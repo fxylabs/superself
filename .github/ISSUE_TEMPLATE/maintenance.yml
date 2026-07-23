@@ -1,0 +1,67 @@
+name: Maintenance proposal
+description: Propose documentation, refactor, test, dependency, CI, release, or repository work
+title: "[Maintenance]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for work that is not a user-facing feature or reproducible bug. Opening an issue is not approval to implement it. Wait for `status:accepted` and maintainer assignment before creating a branch or pull request.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Change type
+      options:
+        - Documentation
+        - Refactor
+        - Tests or proof coverage
+        - Dependencies or toolchain
+        - CI or build
+        - Release preparation
+        - Repository maintenance
+        - SPFN upstream compatibility
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: need
+    attributes:
+      label: Maintenance need
+      description: What is unclear, fragile, outdated, duplicated, or costly today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Intended outcome and scope
+      description: State the observable result and what should remain out of scope.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How will the change be verified beyond the standard project checks?
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk and compatibility
+      description: Note effects on local data, security, packaging, licenses, dependencies, or public contracts. Write "None" when there is no effect.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for the same maintenance work.
+          required: true
+        - label: I removed secrets, credentials, active pairing links, and private data.
+          required: true

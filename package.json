@@ -1,0 +1,17 @@
+{
+  "name": "superself",
+  "description": "Agent workspace for shipping AI-built products",
+  "license": "Apache-2.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @fxylabs/superself-local dev",
+    "proof": "pnpm --filter @fxylabs/superself-local proof",
+    "build": "pnpm --filter @fxylabs/superself-local build",
+    "start": "pnpm --filter @fxylabs/superself-local start",
+    "typecheck": "pnpm --filter @fxylabs/superself-local typecheck"
+  }
+}
