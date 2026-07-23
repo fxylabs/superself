@@ -1,0 +1,99 @@
+name: Bug report
+description: Report reproducible behavior that differs from the documented contract
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove secrets, pairing links, credentials, and private workspace data before submitting.
+        Opening an issue is not approval to implement it. Wait for `status:accepted` and maintainer assignment before opening a pull request.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Use a release tag when available, otherwise the output of `git rev-parse --short HEAD`.
+      placeholder: 1a2b3c4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Linux x64
+        - Linux arm64
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Node.js and pnpm versions
+      placeholder: Node 22.20.0, pnpm 10.33.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Run mode
+      options:
+        - pnpm dev
+        - pnpm start
+        - pnpm proof
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest sequence that reproduces the problem.
+      placeholder: |
+        1. Start Superself with ...
+        2. Open ...
+        3. Create ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+      description: Remove tokens, cookies, credentials, absolute private paths, and personal data.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: data-impact
+    attributes:
+      label: Local data impact
+      options:
+        - label: The issue may corrupt, delete, expose, or make local data inaccessible.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for a duplicate.
+          required: true
+        - label: I removed secrets, active pairing links, and private data.
+          required: true
