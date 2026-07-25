@@ -43,7 +43,7 @@ export interface ProjectModel
     description?: string;
     goal?: string;
     decisions: DecisionState[];
-    conventions: { ts: string; text: string }[];
+    conventions: { id: string; ts: string; text: string }[];
     works: WorkState[];
     openQuestions: string[];
     health: string[];
@@ -93,7 +93,13 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     }
     if (event.type === "convention.added")
     {
-        model.conventions.push({ ts: event.ts, text: String(event.payload.text) });
+        model.conventions.push({ id: event.id, ts: event.ts, text: String(event.payload.text) });
+        return;
+    }
+    if (event.type === "convention.dropped")
+    {
+        const dropped = event.refs?.supersedes ?? [];
+        model.conventions = model.conventions.filter((convention) => !dropped.includes(convention.id));
     }
 }
 

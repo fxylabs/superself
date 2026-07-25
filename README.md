@@ -55,7 +55,11 @@ sits next to git:
   whole workspace with current-project results ranked first;
 - canonical files are generated output — hand edits are detected as drift and
   overwritten with a warning; reports attach to work units and auto-reference
-  the project's HEAD commit as evidence.
+  the project's HEAD commit as evidence;
+- `self connect` renders an agent-onboarding block into `AGENTS.md` and
+  `CLAUDE.md` — the instruction files agent tools already read — so any
+  terminal agent learns the protocol and current conventions; the block
+  refreshes on every fold.
 
 The CLI is the first application shell. A read-only viewer is a later, optional
 layer — never a required surface.

@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { connectProject } from "./connect.js";
 import { foldProject } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
@@ -34,7 +35,8 @@ const USAGE = `usage: self <command>
   work add "<required outcome>"              create a work unit
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
   report <work-id> "<summary>" [--evidence c] [--next n]
-  convention add "<text>"                    record a convention
+  convention add "<text>" | drop <event-id>  record or retire a convention
+  connect                                    render the agent-onboarding block into AGENTS.md and CLAUDE.md
   context                                    print derived context for agents
   status                                     print a short state summary
   log [-n N]                                 print recent events
@@ -54,6 +56,7 @@ function main(argv: string[]): void
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
         case "convention": cmdConvention(rest); break;
+        case "connect": cmdConnect(); break;
         case "context": printContext(requireWorkspace(process.cwd())); break;
         case "status": printStatus(requireWorkspace(process.cwd())); break;
         case "log": cmdLog(rest); break;
@@ -273,13 +276,24 @@ function headEvidence(ctx: ProjectContext): string[]
 
 function cmdConvention(rest: string[]): void
 {
-    if (rest[0] !== "add")
-    {
-        throw new CliError('usage: self convention add "<text>"');
-    }
     const ctx = requireProject(process.cwd());
-    const text = requireText(rest[1], 'convention add "<text>"');
-    recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, undefined, true), text);
+    if (rest[0] === "add")
+    {
+        const text = requireText(rest[1], 'convention add "<text>"');
+        recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, undefined, true), text);
+        return;
+    }
+    if (rest[0] === "drop")
+    {
+        const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(rest[1], "convention drop <event-id>"));
+        if (target.type !== "convention.added")
+        {
+            throw new CliError(`${target.id} is not a convention`);
+        }
+        recordEvent(ctx, makeEvent(ctx.project, "convention.dropped", {}, { supersedes: [target.id] }, true), String(target.payload.text));
+        return;
+    }
+    throw new CliError('usage: self convention add "<text>" | drop <event-id>');
 }
 
 function cmdLog(rest: string[]): void
@@ -303,6 +317,14 @@ function cmdSearch(rest: string[]): void
     });
     const query = requireText(positionals[0], "search <query>");
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
+}
+
+function cmdConnect(): void
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const files = connectProject(ctx.projectDir, model);
+    console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
 }
 
 function cmdFold(): void
