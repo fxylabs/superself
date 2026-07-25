@@ -33,7 +33,7 @@ export function foldProject(storeDir: string, slug: string): void
         }
     }
     writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
-    writeViews(storeDir, model, readStoreConfig(storeDir).lang ?? "en");
+    writeViews(storeDir, model, readStoreConfig(storeDir).lang ?? "en", verdicts);
     if (projectDir !== null && existsSync(projectDir))
     {
         refreshBlocks(projectDir, model);

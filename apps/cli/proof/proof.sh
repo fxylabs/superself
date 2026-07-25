@@ -96,8 +96,18 @@ grep -q "prove two-machine sync" "$VIEW_A/workspace.html" || fail "workspace vie
 grep -q "machine B started the work" "$VIEW_A/demo/$WID.html" || fail "work detail page missing report history"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked into store history"
 cd "$ROOT/A/ws" && SELF lang ko > /dev/null
-grep -q "워크스페이스" "$VIEW_A/workspace.html" || fail "lang ko did not localize views"
+grep -q 'lang="ko"' "$VIEW_A/workspace.html" || fail "lang ko not recorded in view metadata"
+grep -q "Workspace record" "$VIEW_A/workspace.html" || fail "labels did not stay English-base under lang ko"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
+
+# a machine-local theme.css restyles every page at the next fold and never syncs
+echo ':root { --seal: #123abc; }' > "$ROOT/A/ws/.superself/theme.css"
+cd "$ROOT/A/ws/demo" && SELF fold > /dev/null
+grep -q -- "--seal: #123abc" "$VIEW_A/demo.html" || fail "theme.css override not inlined into the project view"
+grep -q -- "--seal: #123abc" "$VIEW_A/workspace.html" || fail "theme.css override missing from the workspace view"
+grep -q -- "--seal: #123abc" "$VIEW_A/demo/$WID.html" || fail "theme.css override missing from the work view"
+grep -q -- "--seal: #1d5c43" "$VIEW_A/demo.html" || fail "default theme tokens missing from the project view"
+git -C "$ROOT/A/ws/.superself" ls-files | grep -q "theme.css" && fail "theme.css leaked into store history"
 
 # the machine pointer, not the directory tree, decides the workspace
 mkdir -p "$ROOT/outside/app"
