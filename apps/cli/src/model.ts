@@ -1,6 +1,6 @@
 import { readEvents } from "./logfile.js";
 import { readRegistry } from "./paths.js";
-import { SelfEvent } from "./types.js";
+import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
@@ -21,6 +21,7 @@ export interface ReportEntry
     ts: string;
     text: string;
     commits: string[];
+    artifacts: ArtifactMeta[];
 }
 
 export interface WorkState
@@ -34,6 +35,7 @@ export interface WorkState
     blockedWhy?: string;
     reports: ReportEntry[];
     evidence: string[];
+    artifacts: ArtifactMeta[];
     next?: string;
 }
 
@@ -161,7 +163,8 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             lastEventTs: event.ts,
             status: "next",
             reports: [],
-            evidence: []
+            evidence: [],
+            artifacts: []
         });
         return;
     }
@@ -198,8 +201,10 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     const commits = event.refs?.commits ?? [];
-    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits });
+    const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
+    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
+    work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
     {
         work.next = String(event.payload.next);

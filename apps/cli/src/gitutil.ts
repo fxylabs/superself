@@ -38,9 +38,11 @@ export function commitAll(storeDir: string, message: string): void
     git(storeDir, "commit", "-qm", message);
 }
 
+// 12 hex chars: short hashes recorded as evidence must stay unambiguous as
+// the project repo grows.
 export function headCommit(dir: string): string | null
 {
-    const result = git(dir, "rev-parse", "--short", "HEAD");
+    const result = git(dir, "rev-parse", "--short=12", "HEAD");
     return result.ok ? result.out : null;
 }
 

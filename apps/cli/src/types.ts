@@ -25,6 +25,13 @@ export interface SelfEvent
     refs?: EventRefs;
 }
 
+export interface ArtifactMeta
+{
+    id: string;
+    name: string;
+    path: string;
+}
+
 export interface RegistryEntry
 {
     slug: string;
