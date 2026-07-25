@@ -1,0 +1,340 @@
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { foldProject } from "./fold.js";
+import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
+import { workId } from "./ids.js";
+import { findEventByPrefix } from "./logfile.js";
+import { buildModel, WorkState } from "./model.js";
+import {
+    CliContext,
+    ensureDir,
+    MARKER_FILE,
+    projectStateDir,
+    readRegistry,
+    requireProject,
+    requireWorkspace,
+    STORE_DIR
+} from "./paths.js";
+import { makeEvent, recordEvent } from "./pipeline.js";
+import { runSearch } from "./search.js";
+import { printContext, printLog, printStatus, printWorkList } from "./views.js";
+import { CliError, EventRefs } from "./types.js";
+
+type ProjectContext = CliContext & { project: string; projectDir: string };
+
+const USAGE = `usage: self <command>
+
+  init                                       initialize the current directory as a workspace
+  project add [path] [--name s] [--desc d]   register a project
+  goal set "<text>"                          set the project goal
+  decide "<text>" [--why w] [--proposed] [--supersedes id]
+  decide confirm <event-id>                  confirm a proposed decision
+  work                                       list open work
+  work add "<required outcome>"              create a work unit
+  work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
+  report <work-id> "<summary>" [--evidence c] [--next n]
+  convention add "<text>"                    record a convention
+  context                                    print derived context for agents
+  status                                     print a short state summary
+  log [-n N]                                 print recent events
+  search <query> [--type t] [--project p]    grep state across the workspace
+  fold                                       re-derive canonical files from the log`;
+
+function main(argv: string[]): void
+{
+    const cmd = argv[0];
+    const rest = argv.slice(1);
+    switch (cmd)
+    {
+        case "init": cmdInit(); break;
+        case "project": cmdProject(rest); break;
+        case "goal": cmdGoal(rest); break;
+        case "decide": cmdDecide(rest); break;
+        case "work": cmdWork(rest); break;
+        case "report": cmdReport(rest); break;
+        case "convention": cmdConvention(rest); break;
+        case "context": printContext(requireWorkspace(process.cwd())); break;
+        case "status": printStatus(requireWorkspace(process.cwd())); break;
+        case "log": cmdLog(rest); break;
+        case "search": cmdSearch(rest); break;
+        case "fold": cmdFold(); break;
+        default: console.log(USAGE); break;
+    }
+}
+
+function cmdInit(): void
+{
+    const cwd = process.cwd();
+    const storeDir = join(cwd, STORE_DIR);
+    if (existsSync(storeDir))
+    {
+        console.log(`workspace already initialized at ${storeDir}`);
+        return;
+    }
+    ensureDir(storeDir);
+    writeFileSync(join(storeDir, "registry.jsonl"), "");
+    ensureWorkspaceRepo(storeDir);
+    excludeLocally(cwd, STORE_DIR + "/");
+    commitAll(storeDir, "self init");
+    console.log(`workspace initialized at ${storeDir}`);
+}
+
+function cmdProject(rest: string[]): void
+{
+    if (rest[0] !== "add")
+    {
+        throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"]');
+    }
+    const { values, positionals } = parseArgs({
+        args: rest.slice(1),
+        options: { name: { type: "string" }, desc: { type: "string" } },
+        allowPositionals: true
+    });
+    const ctx = requireWorkspace(process.cwd());
+    const projectDir = resolve(positionals[0] ?? process.cwd());
+    const slug = values.name ?? basename(projectDir);
+    if (readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
+    {
+        throw new CliError(`project "${slug}" is already registered`);
+    }
+    const entry: Record<string, unknown> = { slug, path: projectDir, added: new Date().toISOString() };
+    if (values.desc !== undefined)
+    {
+        entry.description = values.desc;
+    }
+    appendFileSync(join(ctx.storeDir, "registry.jsonl"), JSON.stringify(entry) + "\n");
+    writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ workspace: ctx.workspaceDir, project: slug }) + "\n");
+    excludeLocally(projectDir, MARKER_FILE);
+    ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
+    foldProject(ctx.storeDir, slug);
+    commitAll(ctx.storeDir, `project add ${slug}`);
+    console.log(`project "${slug}" registered`);
+}
+
+function cmdGoal(rest: string[]): void
+{
+    if (rest[0] !== "set")
+    {
+        throw new CliError('usage: self goal set "<text>"');
+    }
+    const ctx = requireProject(process.cwd());
+    const text = requireText(rest[1], 'goal set "<text>"');
+    recordEvent(ctx, makeEvent(ctx.project, "goal.set", { text }, undefined, true), text);
+}
+
+function cmdDecide(rest: string[]): void
+{
+    const ctx = requireProject(process.cwd());
+    if (rest[0] === "confirm")
+    {
+        confirmDecision(ctx, rest[1]);
+        return;
+    }
+    const { values, positionals } = parseArgs({
+        args: rest,
+        options: {
+            proposed: { type: "boolean" },
+            why: { type: "string" },
+            supersedes: { type: "string", multiple: true }
+        },
+        allowPositionals: true
+    });
+    const text = requireText(positionals[0], 'decide "<decision>" [--why w] [--proposed]');
+    const payload: Record<string, unknown> = { text };
+    if (values.why !== undefined)
+    {
+        payload.why = values.why;
+    }
+    const refs = resolveSupersedes(ctx, values.supersedes);
+    const type = values.proposed === true ? "decision.proposed" : "decision.confirmed";
+    recordEvent(ctx, makeEvent(ctx.project, type, payload, refs, values.proposed !== true), text);
+}
+
+function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
+{
+    const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, "decide confirm <event-id>"));
+    if (target.type !== "decision.proposed")
+    {
+        throw new CliError(`${target.id} is not a proposed decision`);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "decision.confirmed", {}, { confirms: target.id }, true), String(target.payload.text));
+}
+
+function resolveSupersedes(ctx: ProjectContext, prefixes: string[] | undefined): EventRefs | undefined
+{
+    if (prefixes === undefined || prefixes.length === 0)
+    {
+        return undefined;
+    }
+    return { supersedes: prefixes.map((prefix) => findEventByPrefix(ctx.storeDir, ctx.project, prefix).id) };
+}
+
+const TRANSITIONS: Record<string, string> = {
+    start: "work.started",
+    block: "work.blocked",
+    unblock: "work.unblocked",
+    done: "work.done"
+};
+
+function cmdWork(rest: string[]): void
+{
+    const ctx = requireProject(process.cwd());
+    if (rest.length === 0)
+    {
+        printWorkList(ctx);
+        return;
+    }
+    if (rest[0] === "add")
+    {
+        const outcome = requireText(rest[1], 'work add "<required outcome>"');
+        const id = workId();
+        recordEvent(ctx, makeEvent(ctx.project, "work.created", { work: id, outcome }), `${id} ${outcome}`);
+        console.log(id);
+        return;
+    }
+    const type = TRANSITIONS[rest[0]];
+    if (type === undefined)
+    {
+        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|start|block|unblock|done`);
+    }
+    transitionWork(ctx, type, rest.slice(1));
+}
+
+function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
+{
+    const { values, positionals } = parseArgs({
+        args,
+        options: { on: { type: "string" }, why: { type: "string" } },
+        allowPositionals: true
+    });
+    const work = requireOpenWork(ctx, positionals[0]);
+    const payload: Record<string, unknown> = { work: work.id };
+    if (type === "work.blocked")
+    {
+        if (values.on !== "decision" && values.on !== "dependency" && values.on !== "external")
+        {
+            throw new CliError("work block requires --on decision|dependency|external");
+        }
+        payload.on = values.on;
+        if (values.why !== undefined)
+        {
+            payload.why = values.why;
+        }
+    }
+    recordEvent(ctx, makeEvent(ctx.project, type, payload), `${work.id} ${work.outcome}`);
+}
+
+function cmdReport(rest: string[]): void
+{
+    const ctx = requireProject(process.cwd());
+    const { values, positionals } = parseArgs({
+        args: rest,
+        options: { evidence: { type: "string", multiple: true }, next: { type: "string" } },
+        allowPositionals: true
+    });
+    const work = requireOpenWork(ctx, positionals[0]);
+    const text = requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit');
+    const commits = values.evidence ?? headEvidence(ctx);
+    const refs: EventRefs = { work: work.id };
+    if (commits.length > 0)
+    {
+        refs.commits = commits;
+    }
+    const payload: Record<string, unknown> = { text };
+    if (values.next !== undefined)
+    {
+        payload.next = values.next;
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`);
+}
+
+function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
+{
+    const wanted = requireText(id, "… <work-id> — run `self work` to list ids");
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const work = model.works.find((item) => item.id === wanted);
+    if (work === undefined)
+    {
+        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+    }
+    if (work.status === "done")
+    {
+        throw new CliError(`${wanted} is already done`);
+    }
+    return work;
+}
+
+function headEvidence(ctx: ProjectContext): string[]
+{
+    const head = headCommit(ctx.projectDir);
+    return head === null ? [] : [head];
+}
+
+function cmdConvention(rest: string[]): void
+{
+    if (rest[0] !== "add")
+    {
+        throw new CliError('usage: self convention add "<text>"');
+    }
+    const ctx = requireProject(process.cwd());
+    const text = requireText(rest[1], 'convention add "<text>"');
+    recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, undefined, true), text);
+}
+
+function cmdLog(rest: string[]): void
+{
+    const ctx = requireProject(process.cwd());
+    const { values } = parseArgs({ args: rest, options: { lines: { type: "string", short: "n" } } });
+    const limit = values.lines === undefined ? 20 : Number.parseInt(values.lines, 10);
+    if (Number.isNaN(limit) || limit <= 0)
+    {
+        throw new CliError("log -n expects a positive number");
+    }
+    printLog(ctx, limit);
+}
+
+function cmdSearch(rest: string[]): void
+{
+    const { values, positionals } = parseArgs({
+        args: rest,
+        options: { type: { type: "string" }, project: { type: "string" } },
+        allowPositionals: true
+    });
+    const query = requireText(positionals[0], "search <query>");
+    runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
+}
+
+function cmdFold(): void
+{
+    const ctx = requireProject(process.cwd());
+    foldProject(ctx.storeDir, ctx.project);
+    commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
+    console.log(`refolded ${ctx.project}`);
+}
+
+function requireText(value: string | undefined, usage: string): string
+{
+    if (value === undefined || value.trim() === "")
+    {
+        throw new CliError(`usage: self ${usage}`);
+    }
+    return value;
+}
+
+try
+{
+    main(process.argv.slice(2));
+}
+catch (error)
+{
+    if (error instanceof CliError)
+    {
+        console.error(`error: ${error.message}`);
+        process.exitCode = 1;
+    }
+    else
+    {
+        throw error;
+    }
+}
