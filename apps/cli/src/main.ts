@@ -1,8 +1,8 @@
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { connectProject } from "./connect.js";
-import { foldProject } from "./fold.js";
+import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
@@ -33,8 +33,9 @@ const USAGE = `usage: self <command>
   decide confirm <event-id>                  confirm a proposed decision
   work                                       list open work
   work add "<required outcome>"              create a work unit
+  work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
-  report <work-id> "<summary>" [--evidence c] [--next n]
+  report <work-id> "<summary>" [--file path] [--evidence c] [--next n]
   convention add "<text>" | drop <event-id>  record or retire a convention
   connect                                    render the agent-onboarding block into AGENTS.md and CLAUDE.md
   context                                    print derived context for agents
@@ -196,6 +197,18 @@ function cmdWork(rest: string[]): void
         console.log(id);
         return;
     }
+    if (rest[0] === "show")
+    {
+        const wanted = requireText(rest[1], "work show <work-id>");
+        const model = buildModel(ctx.storeDir, ctx.project, new Date());
+        const work = model.works.find((item) => item.id === wanted);
+        if (work === undefined)
+        {
+            throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+        }
+        console.log(renderWorkBody(work).trimEnd());
+        return;
+    }
     const type = TRANSITIONS[rest[0]];
     if (type === undefined)
     {
@@ -233,11 +246,13 @@ function cmdReport(rest: string[]): void
     const ctx = requireProject(process.cwd());
     const { values, positionals } = parseArgs({
         args: rest,
-        options: { evidence: { type: "string", multiple: true }, next: { type: "string" } },
+        options: { evidence: { type: "string", multiple: true }, next: { type: "string" }, file: { type: "string" } },
         allowPositionals: true
     });
     const work = requireOpenWork(ctx, positionals[0]);
-    const text = requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit');
+    const text = values.file === undefined
+        ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
+        : readReportFile(values.file);
     const commits = values.evidence ?? headEvidence(ctx);
     const refs: EventRefs = { work: work.id };
     if (commits.length > 0)
@@ -266,6 +281,20 @@ function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
         throw new CliError(`${wanted} is already done`);
     }
     return work;
+}
+
+function readReportFile(path: string): string
+{
+    if (!existsSync(path))
+    {
+        throw new CliError(`report --file: "${path}" does not exist`);
+    }
+    const text = readFileSync(path, "utf8").trim();
+    if (text === "")
+    {
+        throw new CliError(`report --file: "${path}" is empty`);
+    }
+    return text;
 }
 
 function headEvidence(ctx: ProjectContext): string[]
