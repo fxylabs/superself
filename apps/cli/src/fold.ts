@@ -118,7 +118,12 @@ function blockedLine(work: WorkState): string
 
 function renderWork(work: WorkState): string
 {
-    const lines: string[] = [GENERATED_NOTE, "", `# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
+    return GENERATED_NOTE + "\n\n" + renderWorkBody(work);
+}
+
+export function renderWorkBody(work: WorkState): string
+{
+    const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
     if (work.status === "blocked")
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);
@@ -138,7 +143,14 @@ function renderWork(work: WorkState): string
         for (const report of [...work.reports].reverse())
         {
             const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
-            lines.push(`- ${day(report.ts)} — ${report.text}${commits}`);
+            if (report.text.includes("\n"))
+            {
+                lines.push(`### ${day(report.ts)}${commits}`, "", report.text, "");
+            }
+            else
+            {
+                lines.push(`- ${day(report.ts)} — ${report.text}${commits}`);
+            }
         }
         lines.push("");
     }

@@ -105,7 +105,8 @@ export function printWorkList(ctx: CliContext & { project: string }): void
     for (const work of open)
     {
         const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
-        console.log(`${work.id}  ${work.status}${blocked}  ${work.outcome}`);
+        const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
+        console.log(`${work.id}  ${work.status}${blocked}  ${work.outcome}${reports}`);
     }
     const done = model.works.length - open.length;
     if (done > 0)

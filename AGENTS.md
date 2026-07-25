@@ -33,6 +33,8 @@ command is unavailable.
 - Record decisions the user confirmed: `self decide "<text>" --why "<reason>"`.
   Use `--proposed` when the user has not confirmed. One decision per event.
 - Blocked? `self work block <id> --on decision|dependency|external --why "..."`.
+- Picking up existing work? `self work show <id>` prints its full brief and
+  report history. Leave a brief for the next session with `self report <id> --file <path>`.
 - Search past state with `self search <query>`; list work with `self work`.
 - Never hand-edit generated state files or anything under `.superself/`.
 
