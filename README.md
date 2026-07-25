@@ -60,10 +60,15 @@ sits next to git:
 - canonical files are generated output — hand edits are detected as drift and
   overwritten with a warning; reports attach to work units and auto-reference
   the project's HEAD commit as evidence;
-- `self connect` renders an agent-onboarding block into `AGENTS.md` and
+- `self project add` renders an agent-onboarding block into `AGENTS.md` and
   `CLAUDE.md` — the instruction files agent tools already read — so any
   terminal agent learns the protocol and current conventions; the block
-  refreshes on every fold;
+  refreshes on every fold, `self connect` re-renders it, and `--no-connect`
+  skips it;
+- `self init` offers to write a short block into this machine's own agent
+  instruction files (`self connect --global` does it later), so agents notice
+  self in projects that are not registered yet and ask you once — they are
+  told never to register a project on their own;
 - `self remote add` connects the workspace store to a git remote, `self sync`
   pulls, refolds, and pushes it, and `self clone` brings a store onto a new
   machine — `self clone` also points the new machine at what it cloned,
@@ -96,7 +101,8 @@ alias self="node $PWD/apps/cli/bin/self.mjs"
 Then, in the directory that should hold your state:
 
 ```bash
-self init                      # once per machine; every later command finds it
+self init                      # once per machine; asks about agents, then every
+                               # later command finds the workspace on its own
 cd ~/anywhere/my-project && self project add
 self goal set "Ship the first release"
 self work add "Payment flow passes e2e"

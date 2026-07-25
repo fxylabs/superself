@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
-import { connectProject } from "./connect.js";
+import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
@@ -34,10 +34,11 @@ type ProjectContext = CliContext & { project: string; projectDir: string };
 
 const USAGE = `usage: self <command>
 
-  init [--lang <code>]                       initialize the current directory as a workspace
+  init [--lang <code>] [--agents]             initialize the current directory as a workspace
   workspace [<path>]                         show or set the workspace this machine uses
   lang [<code>]                              show or set the language of the HTML views
-  project add [path] [--name s] [--desc d]   register a project
+  project add [path] [--name s] [--desc d] [--no-connect]
+                                             register a project and render its agent block
   project link <slug> [path]                 reconnect a registered project on this machine
   remote add <url>                           connect the workspace store to a git remote
   sync                                       pull, refold, and push the workspace store
@@ -51,7 +52,8 @@ const USAGE = `usage: self <command>
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
   report <work-id> "<summary>" [--file path] [--evidence c] [--next n]
   convention add "<text>" | drop <event-id>  record or retire a convention
-  connect                                    render the agent-onboarding block into AGENTS.md and CLAUDE.md
+  connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
+                                             (--global: into this machine's agent instruction files)
   view [slug]                                open the live workspace or project view in the browser
   context                                    print derived context for agents
   status                                     print a short state summary
@@ -78,7 +80,7 @@ async function main(argv: string[]): Promise<void>
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
         case "convention": cmdConvention(rest); break;
-        case "connect": cmdConnect(); break;
+        case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
         case "context": printContext(requireWorkspace(process.cwd())); break;
         case "status": printStatus(requireWorkspace(process.cwd())); break;
@@ -92,7 +94,7 @@ async function main(argv: string[]): Promise<void>
 
 async function cmdInit(rest: string[]): Promise<void>
 {
-    const { values } = parseArgs({ args: rest, options: { lang: { type: "string" } } });
+    const { values } = parseArgs({ args: rest, options: { lang: { type: "string" }, agents: { type: "boolean" } } });
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
@@ -114,6 +116,35 @@ async function cmdInit(rest: string[]): Promise<void>
     commitAll(storeDir, "self init");
     setMachineWorkspace(cwd);
     console.log(`workspace initialized at ${storeDir} (views in "${lang}")`);
+    if (values.agents === true || await askAgents())
+    {
+        connectMachineAgents();
+    }
+}
+
+// Asked once, at the only moment a person is certain to be present.
+async function askAgents(): Promise<boolean>
+{
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+    {
+        return false;
+    }
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question("tell the agents on this machine about self, so they offer to register projects? [Y/n]: ");
+    rl.close();
+    return !answer.trim().toLowerCase().startsWith("n");
+}
+
+function connectMachineAgents(): void
+{
+    const files = connectMachine();
+    if (files.length === 0)
+    {
+        console.log("no agent instruction files found on this machine — paste this into yours:\n");
+        console.log(machineBlock());
+        return;
+    }
+    console.log(`agents on this machine now know about self — block written into ${files.join(", ")}`);
 }
 
 function cmdWorkspace(rest: string[]): void
@@ -192,7 +223,7 @@ function projectAdd(args: string[]): void
 {
     const { values, positionals } = parseArgs({
         args,
-        options: { name: { type: "string" }, desc: { type: "string" } },
+        options: { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } },
         allowPositionals: true
     });
     const ctx = requireWorkspace(process.cwd());
@@ -213,6 +244,11 @@ function projectAdd(args: string[]): void
     foldProject(ctx.storeDir, slug);
     commitAll(ctx.storeDir, `project add ${slug}`);
     console.log(`project "${slug}" registered`);
+    if (values["no-connect"] !== true)
+    {
+        const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()));
+        console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
+    }
 }
 
 function projectLink(args: string[]): void
@@ -492,8 +528,13 @@ function cmdSearch(rest: string[]): void
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
 }
 
-function cmdConnect(): void
+function cmdConnect(rest: string[]): void
 {
+    if (rest[0] === "--global")
+    {
+        connectMachineAgents();
+        return;
+    }
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const files = connectProject(ctx.projectDir, model);
