@@ -14,6 +14,9 @@ command is unavailable.
 - Blocked? `self work block <id> --on decision|dependency|external --why "..."`.
 - Picking up existing work? `self work show <id>` prints its full brief and
   report history. Leave a brief for the next session with `self report <id> --file <path>`.
+- Proposed next work, or suggested continuing in the next session, and the
+  user approved? Register it with `self work add` right then, with the
+  context behind the proposal — an approved plan that is never registered is lost.
 - Deferring work for later? Attach a scoping brief the moment you create it:
   `self report <id> --file <path>` covering scope, design anchors, and known
   pitfalls — a bare outcome line loses the context that created the work.
