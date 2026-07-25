@@ -1,10 +1,11 @@
 # Superself
 
-**Build with agents. Ship like a team.**
+**Your agents forget. Your projects shouldn't.**
 
-Superself is the agent workspace for shipping AI-built products. It turns goals
-into agent-sized work, live reports, artifacts, and durable project memory so a
-project keeps moving beyond the demo toward a real release.
+Superself is version control for your project's state. Git versions your code;
+Superself versions the project itself — goals, decisions, work, and outputs —
+so you pick up where you left off across sessions, models, and tools instead
+of re-explaining your project every session.
 
 > [!IMPORTANT]
 > Superself is in an early architecture and packaging phase. The current code is
@@ -12,23 +13,28 @@ project keeps moving beyond the demo toward a real release.
 
 ## Why Superself
 
-AI makes it remarkably easy to reach a first demo. Shipping still requires
-clear goals, scoped work, current status, reviewable outputs, decisions, and
-follow-through. Those pieces are usually scattered across chat histories,
-terminals, files, and provider-specific sessions.
+AI agents start every session from zero. The project's goals, decisions,
+progress, and rejected directions live nowhere — scattered across chat
+histories, terminals, hand-maintained markdown files, and provider-specific
+sessions that each tool forgets or silos. Hand-maintained fixes (CLAUDE.md
+files, memory banks, handoff notes) rot, contradict themselves, and depend on
+discipline that fails under fatigue.
 
-Superself is building the delivery layer above those sessions:
+Superself splits a project into **state, work, and outputs**, and keeps them
+versioned above any single session:
 
-- **Work** has an identity, state, current report, and revision history.
-- **Artifacts** remain connected to the work that produced them.
-- **Memory** survives individual agent and model sessions.
-- **Projects, milestones, goals, and routines** give delegated work a
-  longer-lived direction.
+- **State** — goals, active decisions, progress, and open questions, kept
+  small and current, with append-only history.
+- **Work** — each unit has an identity, state, current report, and revision
+  history.
+- **Outputs** — artifacts remain connected to the work that produced them.
+- **Derived context** — what an agent receives each session is generated from
+  state, not hand-maintained.
 - **Local-first ownership** keeps the primary workspace on your machine.
 
-Superself is not another model provider, chat client, or agent runtime. It is an
-agent workspace where builders can direct, inspect, and finish work across the
-AI tools they already use.
+Superself is not another model provider, chat client, agent runtime, or memory
+plugin. It is the project-state layer above the AI tools you already use, so
+work can be directed, inspected, and finished across all of them.
 
 ## What works today
 
@@ -109,7 +115,7 @@ The near-term sequence is:
 2. implement the complete project and agent-work surfaces;
 3. add milestones, Definition of Done, and release readiness;
 4. attach test, build, deployment, and review evidence to work reports;
-5. add artifact and memory flows;
+5. add artifact and project-state history flows;
 6. add agent/MCP integration;
 7. add backup, restore, and migration guarantees;
 8. publish a local CLI preview;
