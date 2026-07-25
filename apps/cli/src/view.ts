@@ -48,7 +48,7 @@ export function openFile(ctx: CliContext, file: string): void
     const command = process.platform === "darwin" ? "open"
         : process.platform === "win32" ? "explorer" : "xdg-open";
     spawn(command, [file], { cwd: ctx.workspaceDir, detached: true, stdio: "ignore" }).unref();
-    console.log(`opened ${file} — the page refreshes itself every 5 seconds`);
+    console.log(`opened ${file} — the page reloads itself when state changes and you are not interacting`);
 }
 
 function summarize(model: ProjectModel): ProjectSummary
@@ -84,6 +84,7 @@ function renderProjectPage(model: ProjectModel): string
     const confirmed = model.decisions.filter((d) => d.status === "confirmed");
     const proposed = model.decisions.filter((d) => d.status === "proposed" && !d.expired);
     const body = [
+        `<p><a class="muted" href="workspace.html">← workspace</a></p>`,
         `<header><h1>${esc(model.slug)}</h1>${model.description === undefined ? "" : `<p class="muted">${esc(model.description)}</p>`}</header>`,
         `<p class="goal">${esc(model.goal ?? "goal not set")}</p>`,
         list("alert", model.health),
@@ -94,7 +95,8 @@ function renderProjectPage(model: ProjectModel): string
         section("Decisions", confirmed.map((d) => `<li>${esc(d.text)}${d.why === undefined ? "" : ` <span class="muted">— ${esc(d.why)}</span>`} <span class="muted">(${d.ts.slice(0, 10)})</span></li>`)),
         section("Proposed decisions", proposed.map((d) => `<li>${esc(d.text)} <span class="muted">— confirm with <code>self decide confirm ${esc(d.id)}</code></span></li>`)),
         section("Conventions", model.conventions.map((c) => `<li>${esc(c.text)}</li>`)),
-        `<footer class="muted">${done.length} work unit(s) done · updated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC</footer>`
+        section("Done", done.map((w) => `<li><span class="badge b-done">done</span> <code>${esc(w.id)}</code> ${esc(w.outcome)} <span class="muted">(${w.lastEventTs.slice(0, 10)})</span></li>`)),
+        `<footer class="muted">updated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC</footer>`
     ].join("\n");
     return page(model.slug, body);
 }
@@ -127,14 +129,14 @@ function workCard(work: WorkState): string
 function renderWorkspacePage(summaries: ProjectSummary[]): string
 {
     const cards = summaries.map((summary) => [
-        `<div class="card"><h2>${esc(summary.slug)}</h2>`,
+        `<a class="card" href="${esc(summary.slug)}.html"><h2>${esc(summary.slug)}</h2>`,
         summary.description === undefined ? "" : `<p class="muted">${esc(summary.description)}</p>`,
         `<p class="goal">${esc(summary.goal ?? "goal not set")}</p>`,
         `<p>${badge(summary.active.length, "active", "b-active")} ${badge(summary.blockedCount, "blocked", "b-blocked")} ${badge(summary.nextCount, "next", "b-next")} ${badge(summary.doneCount, "done", "b-done")}</p>`,
         summary.active.map((w) => `<p><code>${esc(w.id)}</code> ${esc(w.outcome)}</p>`).join("\n"),
         summary.health.map((h) => `<p class="alert-text">${esc(h)}</p>`).join("\n"),
         summary.openQuestions.map((q) => `<p class="alert-text">${esc(q)}</p>`).join("\n"),
-        `<footer class="muted">updated ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></div>`
+        `<footer class="muted">updated ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></a>`
     ].join("\n")).join("\n");
     const body = `<header><h1>Workspace</h1></header>\n<div class="grid">${cards}</div>`;
     return page("Workspace", body);
@@ -177,17 +179,29 @@ function page(title: string, body: string): string
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="5">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — superself</title>
 <style>${CSS}</style>
 </head>
 <body><main>
 ${body}
-</main></body>
+</main>
+<script>${REFRESH_SCRIPT}</script>
+</body>
 </html>
 `;
 }
+
+// Reload to pick up refolds, but never while the reader is interacting:
+// any pointer or key activity in the last 10s, or a live text selection, defers it.
+const REFRESH_SCRIPT = `
+let lastActivity = 0;
+addEventListener("pointermove", () => lastActivity = Date.now());
+addEventListener("keydown", () => lastActivity = Date.now());
+setInterval(() => {
+  if (Date.now() - lastActivity > 10000 && String(getSelection()) === "") location.reload();
+}, 5000);
+`;
 
 const CSS = `
 :root { --bg: #fafaf8; --fg: #1a1a1a; --muted: #6b6b6b; --card: #ffffff; --border: #e2e0dc;
@@ -206,8 +220,13 @@ h2 { font-size: 1rem; margin: 2rem 0 .5rem; text-transform: uppercase;
            font-size: 1.1rem; margin: 0 0 .25rem; }
 .goal { font-size: 1.1rem; margin: .5rem 0 0; }
 .muted { color: var(--muted); }
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-        padding: .9rem 1rem; margin: .6rem 0; }
+.card { display: block; background: var(--card); border: 1px solid var(--border);
+        border-radius: 8px; padding: .9rem 1rem; margin: .6rem 0;
+        color: inherit; text-decoration: none; }
+a.card:hover { border-color: var(--accent); }
+a { color: var(--accent); }
+a.muted { color: var(--muted); text-decoration: none; }
+a.muted:hover { color: var(--fg); }
 .card p { margin: .4rem 0 0; }
 .card footer { margin-top: .6rem; font-size: .8rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: .8rem; }
