@@ -77,4 +77,21 @@ cd "$ROOT/A/ws" && SELF lang ko > /dev/null
 grep -q "워크스페이스" "$VIEW_A/workspace.html" || fail "lang ko did not localize views"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
 
+# a .superself directory owned by another tool is not a workspace store
+mkdir -p "$ROOT/foreign/.superself" "$ROOT/foreign/app"
+cd "$ROOT/foreign"
+INIT="$(SELF init 2>&1 || true)"
+echo "$INIT" | grep -q "not a workspace store" || fail "init adopted a foreign .superself"
+cd "$ROOT/foreign/app"
+STATUS="$(SELF status 2>&1 || true)"
+echo "$STATUS" | grep -q "no workspace found" || fail "resolution adopted a foreign .superself"
+SELF setup | grep -q "not a workspace store" || fail "setup did not report the skipped candidate"
+
+# setup names the workspace, project, and store the current directory resolves to
+cd "$ROOT/A/ws/demo"
+SETUP="$(SELF setup)"
+echo "$SETUP" | grep -q "^project    demo" || fail "setup did not name the project"
+echo "$SETUP" | grep -q "^workspace .*/A/ws$" || fail "setup did not name the workspace"
+echo "$SETUP" | grep -q "^store .*commits" || fail "setup did not describe the store"
+
 echo "proof OK"

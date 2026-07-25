@@ -52,7 +52,9 @@ sits next to git:
   repository, so state has log, blame, and revert;
 - `self context` prints the derived context an agent needs at session start;
   `self status`, `self work`, and `self log` read state; `self search` greps the
-  whole workspace with current-project results ranked first;
+  whole workspace with current-project results ranked first; `self setup` shows
+  which workspace, project, and store the current directory resolves to, and
+  names any `.superself` directory it skipped because another tool owns it;
 - canonical files are generated output — hand edits are detected as drift and
   overwritten with a warning; reports attach to work units and auto-reference
   the project's HEAD commit as evidence;
