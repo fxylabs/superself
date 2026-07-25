@@ -310,16 +310,16 @@ Requirements (decided): listing, paging, and search at work, project, and
 workspace granularity. CLI shape: `artifact list [--work|--project]`,
 `artifact search`, `artifact open <id>` (OS default app).
 
-## Naming (proposed)
+## Naming (decided 2026-07-25)
 
-Package name `superself` is too long for a daily binary. Candidates raised:
-`spsf`, `self`. Assessment: `spsf` is unpronounceable and visually collides
-with `spfn` (the adjacent SPFN framework's CLI) — dropped. Recommended:
-**binary `self`, distributed as package `superself`** (brew/npm install
-superself, provides `self`). The command surface reads as English phrases —
-`self status`, `self report`, `self decide`, `self work start` — and no
-mainstream binary squats the name. Weakness: poor web searchability as a
-bare word, mitigated by the package name.
+**Binary `self`, distributed as package `superself`** (brew/npm install
+superself, provides `self`). Candidates considered: `spsf` (dropped —
+unpronounceable, visually collides with the adjacent SPFN framework's
+`spfn` CLI), `ss` (dropped — conflicts with the standard socket-statistics
+utility). The command surface reads as English phrases — `self status`,
+`self report`, `self decide`, `self work start` — and no mainstream binary
+squats the name. Known weakness: poor web searchability as a bare word,
+mitigated by the `superself` package name.
 
 ## Viewer (decided 2026-07-25)
 
@@ -342,10 +342,11 @@ The read-only principle stands: no viewer ever writes state.
 
 ## Next discussion
 
-Final naming confirmation (`self` recommended). All other design items —
-command surface, state definition, context delivery, snapshot derivation,
-schema refinements, file formats, artifact storage, viewer — are settled
-above.
+All design items in this document are settled: command surface, state
+definition, context delivery, snapshot derivation, schema refinements, file
+formats, artifact storage, viewer, naming. Next step: scope the first
+vertical slice of the CLI (`self init` → `self project add` → event verbs →
+fold → `self context`).
 
 ## Open questions
 
