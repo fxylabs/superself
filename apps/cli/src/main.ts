@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { ingestArtifacts, runArtifact } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
@@ -23,6 +24,7 @@ import {
     STORE_DIR
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
+import { loadVerdicts } from "./reachability.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
@@ -50,7 +52,9 @@ const USAGE = `usage: self <command>
   work add "<required outcome>"              create a work unit
   work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
-  report <work-id> "<summary>" [--file path] [--evidence c] [--next n]
+  report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
+  artifact list [--work id] [--project slug]  list artifacts from the derived registry
+  artifact search <query> | open <id>        find an artifact or open it with the OS default app
   convention add "<text>" | drop <event-id>  record or retire a convention
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
@@ -79,6 +83,7 @@ async function main(argv: string[]): Promise<void>
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
+        case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
@@ -386,7 +391,7 @@ function cmdWork(rest: string[]): void
         {
             throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
         }
-        console.log(renderWorkBody(work).trimEnd());
+        console.log(renderWorkBody(work, loadVerdicts(ctx.storeDir, ctx.project)).trimEnd());
         return;
     }
     const type = TRANSITIONS[rest[0]];
@@ -426,7 +431,12 @@ function cmdReport(rest: string[]): void
     const ctx = requireProject(process.cwd());
     const { values, positionals } = parseArgs({
         args: rest,
-        options: { evidence: { type: "string", multiple: true }, next: { type: "string" }, file: { type: "string" } },
+        options: {
+            evidence: { type: "string", multiple: true },
+            artifact: { type: "string", multiple: true },
+            next: { type: "string" },
+            file: { type: "string" }
+        },
         allowPositionals: true
     });
     const work = requireOpenWork(ctx, positionals[0]);
@@ -443,6 +453,12 @@ function cmdReport(rest: string[]): void
     if (values.next !== undefined)
     {
         payload.next = values.next;
+    }
+    if (values.artifact !== undefined && values.artifact.length > 0)
+    {
+        const metas = ingestArtifacts(ctx.storeDir, ctx.project, values.artifact);
+        payload.artifacts = metas;
+        refs.artifacts = metas.map((meta) => meta.id);
     }
     recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`);
 }

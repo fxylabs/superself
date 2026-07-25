@@ -88,10 +88,15 @@ export function viewFile(storeDir: string, slug: string | undefined): string
 
 export function openFile(ctx: CliContext, file: string): void
 {
+    launchFile(ctx, file);
+    console.log(`opened ${file} — the page reloads itself when state changes and you are not interacting`);
+}
+
+export function launchFile(ctx: CliContext, file: string): void
+{
     const command = process.platform === "darwin" ? "open"
         : process.platform === "win32" ? "explorer" : "xdg-open";
     spawn(command, [file], { cwd: ctx.workspaceDir, detached: true, stdio: "ignore" }).unref();
-    console.log(`opened ${file} — the page reloads itself when state changes and you are not interacting`);
 }
 
 function summarize(model: ProjectModel): ProjectSummary

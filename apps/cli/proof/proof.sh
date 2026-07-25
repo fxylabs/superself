@@ -133,4 +133,64 @@ echo "$SETUP" | grep -q "^workspace .*/A/ws$" || fail "setup did not name the wo
 echo "$SETUP" | grep -q "^store .*commits" || fail "setup did not describe the store"
 echo "$SETUP" | grep -q "^pointer .*machine.json$" || fail "setup did not name the machine pointer"
 
+# artifacts: ingested at report time, listed and searched from the derived registry
+cd "$ROOT/A/ws/demo"
+echo "<h1>launch page</h1>" > "$ROOT/launch.html"
+SELF report "$WID" "attached the launch page" --artifact "$ROOT/launch.html"
+AID="$(SELF artifact list --work "$WID" | awk '{print $1}')"
+echo "$AID" | grep -q "^a-" || fail "artifact list did not show an a- id"
+[ -f "$ROOT/A/ws/.superself/artifacts/demo/$AID-launch.html" ] || fail "artifact bytes not copied into the store"
+git -C "$ROOT/A/ws/.superself" ls-files | grep -q "artifacts/demo/$AID-launch.html" || fail "artifact not committed with its event"
+SELF artifact search launch | grep -q "$AID" || fail "artifact search missed the name"
+SELF artifact search nothing-matches | grep -q "no artifacts" || fail "empty search did not say so"
+SELF work show "$WID" | grep -q "$AID launch.html" || fail "work detail missing its artifact"
+BAD="$(SELF report "$WID" "bad path" --artifact "$ROOT/missing.bin" 2>&1 || true)"
+echo "$BAD" | grep -q "does not exist" || fail "missing artifact path not rejected"
+
+# artifacts travel with the store: machine B sees bytes and registry after sync
+cd "$ROOT/A/ws" && SELF sync
+machine B
+cd "$ROOT/B/ws" && SELF sync
+cd "$ROOT/B/ws/demo"
+SELF artifact list | grep -q "$AID" || fail "artifact registry not derived on machine B"
+[ -f "$ROOT/B/ws/.superself/artifacts/demo/$AID-launch.html" ] || fail "artifact bytes did not sync"
+machine A
+
+# evidence reachability: merged settles, a live branch stays provisional,
+# a discarded branch reads as abandoned, a rewritten hash as unverifiable
+cd "$ROOT/A/ws/demo"
+git checkout -q -b feature
+echo one > merged.txt && git add . && git commit -qm "merged work"
+MERGED="$(git rev-parse --short=12 HEAD)"
+git checkout -q -b live
+echo two > live.txt && git add . && git commit -qm "live branch work"
+LIVE="$(git rev-parse --short=12 HEAD)"
+git checkout -q feature
+git checkout -q -b doomed
+echo three > doomed.txt && git add . && git commit -qm "doomed branch work"
+DOOMED="$(git rev-parse --short=12 HEAD)"
+git checkout -q feature
+git branch -q -D doomed
+git checkout -q -b main 2>/dev/null || git checkout -q main
+git merge -q --ff-only feature 2>/dev/null || git merge -q feature
+WID2="$(SELF work add "classify evidence" | tail -1)"
+SELF work start "$WID2"
+SELF report "$WID2" "evidence in all states" --evidence "$MERGED" --evidence "$LIVE" --evidence "$DOOMED" --evidence "000000000000"
+WORK2="$ROOT/A/ws/.superself/projects/demo/work/$WID2.md"
+grep -q "$MERGED (settled)" "$WORK2" || fail "merged evidence not settled"
+grep -q "$LIVE (provisional)" "$WORK2" || fail "live-branch evidence not provisional"
+grep -q "$DOOMED (abandoned)" "$WORK2" || fail "discarded-branch evidence not abandoned"
+grep -q "000000000000 (unverifiable)" "$WORK2" || fail "unknown hash not unverifiable"
+SELF status | grep -q "discarded with its branch" || fail "abandoned evidence raised no health signal"
+
+# the unlinked machine skips the recheck and keeps the synced verdicts
+cd "$ROOT/A/ws" && SELF sync
+machine B
+cd "$ROOT/B/ws"
+rm "$ROOT/B/ws/demo/.self" "$ROOT/B/ws/.superself/links.jsonl"
+SELF sync
+grep -q '"'"$MERGED"'": "settled"' "$ROOT/B/ws/.superself/projects/demo/evidence.json" || fail "verdicts did not sync"
+grep -q "$DOOMED (abandoned)" "$ROOT/B/ws/.superself/projects/demo/work/$WID2.md" || fail "unlinked refold dropped a synced verdict"
+machine A
+
 echo "proof OK"
