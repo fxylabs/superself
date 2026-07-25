@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { connectProject } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
@@ -14,6 +15,7 @@ import {
     MARKER_FILE,
     projectStateDir,
     readRegistry,
+    readStoreConfig,
     requireProject,
     requireWorkspace,
     STORE_DIR
@@ -29,7 +31,8 @@ type ProjectContext = CliContext & { project: string; projectDir: string };
 
 const USAGE = `usage: self <command>
 
-  init                                       initialize the current directory as a workspace
+  init [--lang <code>]                       initialize the current directory as a workspace
+  lang [<code>]                              show or set the language of the HTML views
   project add [path] [--name s] [--desc d]   register a project
   project link <slug> [path]                 reconnect a registered project on this machine
   remote add <url>                           connect the workspace store to a git remote
@@ -52,13 +55,14 @@ const USAGE = `usage: self <command>
   search <query> [--type t] [--project p]    grep state across the workspace
   fold                                       re-derive canonical files from the log`;
 
-function main(argv: string[]): void
+async function main(argv: string[]): Promise<void>
 {
     const cmd = argv[0];
     const rest = argv.slice(1);
     switch (cmd)
     {
-        case "init": cmdInit(); break;
+        case "init": await cmdInit(rest); break;
+        case "lang": cmdLang(rest); break;
         case "project": cmdProject(rest); break;
         case "remote": cmdRemote(rest); break;
         case "sync": syncStore(requireWorkspace(process.cwd())); break;
@@ -79,8 +83,9 @@ function main(argv: string[]): void
     }
 }
 
-function cmdInit(): void
+async function cmdInit(rest: string[]): Promise<void>
 {
+    const { values } = parseArgs({ args: rest, options: { lang: { type: "string" } } });
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
@@ -88,13 +93,56 @@ function cmdInit(): void
         console.log(`workspace already initialized at ${storeDir}`);
         return;
     }
+    const lang = validLang(values.lang ?? await askLang());
     ensureDir(storeDir);
     writeFileSync(join(storeDir, "registry.jsonl"), "");
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({ lang }) + "\n");
     ensureWorkspaceRepo(storeDir);
     ensureSyncConfig(storeDir);
     excludeLocally(cwd, STORE_DIR + "/");
     commitAll(storeDir, "self init");
-    console.log(`workspace initialized at ${storeDir}`);
+    console.log(`workspace initialized at ${storeDir} (views in "${lang}")`);
+}
+
+async function askLang(): Promise<string>
+{
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+    {
+        return "en";
+    }
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question("language for the HTML views (en, ko, …) [en]: ");
+    rl.close();
+    return answer.trim() === "" ? "en" : answer.trim();
+}
+
+function validLang(code: string): string
+{
+    const lang = code.trim().toLowerCase();
+    if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})*$/.test(lang))
+    {
+        throw new CliError(`"${code}" is not a language code — use a BCP 47 code like en, ko, ja`);
+    }
+    return lang;
+}
+
+function cmdLang(rest: string[]): void
+{
+    const ctx = requireWorkspace(process.cwd());
+    if (rest[0] === undefined)
+    {
+        console.log(readStoreConfig(ctx.storeDir).lang ?? "en");
+        return;
+    }
+    const lang = validLang(rest[0]);
+    const config = { ...readStoreConfig(ctx.storeDir), lang };
+    writeFileSync(join(ctx.storeDir, "config.json"), JSON.stringify(config) + "\n");
+    for (const entry of readRegistry(ctx.storeDir))
+    {
+        foldProject(ctx.storeDir, entry.slug);
+    }
+    commitAll(ctx.storeDir, `lang set ${lang}`);
+    console.log(`views now render in "${lang}"`);
 }
 
 function cmdProject(rest: string[]): void
@@ -443,7 +491,7 @@ function requireText(value: string | undefined, usage: string): string
 
 try
 {
-    main(process.argv.slice(2));
+    await main(process.argv.slice(2));
 }
 catch (error)
 {

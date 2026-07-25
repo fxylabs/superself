@@ -8,6 +8,43 @@ import { CliError } from "./types.js";
 
 const VIEW_DIR = "view";
 
+const STRINGS: Record<string, Record<string, string>> = {
+    ko: {
+        "Workspace": "워크스페이스",
+        "workspace": "워크스페이스",
+        "Work in progress": "진행 중인 작업",
+        "Blocked": "막힌 작업",
+        "Next": "다음 작업",
+        "Open questions": "열린 질문",
+        "Decisions": "결정",
+        "Proposed decisions": "제안된 결정",
+        "Conventions": "컨벤션",
+        "Done": "완료된 작업",
+        "Reports (latest first)": "보고 (최신순)",
+        "updated": "갱신",
+        "goal not set": "목표 미설정",
+        "created": "생성",
+        "last event": "마지막 이벤트",
+        "next action": "다음 행동",
+        "evidence": "증거",
+        "waiting on": "대기:",
+        "confirm with": "확인 명령",
+        "report(s)": "보고",
+        "work unit(s) done": "작업 완료",
+        "active": "진행",
+        "blocked": "막힘",
+        "next": "다음",
+        "done": "완료"
+    }
+};
+
+let LANG = "en";
+
+function t(key: string): string
+{
+    return STRINGS[LANG]?.[key] ?? key;
+}
+
 interface ProjectSummary
 {
     slug: string;
@@ -22,8 +59,9 @@ interface ProjectSummary
     openQuestions: string[];
 }
 
-export function writeViews(storeDir: string, model: ProjectModel): void
+export function writeViews(storeDir: string, model: ProjectModel, lang: string): void
 {
+    LANG = lang;
     const dir = ensureDir(join(storeDir, VIEW_DIR));
     excludeLocally(storeDir, VIEW_DIR + "/");
     writeFileSync(join(dir, `${model.slug}.html`), renderProjectPage(model));
@@ -89,19 +127,19 @@ function renderProjectPage(model: ProjectModel): string
     const confirmed = model.decisions.filter((d) => d.status === "confirmed");
     const proposed = model.decisions.filter((d) => d.status === "proposed" && !d.expired);
     const body = [
-        `<p><a class="muted" href="workspace.html">← workspace</a></p>`,
+        `<p><a class="muted" href="workspace.html">← ${t("workspace")}</a></p>`,
         `<header><h1>${esc(model.slug)}</h1>${model.description === undefined ? "" : `<p class="muted">${esc(model.description)}</p>`}</header>`,
-        `<p class="goal">${esc(model.goal ?? "goal not set")}</p>`,
+        `<p class="goal">${esc(model.goal ?? t("goal not set"))}</p>`,
         list("alert", model.health),
-        cards("Work in progress", active.map((w) => workCard(model.slug, w))),
-        cards("Blocked", blocked.map((w) => workCard(model.slug, w))),
-        section("Next", next.map((w) => `<li>${workLink(model.slug, w)} ${esc(w.outcome)}</li>`)),
-        section("Open questions", model.openQuestions.map((q) => `<li>${esc(q)}</li>`)),
-        section("Decisions", confirmed.map((d) => `<li>${esc(d.text)}${d.why === undefined ? "" : ` <span class="muted">— ${esc(d.why)}</span>`} <span class="muted">(${d.ts.slice(0, 10)})</span></li>`)),
-        section("Proposed decisions", proposed.map((d) => `<li>${esc(d.text)} <span class="muted">— confirm with <code>self decide confirm ${esc(d.id)}</code></span></li>`)),
-        section("Conventions", model.conventions.map((c) => `<li>${esc(c.text)}</li>`)),
-        section("Done", done.map((w) => `<li><span class="badge b-done">done</span> ${workLink(model.slug, w)} ${esc(w.outcome)} <span class="muted">(${w.lastEventTs.slice(0, 10)})</span></li>`)),
-        `<footer class="muted">updated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC</footer>`
+        cards(t("Work in progress"), active.map((w) => workCard(model.slug, w))),
+        cards(t("Blocked"), blocked.map((w) => workCard(model.slug, w))),
+        section(t("Next"), next.map((w) => `<li>${workLink(model.slug, w)} ${esc(w.outcome)}</li>`)),
+        section(t("Open questions"), model.openQuestions.map((q) => `<li>${esc(q)}</li>`)),
+        section(t("Decisions"), confirmed.map((d) => `<li>${esc(d.text)}${d.why === undefined ? "" : ` <span class="muted">— ${esc(d.why)}</span>`} <span class="muted">(${d.ts.slice(0, 10)})</span></li>`)),
+        section(t("Proposed decisions"), proposed.map((d) => `<li>${esc(d.text)} <span class="muted">— ${t("confirm with")} <code>self decide confirm ${esc(d.id)}</code></span></li>`)),
+        section(t("Conventions"), model.conventions.map((c) => `<li>${esc(c.text)}</li>`)),
+        section(t("Done"), done.map((w) => `<li><span class="badge b-done">${t("done")}</span> ${workLink(model.slug, w)} ${esc(w.outcome)} <span class="muted">(${w.lastEventTs.slice(0, 10)})</span></li>`)),
+        `<footer class="muted">${t("updated")} ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC</footer>`
     ].join("\n");
     return page(model.slug, body);
 }
@@ -115,23 +153,23 @@ function workCard(slug: string, work: WorkState): string
 {
     const latest = work.reports[work.reports.length - 1];
     const parts = [
-        `<div class="card"><div><span class="badge b-${work.status}">${work.status}</span> ${workLink(slug, work)} <strong>${esc(work.outcome)}</strong></div>`
+        `<div class="card"><div><span class="badge b-${work.status}">${t(work.status)}</span> ${workLink(slug, work)} <strong>${esc(work.outcome)}</strong></div>`
     ];
     if (work.status === "blocked")
     {
-        parts.push(`<p class="alert-text">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`);
+        parts.push(`<p class="alert-text">${t("waiting on")} ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`);
     }
     if (latest !== undefined)
     {
-        parts.push(`<p>${esc(firstLine(latest.text))} <span class="muted">(${latest.ts.slice(0, 10)}, ${work.reports.length} report(s))</span></p>`);
+        parts.push(`<p>${esc(firstLine(latest.text))} <span class="muted">(${latest.ts.slice(0, 10)}, ${work.reports.length} ${t("report(s)")})</span></p>`);
     }
     if (work.next !== undefined)
     {
-        parts.push(`<p class="muted">next: ${esc(work.next)}</p>`);
+        parts.push(`<p class="muted">${t("next action")}: ${esc(work.next)}</p>`);
     }
     if (work.evidence.length > 0)
     {
-        parts.push(`<p class="muted">evidence: ${work.evidence.map((c) => `<code>${esc(c)}</code>`).join(" ")}</p>`);
+        parts.push(`<p class="muted">${t("evidence")}: ${work.evidence.map((c) => `<code>${esc(c)}</code>`).join(" ")}</p>`);
     }
     return parts.join("\n") + "</div>";
 }
@@ -139,29 +177,29 @@ function workCard(slug: string, work: WorkState): string
 function renderWorkPage(slug: string, work: WorkState): string
 {
     const facts = [
-        `<li>created ${work.ts.slice(0, 10)} · last event ${work.lastEventTs.slice(0, 10)}</li>`
+        `<li>${t("created")} ${work.ts.slice(0, 10)} · ${t("last event")} ${work.lastEventTs.slice(0, 10)}</li>`
     ];
     if (work.status === "blocked")
     {
-        facts.push(`<li class="alert-text">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</li>`);
+        facts.push(`<li class="alert-text">${t("waiting on")} ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</li>`);
     }
     if (work.next !== undefined)
     {
-        facts.push(`<li>next action: ${esc(work.next)}</li>`);
+        facts.push(`<li>${t("next action")}: ${esc(work.next)}</li>`);
     }
     if (work.evidence.length > 0)
     {
-        facts.push(`<li>evidence: ${work.evidence.map((c) => `<code>${esc(c)}</code>`).join(" ")}</li>`);
+        facts.push(`<li>${t("evidence")}: ${work.evidence.map((c) => `<code>${esc(c)}</code>`).join(" ")}</li>`);
     }
     const reports = [...work.reports].reverse().map((report) =>
         `<div class="card"><p class="muted">${report.ts.slice(0, 10)}${report.commits.length > 0 ? ` · ${report.commits.map((c) => `<code>${esc(c)}</code>`).join(" ")}` : ""}</p>` +
         `<div class="prose">${esc(report.text)}</div></div>`);
     const body = [
         `<p><a class="muted" href="../${esc(slug)}.html">← ${esc(slug)}</a></p>`,
-        `<header><h1><span class="badge b-${work.status}">${work.status}</span> <code>${esc(work.id)}</code></h1>`,
+        `<header><h1><span class="badge b-${work.status}">${t(work.status)}</span> <code>${esc(work.id)}</code></h1>`,
         `<p class="goal">${esc(work.outcome)}</p></header>`,
         `<ul>${facts.join("\n")}</ul>`,
-        reports.length === 0 ? "" : `<h2>Reports (latest first)</h2>\n${reports.join("\n")}`
+        reports.length === 0 ? "" : `<h2>${t("Reports (latest first)")}</h2>\n${reports.join("\n")}`
     ].join("\n");
     return page(`${work.id} — ${slug}`, body);
 }
@@ -171,15 +209,15 @@ function renderWorkspacePage(summaries: ProjectSummary[]): string
     const cards = summaries.map((summary) => [
         `<a class="card" href="${esc(summary.slug)}.html"><h2>${esc(summary.slug)}</h2>`,
         summary.description === undefined ? "" : `<p class="muted">${esc(summary.description)}</p>`,
-        `<p class="goal">${esc(summary.goal ?? "goal not set")}</p>`,
-        `<p>${badge(summary.active.length, "active", "b-active")} ${badge(summary.blockedCount, "blocked", "b-blocked")} ${badge(summary.nextCount, "next", "b-next")} ${badge(summary.doneCount, "done", "b-done")}</p>`,
+        `<p class="goal">${esc(summary.goal ?? t("goal not set"))}</p>`,
+        `<p>${badge(summary.active.length, t("active"), "b-active")} ${badge(summary.blockedCount, t("blocked"), "b-blocked")} ${badge(summary.nextCount, t("next"), "b-next")} ${badge(summary.doneCount, t("done"), "b-done")}</p>`,
         summary.active.map((w) => `<p><code>${esc(w.id)}</code> ${esc(w.outcome)}</p>`).join("\n"),
         summary.health.map((h) => `<p class="alert-text">${esc(h)}</p>`).join("\n"),
         summary.openQuestions.map((q) => `<p class="alert-text">${esc(q)}</p>`).join("\n"),
-        `<footer class="muted">updated ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></a>`
+        `<footer class="muted">${t("updated")} ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></a>`
     ].join("\n")).join("\n");
-    const body = `<header><h1>Workspace</h1></header>\n<div class="grid">${cards}</div>`;
-    return page("Workspace", body);
+    const body = `<header><h1>${t("Workspace")}</h1></header>\n<div class="grid">${cards}</div>`;
+    return page(t("Workspace"), body);
 }
 
 function badge(count: number, label: string, cls: string): string
@@ -216,7 +254,7 @@ function esc(text: string): string
 function page(title: string, body: string): string
 {
     return `<!doctype html>
-<html lang="en">
+<html lang="${esc(LANG)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

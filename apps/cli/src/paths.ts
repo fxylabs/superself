@@ -90,6 +90,17 @@ export function readRegistry(storeDir: string): RegistryEntry[]
     return readJsonl(join(storeDir, "registry.jsonl"));
 }
 
+export interface StoreConfig
+{
+    lang?: string;
+}
+
+export function readStoreConfig(storeDir: string): StoreConfig
+{
+    const file = join(storeDir, "config.json");
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+}
+
 export function readLinks(storeDir: string): Record<string, string>
 {
     const links: Record<string, string> = {};
