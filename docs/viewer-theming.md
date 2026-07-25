@@ -120,8 +120,14 @@ the tokens and the class names listed below are stable.
 
 Themes that go beyond tokens can rely on these class names:
 
-- Page chrome: `main` (`main.wide` on the workspace page), `.crumb`,
-  `.eyebrow`, `.desc`, `.goal`, `.note-band`, `footer`
+- Page chrome: `main` (`main.wide` on the workspace and project pages),
+  `.crumb`, `.eyebrow`, `.desc`, `.goal`, `.note-band`, `footer`
+- Project dashboard: `.board-head` (the one-line header; carries `.desc`,
+  `.goal-line`, `.counts`, and a `.stamp` timestamp), `.attention` (modifier
+  `.attention.calm` for the empty state; entries `.att` with a `.kind` chip),
+  `.board` (the main grid; `.span` panels stretch across all columns),
+  `.queue` (one-line queued work), `.empty` (panel empty states), `.fold`
+  (`<details>` collapse used by decisions, conventions, and done)
 - Ledger rows: `.row` (modifier `.row.proposed`), with `time`, `.body`,
   `.why`, `.id` inside
 - Work cards: `.work` with status modifiers `.active` / `.blocked` / `.next`
@@ -132,7 +138,9 @@ Themes that go beyond tokens can rely on these class names:
 - Artifacts: `.plates`, `.plate`, `.doc`
 - Event log: `.log` with `time` and `.type` inside
 - Workspace cards: `.projects`, `.project`, `.goal-line`, `.counts` (with
-  `.on-active`, `.on-blocked`, `.zero`)
+  `.on-active`, `.on-blocked`, `.zero`) — `.goal-line` and `.counts` also
+  appear in the project-page header, and `.counts` in the workspace
+  attention line
 
 **Guaranteed stable across versions:** the token names and the class names
 above. **Not guaranteed:** the element structure inside each class, default

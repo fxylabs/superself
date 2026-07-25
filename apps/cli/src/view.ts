@@ -10,7 +10,11 @@ import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";
 const THEME_FILE = "theme.css";
-const EVENT_TAIL = 8;
+const EVENT_TAIL = 15;
+const DECISION_ROWS = 5;
+const PROJECT_ARTIFACTS = 6;
+const SUMMARY_ARTIFACTS = 4;
+const WORKSPACE_ARTIFACTS = 8;
 
 // Optional localization layer, unused by default: view labels are
 // English-base and scan-only chrome is not translated. The workspace
@@ -55,6 +59,18 @@ function t(key: string): string
     return STRINGS[LANG]?.[key] ?? key;
 }
 
+interface SummaryArtifact
+{
+    id: string;
+    name: string;
+    path: string;
+    workId: string;
+    ts: string;
+}
+
+// proposedCount and recentArtifacts are optional so the workspace renderer
+// tolerates stale *.json summaries written before they existed — other
+// projects refold lazily.
 interface ProjectSummary
 {
     slug: string;
@@ -67,6 +83,8 @@ interface ProjectSummary
     doneCount: number;
     health: string[];
     openQuestions: string[];
+    proposedCount?: number;
+    recentArtifacts?: SummaryArtifact[];
 }
 
 export function writeViews(storeDir: string, model: ProjectModel, lang: string, verdicts: Record<string, Verdict> = {}): void
@@ -132,7 +150,10 @@ function summarize(model: ProjectModel): ProjectSummary
         nextCount: model.works.filter((w) => w.status === "next").length,
         doneCount: model.works.filter((w) => w.status === "done").length,
         health: model.health,
-        openQuestions: model.openQuestions
+        openQuestions: model.openQuestions,
+        proposedCount: model.decisions.filter((d) => d.status === "proposed" && !d.expired).length,
+        recentArtifacts: artifactRows(model).slice(0, SUMMARY_ARTIFACTS)
+            .map((r) => ({ id: r.meta.id, name: r.meta.name, path: r.meta.path, workId: r.workId, ts: r.ts }))
     };
 }
 
@@ -150,28 +171,78 @@ function renderProjectPage(model: ProjectModel, events: SelfEvent[], verdicts: R
     const blocked = model.works.filter((w) => w.status === "blocked");
     const next = model.works.filter((w) => w.status === "next");
     const done = model.works.filter((w) => w.status === "done");
-    const proposed = model.decisions.filter((d) => d.status === "proposed" && !d.expired);
-    const notes = [...model.health, ...model.openQuestions];
-    if (proposed.length > 0)
-    {
-        notes.push(`${proposed.length} proposed ${proposed.length === 1 ? "decision awaits" : "decisions await"} confirmation — see the decision ledger`);
-    }
+    const counts = [countSpan(active.length, "active"), countSpan(blocked.length, "blocked"),
+        countSpan(next.length, "next"), countSpan(done.length, "done")].join(" · ");
+    const queue = next.map((w) => `<li>${workLink(model.slug, w)} ${esc(w.outcome)}</li>`).join("\n");
     const body = [
         `<a class="crumb" href="workspace.html">← workspace</a>`,
         `<p class="eyebrow">Project record</p>`,
-        `<header><h1>${esc(model.slug)}</h1>${model.description === undefined ? "" : `<p class="desc">${esc(model.description)}</p>`}</header>`,
-        `<p class="goal"><em>${esc(model.goal ?? "goal not set")}</em></p>`,
-        noteBand(notes),
-        cardSection("Work in progress", [...active, ...blocked].map((w) => workCard(model.slug, w, verdicts))),
-        cardSection("Next", next.map((w) => workCard(model.slug, w, verdicts))),
-        ledger("Decision ledger", decisionRows(model.decisions)),
-        ledger("Conventions", model.conventions.map((c) => row(c.ts, `<p>${esc(c.text)}</p><p class="id">${esc(c.id)}</p>`))),
-        plates("Artifacts", artifactRows(model), ".."),
-        eventLog("Recent events", events),
-        ledger("Done", done.map((w) => row(w.lastEventTs, `<p>${workLink(model.slug, w)} ${esc(w.outcome)}</p>`))),
+        `<header class="board-head"><h1>${esc(model.slug)}</h1>` +
+            (model.description === undefined ? "" : `<span class="desc">${esc(model.description)}</span>`) +
+            `<span class="goal-line">${esc(model.goal ?? "goal not set")}</span>` +
+            `<span class="counts">${counts}</span>` +
+            `<span class="stamp">updated ${stamp()} UTC</span></header>`,
+        attentionBand(model, blocked),
+        `<div class="board">`,
+        plates("Artifacts", artifactRows(model), "..", ` class="span"`, "no artifacts yet", PROJECT_ARTIFACTS),
+        panel("In progress", active.map((w) => workCard(model.slug, w, verdicts)), "no active work"),
+        panel("Next", queue === "" ? [] : [`<ul class="queue">${queue}</ul>`], "queue is empty"),
+        events.length === 0 ? panel("Recent events", [], "no events yet") : eventLog("Recent events", events),
+        `</div>`,
+        decisionSection(model.decisions),
+        foldSection("Conventions", model.conventions.map((c) => row(c.ts, `<p>${esc(c.text)}</p><p class="id">${esc(c.id)}</p>`))),
+        foldSection("Done", done.map((w) => row(w.lastEventTs, `<p>${workLink(model.slug, w)} ${esc(w.outcome)}</p>`))),
         pageFooter()
     ].join("\n");
-    return page(model.slug, body);
+    return page(model.slug, body, true);
+}
+
+// Everything that waits on the reader, in one band under the header; an
+// explicit empty state so absence reads as information, not omission.
+function attentionBand(model: ProjectModel, blocked: WorkState[]): string
+{
+    // the model already turns decision-blocked work into an open question;
+    // the blocked entry carries the link, so drop the generated duplicate
+    const generated = new Set(blocked.map((w) => `${w.id} is waiting on a decision: ${w.blockedWhy ?? w.outcome}`));
+    const proposed = model.decisions.filter((d) => d.status === "proposed" && !d.expired);
+    const items = [
+        ...blocked.map((w) => att("blocked", `${workLink(model.slug, w)} ${esc(w.outcome)} — waiting on ${esc(w.blockedOn ?? "?")}${w.blockedWhy === undefined ? "" : `: ${esc(w.blockedWhy)}`}`)),
+        ...model.health.map((h) => att("health", esc(h))),
+        ...proposed.map((d) => att("proposal", `${esc(d.text)} · <code>self decide confirm ${esc(d.id)}</code>`)),
+        ...model.openQuestions.filter((q) => !generated.has(q)).map((q) => att("question", esc(q)))
+    ];
+    return items.length === 0
+        ? `<div class="attention calm"><p>nothing waiting on you</p></div>`
+        : `<div class="attention">${items.join("\n")}</div>`;
+}
+
+function att(kind: string, body: string): string
+{
+    return `<p class="att"><b class="kind">${kind}</b> ${body}</p>`;
+}
+
+function panel(title: string, items: string[], empty: string): string
+{
+    return `<section><h2>${title}</h2>\n${items.length === 0 ? `<p class="empty">${esc(empty)}</p>` : items.join("\n")}</section>`;
+}
+
+function decisionSection(decisions: DecisionState[]): string
+{
+    const rows = decisionRows(decisions);
+    if (rows.length === 0)
+    {
+        return "";
+    }
+    const rest = rows.slice(DECISION_ROWS);
+    const fold = rest.length === 0 ? "" :
+        `\n<details class="fold"><summary>${count(rest.length, "earlier decision")}</summary>\n${rest.join("\n")}</details>`;
+    return `<section><h2>Decisions</h2>\n${rows.slice(0, DECISION_ROWS).join("\n")}${fold}</section>`;
+}
+
+function foldSection(title: string, rows: string[]): string
+{
+    return rows.length === 0 ? "" :
+        `<section><details class="fold"><summary>${title} · ${rows.length}</summary>\n${rows.join("\n")}</details></section>`;
 }
 
 function noteBand(notes: string[]): string
@@ -202,32 +273,21 @@ function workLink(slug: string, work: WorkState): string
     return `<a href="${esc(slug)}/${esc(work.id)}.html"><code>${esc(work.id)}</code></a>`;
 }
 
+// Compressed card for the dashboard column: id, outcome, latest report
+// first line, evidence chips — everything else lives on the work page.
 function workCard(slug: string, work: WorkState, verdicts: Record<string, Verdict>): string
 {
     const latest = work.reports[work.reports.length - 1];
     const parts = [
         `<div class="work ${work.status}"><h3>${workLink(slug, work)} ${esc(work.outcome)}</h3>`
     ];
-    if (work.status === "blocked")
-    {
-        parts.push(`<p class="alert">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`);
-    }
     if (latest !== undefined)
     {
         parts.push(`<p>${esc(firstLine(latest.text))} <span class="meta">(${latest.ts.slice(0, 10)})</span></p>`);
     }
-    if (work.next !== undefined)
+    if (work.evidence.length > 0)
     {
-        parts.push(`<p class="meta">next: ${esc(work.next)}</p>`);
-    }
-    const meta = [
-        work.artifacts.length > 0 ? count(work.artifacts.length, "artifact") : "",
-        work.reports.length > 0 ? count(work.reports.length, "report") : "",
-        work.evidence.length > 0 ? `evidence ${work.evidence.map((c) => hashChip(c, verdicts)).join(" ")}` : ""
-    ].filter((part) => part !== "");
-    if (meta.length > 0)
-    {
-        parts.push(`<p class="meta">${meta.join(" · ")}</p>`);
+        parts.push(`<p class="meta">evidence ${work.evidence.map((c) => hashChip(c, verdicts)).join(" ")}</p>`);
     }
     return parts.join("\n") + "</div>";
 }
@@ -284,6 +344,7 @@ interface ArtifactRow
     meta: ArtifactMeta;
     workId: string;
     ts: string;
+    project?: string;
 }
 
 function artifactRows(model: ProjectModel): ArtifactRow[]
@@ -298,24 +359,37 @@ function workArtifactRows(work: WorkState): ArtifactRow[]
 }
 
 // prefix walks from the page's directory back up to the store root, where
-// the ingested artifact files live.
-function plates(title: string, rows: ArtifactRow[], prefix: string): string
+// the ingested artifact files live. With an empty-state text the section
+// renders even without rows, so the panel never silently vanishes; visible
+// caps the open grid and folds the rest so the strip stays one glance tall.
+function plates(title: string, rows: ArtifactRow[], prefix: string, cls = "", empty?: string, visible?: number): string
 {
-    if (rows.length === 0)
+    if (rows.length === 0 && empty === undefined)
     {
         return "";
     }
-    const items = rows.map((rowItem) =>
+    if (rows.length === 0)
     {
-        const href = esc(`${prefix}/${rowItem.meta.path}`);
-        const ext = rowItem.meta.name.replace(/^.*(\.[^.]+)$/, "$1");
-        const thumb = isImage(rowItem.meta.name)
-            ? `<img src="${href}" alt="" loading="lazy">`
-            : `<div class="doc">${esc(ext)}</div>`;
-        return `<a class="plate" href="${href}"><figure>${thumb}` +
-            `<figcaption>${esc(rowItem.meta.name)}<span>${esc(rowItem.meta.id)} · ${esc(rowItem.workId)} · ${rowItem.ts.slice(0, 10)}</span></figcaption></figure></a>`;
-    });
-    return `<section><h2>${title}</h2>\n<div class="plates">${items.join("\n")}</div></section>`;
+        return `<section${cls}><h2>${title}</h2>\n<p class="empty">${esc(empty ?? "")}</p></section>`;
+    }
+    const shown = rows.slice(0, visible ?? rows.length);
+    const rest = rows.slice(visible ?? rows.length);
+    const fold = rest.length === 0 ? "" :
+        `\n<details class="fold"><summary>${count(rest.length, "earlier artifact")}</summary>` +
+        `<div class="plates">${rest.map((r) => plate(r, prefix)).join("\n")}</div></details>`;
+    return `<section${cls}><h2>${title}</h2>\n<div class="plates">${shown.map((r) => plate(r, prefix)).join("\n")}</div>${fold}</section>`;
+}
+
+function plate(rowItem: ArtifactRow, prefix: string): string
+{
+    const href = esc(`${prefix}/${rowItem.meta.path}`);
+    const ext = rowItem.meta.name.replace(/^.*(\.[^.]+)$/, "$1");
+    const thumb = isImage(rowItem.meta.name)
+        ? `<img src="${href}" alt="" loading="lazy">`
+        : `<div class="doc">${esc(ext)}</div>`;
+    const caption = `${esc(rowItem.project ?? rowItem.meta.id)} · ${esc(rowItem.workId)} · ${rowItem.ts.slice(0, 10)}`;
+    return `<a class="plate" href="${href}"><figure>${thumb}` +
+        `<figcaption>${esc(rowItem.meta.name)}<span>${caption}</span></figcaption></figure></a>`;
 }
 
 function isImage(name: string): boolean
@@ -336,6 +410,14 @@ function eventLog(title: string, events: SelfEvent[]): string
 
 function renderWorkspacePage(summaries: ProjectSummary[]): string
 {
+    const blockedTotal = summaries.reduce((n, s) => n + s.blockedCount, 0);
+    const waitingTotal = summaries.reduce((n, s) => n + (s.proposedCount ?? 0) + s.openQuestions.length, 0);
+    const healthTotal = summaries.reduce((n, s) => n + s.health.length, 0);
+    const recent = summaries
+        .flatMap((s) => (s.recentArtifacts ?? []).map((a) =>
+            ({ meta: { id: a.id, name: a.name, path: a.path }, workId: a.workId, ts: a.ts, project: s.slug })))
+        .sort((a, b) => b.ts.localeCompare(a.ts))
+        .slice(0, WORKSPACE_ARTIFACTS);
     const cards = summaries.map((summary) => [
         `<div class="project"><h2><a href="${esc(summary.slug)}.html">${esc(summary.slug)}</a></h2>`,
         summary.description === undefined ? "" : `<p class="desc">${esc(summary.description)}</p>`,
@@ -348,10 +430,28 @@ function renderWorkspacePage(summaries: ProjectSummary[]): string
     const body = [
         `<p class="eyebrow">Workspace record</p>`,
         `<header><h1>Workspace</h1></header>`,
+        workspaceAttention(blockedTotal, waitingTotal, healthTotal),
+        plates("Recent artifacts", recent, ".."),
         `<div class="projects">${cards}</div>`,
         pageFooter()
     ].join("\n");
     return page("Workspace", body, true);
+}
+
+// The workspace answers "is anything waiting on me?" before a single
+// project card is read.
+function workspaceAttention(blocked: number, waiting: number, health: number): string
+{
+    if (blocked + waiting + health === 0)
+    {
+        return `<div class="attention calm"><p>nothing waiting on you</p></div>`;
+    }
+    const line = [
+        countSpan(blocked, "blocked"),
+        countSpan(waiting, "waiting on you"),
+        countSpan(health, health === 1 ? "health signal" : "health signals")
+    ].join(" · ");
+    return `<div class="attention"><p class="att counts">${line}</p></div>`;
 }
 
 function countSpan(n: number, label: string): string
@@ -362,11 +462,6 @@ function countSpan(n: number, label: string): string
     }
     const cls = label === "active" ? ` class="on-active"` : label === "blocked" ? ` class="on-blocked"` : "";
     return `<b${cls}>${n} ${label}</b>`;
-}
-
-function cardSection(title: string, items: string[]): string
-{
-    return items.length === 0 ? "" : `<section><h2>${title}</h2>\n${items.join("\n")}</section>`;
 }
 
 function ledger(title: string, rows: string[]): string
@@ -381,7 +476,12 @@ function row(ts: string, body: string, cls = ""): string
 
 function pageFooter(): string
 {
-    return `<footer>superself record · updated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC · generated from the event log</footer>`;
+    return `<footer>superself record · updated ${stamp()} UTC · generated from the event log</footer>`;
+}
+
+function stamp(): string
+{
+    return new Date().toISOString().slice(0, 16).replace("T", " ");
 }
 
 function firstLine(text: string): string
@@ -533,6 +633,36 @@ figure { margin: 0; }
 .counts .on-active { color: var(--seal); }
 .counts .on-blocked { color: var(--note); }
 .counts .zero { opacity: .55; }
+.board-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem 1.1rem;
+              margin: .8rem 0 0; }
+.board-head h1 { font-size: 21px; margin: 0; }
+.board-head .desc { margin: 0; }
+.board-head .goal-line { font: 500 15px/1.5 var(--sans); margin: 0;
+        box-shadow: inset 0 -0.4em 0 color-mix(in srgb, var(--seal) 12%, transparent); }
+.stamp { font: 12px var(--mono); color: var(--ink-soft); }
+.attention { border-left: 3px solid var(--note); padding: .6rem 1rem; margin: 1.7rem 0 0;
+             background: color-mix(in srgb, var(--note) 6%, transparent); }
+.attention .att { margin: .25rem 0; }
+.attention .kind { font: 600 10.5px var(--mono); letter-spacing: .14em; text-transform: uppercase;
+                   color: var(--note); margin-right: .4rem; }
+.attention.calm { border-left-color: var(--rule); background: transparent; }
+.attention.calm p { margin: .15rem 0; color: var(--ink-soft); }
+.board { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);
+         gap: 2.2rem 1.8rem; margin-top: 2.6rem; }
+.board section { margin-top: 0; }
+.board .span { grid-column: 1 / -1; }
+.board .log { max-height: 30rem; overflow-y: auto; }
+.board .log li { display: block; padding: .4rem 0; }
+.board .log li time, .board .log li .type { margin-right: .55rem; }
+@media (max-width: 60rem) { .board { grid-template-columns: 1fr; } }
+.queue { list-style: none; padding: 0; margin: .4rem 0 0; }
+.queue li { margin: 0; padding: .5rem 0; border-bottom: 1px solid var(--rule); }
+.queue a { text-decoration: none; }
+.empty { color: var(--ink-soft); opacity: .85; }
+.fold summary { cursor: pointer; font: 600 12px var(--mono); letter-spacing: .2em;
+                text-transform: uppercase; color: var(--ink-soft); padding: .45rem 0; }
+.fold summary:hover { color: var(--ink); }
+.fold:first-child > summary { border-bottom: 1px solid var(--ink); margin-bottom: .2rem; }
 footer { margin-top: 3.5rem; color: var(--ink-soft); font: 12px var(--mono); }
 ul { padding-left: 1.3rem; margin: .4rem 0; }
 li { margin: .3rem 0; }

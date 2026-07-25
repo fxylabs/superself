@@ -158,6 +158,9 @@ BAD="$(SELF report "$WID" "bad path" --artifact "$ROOT/missing.bin" 2>&1 || true
 echo "$BAD" | grep -q "does not exist" || fail "missing artifact path not rejected"
 grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/demo.html" || fail "project view missing the artifact"
 grep -q "$AID-launch.html" "$VIEW_A/demo/$WID.html" || fail "work view missing the artifact"
+grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/workspace.html" || fail "workspace view missing the recent-artifact strip"
+grep -q 'class="attention' "$VIEW_A/demo.html" || fail "project view missing the attention band"
+grep -q 'class="attention' "$VIEW_A/workspace.html" || fail "workspace view missing the attention line"
 
 # artifacts travel with the store: machine B sees bytes and registry after sync
 cd "$ROOT/A/ws" && SELF sync
