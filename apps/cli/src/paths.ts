@@ -4,6 +4,7 @@ import { CliError, RegistryEntry } from "./types.js";
 
 export const STORE_DIR = ".superself";
 export const MARKER_FILE = ".self";
+export const LINKS_FILE = "links.jsonl";
 
 export interface CliContext
 {
@@ -86,7 +87,32 @@ export function ensureDir(path: string): string
 
 export function readRegistry(storeDir: string): RegistryEntry[]
 {
-    const file = join(storeDir, "registry.jsonl");
+    return readJsonl(join(storeDir, "registry.jsonl"));
+}
+
+export function readLinks(storeDir: string): Record<string, string>
+{
+    const links: Record<string, string> = {};
+    for (const entry of readJsonl(join(storeDir, LINKS_FILE)))
+    {
+        links[entry.slug] = entry.path;
+    }
+    return links;
+}
+
+export function resolveProjectPath(storeDir: string, slug: string): string | null
+{
+    const linked = readLinks(storeDir)[slug];
+    if (linked !== undefined)
+    {
+        return linked;
+    }
+    const entry = readRegistry(storeDir).find((item) => item.slug === slug);
+    return entry?.path ?? null;
+}
+
+function readJsonl(file: string): any[]
+{
     if (!existsSync(file))
     {
         return [];

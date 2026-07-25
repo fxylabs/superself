@@ -16,7 +16,8 @@
     },
     "scripts": {
         "build": "tsc",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "proof": "tsc && bash proof/proof.sh"
     },
     "devDependencies": {
         "@types/node": "22.10.5",

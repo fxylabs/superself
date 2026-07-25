@@ -2,10 +2,20 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export function git(cwd: string, ...args: string[]): { ok: boolean; out: string }
+export function git(cwd: string, ...args: string[]): { ok: boolean; out: string; err: string }
 {
     const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-    return { ok: result.status === 0, out: (result.stdout ?? "").trim() };
+    return {
+        ok: result.status === 0,
+        out: (result.stdout ?? "").trim(),
+        err: (result.stderr ?? "").trim()
+    };
+}
+
+export function configureStoreIdentity(storeDir: string): void
+{
+    git(storeDir, "config", "user.name", "superself");
+    git(storeDir, "config", "user.email", "self@superself.local");
 }
 
 export function ensureWorkspaceRepo(storeDir: string): void
@@ -15,8 +25,7 @@ export function ensureWorkspaceRepo(storeDir: string): void
         return;
     }
     git(storeDir, "init", "-q");
-    git(storeDir, "config", "user.name", "superself");
-    git(storeDir, "config", "user.email", "self@superself.local");
+    configureStoreIdentity(storeDir);
 }
 
 export function commitAll(storeDir: string, message: string): void

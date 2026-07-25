@@ -59,7 +59,11 @@ sits next to git:
 - `self connect` renders an agent-onboarding block into `AGENTS.md` and
   `CLAUDE.md` — the instruction files agent tools already read — so any
   terminal agent learns the protocol and current conventions; the block
-  refreshes on every fold.
+  refreshes on every fold;
+- `self remote add` connects the workspace store to a git remote, `self sync`
+  pulls, refolds, and pushes it, and `self clone` brings a store onto a new
+  machine — concurrent appends from different machines merge cleanly, and
+  `self project link` reconnects each project checkout to the cloned store.
 
 The CLI is the first application shell. A read-only viewer is a later, optional
 layer — never a required surface.
@@ -92,6 +96,7 @@ self context                   # what an agent should read at session start
 
 ```bash
 pnpm typecheck
+pnpm proof                     # end-to-end proof: lifecycle + two-machine sync
 pnpm build
 ```
 
