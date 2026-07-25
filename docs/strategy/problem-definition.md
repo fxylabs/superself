@@ -345,9 +345,13 @@ The read-only principle stands: no viewer ever writes state.
 Scope: `self init`, `self project add`, the event verbs (`goal set`, `decide`,
 `work add/start/block/unblock/done`, `report`, `convention add`), immediate
 fold, `self context`, the read commands (`status`, `work`, `log`), and
-`self search`. Deferred to the next slice: commit-trailer harvesting, the
-CLAUDE.md managed block, `artifact` commands, evidence-reachability checks,
-and richer health derivation.
+`self search`. Deferred to the next slice: commit-trailer harvesting,
+`artifact` commands, evidence-reachability checks, and richer health
+derivation. The managed block was pulled forward into this slice as
+`self connect` (decided 2026-07-25): it renders the agent-onboarding block —
+protocol plus current conventions — into AGENTS.md (the cross-tool
+instruction standard) and CLAUDE.md, and every fold refreshes it, so any
+terminal agent learns the CLI without per-tool adapters.
 
 Decisions taken while scoping:
 
@@ -374,9 +378,9 @@ Decisions taken while scoping:
 - **Context budget.** No hard cap in this slice; the section order is fixed
   (description and goal → decisions and conventions → work in progress with
   reports → blocked on the human → next). Measure real sizes first, then
-  decide on a cap. Injection path for now is one instruction line telling
-  agents to run `self context` at session start; the managed block comes with
-  the next slice.
+  decide on a cap. The injection path is the managed block rendered by
+  `self connect`, which instructs agents to run `self context` at session
+  start.
 
 ## Next discussion
 
