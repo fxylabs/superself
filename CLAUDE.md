@@ -14,6 +14,9 @@ command is unavailable.
 - Blocked? `self work block <id> --on decision|dependency|external --why "..."`.
 - Picking up existing work? `self work show <id>` prints its full brief and
   report history. Leave a brief for the next session with `self report <id> --file <path>`.
+- Deferring work for later? Attach a scoping brief the moment you create it:
+  `self report <id> --file <path>` covering scope, design anchors, and known
+  pitfalls — a bare outcome line loses the context that created the work.
 - Search past state with `self search <query>`; list work with `self work`.
 - Never hand-edit generated state files or anything under `.superself/`.
 
