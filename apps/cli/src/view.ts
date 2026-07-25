@@ -12,10 +12,10 @@ const VIEW_DIR = "view";
 const THEME_FILE = "theme.css";
 const EVENT_TAIL = 8;
 
-// Optional localization layer, unused by default: human-facing labels are
-// English-base and scan-only chrome is not translated. `self lang` still
-// records the workspace language, which reaches the html lang attribute.
-// Kept until the retire-localization proposal is confirmed or rejected.
+// Optional localization layer, unused by default: view labels are
+// English-base and scan-only chrome is not translated. The workspace
+// language set by `self lang` is the language agents write human-facing
+// documents and artifacts in; here it only reaches the html lang attribute.
 const STRINGS: Record<string, Record<string, string>> = {
     ko: {
         "Workspace": "워크스페이스",
