@@ -1,20 +1,51 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { ProjectModel } from "./model.js";
 
 const BEGIN = "<!-- superself:begin -->";
 const END = "<!-- superself:end -->";
+const MACHINE_BEGIN = "<!-- superself:machine:begin -->";
+const MACHINE_END = "<!-- superself:machine:end -->";
 const TARGETS = ["AGENTS.md", "CLAUDE.md"];
+
+// The instruction file each agent tool reads in every project on this machine.
+const MACHINE_TARGETS = [
+    [".claude", "CLAUDE.md"],
+    [".codex", "AGENTS.md"],
+    [".gemini", "GEMINI.md"]
+];
 
 export function connectProject(projectDir: string, model: ProjectModel): string[]
 {
     const written: string[] = [];
     for (const name of TARGETS)
     {
-        upsertBlock(join(projectDir, name), renderBlock(model), true);
+        upsertBlock(join(projectDir, name), renderBlock(model), true, BEGIN, END);
         written.push(name);
     }
     return written;
+}
+
+export function connectMachine(): string[]
+{
+    const written: string[] = [];
+    for (const [dir, name] of MACHINE_TARGETS)
+    {
+        if (!existsSync(join(homedir(), dir)))
+        {
+            continue;
+        }
+        const file = join(homedir(), dir, name);
+        upsertBlock(file, renderMachineBlock(), true, MACHINE_BEGIN, MACHINE_END);
+        written.push(file);
+    }
+    return written;
+}
+
+export function machineBlock(): string
+{
+    return renderMachineBlock();
 }
 
 export function refreshBlocks(projectDir: string, model: ProjectModel): void
@@ -24,12 +55,12 @@ export function refreshBlocks(projectDir: string, model: ProjectModel): void
         const file = join(projectDir, name);
         if (existsSync(file) && readFileSync(file, "utf8").includes(BEGIN))
         {
-            upsertBlock(file, renderBlock(model), false);
+            upsertBlock(file, renderBlock(model), false, BEGIN, END);
         }
     }
 }
 
-function upsertBlock(file: string, block: string, create: boolean): void
+function upsertBlock(file: string, block: string, create: boolean, begin: string, end: string): void
 {
     const current = existsSync(file) ? readFileSync(file, "utf8") : null;
     if (current === null)
@@ -40,15 +71,33 @@ function upsertBlock(file: string, block: string, create: boolean): void
         }
         return;
     }
-    const begin = current.indexOf(BEGIN);
-    const end = current.indexOf(END);
-    const next = begin !== -1 && end !== -1
-        ? current.slice(0, begin) + block + current.slice(end + END.length)
+    const from = current.indexOf(begin);
+    const to = current.indexOf(end);
+    const next = from !== -1 && to !== -1
+        ? current.slice(0, from) + block + current.slice(to + end.length)
         : current.replace(/\n*$/, "\n\n") + block + "\n";
     if (next !== current)
     {
         writeFileSync(file, next);
     }
+}
+
+function renderMachineBlock(): string
+{
+    return [
+        MACHINE_BEGIN,
+        "## Project state (superself)",
+        "",
+        "The `self` CLI version-controls project state — goals, decisions, work",
+        "units, reports — outside the code repository.",
+        "",
+        "- A registered project has a `.self` file at its root and its own superself",
+        "  block in AGENTS.md or CLAUDE.md: run `self context` at session start and",
+        "  follow that block.",
+        "- In an unregistered project, ask the user once whether to register it with",
+        "  `self project add`. Never register a project on your own.",
+        MACHINE_END
+    ].join("\n");
 }
 
 function renderBlock(model: ProjectModel): string

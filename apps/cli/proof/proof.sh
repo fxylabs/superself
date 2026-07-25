@@ -18,23 +18,29 @@ fail()
     exit 1
 }
 
-# each simulated machine keeps its own workspace pointer
+# each simulated machine keeps its own home and workspace pointer, so the
+# proof can never reach the real one
 machine()
 {
+    export HOME="$ROOT/$1/home"
     export XDG_CONFIG_HOME="$ROOT/$1/config"
+    mkdir -p "$HOME"
 }
 
 git init -q --bare "$ROOT/remote.git"
 
 # machine A: workspace, project, events, first push
 machine A
-mkdir -p "$ROOT/A/ws/demo"
+mkdir -p "$ROOT/A/ws/demo" "$ROOT/A/home/.claude"
 cd "$ROOT/A/ws"
-SELF init
+SELF init --agents
+grep -q "superself:machine:begin" "$ROOT/A/home/.claude/CLAUDE.md" || fail "init did not tell this machine's agents about self"
+grep -q "ask the user once" "$ROOT/A/home/.claude/CLAUDE.md" || fail "machine block does not forbid registering on its own"
 grep -q "$ROOT/A/ws" "$ROOT/A/config/superself/machine.json" || fail "init did not record the machine workspace"
 cd "$ROOT/A/ws/demo"
 git init -q
 SELF project add --name demo --desc "sync proof project"
+grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
 SELF goal set "prove two-machine sync"
 WID=$(SELF work add "events from both machines merge cleanly" | tail -1)
 cd "$ROOT/A/ws"
@@ -97,7 +103,8 @@ git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.j
 mkdir -p "$ROOT/outside/app"
 cd "$ROOT/outside/app"
 git init -q
-SELF project add --name outside --desc "registered from outside the workspace tree"
+SELF project add --name outside --desc "registered from outside the workspace tree" --no-connect
+[ -f CLAUDE.md ] && fail "--no-connect still wrote the managed block"
 SELF goal set "prove out-of-tree projects work"
 SELF context | grep -q "prove out-of-tree projects work" || fail "out-of-tree project not usable"
 grep -q '"slug":"outside"' "$ROOT/A/ws/.superself/registry.jsonl" || fail "out-of-tree project missing from registry"
