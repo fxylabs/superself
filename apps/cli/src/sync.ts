@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { foldProject } from "./fold.js";
 import { commitAll, configureStoreIdentity, excludeLocally, git } from "./gitutil.js";
+import { setMachineWorkspace } from "./machine.js";
 import { CliContext, ensureDir, LINKS_FILE, readRegistry, STORE_DIR } from "./paths.js";
 import { CliError } from "./types.js";
 
@@ -114,6 +115,7 @@ export function cloneStore(url: string, dir: string | undefined): void
     {
         foldProject(storeDir, slug);
     }
+    setMachineWorkspace(target);
     console.log(`workspace cloned into ${target}`);
     if (slugs.length > 0)
     {

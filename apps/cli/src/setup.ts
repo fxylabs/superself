@@ -1,58 +1,52 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git } from "./gitutil.js";
+import { machineConfigPath } from "./machine.js";
 import {
-    findAllUp,
     findUp,
     isStore,
     MARKER_FILE,
     readRegistry,
     readStoreConfig,
     resolveProjectPath,
-    STORE_DIR
+    STORE_DIR,
+    workspaceDirFor
 } from "./paths.js";
 
 export function printSetup(cwd: string): void
 {
     const marker = findUp(cwd, MARKER_FILE);
-    const workspaceDir = marker === null
-        ? dirnameOrNull(findUp(cwd, STORE_DIR, isStore))
-        : JSON.parse(readFileSync(marker, "utf8")).workspace;
-    const lines = [...attachmentLines(cwd, marker), ...storeLines(workspaceDir), ...skippedLines(cwd, workspaceDir)];
-    console.log(lines.join("\n"));
+    console.log([...projectLines(marker), ...workspaceLines(workspaceDirFor(marker))].join("\n"));
 }
 
-function attachmentLines(cwd: string, marker: string | null): string[]
+function projectLines(marker: string | null): string[]
 {
     if (marker === null)
     {
-        const store = findUp(cwd, STORE_DIR, isStore);
-        return store === null
-            ? [row("project", "(none) — this directory belongs to no workspace")]
-            : [row("project", "(none) — inside the workspace, but not registered; run `self project add`")];
+        return [row("project", "(none) — this directory is not registered; run `self project add`")];
     }
-    const parsed = JSON.parse(readFileSync(marker, "utf8"));
     return [
-        row("project", parsed.project),
+        row("project", JSON.parse(readFileSync(marker, "utf8")).project),
         row("", `${dirname(marker)} (via ${MARKER_FILE})`)
     ];
 }
 
-function storeLines(workspaceDir: string | null): string[]
+function workspaceLines(workspaceDir: string | null): string[]
 {
     if (workspaceDir === null)
     {
-        return [];
+        return [row("workspace", "(none) — run `self init` or `self workspace <path>`")];
     }
     const storeDir = join(workspaceDir, STORE_DIR);
     if (!isStore(storeDir))
     {
-        return [row("workspace", `${workspaceDir} — no store here; the marker is stale`)];
+        return [row("workspace", `${workspaceDir} — no store there; the machine pointer is stale`)];
     }
     const registry = readRegistry(storeDir);
     return [
         row("workspace", workspaceDir),
         row("store", `${storeDir} (${storeState(storeDir)})`),
+        row("pointer", machineConfigPath()),
         row("views", readStoreConfig(storeDir).lang ?? "en"),
         ...registry.map((entry, index) => row(index === 0 ? "projects" : "", projectLine(storeDir, entry.slug)))
     ];
@@ -68,18 +62,6 @@ function storeState(storeDir: string): string
     const commits = git(storeDir, "rev-list", "--count", "HEAD");
     const remote = git(storeDir, "remote", "get-url", "origin");
     return `${commits.ok ? commits.out : "0"} commits, ${remote.ok ? remote.out : "no remote"}`;
-}
-
-function skippedLines(cwd: string, workspaceDir: string | null): string[]
-{
-    return findAllUp(cwd, STORE_DIR)
-        .filter((candidate) => !isStore(candidate) && dirname(candidate) !== workspaceDir)
-        .map((candidate) => row("skipped", `${candidate} — no registry.jsonl, so not a workspace store`));
-}
-
-function dirnameOrNull(path: string | null): string | null
-{
-    return path === null ? null : dirname(path);
 }
 
 function row(label: string, value: string): string

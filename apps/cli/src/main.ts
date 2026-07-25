@@ -7,6 +7,7 @@ import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
+import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, WorkState } from "./model.js";
 import {
     CliContext,
@@ -34,6 +35,7 @@ type ProjectContext = CliContext & { project: string; projectDir: string };
 const USAGE = `usage: self <command>
 
   init [--lang <code>]                       initialize the current directory as a workspace
+  workspace [<path>]                         show or set the workspace this machine uses
   lang [<code>]                              show or set the language of the HTML views
   project add [path] [--name s] [--desc d]   register a project
   project link <slug> [path]                 reconnect a registered project on this machine
@@ -65,6 +67,7 @@ async function main(argv: string[]): Promise<void>
     switch (cmd)
     {
         case "init": await cmdInit(rest); break;
+        case "workspace": cmdWorkspace(rest); break;
         case "lang": cmdLang(rest); break;
         case "project": cmdProject(rest); break;
         case "remote": cmdRemote(rest); break;
@@ -109,7 +112,24 @@ async function cmdInit(rest: string[]): Promise<void>
     ensureSyncConfig(storeDir);
     excludeLocally(cwd, STORE_DIR + "/");
     commitAll(storeDir, "self init");
+    setMachineWorkspace(cwd);
     console.log(`workspace initialized at ${storeDir} (views in "${lang}")`);
+}
+
+function cmdWorkspace(rest: string[]): void
+{
+    if (rest[0] === undefined)
+    {
+        console.log(machineWorkspace() ?? "no workspace set — run `self init` in the directory that should hold it");
+        return;
+    }
+    const dir = resolve(rest[0]);
+    if (!isStore(join(dir, STORE_DIR)))
+    {
+        throw new CliError(`${dir} holds no workspace store — run \`self init\` there first`);
+    }
+    setMachineWorkspace(dir);
+    console.log(`this machine now uses the workspace at ${dir}`);
 }
 
 async function askLang(): Promise<string>
@@ -227,7 +247,7 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
     excludeLocally(ctx.storeDir, LINKS_FILE);
     appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
-    writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ workspace: ctx.workspaceDir, project: slug }) + "\n");
+    writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
 }
 

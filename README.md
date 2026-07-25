@@ -42,9 +42,11 @@ The first vertical slice is the `self` CLI — a workspace-level state store tha
 sits next to git:
 
 - `self init` turns a directory into a workspace with its own state store and
-  git history;
+  git history, and records it as the one workspace this machine uses —
+  `self workspace` shows or moves that pointer;
 - `self project add` registers a project through a local marker file that never
-  enters the code repository;
+  enters the code repository; projects live wherever they already are, inside
+  or outside the workspace directory, because the pointer decides the store;
 - typed event verbs — `goal set`, `decide`, `work add/start/block/unblock/done`,
   `report`, `convention add` — append to a per-project JSONL log;
 - every event immediately refolds canonical markdown (project state plus one
@@ -53,8 +55,8 @@ sits next to git:
 - `self context` prints the derived context an agent needs at session start;
   `self status`, `self work`, and `self log` read state; `self search` greps the
   whole workspace with current-project results ranked first; `self setup` shows
-  which workspace, project, and store the current directory resolves to, and
-  names any `.superself` directory it skipped because another tool owns it;
+  the project, workspace, store, and machine pointer the current directory
+  resolves to;
 - canonical files are generated output — hand edits are detected as drift and
   overwritten with a warning; reports attach to work units and auto-reference
   the project's HEAD commit as evidence;
@@ -64,7 +66,8 @@ sits next to git:
   refreshes on every fold;
 - `self remote add` connects the workspace store to a git remote, `self sync`
   pulls, refolds, and pushes it, and `self clone` brings a store onto a new
-  machine — concurrent appends from different machines merge cleanly, and
+  machine — `self clone` also points the new machine at what it cloned,
+  concurrent appends from different machines merge cleanly, and
   `self project link` reconnects each project checkout to the cloned store;
 - `self view` opens a live, read-only HTML dashboard — a workspace overview,
   one project in detail, or any work unit's full report history — rendered at
@@ -90,11 +93,11 @@ pnpm build
 alias self="node $PWD/apps/cli/bin/self.mjs"
 ```
 
-Then, in the directory that holds your projects:
+Then, in the directory that should hold your state:
 
 ```bash
-self init                      # once per workspace
-cd my-project && self project add
+self init                      # once per machine; every later command finds it
+cd ~/anywhere/my-project && self project add
 self goal set "Ship the first release"
 self work add "Payment flow passes e2e"
 self context                   # what an agent should read at session start

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
 
 export const STORE_DIR = ".superself";
@@ -19,13 +20,13 @@ export function isStore(dir: string): boolean
     return existsSync(join(dir, "registry.jsonl"));
 }
 
-export function findUp(start: string, name: string, accept?: (path: string) => boolean): string | null
+export function findUp(start: string, name: string): string | null
 {
     let dir = resolve(start);
     while (true)
     {
         const candidate = join(dir, name);
-        if (existsSync(candidate) && (accept === undefined || accept(candidate)))
+        if (existsSync(candidate))
         {
             return candidate;
         }
@@ -38,50 +39,47 @@ export function findUp(start: string, name: string, accept?: (path: string) => b
     }
 }
 
-export function findAllUp(start: string, name: string): string[]
-{
-    const found: string[] = [];
-    let dir = resolve(start);
-    while (true)
-    {
-        const candidate = join(dir, name);
-        if (existsSync(candidate))
-        {
-            found.push(candidate);
-        }
-        const parent = dirname(dir);
-        if (parent === dir)
-        {
-            return found;
-        }
-        dir = parent;
-    }
-}
-
 export function resolveContext(cwd: string): CliContext | null
 {
     const marker = findUp(cwd, MARKER_FILE);
-    if (marker !== null)
+    const workspaceDir = workspaceDirFor(marker);
+    if (workspaceDir === null)
     {
-        const parsed = JSON.parse(readFileSync(marker, "utf8"));
-        const storeDir = join(parsed.workspace, STORE_DIR);
-        if (!isStore(storeDir))
-        {
-            throw new CliError(`${marker} points at ${parsed.workspace}, which holds no workspace store — re-run \`self project link ${parsed.project}\` from this directory`);
-        }
-        return {
-            workspaceDir: parsed.workspace,
-            storeDir,
-            project: parsed.project,
-            projectDir: dirname(marker)
-        };
+        return null;
     }
-    const store = findUp(cwd, STORE_DIR, isStore);
-    if (store !== null)
+    const storeDir = join(workspaceDir, STORE_DIR);
+    if (!isStore(storeDir))
     {
-        return { workspaceDir: dirname(store), storeDir: store };
+        throw new CliError(`${workspaceDir} holds no workspace store — run \`self workspace <path>\` to point this machine at one`);
     }
-    return null;
+    if (marker === null)
+    {
+        return { workspaceDir, storeDir };
+    }
+    return {
+        workspaceDir,
+        storeDir,
+        project: JSON.parse(readFileSync(marker, "utf8")).project,
+        projectDir: dirname(marker)
+    };
+}
+
+// The machine's workspace is the single source. Markers written before that
+// carried the path themselves; the first command that meets one adopts it.
+export function workspaceDirFor(marker: string | null): string | null
+{
+    const configured = machineWorkspace();
+    if (configured !== null || marker === null)
+    {
+        return configured;
+    }
+    const legacy = JSON.parse(readFileSync(marker, "utf8")).workspace;
+    if (typeof legacy !== "string" || !isStore(join(legacy, STORE_DIR)))
+    {
+        return null;
+    }
+    setMachineWorkspace(legacy);
+    return legacy;
 }
 
 export function requireWorkspace(cwd: string): CliContext
@@ -89,7 +87,7 @@ export function requireWorkspace(cwd: string): CliContext
     const ctx = resolveContext(cwd);
     if (ctx === null)
     {
-        throw new CliError("no workspace found — run `self init` in your workspace directory first, or `self setup` to see what was searched");
+        throw new CliError("this machine has no workspace — run `self init` in the directory that should hold it, or `self workspace <path>` to point at an existing one");
     }
     return ctx;
 }
