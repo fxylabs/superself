@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git } from "./gitutil.js";
 import { machineConfigPath } from "./machine.js";
+import { dim, styled } from "./style.js";
 import {
     findUp,
     isStore,
@@ -66,5 +67,6 @@ function storeState(storeDir: string): string
 
 function row(label: string, value: string): string
 {
-    return `${label.padEnd(10)} ${value}`;
+    const padded = label.padEnd(10);
+    return `${styled ? dim(padded) : padded} ${value}`;
 }

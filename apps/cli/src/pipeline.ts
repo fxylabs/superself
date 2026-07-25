@@ -4,6 +4,7 @@ import { foldProject } from "./fold.js";
 import { commitAll } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { CliContext, ensureDir, projectStateDir } from "./paths.js";
+import { bold, dim, green, styled } from "./style.js";
 import { EventRefs, SelfEvent } from "./types.js";
 
 export function makeEvent(
@@ -35,7 +36,9 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string):
     appendFileSync(join(dir, "log.jsonl"), JSON.stringify(event) + "\n");
     foldProject(ctx.storeDir, event.project);
     commitAll(ctx.storeDir, `${event.type} ${event.project}: ${truncate(summary, 60)}`);
-    console.log(`${event.type} recorded [${event.id}]`);
+    console.log(styled
+        ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`
+        : `${event.type} recorded [${event.id}]`);
 }
 
 function truncate(text: string, max: number): string

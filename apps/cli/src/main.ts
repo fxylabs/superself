@@ -26,6 +26,7 @@ import { makeEvent, recordEvent } from "./pipeline.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
+import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
@@ -88,8 +89,27 @@ async function main(argv: string[]): Promise<void>
         case "log": cmdLog(rest); break;
         case "search": cmdSearch(rest); break;
         case "fold": cmdFold(); break;
-        default: console.log(USAGE); break;
+        default: printUsage(); break;
     }
+}
+
+// Dim the description column so the command column stands out; piped output is untouched.
+function printUsage(): void
+{
+    if (!styled)
+    {
+        console.log(USAGE);
+        return;
+    }
+    console.log(USAGE.split("\n").map((line) =>
+    {
+        const match = line.match(/^(  \S.*?)(\s{2,})(\S.*)$/);
+        if (match !== null)
+        {
+            return match[1] + match[2] + dim(match[3]);
+        }
+        return /^\s{20,}\S/.test(line) ? dim(line.trimEnd()) : line;
+    }).join("\n"));
 }
 
 async function cmdInit(rest: string[]): Promise<void>
@@ -386,7 +406,7 @@ function cmdWork(rest: string[]): void
         {
             throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
         }
-        console.log(renderWorkBody(work).trimEnd());
+        console.log(markdownHeadings(renderWorkBody(work).trimEnd()));
         return;
     }
     const type = TRANSITIONS[rest[0]];
@@ -566,7 +586,7 @@ catch (error)
 {
     if (error instanceof CliError)
     {
-        console.error(`error: ${error.message}`);
+        console.error(`${errRed("error:")} ${error.message}`);
         process.exitCode = 1;
     }
     else
