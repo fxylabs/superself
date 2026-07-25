@@ -53,10 +53,13 @@ The default theme (the "quiet ledger" look):
     --note: #a34a2f;           /* attention: alerts, blocked work, proposals */
     --card: #ffffff;           /* raised surfaces: work cards, project cards, plates */
     --mono: "SF Mono", ui-monospace, Menlo, monospace;
-    --serif: "Iowan Old Style", "Palatino", Palatino, "Nanum Myeongjo", serif;
-    --sans: -apple-system, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+    --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
 }
 ```
+
+The sans stack prefers locally installed Inter and Pretendard (for Korean)
+and falls back to system fonts — views make no network requests, so fonts
+are never downloaded.
 
 What each token controls:
 
@@ -70,8 +73,7 @@ What each token controls:
 | `--note` | Alert band, blocked-work rail, "proposed" markers, abandoned/unverifiable evidence, blocked counts |
 | `--card` | Background of work cards, project cards, and artifact plates |
 | `--mono` | Dates, ids, hashes, labels, section titles, footers |
-| `--serif` | Page titles, the goal line, project-card titles |
-| `--sans` | Body text |
+| `--sans` | Body text, page titles, the goal line, project-card titles |
 
 Semi-transparent tints (the goal underline, the alert-band background) are
 derived from `--seal` and `--note` with `color-mix()`, so they follow your
@@ -92,16 +94,15 @@ overrides automatically.
 }
 ```
 
-Fonts are untouched, so the ledger keeps its serif-and-mono voice on a dark
-page. There is no automatic light/dark switching: the viewer renders exactly
-one theme, yours.
+Fonts are untouched, so the ledger keeps its voice on a dark page. There is
+no automatic light/dark switching: the viewer renders exactly one theme,
+yours.
 
 ## Worked example: a dense mono variant
 
 ```css
 /* <store>/theme.css */
 :root {
-    --serif: ui-monospace, "SF Mono", Menlo, monospace;
     --sans: ui-monospace, "SF Mono", Menlo, monospace;
     --seal: #2757d6;
     --note: #b3362c;
