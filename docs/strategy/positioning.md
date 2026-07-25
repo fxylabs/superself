@@ -7,6 +7,8 @@ language, solution-landscape survey, folk-practice inventory). This revision
 retires the previous category-first framing — the "Build with agents. Ship
 like a team." headline and the "AI agent workspace" lead — in favor of a
 problem-first framing. Items below are marked **decided** or **proposed**.
+The underlying problem and asset structure are specified in
+[problem-definition.md](problem-definition.md).
 
 ## The problem, in the market's own words
 
