@@ -21,6 +21,7 @@ import {
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { runSearch } from "./search.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
+import { openFile, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
@@ -44,6 +45,7 @@ const USAGE = `usage: self <command>
   report <work-id> "<summary>" [--file path] [--evidence c] [--next n]
   convention add "<text>" | drop <event-id>  record or retire a convention
   connect                                    render the agent-onboarding block into AGENTS.md and CLAUDE.md
+  view [slug]                                open the live workspace or project view in the browser
   context                                    print derived context for agents
   status                                     print a short state summary
   log [-n N]                                 print recent events
@@ -67,6 +69,7 @@ function main(argv: string[]): void
         case "report": cmdReport(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(); break;
+        case "view": cmdView(rest); break;
         case "context": printContext(requireWorkspace(process.cwd())); break;
         case "status": printStatus(requireWorkspace(process.cwd())); break;
         case "log": cmdLog(rest); break;
@@ -154,8 +157,19 @@ function projectLink(args: string[]): void
     console.log(`project "${slug}" linked to ${projectDir}`);
 }
 
+function cmdView(rest: string[]): void
+{
+    const ctx = requireWorkspace(process.cwd());
+    if (rest[0] !== undefined && !readRegistry(ctx.storeDir).some((entry) => entry.slug === rest[0]))
+    {
+        throw new CliError(`unknown project "${rest[0]}" — registered: ${readRegistry(ctx.storeDir).map((e) => e.slug).join(", ")}`);
+    }
+    openFile(ctx, viewFile(ctx.storeDir, rest[0]));
+}
+
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
+    excludeLocally(ctx.storeDir, LINKS_FILE);
     appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ workspace: ctx.workspaceDir, project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
