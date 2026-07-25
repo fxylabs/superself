@@ -10,6 +10,7 @@ import { buildModel, WorkState } from "./model.js";
 import {
     CliContext,
     ensureDir,
+    LINKS_FILE,
     MARKER_FILE,
     projectStateDir,
     readRegistry,
@@ -19,6 +20,7 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { runSearch } from "./search.js";
+import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
@@ -28,6 +30,10 @@ const USAGE = `usage: self <command>
 
   init                                       initialize the current directory as a workspace
   project add [path] [--name s] [--desc d]   register a project
+  project link <slug> [path]                 reconnect a registered project on this machine
+  remote add <url>                           connect the workspace store to a git remote
+  sync                                       pull, refold, and push the workspace store
+  clone <url> [dir]                          clone a workspace store onto a new machine
   goal set "<text>"                          set the project goal
   decide "<text>" [--why w] [--proposed] [--supersedes id]
   decide confirm <event-id>                  confirm a proposed decision
@@ -52,6 +58,9 @@ function main(argv: string[]): void
     {
         case "init": cmdInit(); break;
         case "project": cmdProject(rest); break;
+        case "remote": cmdRemote(rest); break;
+        case "sync": syncStore(requireWorkspace(process.cwd())); break;
+        case "clone": cloneStore(requireText(rest[0], "clone <url> [dir]"), rest[1]); break;
         case "goal": cmdGoal(rest); break;
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
@@ -79,6 +88,7 @@ function cmdInit(): void
     ensureDir(storeDir);
     writeFileSync(join(storeDir, "registry.jsonl"), "");
     ensureWorkspaceRepo(storeDir);
+    ensureSyncConfig(storeDir);
     excludeLocally(cwd, STORE_DIR + "/");
     commitAll(storeDir, "self init");
     console.log(`workspace initialized at ${storeDir}`);
@@ -86,12 +96,23 @@ function cmdInit(): void
 
 function cmdProject(rest: string[]): void
 {
-    if (rest[0] !== "add")
+    if (rest[0] === "add")
     {
-        throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"]');
+        projectAdd(rest.slice(1));
+        return;
     }
+    if (rest[0] === "link")
+    {
+        projectLink(rest.slice(1));
+        return;
+    }
+    throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"] | link <slug> [path]');
+}
+
+function projectAdd(args: string[]): void
+{
     const { values, positionals } = parseArgs({
-        args: rest.slice(1),
+        args,
         options: { name: { type: "string" }, desc: { type: "string" } },
         allowPositionals: true
     });
@@ -102,18 +123,51 @@ function cmdProject(rest: string[]): void
     {
         throw new CliError(`project "${slug}" is already registered`);
     }
-    const entry: Record<string, unknown> = { slug, path: projectDir, added: new Date().toISOString() };
+    const entry: Record<string, unknown> = { slug, added: new Date().toISOString() };
     if (values.desc !== undefined)
     {
         entry.description = values.desc;
     }
     appendFileSync(join(ctx.storeDir, "registry.jsonl"), JSON.stringify(entry) + "\n");
-    writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ workspace: ctx.workspaceDir, project: slug }) + "\n");
-    excludeLocally(projectDir, MARKER_FILE);
+    linkProject(ctx, slug, projectDir);
     ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
     foldProject(ctx.storeDir, slug);
     commitAll(ctx.storeDir, `project add ${slug}`);
     console.log(`project "${slug}" registered`);
+}
+
+function projectLink(args: string[]): void
+{
+    const slug = requireText(args[0], "project link <slug> [path]");
+    const ctx = requireWorkspace(process.cwd());
+    if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
+    {
+        throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
+    }
+    const projectDir = resolve(args[1] ?? process.cwd());
+    if (!existsSync(projectDir))
+    {
+        throw new CliError(`"${projectDir}" does not exist`);
+    }
+    linkProject(ctx, slug, projectDir);
+    foldProject(ctx.storeDir, slug);
+    console.log(`project "${slug}" linked to ${projectDir}`);
+}
+
+function linkProject(ctx: CliContext, slug: string, projectDir: string): void
+{
+    appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
+    writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ workspace: ctx.workspaceDir, project: slug }) + "\n");
+    excludeLocally(projectDir, MARKER_FILE);
+}
+
+function cmdRemote(rest: string[]): void
+{
+    if (rest[0] !== "add")
+    {
+        throw new CliError("usage: self remote add <url>");
+    }
+    remoteAdd(requireWorkspace(process.cwd()), requireText(rest[1], "remote add <url>"));
 }
 
 function cmdGoal(rest: string[]): void

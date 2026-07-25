@@ -28,7 +28,7 @@ export interface SelfEvent
 export interface RegistryEntry
 {
     slug: string;
-    path: string;
+    path?: string;
     description?: string;
     added: string;
 }
