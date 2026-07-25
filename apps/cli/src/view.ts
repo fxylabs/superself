@@ -337,13 +337,13 @@ function eventLog(title: string, events: SelfEvent[]): string
 function renderWorkspacePage(summaries: ProjectSummary[]): string
 {
     const cards = summaries.map((summary) => [
-        `<a class="project" href="${esc(summary.slug)}.html"><h2>${esc(summary.slug)}</h2>`,
+        `<div class="project"><h2><a href="${esc(summary.slug)}.html">${esc(summary.slug)}</a></h2>`,
         summary.description === undefined ? "" : `<p class="desc">${esc(summary.description)}</p>`,
         `<p class="goal-line">${esc(summary.goal ?? "goal not set")}</p>`,
         `<p class="counts">${countSpan(summary.active.length, "active")} · ${countSpan(summary.blockedCount, "blocked")} · ${countSpan(summary.nextCount, "next")} · ${countSpan(summary.doneCount, "done")}</p>`,
-        summary.active.map((w) => `<p><code>${esc(w.id)}</code> ${esc(w.outcome)}</p>`).join("\n"),
+        summary.active.map((w) => `<p><a href="${esc(summary.slug)}/${esc(w.id)}.html"><code>${esc(w.id)}</code></a> ${esc(w.outcome)}</p>`).join("\n"),
         [...summary.health, ...summary.openQuestions].map((n) => `<p class="alert">${esc(n)}</p>`).join("\n"),
-        `<footer>updated ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></a>`
+        `<footer>updated ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></div>`
     ].join("\n")).join("\n");
     const body = [
         `<p class="eyebrow">Workspace record</p>`,
@@ -441,8 +441,7 @@ const DEFAULT_THEME = `:root {
     --note: #a34a2f;           /* attention: alerts, blocked work, proposals */
     --card: #ffffff;           /* raised surfaces */
     --mono: "SF Mono", ui-monospace, Menlo, monospace;
-    --serif: "Iowan Old Style", "Palatino", Palatino, "Nanum Myeongjo", serif;
-    --sans: -apple-system, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+    --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
 }
 `;
 
@@ -458,10 +457,10 @@ code { font: .85em var(--mono); }
 .crumb:hover { color: var(--ink); }
 .eyebrow { font: 600 11px var(--mono); letter-spacing: .22em; text-transform: uppercase;
            color: var(--seal); margin: 2.4rem 0 .2rem; }
-h1 { font: 600 30px/1.2 var(--serif); margin: .6rem 0 .2rem; letter-spacing: -.01em; }
-h1 code { font: 600 24px var(--mono); }
+h1 { font: 700 26px/1.25 var(--sans); margin: .6rem 0 .2rem; letter-spacing: -.02em; }
+h1 code { font: 600 22px var(--mono); }
 .desc { color: var(--ink-soft); margin: 0; }
-.goal { font: 400 21px/1.5 var(--serif); margin: 1.2rem 0 0; }
+.goal { font: 500 19px/1.5 var(--sans); margin: 1.2rem 0 0; }
 .goal em { font-style: normal;
            box-shadow: inset 0 -0.45em 0 color-mix(in srgb, var(--seal) 14%, transparent); }
 .note-band { border-left: 3px solid var(--note); padding: .55rem 1rem; margin: 2rem 0 0;
@@ -519,13 +518,14 @@ figure { margin: 0; }
 .prose { white-space: pre-wrap; }
 .projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
             gap: 1rem; margin-top: 1.4rem; }
-.project { display: block; background: var(--card); border: 1px solid var(--rule);
-           border-top: 3px solid var(--seal); border-radius: 3px; padding: 1rem 1.2rem;
-           color: inherit; text-decoration: none; }
-.project:hover { border-color: var(--seal); }
-.project h2 { font: 600 19px var(--serif); border: 0; padding: 0; margin: 0;
+.project { background: var(--card); border: 1px solid var(--rule);
+           border-top: 3px solid var(--seal); border-radius: 3px; padding: 1rem 1.2rem; }
+.project h2 { font: 700 17px var(--sans); border: 0; padding: 0; margin: 0;
               text-transform: none; letter-spacing: 0; color: var(--ink); }
-.project .goal-line { font: 400 15px/1.5 var(--serif); margin: .5rem 0 0; }
+.project h2 a { color: inherit; text-decoration: none; }
+.project h2 a:hover { color: var(--seal); }
+.project a { text-decoration: none; }
+.project .goal-line { font: 500 14.5px/1.5 var(--sans); margin: .5rem 0 0; }
 .project p { margin: .35rem 0 0; }
 .project footer { margin-top: .8rem; }
 .counts { font: 12px var(--mono); color: var(--ink-soft); }
