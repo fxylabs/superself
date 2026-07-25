@@ -11,6 +11,7 @@ import { buildModel, WorkState } from "./model.js";
 import {
     CliContext,
     ensureDir,
+    isStore,
     LINKS_FILE,
     MARKER_FILE,
     projectStateDir,
@@ -22,6 +23,7 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { runSearch } from "./search.js";
+import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { openFile, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
@@ -51,6 +53,7 @@ const USAGE = `usage: self <command>
   view [slug]                                open the live workspace or project view in the browser
   context                                    print derived context for agents
   status                                     print a short state summary
+  setup                                      print the workspace, project, and store this directory resolves to
   log [-n N]                                 print recent events
   search <query> [--type t] [--project p]    grep state across the workspace
   fold                                       re-derive canonical files from the log`;
@@ -76,6 +79,7 @@ async function main(argv: string[]): Promise<void>
         case "view": cmdView(rest); break;
         case "context": printContext(requireWorkspace(process.cwd())); break;
         case "status": printStatus(requireWorkspace(process.cwd())); break;
+        case "setup": printSetup(process.cwd()); break;
         case "log": cmdLog(rest); break;
         case "search": cmdSearch(rest); break;
         case "fold": cmdFold(); break;
@@ -90,6 +94,10 @@ async function cmdInit(rest: string[]): Promise<void>
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
     {
+        if (!isStore(storeDir))
+        {
+            throw new CliError(`${storeDir} already exists and is not a workspace store — another tool owns that directory`);
+        }
         console.log(`workspace already initialized at ${storeDir}`);
         return;
     }

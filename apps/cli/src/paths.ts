@@ -14,13 +14,18 @@ export interface CliContext
     projectDir?: string;
 }
 
-export function findUp(start: string, name: string): string | null
+export function isStore(dir: string): boolean
+{
+    return existsSync(join(dir, "registry.jsonl"));
+}
+
+export function findUp(start: string, name: string, accept?: (path: string) => boolean): string | null
 {
     let dir = resolve(start);
     while (true)
     {
         const candidate = join(dir, name);
-        if (existsSync(candidate))
+        if (existsSync(candidate) && (accept === undefined || accept(candidate)))
         {
             return candidate;
         }
@@ -33,20 +38,45 @@ export function findUp(start: string, name: string): string | null
     }
 }
 
+export function findAllUp(start: string, name: string): string[]
+{
+    const found: string[] = [];
+    let dir = resolve(start);
+    while (true)
+    {
+        const candidate = join(dir, name);
+        if (existsSync(candidate))
+        {
+            found.push(candidate);
+        }
+        const parent = dirname(dir);
+        if (parent === dir)
+        {
+            return found;
+        }
+        dir = parent;
+    }
+}
+
 export function resolveContext(cwd: string): CliContext | null
 {
     const marker = findUp(cwd, MARKER_FILE);
     if (marker !== null)
     {
         const parsed = JSON.parse(readFileSync(marker, "utf8"));
+        const storeDir = join(parsed.workspace, STORE_DIR);
+        if (!isStore(storeDir))
+        {
+            throw new CliError(`${marker} points at ${parsed.workspace}, which holds no workspace store — re-run \`self project link ${parsed.project}\` from this directory`);
+        }
         return {
             workspaceDir: parsed.workspace,
-            storeDir: join(parsed.workspace, STORE_DIR),
+            storeDir,
             project: parsed.project,
             projectDir: dirname(marker)
         };
     }
-    const store = findUp(cwd, STORE_DIR);
+    const store = findUp(cwd, STORE_DIR, isStore);
     if (store !== null)
     {
         return { workspaceDir: dirname(store), storeDir: store };
@@ -59,7 +89,7 @@ export function requireWorkspace(cwd: string): CliContext
     const ctx = resolveContext(cwd);
     if (ctx === null)
     {
-        throw new CliError("no workspace found — run `self init` in your workspace directory first");
+        throw new CliError("no workspace found — run `self init` in your workspace directory first, or `self setup` to see what was searched");
     }
     return ctx;
 }
