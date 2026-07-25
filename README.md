@@ -63,7 +63,11 @@ sits next to git:
 - `self remote add` connects the workspace store to a git remote, `self sync`
   pulls, refolds, and pushes it, and `self clone` brings a store onto a new
   machine — concurrent appends from different machines merge cleanly, and
-  `self project link` reconnects each project checkout to the cloned store.
+  `self project link` reconnects each project checkout to the cloned store;
+- `self view` opens a live, read-only HTML dashboard — a workspace overview
+  or one project in detail — rendered at fold time as self-contained files
+  that auto-refresh in the browser, so an open tab tracks state with no
+  server.
 
 The CLI is the first application shell. A read-only viewer is a later, optional
 layer — never a required surface.

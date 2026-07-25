@@ -67,4 +67,11 @@ STATE_A="$ROOT/A/ws/.superself/projects/demo/state.md"
 grep -q "machine A made this decision" "$STATE_A" || fail "A's decision missing from folded state"
 grep -q "machine B started the work" "$STATE_A" || fail "B's report missing from folded state"
 
+# views render at fold time and stay out of the store history
+VIEW_A="$ROOT/A/ws/.superself/view"
+grep -q "machine B started the work" "$VIEW_A/demo.html" || fail "project view not refreshed by fold"
+grep -q "prove two-machine sync" "$VIEW_A/workspace.html" || fail "workspace view missing project summary"
+git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked into store history"
+git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
+
 echo "proof OK"
