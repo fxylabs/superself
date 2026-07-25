@@ -66,9 +66,9 @@ A useful test is:
 > Could another SPFN project use this code unchanged without importing a
 > Superself domain type?
 
-If yes, start with an issue describing the upstream SPFN seam. Experimental
-compatibility code may live in `apps/local/src/spfn-experiments/` while the
-upstream API is designed.
+If yes, start with an issue describing the upstream SPFN seam before adding
+the code here. The current CLI slice has no SPFN runtime dependency; this
+boundary applies to the later, optional web layers.
 
 ## Local setup
 
@@ -77,7 +77,7 @@ Requires Node.js 22.12+ and pnpm 10.
 ```bash
 nvm use
 pnpm install
-pnpm dev
+pnpm build
 ```
 
 ## Branches
@@ -110,7 +110,6 @@ Run the same checks as CI:
 
 ```bash
 pnpm typecheck
-pnpm proof
 pnpm build
 ```
 

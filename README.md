@@ -38,20 +38,27 @@ work can be directed, inspected, and finished across all of them.
 
 ## What works today
 
-The first vertical slice proves the local runtime and its security boundary:
+The first vertical slice is the `self` CLI — a workspace-level state store that
+sits next to git:
 
-- Vite + React interface;
-- Hono server with SPFN routes;
-- file-backed PGlite database with restart persistence;
-- login-free local user and default space;
-- five-minute, single-use browser pairing;
-- HttpOnly, SameSite=Strict local session cookie;
-- loopback Host, Origin, Fetch Metadata, and JSON mutation checks;
-- project and work create/read/update flow;
-- production UI and API served by one Node process.
+- `self init` turns a directory into a workspace with its own state store and
+  git history;
+- `self project add` registers a project through a local marker file that never
+  enters the code repository;
+- typed event verbs — `goal set`, `decide`, `work add/start/block/unblock/done`,
+  `report`, `convention add` — append to a per-project JSONL log;
+- every event immediately refolds canonical markdown (project state plus one
+  file per open work unit) and lands as exactly one commit in the workspace
+  repository, so state has log, blame, and revert;
+- `self context` prints the derived context an agent needs at session start;
+  `self status`, `self work`, and `self log` read state; `self search` greps the
+  whole workspace with current-project results ranked first;
+- canonical files are generated output — hand edits are detected as drift and
+  overwritten with a warning; reports attach to work units and auto-reference
+  the project's HEAD commit as evidence.
 
-The browser is the first application shell. Native desktop packaging is a later
-decision; the initial distribution target is a local CLI.
+The CLI is the first application shell. A read-only viewer is a later, optional
+layer — never a required surface.
 
 ## Quick start
 
@@ -64,62 +71,53 @@ cd superself
 nvm use
 pnpm install
 pnpm build
-pnpm start
+alias self="node $PWD/apps/cli/bin/self.mjs"
 ```
 
-For development:
+Then, in the directory that holds your projects:
 
 ```bash
-pnpm dev
+self init                      # once per workspace
+cd my-project && self project add
+self goal set "Ship the first release"
+self work add "Payment flow passes e2e"
+self context                   # what an agent should read at session start
 ```
-
-The server binds to `127.0.0.1`, creates its local data directory, and opens a
-single-use pairing link in the default browser.
 
 ## Verify a checkout
 
 ```bash
 pnpm typecheck
-pnpm proof
 pnpm build
 ```
-
-`pnpm proof` exercises local pairing, security checks, SPFN routes, PGlite
-persistence, revisions, and restart recovery without requiring a browser.
 
 ## Repository layout
 
 ```text
 apps/
-└─ local/                 Vite UI and Hono local runtime
+└─ cli/                   the `self` CLI: event log, fold, context, search
 
 docs/
-├─ architecture/          runtime decisions and upstream boundaries
 ├─ maintainers/           branch, version, and release policy
-└─ strategy/              public positioning decisions under discussion
+└─ strategy/              problem definition and positioning decisions
 ```
 
-Framework-level compatibility seams stay under
-`apps/local/src/spfn-experiments/` until they are ready to move upstream to
-SPFN. Superself-specific principal, security, data, and lifecycle policy remains
-in this repository.
-
-See [the local runtime architecture](docs/architecture/local-runtime.md) for the
-current boundary.
+See [the problem definition](docs/strategy/problem-definition.md) for the state
+architecture the CLI implements.
 
 ## Project status
 
 The near-term sequence is:
 
-1. establish the local runtime and contribution contract;
-2. implement the complete project and agent-work surfaces;
-3. add milestones, Definition of Done, and release readiness;
-4. attach test, build, deployment, and review evidence to work reports;
-5. add artifact and project-state history flows;
-6. add agent/MCP integration;
-7. add backup, restore, and migration guarantees;
-8. publish a local CLI preview;
-9. evaluate native desktop packaging after the runtime stabilizes.
+1. ship the `self` CLI vertical slice: workspace store, event verbs, fold,
+   derived context;
+2. harvest commit-message trailers into events and render the managed context
+   block for agent instruction files;
+3. add artifact commands and evidence-reachability checks;
+4. add health derivation and cross-project workspace views;
+5. add backup, restore, and migration guarantees;
+6. publish the CLI as the `superself` package;
+7. evaluate an optional read-only viewer after the CLI stabilizes.
 
 ## Community and contributions
 

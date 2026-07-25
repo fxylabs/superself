@@ -17,5 +17,4 @@
 ## Project verification
 
 - Type check: `pnpm typecheck`.
-- Runtime proof: `pnpm proof`.
 - Production build: `pnpm build`.

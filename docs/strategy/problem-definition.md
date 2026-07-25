@@ -340,13 +340,52 @@ work state, artifacts) is served by existing surfaces:
 
 The read-only principle stands: no viewer ever writes state.
 
+## First vertical slice (decided 2026-07-25)
+
+Scope: `self init`, `self project add`, the event verbs (`goal set`, `decide`,
+`work add/start/block/unblock/done`, `report`, `convention add`), immediate
+fold, `self context`, the read commands (`status`, `work`, `log`), and
+`self search`. Deferred to the next slice: commit-trailer harvesting, the
+CLAUDE.md managed block, `artifact` commands, evidence-reachability checks,
+and richer health derivation.
+
+Decisions taken while scoping:
+
+- **Package location.** The CLI lives at `apps/cli`, published as package
+  `superself` with binary `self`. The prior browser-first slice (`apps/local`)
+  is removed: its PGlite database contradicts the file-representable
+  direction, and the eventual viewer is a different artifact (read-only,
+  self-contained HTML). Git history preserves the code.
+- **Log schema.** One event per JSONL line with six fields: `id` (ULID —
+  events reference events), `ts` (ISO 8601 UTC), `type` (namespaced, e.g.
+  `decision.confirmed`), `origin` (`actor`, optional `session`, `confirmed`
+  flag for human confirmation), `project`, `payload` (type-specific), plus
+  optional `refs` (`confirms`, `supersedes`, `work`, `commits`, `artifacts`).
+  Work ids are short random slugs (`w-xxxxx`) so parallel agents never
+  contend on a sequence.
+- **Layout.** `self init` makes the current directory a workspace by creating
+  `.superself/` (its own git repository) with `registry.jsonl` and
+  `projects/<slug>/{log.jsonl, state.md, work/<id>.md}`. The project marker
+  is a `.self` file at the project root holding the workspace path and slug,
+  auto-added to `.git/info/exclude` — nothing enters the code repository.
+  Scope resolution walks up from the current directory: a `.self` marker
+  means project context, otherwise a `.superself` directory means workspace
+  context.
+- **Context budget.** No hard cap in this slice; the section order is fixed
+  (description and goal → decisions and conventions → work in progress with
+  reports → blocked on the human → next). Measure real sizes first, then
+  decide on a cap. Injection path for now is one instruction line telling
+  agents to run `self context` at session start; the managed block comes with
+  the next slice.
+
 ## Next discussion
 
 All design items in this document are settled: command surface, state
 definition, context delivery, snapshot derivation, schema refinements, file
-formats, artifact storage, viewer, naming. Next step: scope the first
-vertical slice of the CLI (`self init` → `self project add` → event verbs →
-fold → `self context`).
+formats, artifact storage, viewer, naming. The first vertical slice is
+implemented (see above). Next step: dogfood the CLI on this repository's own
+development, then take the deferred second-slice items (commit trailers,
+managed block, artifacts, evidence reachability).
 
 ## Open questions
 
