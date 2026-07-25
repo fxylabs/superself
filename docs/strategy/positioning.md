@@ -1,174 +1,139 @@
-# Superself positioning and category keywords
+# Superself positioning and product language
 
-This is a working decision document for public product language. It separates
-the outcome Superself promises from the architecture used to deliver it.
+This is a working decision document for public product language.
 
-## Audience and problem
+Revised 2026-07-25 on the basis of a three-track market study (verbatim pain
+language, solution-landscape survey, folk-practice inventory). This revision
+retires the previous category-first framing — the "Build with agents. Ship
+like a team." headline and the "AI agent workspace" lead — in favor of a
+problem-first framing. Items below are marked **decided** or **proposed**.
 
-Superself is for vibe coders and AI builders who can reach a demo or MVP quickly
-but struggle to carry the project through the less glamorous work required to
-ship and keep shipping.
+## The problem, in the market's own words
 
-The bottleneck is no longer only producing code. It is maintaining direction
-and continuity while work moves across agents, sessions, files, and tools:
+The pain is already named and widely repeated. Builders describe agents that
+"forget everything between sessions", sessions that "start from scratch", and
+the first twenty minutes of every session "wasted rediscovering what it could
+have recalled". Three words have converged as the shared vocabulary:
+**amnesia**, **context rot**, and **compaction**. The outcome people ask for
+is equally crystallized: **"pick up where I left off"**.
 
-```text
-product intent and goals
-→ milestones and Definition of Done
-→ agent-sized work
-→ live report, evidence, and next actions
-→ artifacts and decisions
-→ release readiness
-→ shipped product
-→ durable project memory and the next iteration
-```
+The current fixes are folk practice, and all of them collapse at scale:
 
-Superself makes that delivery system visible and persistent.
+- **Hand-maintained markdown** — CLAUDE.md / AGENTS.md (a de facto standard
+  in 60,000+ repositories), memory-bank file sets, handoff documents, TODO
+  protocols. They go stale, contradict themselves, bloat past usefulness, and
+  depend on discipline that fails under fatigue. Agents themselves forget to
+  update them.
+- **Knowledge bases** — wikis, ontologies, note vaults, LLM-maintained wikis.
+  Builders of these systems report the same failure: past a few hundred pages,
+  contradictions accumulate faster than anyone resolves them.
+- **Memory tools** — a saturated space (one plugin alone has 74k+ GitHub
+  stars; five competing repos gained 80k+ combined stars in a single quarter)
+  that stores conversation summaries and preferences, not project state.
+  Community fatigue is explicit: "the 1000th ultimate memory system".
+- **Human review of agent-written knowledge** — collapses under volume.
+  Confirmation queues degrade into auto-approve, the same way permission
+  prompts degrade into skip-permissions.
 
-## Positioning decision
+No shipped product holds a project's goals, decisions, progress, and rejected
+directions across sessions, models, and tools without relying on the user's
+discipline. Built-in platform memory stores preferences and conventions;
+memory APIs are developer building blocks; the trust problem of agent-written
+memory is an acknowledged open research problem.
 
-### Headline
+## The decision frame (decided 2026-07-25)
 
-> **Build with agents. Ship like a team.**
+1. **Never position Superself as a memory system.** The word "memory" places
+   the product in a saturated, fatigue-laden category and invites tool
+   comparisons we do not want.
+2. **Do not build or claim an ever-growing knowledge base.** Accumulating
+   structures — wiki, ontology, vault — collapse at scale from contradiction
+   and duplication, regardless of quality.
+3. **Do not rely on per-item human review for trust.** Confirmation queues
+   fail at scale. Trust must come from structure: bounded live state,
+   append-only timestamped history, cheap on-demand verification, and
+   confirmation captured as a byproduct of decisions the user makes anyway.
+4. **This is not a memory problem.** It is a project-state problem: what
+   version control solved for code is unsolved for the project itself —
+   its goals, decisions, work, and outputs.
 
-### Category
+## Positioning language (proposed)
 
-**AI agent workspace**
+In order of use:
 
-This gives the product a category people can recognize while leaving room for
-Superself to define a more specific delivery-oriented position within it:
+1. **Pain headline** — problem first, in the market's words:
+   > Your agents forget. Your projects shouldn't.
+2. **Category line**:
+   > Version control for your project's state.
+3. **Contrast line** — answers "isn't that just git?" before it is asked:
+   > Git versions your code. Superself versions your project.
+4. **Mechanism line**:
+   > Superself splits your project into state, work, and outputs — and
+   > engineers the context your agents need, every session.
+5. **Outcome line**:
+   > Pick up where you left off — across sessions, models, and tools.
+6. **Trust attributes** — supporting, never leading: local-first, no
+   account, open source. Each claim is used only once it is true and
+   verifiable in the shipped product.
 
-- `agent` identifies the work being directed and preserved without implying
-  that Superself is the runtime that executes it;
-- `workspace` covers goals, work, reports, artifacts, and memory without
-  pretending to be an operating system;
-- `shipping` remains the outcome and differentiator: moving beyond a generated
-  demo toward a real release.
+The shipping outcome ("beyond the demo toward a real release") remains valid
+body copy, but no longer leads.
 
-### Positioning line
+## Language to avoid
 
-> **The agent workspace for shipping AI-built products.**
+- **"memory", "persistent memory", "memory system"** as self-description —
+  decided against (frame decision 1).
+- **"AI agent workspace"** as the lead — recognizable but abstract; it names
+  a category without stating a problem. Acceptable as a secondary descriptor.
+- **"Build with agents. Ship like a team."** — retired as headline.
+- **"production-ready"** — a technical guarantee, not a synonym for shipped.
+- **"autonomous shipping"** — the builder remains accountable.
+- **"AI project management"** — invites Jira/Linear feature comparison.
+- Category naming stays discover-don't-invent (decided 2026-07-23): rotate
+  self-descriptions in content and let audience response pick the winner.
 
-### Product description
+## Positioning creates design obligations
 
-> Superself turns goals into agent-sized work, live reports, artifacts, and
-> durable project memory so AI-built projects keep moving beyond the demo.
+This framing constrains the product, not just the copy:
 
-### Compact proof line
+- **Bounded live state.** The maintained core is small — current goals,
+  active decisions, progress, open questions — never an unbounded knowledge
+  base pretending to be current.
+- **Append-only, timestamped history.** Old entries stay correct as history
+  instead of rotting as stale "current" truth.
+- **Confirmation as a byproduct.** User authority attaches to
+  direction-changing decisions captured in the flow of work — never a
+  separate review queue. Unconfirmed material expires by default.
+- **Derived context.** What an agent receives each session is a view
+  generated from state, not a hand-maintained document.
+- **Cross-tool survival.** State must outlive any single agent, model, or
+  tool.
 
-> Projects · Goals · Agent work reports · Artifacts · Memory
+## Category landscape (revised 2026-07)
 
-`Local-first`, `no account`, and eventually `bring your own agents` are trust and
-architecture attributes. They should support the promise rather than replace it
-in the headline.
-
-## Product boundary
-
-Superself does not primarily run agents or generate code. Agents may execute in
-an IDE, terminal, cloud service, or another orchestrator. Superself maintains the
-delivery state that must survive all of them.
-
-```text
-agent orchestrator or IDE
-→ runs and controls agents
-
-Superself
-→ keeps goals, work units, reports, evidence, outputs, and memory moving toward a release
-```
-
-Superself also does not currently guarantee that generated software is
-production-ready. `Ship` means providing the durable workflow and evidence
-needed to reach and operate a release. Security, deployment, testing, and
-reliability claims must be backed by shipped features and verification.
-
-## Positioning creates product obligations
-
-The shipping promise must become more than marketing. The roadmap needs:
-
-- milestones and release goals;
-- an explicit Definition of Done;
-- test, build, review, and deployment evidence;
-- outcome-based agent reports instead of activity logs;
-- release-readiness checks;
-- completion and handoff across agents;
-- post-release feedback linked to the next iteration;
-- durable artifacts, decisions, and project memory.
-
-Features that do not strengthen this path should not outrank these foundations.
-
-## Category landscape
-
-| Category | What it usually means | Superself stance |
+| Category | What it holds | Superself stance |
 | --- | --- | --- |
-| AI agent orchestrator | run, parallelize, and control agents | complementary, not primary |
-| vibe coding IDE | generate and edit code with agents | complementary, not primary |
-| agent-native project management | teams, tickets, chat, and agents in one PM tool | adjacent and broader than the initial wedge |
-| AI agent workspace | persistent context and coordination for work done with agents | primary category |
-| shipping workspace | continuity from goal to real release | outcome-led positioning, not a standalone category |
-| personal AI operating system | broad, aspirational personal-computing vision | long-term vision only |
+| built-in platform memory (Claude Code, Cursor, Copilot, …) | preferences, facts, repo conventions; single-tool | complementary; does not hold project state |
+| memory infrastructure APIs (Mem0, Zep, Letta, …) | developer building blocks | different layer; not end-user products |
+| memory plugins (claude-mem, …) | compressed conversation history | saturated space; deliberately not our category |
+| agent task trackers (Beads, task-master, …) | task graphs and progress | adjacent; progress without goals/decisions |
+| spec-driven development (Spec Kit, Kiro) | specs as durable intent | adjacent; specs drift from code without state |
+| auto-generated code wikis (DeepWiki, …) | knowledge derivable from code | complementary; project state is not derivable |
+| project state layer | goals, decisions, work, outputs, history | **primary — the empty slot** |
 
-## Language hierarchy
-
-Use these ideas in this order:
-
-1. **Build with agents. Ship like a team.** — memorable promise;
-2. **AI agent workspace** — recognizable category;
-3. **the agent workspace for shipping AI-built products** — differentiated
-   position;
-4. **move beyond the demo toward a real release** — problem and outcome;
-5. **projects, goals, agent work reports, artifacts, and memory** — mechanism;
-6. **local-first, no account, open source** — trust, once each claim is true;
-7. **bring your own agents** — interoperability, once the public integration is
-   shipped.
-
-Avoid leading with:
-
-- `production-ready`: this is a technical guarantee, not a synonym for shipped;
-- `autonomous shipping`: the builder remains accountable for the release;
-- `AI project management`: too generic and team-software oriented;
-- `local-first`: important architecture, but not the primary outcome;
-- `vibe coding`: useful audience and problem language, but likely too temporal
-  to become the permanent product category.
-
-## GitHub metadata draft
+## GitHub metadata draft (proposed)
 
 Repository description:
 
-> Agent workspace for shipping AI-built products—goals, work reports, artifacts, and memory.
+> Version control for your project's state — goals, decisions, work, and outputs your agents can pick up in any session.
 
-Initial GitHub topics:
+Topics: keep the current list; replace `project-management` with
+`context-engineering` when the description changes ships.
 
-```text
-ai-agents
-vibe-coding
-project-management
-developer-tools
-productivity
-local-first
-pglite
-hono
-vite
-spfn
-```
+## Open items
 
-Add `mcp` when an MCP integration exists in the public repository. Add packaging
-and platform topics only when those user-facing contracts are shipped and
-tested.
-
-## Copy candidates
-
-Primary:
-
-> **Build with agents. Ship like a team.**
-
-Campaign or launch copy:
-
-> Do not stop at the demo. Ship the product.
-
-Explanatory copy:
-
-> The workspace for the work between an AI-made demo and a product people can
-> actually use.
-
-The primary line is durable enough for the README. The sharper demo language is
-best used in launch material where the target audience is already clear.
+- A/B the pain headline against the contrast line in launch content; the
+  loser becomes body copy.
+- Lead word test: "state" vs "context" in self-descriptions.
+- README and landing rewrite follow this document once the proposed lines are
+  confirmed in content testing.
