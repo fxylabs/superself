@@ -195,4 +195,16 @@ grep -q '"'"$MERGED"'": "settled"' "$ROOT/B/ws/.superself/projects/demo/evidence
 grep -q "$DOOMED (abandoned)" "$ROOT/B/ws/.superself/projects/demo/work/$WID2.md" || fail "unlinked refold dropped a synced verdict"
 machine A
 
+# a proposal never displaces a confirmed decision; confirming it does
+cd "$ROOT/A/ws/demo"
+SELF decide "old rule stands" --why "integrity check"
+OLD_ID="$(SELF log -n 1 | sed -E 's/.*\[([^]]+)\].*/\1/')"
+SELF decide "new rule replaces it" --proposed --supersedes "$OLD_ID"
+PROP_ID="$(SELF log -n 1 | sed -E 's/.*\[([^]]+)\].*/\1/')"
+STATE_A="$ROOT/A/ws/.superself/projects/demo/state.md"
+grep -q "old rule stands" "$STATE_A" || fail "a mere proposal displaced a confirmed decision"
+SELF decide confirm "$PROP_ID"
+grep -q "old rule stands" "$STATE_A" && fail "confirming the proposal did not supersede the old decision"
+grep -q "new rule replaces it" "$STATE_A" || fail "confirmed proposal missing from state"
+
 echo "proof OK"

@@ -14,6 +14,7 @@ export interface DecisionState
     status: "proposed" | "confirmed" | "superseded";
     humanConfirmed: boolean;
     expired: boolean;
+    supersedes: string[];
 }
 
 export interface ReportEntry
@@ -105,16 +106,10 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     }
 }
 
+// A proposal must not displace a confirmed decision: its supersedes refs are
+// carried on the proposal and applied only at the moment it is confirmed.
 function applyDecision(model: ProjectModel, event: SelfEvent): void
 {
-    for (const id of event.refs?.supersedes ?? [])
-    {
-        const target = model.decisions.find((decision) => decision.id === id);
-        if (target !== undefined)
-        {
-            target.status = "superseded";
-        }
-    }
     if (event.type === "decision.proposed")
     {
         model.decisions.push(newDecision(event, "proposed", false));
@@ -127,15 +122,29 @@ function applyDecision(model: ProjectModel, event: SelfEvent): void
     const confirms = event.refs?.confirms;
     if (confirms === undefined)
     {
+        applySupersedes(model, event.refs?.supersedes ?? []);
         model.decisions.push(newDecision(event, "confirmed", event.origin.confirmed));
         return;
     }
     const target = model.decisions.find((decision) => decision.id === confirms);
     if (target !== undefined && target.status === "proposed")
     {
+        applySupersedes(model, target.supersedes);
         target.status = "confirmed";
         target.humanConfirmed = event.origin.confirmed;
         target.ts = event.ts;
+    }
+}
+
+function applySupersedes(model: ProjectModel, ids: string[]): void
+{
+    for (const id of ids)
+    {
+        const target = model.decisions.find((decision) => decision.id === id);
+        if (target !== undefined)
+        {
+            target.status = "superseded";
+        }
     }
 }
 
@@ -148,7 +157,8 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
         ts: event.ts,
         status,
         humanConfirmed,
-        expired: false
+        expired: false,
+        supersedes: event.refs?.supersedes ?? []
     };
 }
 
