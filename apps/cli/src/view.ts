@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { excludeLocally } from "./gitutil.js";
 import { ProjectModel, WorkState } from "./model.js";
 import { CliContext, ensureDir } from "./paths.js";
-import { CliError } from "./types.js";
+import { ArtifactMeta, CliError } from "./types.js";
 
 const VIEW_DIR = "view";
 
@@ -19,6 +19,7 @@ const STRINGS: Record<string, Record<string, string>> = {
         "Decisions": "결정",
         "Proposed decisions": "제안된 결정",
         "Conventions": "컨벤션",
+        "Artifacts": "산출물",
         "Done": "완료된 작업",
         "Reports (latest first)": "보고 (최신순)",
         "updated": "갱신",
@@ -140,6 +141,7 @@ function renderProjectPage(model: ProjectModel): string
         cards(t("Blocked"), blocked.map((w) => workCard(model.slug, w))),
         section(t("Next"), next.map((w) => `<li>${workLink(model.slug, w)} ${esc(w.outcome)}</li>`)),
         section(t("Open questions"), model.openQuestions.map((q) => `<li>${esc(q)}</li>`)),
+        artifactGrid(t("Artifacts"), artifactRows(model), ".."),
         section(t("Decisions"), confirmed.map((d) => `<li>${esc(d.text)}${d.why === undefined ? "" : ` <span class="muted">— ${esc(d.why)}</span>`} <span class="muted">(${d.ts.slice(0, 10)})</span></li>`)),
         section(t("Proposed decisions"), proposed.map((d) => `<li>${esc(d.text)} <span class="muted">— ${t("confirm with")} <code>self decide confirm ${esc(d.id)}</code></span></li>`)),
         section(t("Conventions"), model.conventions.map((c) => `<li>${esc(c.text)}</li>`)),
@@ -204,9 +206,51 @@ function renderWorkPage(slug: string, work: WorkState): string
         `<header><h1><span class="badge b-${work.status}">${t(work.status)}</span> <code>${esc(work.id)}</code></h1>`,
         `<p class="goal">${esc(work.outcome)}</p></header>`,
         `<ul>${facts.join("\n")}</ul>`,
+        artifactGrid(t("Artifacts"), workArtifactRows(work), "../.."),
         reports.length === 0 ? "" : `<h2>${t("Reports (latest first)")}</h2>\n${reports.join("\n")}`
     ].join("\n");
     return page(`${work.id} — ${slug}`, body);
+}
+
+interface ArtifactRow
+{
+    meta: ArtifactMeta;
+    workId: string;
+    ts: string;
+}
+
+function artifactRows(model: ProjectModel): ArtifactRow[]
+{
+    return model.works.flatMap(workArtifactRows).sort((a, b) => b.ts.localeCompare(a.ts));
+}
+
+function workArtifactRows(work: WorkState): ArtifactRow[]
+{
+    return work.reports.flatMap((report) =>
+        report.artifacts.map((meta) => ({ meta, workId: work.id, ts: report.ts })));
+}
+
+// prefix walks from the page's directory back up to the store root, where
+// the ingested artifact files live.
+function artifactGrid(title: string, rows: ArtifactRow[], prefix: string): string
+{
+    if (rows.length === 0)
+    {
+        return "";
+    }
+    const cards = rows.map((row) =>
+    {
+        const href = esc(`${prefix}/${row.meta.path}`);
+        const thumb = isImage(row.meta.name) ? `<img src="${href}" alt="" loading="lazy">` : "";
+        return `<a class="card art" href="${href}">${thumb}<p><strong>${esc(row.meta.name)}</strong></p>` +
+            `<p class="muted"><code>${esc(row.meta.id)}</code> · <code>${esc(row.workId)}</code> · ${row.ts.slice(0, 10)}</p></a>`;
+    });
+    return `<h2>${title}</h2>\n<div class="grid grid-art">${cards.join("\n")}</div>`;
+}
+
+function isImage(name: string): boolean
+{
+    return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(name);
 }
 
 function renderWorkspacePage(summaries: ProjectSummary[]): string
@@ -313,6 +357,10 @@ a.muted:hover { color: var(--fg); }
 .card p { margin: .4rem 0 0; }
 .card footer { margin-top: .6rem; font-size: .8rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: .8rem; }
+.grid-art { grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); }
+.art img { display: block; width: 100%; max-height: 110px; object-fit: cover;
+           border: 1px solid var(--border); border-radius: 5px; margin-bottom: .5rem; }
+.art p { margin: .15rem 0 0; overflow-wrap: anywhere; }
 .badge { display: inline-block; font-size: .75rem; font-weight: 600; padding: .05rem .5rem;
          border-radius: 99px; border: 1px solid currentColor; }
 .b-active { color: var(--accent); }

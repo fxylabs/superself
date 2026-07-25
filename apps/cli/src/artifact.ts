@@ -31,7 +31,9 @@ export function ingestArtifacts(storeDir: string, slug: string, paths: string[])
         }
         const id = artifactId();
         const name = basename(source);
-        const relative = join("artifacts", slug, `${id}-${name}`);
+        // Forward slashes: the path is persisted in the event and rendered
+        // into view hrefs, so it must not vary by platform.
+        const relative = `artifacts/${slug}/${id}-${name}`;
         ensureDir(join(storeDir, "artifacts", slug));
         copyFileSync(source, join(storeDir, relative));
         return { id, name, path: relative };
