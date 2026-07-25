@@ -45,10 +45,10 @@ The default theme (the "quiet ledger" look):
 
 ```css
 :root {
-    --paper: #faf9f4;          /* page background */
+    --paper: #f1f2ee;          /* page background */
     --ink: #182420;            /* primary text */
     --ink-soft: #5c6b62;       /* secondary text: dates, ids, metadata */
-    --rule: #c9d6c9;           /* hairlines: ledger rules, card borders */
+    --rule: #d3dad2;           /* hairlines: ledger rules, card borders */
     --seal: #1d5c43;           /* accent: links, active work, settled evidence */
     --note: #a34a2f;           /* attention: alerts, blocked work, proposals */
     --card: #ffffff;           /* raised surfaces: work cards, project cards, plates */
@@ -65,8 +65,8 @@ What each token controls:
 
 | Token | Controls |
 | --- | --- |
-| `--paper` | Background of every page |
-| `--ink` | Body text, headings, the section-title underline |
+| `--paper` | Background of every page, and text on the app bar |
+| `--ink` | Body text, headings, and the app-bar background |
 | `--ink-soft` | Dates, event types, ids, captions, footers, muted text |
 | `--rule` | Row separators, card borders, plate frames, the rail of queued/done work |
 | `--seal` | Links, eyebrow labels, active-work rail, work ids, event types, settled evidence, active counts |
@@ -121,7 +121,9 @@ the tokens and the class names listed below are stable.
 Themes that go beyond tokens can rely on these class names:
 
 - Page chrome: `main` (`main.wide` on the workspace and project pages),
-  `.crumb`, `.eyebrow`, `.desc`, `.goal`, `.note-band`, `footer`
+  `.topbar` (the sticky app bar; carries a `.mark` product mark, a `.trail`
+  breadcrumb with `.crumb` links and `.sep` separators, and a `.fold-stamp`
+  timestamp), `.eyebrow`, `.desc`, `.goal`, `.note-band`, `footer`
 - Project dashboard: `.board-head` (the one-line header; carries `.desc`,
   `.goal-line`, `.counts`, and a `.stamp` timestamp), `.attention` (modifier
   `.attention.calm` for the empty state; entries `.att` with a `.kind` chip),
