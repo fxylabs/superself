@@ -2,12 +2,20 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { excludeLocally } from "./gitutil.js";
-import { ProjectModel, WorkState } from "./model.js";
+import { eventSummary, readEvents } from "./logfile.js";
+import { DecisionState, ProjectModel, WorkState } from "./model.js";
 import { CliContext, ensureDir } from "./paths.js";
-import { ArtifactMeta, CliError } from "./types.js";
+import { Verdict } from "./reachability.js";
+import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";
+const THEME_FILE = "theme.css";
+const EVENT_TAIL = 8;
 
+// Optional localization layer, unused by default: human-facing labels are
+// English-base and scan-only chrome is not translated. `self lang` still
+// records the workspace language, which reaches the html lang attribute.
+// Kept until the retire-localization proposal is confirmed or rejected.
 const STRINGS: Record<string, Record<string, string>> = {
     ko: {
         "Workspace": "워크스페이스",
@@ -40,6 +48,7 @@ const STRINGS: Record<string, Record<string, string>> = {
 };
 
 let LANG = "en";
+let USER_THEME = "";
 
 function t(key: string): string
 {
@@ -60,19 +69,30 @@ interface ProjectSummary
     openQuestions: string[];
 }
 
-export function writeViews(storeDir: string, model: ProjectModel, lang: string): void
+export function writeViews(storeDir: string, model: ProjectModel, lang: string, verdicts: Record<string, Verdict> = {}): void
 {
     LANG = lang;
+    USER_THEME = readUserTheme(storeDir);
     const dir = ensureDir(join(storeDir, VIEW_DIR));
     excludeLocally(storeDir, VIEW_DIR + "/");
-    writeFileSync(join(dir, `${model.slug}.html`), renderProjectPage(model));
+    excludeLocally(storeDir, THEME_FILE);
+    const events = readEvents(storeDir, model.slug).slice(-EVENT_TAIL).reverse();
+    writeFileSync(join(dir, `${model.slug}.html`), renderProjectPage(model, events, verdicts));
     writeFileSync(join(dir, `${model.slug}.json`), JSON.stringify(summarize(model)) + "\n");
     writeFileSync(join(dir, "workspace.html"), renderWorkspacePage(readSummaries(dir)));
     const workDir = ensureDir(join(dir, model.slug));
     for (const work of model.works)
     {
-        writeFileSync(join(workDir, `${work.id}.html`), renderWorkPage(model.slug, work));
+        writeFileSync(join(workDir, `${work.id}.html`), renderWorkPage(model.slug, work, verdicts));
     }
+}
+
+// The override is inlined into a <style> element, so it must never be able
+// to close it and start injecting markup.
+function readUserTheme(storeDir: string): string
+{
+    const file = join(storeDir, THEME_FILE);
+    return existsSync(file) ? readFileSync(file, "utf8").replace(/<\/style/gi, "") : "";
 }
 
 export function viewFile(storeDir: string, slug: string | undefined): string
@@ -124,31 +144,57 @@ function readSummaries(dir: string): ProjectSummary[]
         .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-function renderProjectPage(model: ProjectModel): string
+function renderProjectPage(model: ProjectModel, events: SelfEvent[], verdicts: Record<string, Verdict>): string
 {
     const active = model.works.filter((w) => w.status === "active");
     const blocked = model.works.filter((w) => w.status === "blocked");
     const next = model.works.filter((w) => w.status === "next");
     const done = model.works.filter((w) => w.status === "done");
-    const confirmed = model.decisions.filter((d) => d.status === "confirmed");
     const proposed = model.decisions.filter((d) => d.status === "proposed" && !d.expired);
+    const notes = [...model.health, ...model.openQuestions];
+    if (proposed.length > 0)
+    {
+        notes.push(`${proposed.length} proposed ${proposed.length === 1 ? "decision awaits" : "decisions await"} confirmation — see the decision ledger`);
+    }
     const body = [
-        `<p><a class="muted" href="workspace.html">← ${t("workspace")}</a></p>`,
-        `<header><h1>${esc(model.slug)}</h1>${model.description === undefined ? "" : `<p class="muted">${esc(model.description)}</p>`}</header>`,
-        `<p class="goal">${esc(model.goal ?? t("goal not set"))}</p>`,
-        list("alert", model.health),
-        cards(t("Work in progress"), active.map((w) => workCard(model.slug, w))),
-        cards(t("Blocked"), blocked.map((w) => workCard(model.slug, w))),
-        section(t("Next"), next.map((w) => `<li>${workLink(model.slug, w)} ${esc(w.outcome)}</li>`)),
-        section(t("Open questions"), model.openQuestions.map((q) => `<li>${esc(q)}</li>`)),
-        artifactGrid(t("Artifacts"), artifactRows(model), ".."),
-        section(t("Decisions"), confirmed.map((d) => `<li>${esc(d.text)}${d.why === undefined ? "" : ` <span class="muted">— ${esc(d.why)}</span>`} <span class="muted">(${d.ts.slice(0, 10)})</span></li>`)),
-        section(t("Proposed decisions"), proposed.map((d) => `<li>${esc(d.text)} <span class="muted">— ${t("confirm with")} <code>self decide confirm ${esc(d.id)}</code></span></li>`)),
-        section(t("Conventions"), model.conventions.map((c) => `<li>${esc(c.text)}</li>`)),
-        section(t("Done"), done.map((w) => `<li><span class="badge b-done">${t("done")}</span> ${workLink(model.slug, w)} ${esc(w.outcome)} <span class="muted">(${w.lastEventTs.slice(0, 10)})</span></li>`)),
-        `<footer class="muted">${t("updated")} ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC</footer>`
+        `<a class="crumb" href="workspace.html">← workspace</a>`,
+        `<p class="eyebrow">Project record</p>`,
+        `<header><h1>${esc(model.slug)}</h1>${model.description === undefined ? "" : `<p class="desc">${esc(model.description)}</p>`}</header>`,
+        `<p class="goal"><em>${esc(model.goal ?? "goal not set")}</em></p>`,
+        noteBand(notes),
+        cardSection("Work in progress", [...active, ...blocked].map((w) => workCard(model.slug, w, verdicts))),
+        cardSection("Next", next.map((w) => workCard(model.slug, w, verdicts))),
+        ledger("Decision ledger", decisionRows(model.decisions)),
+        ledger("Conventions", model.conventions.map((c) => row(c.ts, `<p>${esc(c.text)}</p><p class="id">${esc(c.id)}</p>`))),
+        plates("Artifacts", artifactRows(model), ".."),
+        eventLog("Recent events", events),
+        ledger("Done", done.map((w) => row(w.lastEventTs, `<p>${workLink(model.slug, w)} ${esc(w.outcome)}</p>`))),
+        pageFooter()
     ].join("\n");
     return page(model.slug, body);
+}
+
+function noteBand(notes: string[]): string
+{
+    return notes.length === 0 ? "" : `<div class="note-band">${notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`;
+}
+
+function decisionRows(decisions: DecisionState[]): string[]
+{
+    return decisions
+        .filter((d) => d.status === "confirmed" || (d.status === "proposed" && !d.expired))
+        .sort((a, b) => b.ts.localeCompare(a.ts))
+        .map((d) =>
+        {
+            const why = [
+                d.why === undefined ? "" : esc(d.why),
+                d.status === "proposed" ? `<code>self decide confirm ${esc(d.id)}</code>` : ""
+            ].filter((part) => part !== "").join(" · ");
+            const body = `<p>${esc(d.text)}</p>` +
+                (why === "" ? "" : `<p class="why">${why}</p>`) +
+                `<p class="id">${esc(d.id)}</p>`;
+            return row(d.ts, body, d.status === "proposed" ? " proposed" : "");
+        });
 }
 
 function workLink(slug: string, work: WorkState): string
@@ -156,58 +202,79 @@ function workLink(slug: string, work: WorkState): string
     return `<a href="${esc(slug)}/${esc(work.id)}.html"><code>${esc(work.id)}</code></a>`;
 }
 
-function workCard(slug: string, work: WorkState): string
+function workCard(slug: string, work: WorkState, verdicts: Record<string, Verdict>): string
 {
     const latest = work.reports[work.reports.length - 1];
     const parts = [
-        `<div class="card"><div><span class="badge b-${work.status}">${t(work.status)}</span> ${workLink(slug, work)} <strong>${esc(work.outcome)}</strong></div>`
+        `<div class="work ${work.status}"><h3>${workLink(slug, work)} ${esc(work.outcome)}</h3>`
     ];
     if (work.status === "blocked")
     {
-        parts.push(`<p class="alert-text">${t("waiting on")} ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`);
+        parts.push(`<p class="alert">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`);
     }
     if (latest !== undefined)
     {
-        parts.push(`<p>${esc(firstLine(latest.text))} <span class="muted">(${latest.ts.slice(0, 10)}, ${work.reports.length} ${t("report(s)")})</span></p>`);
+        parts.push(`<p>${esc(firstLine(latest.text))} <span class="meta">(${latest.ts.slice(0, 10)})</span></p>`);
     }
     if (work.next !== undefined)
     {
-        parts.push(`<p class="muted">${t("next action")}: ${esc(work.next)}</p>`);
+        parts.push(`<p class="meta">next: ${esc(work.next)}</p>`);
     }
-    if (work.evidence.length > 0)
+    const meta = [
+        work.artifacts.length > 0 ? count(work.artifacts.length, "artifact") : "",
+        work.reports.length > 0 ? count(work.reports.length, "report") : "",
+        work.evidence.length > 0 ? `evidence ${work.evidence.map((c) => hashChip(c, verdicts)).join(" ")}` : ""
+    ].filter((part) => part !== "");
+    if (meta.length > 0)
     {
-        parts.push(`<p class="muted">${t("evidence")}: ${work.evidence.map((c) => `<code>${esc(c)}</code>`).join(" ")}</p>`);
+        parts.push(`<p class="meta">${meta.join(" · ")}</p>`);
     }
     return parts.join("\n") + "</div>";
 }
 
-function renderWorkPage(slug: string, work: WorkState): string
+function count(n: number, word: string): string
+{
+    return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function hashChip(hash: string, verdicts: Record<string, Verdict>): string
+{
+    const verdict = verdicts[hash];
+    return verdict === undefined
+        ? `<span class="hash"><b>${esc(hash)}</b></span>`
+        : `<span class="hash v-${verdict}"><b>${esc(hash)}</b> ${verdict}</span>`;
+}
+
+function renderWorkPage(slug: string, work: WorkState, verdicts: Record<string, Verdict>): string
 {
     const facts = [
-        `<li>${t("created")} ${work.ts.slice(0, 10)} · ${t("last event")} ${work.lastEventTs.slice(0, 10)}</li>`
+        `<li>created ${work.ts.slice(0, 10)} · last event ${work.lastEventTs.slice(0, 10)}</li>`
     ];
-    if (work.status === "blocked")
-    {
-        facts.push(`<li class="alert-text">${t("waiting on")} ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</li>`);
-    }
     if (work.next !== undefined)
     {
-        facts.push(`<li>${t("next action")}: ${esc(work.next)}</li>`);
+        facts.push(`<li>next: ${esc(work.next)}</li>`);
     }
     if (work.evidence.length > 0)
     {
-        facts.push(`<li>${t("evidence")}: ${work.evidence.map((c) => `<code>${esc(c)}</code>`).join(" ")}</li>`);
+        facts.push(`<li>evidence ${work.evidence.map((c) => hashChip(c, verdicts)).join(" ")}</li>`);
     }
     const reports = [...work.reports].reverse().map((report) =>
-        `<div class="card"><p class="muted">${report.ts.slice(0, 10)}${report.commits.length > 0 ? ` · ${report.commits.map((c) => `<code>${esc(c)}</code>`).join(" ")}` : ""}</p>` +
-        `<div class="prose">${esc(report.text)}</div></div>`);
+        row(report.ts,
+            (report.commits.length > 0 ? `<p class="id">${report.commits.map((c) => `<code>${esc(c)}</code>`).join(" ")}</p>` : "") +
+            `<div class="prose">${esc(report.text)}</div>`));
+    const blockedNote = work.status === "blocked"
+        ? noteBand([`waiting on ${work.blockedOn ?? "?"}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`])
+        : "";
     const body = [
-        `<p><a class="muted" href="../${esc(slug)}.html">← ${esc(slug)}</a></p>`,
-        `<header><h1><span class="badge b-${work.status}">${t(work.status)}</span> <code>${esc(work.id)}</code></h1>`,
-        `<p class="goal">${esc(work.outcome)}</p></header>`,
-        `<ul>${facts.join("\n")}</ul>`,
-        artifactGrid(t("Artifacts"), workArtifactRows(work), "../.."),
-        reports.length === 0 ? "" : `<h2>${t("Reports (latest first)")}</h2>\n${reports.join("\n")}`
+        `<a class="crumb" href="../${esc(slug)}.html">← ${esc(slug)}</a>`,
+        `<p class="eyebrow">Work record · <span class="st st-${work.status}">${work.status}</span></p>`,
+        `<header><h1><code>${esc(work.id)}</code></h1></header>`,
+        `<p class="goal"><em>${esc(work.outcome)}</em></p>`,
+        blockedNote,
+        `<ul class="facts">${facts.join("\n")}</ul>`,
+        plates("Artifacts", workArtifactRows(work), "../.."),
+        ledger("Reports (latest first)", reports),
+        pageFooter()
     ].join("\n");
     return page(`${work.id} — ${slug}`, body);
 }
@@ -232,20 +299,23 @@ function workArtifactRows(work: WorkState): ArtifactRow[]
 
 // prefix walks from the page's directory back up to the store root, where
 // the ingested artifact files live.
-function artifactGrid(title: string, rows: ArtifactRow[], prefix: string): string
+function plates(title: string, rows: ArtifactRow[], prefix: string): string
 {
     if (rows.length === 0)
     {
         return "";
     }
-    const cards = rows.map((row) =>
+    const items = rows.map((rowItem) =>
     {
-        const href = esc(`${prefix}/${row.meta.path}`);
-        const thumb = isImage(row.meta.name) ? `<img src="${href}" alt="" loading="lazy">` : "";
-        return `<a class="card art" href="${href}">${thumb}<p><strong>${esc(row.meta.name)}</strong></p>` +
-            `<p class="muted"><code>${esc(row.meta.id)}</code> · <code>${esc(row.workId)}</code> · ${row.ts.slice(0, 10)}</p></a>`;
+        const href = esc(`${prefix}/${rowItem.meta.path}`);
+        const ext = rowItem.meta.name.replace(/^.*(\.[^.]+)$/, "$1");
+        const thumb = isImage(rowItem.meta.name)
+            ? `<img src="${href}" alt="" loading="lazy">`
+            : `<div class="doc">${esc(ext)}</div>`;
+        return `<a class="plate" href="${href}"><figure>${thumb}` +
+            `<figcaption>${esc(rowItem.meta.name)}<span>${esc(rowItem.meta.id)} · ${esc(rowItem.workId)} · ${rowItem.ts.slice(0, 10)}</span></figcaption></figure></a>`;
     });
-    return `<h2>${title}</h2>\n<div class="grid grid-art">${cards.join("\n")}</div>`;
+    return `<section><h2>${title}</h2>\n<div class="plates">${items.join("\n")}</div></section>`;
 }
 
 function isImage(name: string): boolean
@@ -253,40 +323,65 @@ function isImage(name: string): boolean
     return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(name);
 }
 
+function eventLog(title: string, events: SelfEvent[]): string
+{
+    if (events.length === 0)
+    {
+        return "";
+    }
+    const items = events.map((event) =>
+        `<li><time>${event.ts.slice(5, 16).replace("T", " ")}</time><span class="type">${esc(event.type)}</span><span>${esc(firstLine(eventSummary(event)))}</span></li>`);
+    return `<section><h2>${title}</h2>\n<ul class="log">${items.join("\n")}</ul></section>`;
+}
+
 function renderWorkspacePage(summaries: ProjectSummary[]): string
 {
     const cards = summaries.map((summary) => [
-        `<a class="card" href="${esc(summary.slug)}.html"><h2>${esc(summary.slug)}</h2>`,
-        summary.description === undefined ? "" : `<p class="muted">${esc(summary.description)}</p>`,
-        `<p class="goal">${esc(summary.goal ?? t("goal not set"))}</p>`,
-        `<p>${badge(summary.active.length, t("active"), "b-active")} ${badge(summary.blockedCount, t("blocked"), "b-blocked")} ${badge(summary.nextCount, t("next"), "b-next")} ${badge(summary.doneCount, t("done"), "b-done")}</p>`,
+        `<a class="project" href="${esc(summary.slug)}.html"><h2>${esc(summary.slug)}</h2>`,
+        summary.description === undefined ? "" : `<p class="desc">${esc(summary.description)}</p>`,
+        `<p class="goal-line">${esc(summary.goal ?? "goal not set")}</p>`,
+        `<p class="counts">${countSpan(summary.active.length, "active")} · ${countSpan(summary.blockedCount, "blocked")} · ${countSpan(summary.nextCount, "next")} · ${countSpan(summary.doneCount, "done")}</p>`,
         summary.active.map((w) => `<p><code>${esc(w.id)}</code> ${esc(w.outcome)}</p>`).join("\n"),
-        summary.health.map((h) => `<p class="alert-text">${esc(h)}</p>`).join("\n"),
-        summary.openQuestions.map((q) => `<p class="alert-text">${esc(q)}</p>`).join("\n"),
-        `<footer class="muted">${t("updated")} ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></a>`
+        [...summary.health, ...summary.openQuestions].map((n) => `<p class="alert">${esc(n)}</p>`).join("\n"),
+        `<footer>updated ${summary.updated.slice(0, 16).replace("T", " ")} UTC</footer></a>`
     ].join("\n")).join("\n");
-    const body = `<header><h1>${t("Workspace")}</h1></header>\n<div class="grid">${cards}</div>`;
-    return page(t("Workspace"), body);
+    const body = [
+        `<p class="eyebrow">Workspace record</p>`,
+        `<header><h1>Workspace</h1></header>`,
+        `<div class="projects">${cards}</div>`,
+        pageFooter()
+    ].join("\n");
+    return page("Workspace", body, true);
 }
 
-function badge(count: number, label: string, cls: string): string
+function countSpan(n: number, label: string): string
 {
-    return `<span class="badge ${count === 0 ? "b-zero" : cls}">${count} ${label}</span>`;
+    if (n === 0)
+    {
+        return `<span class="zero">0 ${label}</span>`;
+    }
+    const cls = label === "active" ? ` class="on-active"` : label === "blocked" ? ` class="on-blocked"` : "";
+    return `<b${cls}>${n} ${label}</b>`;
 }
 
-function section(title: string, items: string[]): string
+function cardSection(title: string, items: string[]): string
 {
-    return items.length === 0 ? "" : `<h2>${title}</h2>\n<ul>${items.join("\n")}</ul>`;
+    return items.length === 0 ? "" : `<section><h2>${title}</h2>\n${items.join("\n")}</section>`;
 }
 
-function cards(title: string, items: string[]): string
+function ledger(title: string, rows: string[]): string
 {
-    return items.length === 0 ? "" : `<h2>${title}</h2>\n${items.join("\n")}`;
+    return rows.length === 0 ? "" : `<section><h2>${title}</h2>\n${rows.join("\n")}</section>`;
 }
 
-function list(cls: string, items: string[]): string
+function row(ts: string, body: string, cls = ""): string
 {
-    return items.length === 0 ? "" : `<ul class="${cls}">${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
+    return `<div class="row${cls}"><time>${ts.slice(0, 10)}</time><div class="body">${body}</div></div>`;
+}
+
+function pageFooter(): string
+{
+    return `<footer>superself record · updated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC · generated from the event log</footer>`;
 }
 
 function firstLine(text: string): string
@@ -300,17 +395,22 @@ function esc(text: string): string
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function page(title: string, body: string): string
+function page(title: string, body: string, wide = false): string
 {
+    const userTheme = USER_THEME === "" ? "" : `/* user theme — <store>/theme.css */\n${USER_THEME}\n`;
     return `<!doctype html>
 <html lang="${esc(LANG)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — superself</title>
-<style>${CSS}</style>
+<style>
+/* theme tokens — override via <store>/theme.css (docs/viewer-theming.md) */
+${DEFAULT_THEME}
+${userTheme}/* layout — stable contract: restyle through tokens, never edit this file */
+${LAYOUT_CSS}</style>
 </head>
-<body><main>
+<body><main${wide ? ` class="wide"` : ""}>
 ${body}
 </main>
 <script>${REFRESH_SCRIPT}</script>
@@ -330,51 +430,110 @@ setInterval(() => {
 }, 5000);
 `;
 
-const CSS = `
-:root { --bg: #fafaf8; --fg: #1a1a1a; --muted: #6b6b6b; --card: #ffffff; --border: #e2e0dc;
-        --accent: #2757d6; --alert: #b3362c; --ok: #22764a; --neutral: #6b6b6b; }
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #16181c; --fg: #e8e6e3; --muted: #9a9892; --card: #1f2228; --border: #32363e;
-          --accent: #7ba3f0; --alert: #e0796f; --ok: #74c69a; --neutral: #9a9892; } }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg);
-       font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-main { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
-h2 { font-size: 1rem; margin: 2rem 0 .5rem; text-transform: uppercase;
-     letter-spacing: .06em; color: var(--muted); }
-.card h2 { text-transform: none; letter-spacing: 0; color: var(--fg);
-           font-size: 1.1rem; margin: 0 0 .25rem; }
-.goal { font-size: 1.1rem; margin: .5rem 0 0; }
-.muted { color: var(--muted); }
-.card { display: block; background: var(--card); border: 1px solid var(--border);
-        border-radius: 8px; padding: .9rem 1rem; margin: .6rem 0;
-        color: inherit; text-decoration: none; }
-a.card:hover { border-color: var(--accent); }
-a { color: var(--accent); }
-a.muted { color: var(--muted); text-decoration: none; }
-a.muted:hover { color: var(--fg); }
-.card p { margin: .4rem 0 0; }
-.card footer { margin-top: .6rem; font-size: .8rem; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: .8rem; }
-.grid-art { grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); }
-.art img { display: block; width: 100%; max-height: 110px; object-fit: cover;
-           border: 1px solid var(--border); border-radius: 5px; margin-bottom: .5rem; }
-.art p { margin: .15rem 0 0; overflow-wrap: anywhere; }
-.badge { display: inline-block; font-size: .75rem; font-weight: 600; padding: .05rem .5rem;
-         border-radius: 99px; border: 1px solid currentColor; }
-.b-active { color: var(--accent); }
-.b-blocked { color: var(--alert); }
-.b-next { color: var(--neutral); }
-.b-done { color: var(--ok); }
-.b-zero { color: var(--muted); opacity: .55; }
-.alert { border: 1px solid var(--alert); border-radius: 8px; padding: .6rem 1rem .6rem 2rem;
-         color: var(--alert); }
-.alert-text { color: var(--alert); }
-.prose { white-space: pre-wrap; margin-top: .4rem; }
+// Every color, family, and surface flows from these tokens; a theme.css in
+// the store root overrides them without touching the layout contract below.
+const DEFAULT_THEME = `:root {
+    --paper: #faf9f4;          /* page background */
+    --ink: #182420;            /* primary text */
+    --ink-soft: #5c6b62;       /* secondary text */
+    --rule: #c9d6c9;           /* hairlines and borders */
+    --seal: #1d5c43;           /* accent: links, active work, settled evidence */
+    --note: #a34a2f;           /* attention: alerts, blocked work, proposals */
+    --card: #ffffff;           /* raised surfaces */
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    --serif: "Iowan Old Style", "Palatino", Palatino, "Nanum Myeongjo", serif;
+    --sans: -apple-system, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+}
+`;
+
+const LAYOUT_CSS = `* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink);
+       font: 15px/1.65 var(--sans); word-break: keep-all; }
+main { max-width: 46rem; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+main.wide { max-width: 64rem; }
+a { color: var(--seal); }
+code { font: .85em var(--mono); }
+.crumb { font: 12px var(--mono); color: var(--ink-soft); text-decoration: none;
+         letter-spacing: .04em; }
+.crumb:hover { color: var(--ink); }
+.eyebrow { font: 600 11px var(--mono); letter-spacing: .22em; text-transform: uppercase;
+           color: var(--seal); margin: 2.4rem 0 .2rem; }
+h1 { font: 600 30px/1.2 var(--serif); margin: .6rem 0 .2rem; letter-spacing: -.01em; }
+h1 code { font: 600 24px var(--mono); }
+.desc { color: var(--ink-soft); margin: 0; }
+.goal { font: 400 21px/1.5 var(--serif); margin: 1.2rem 0 0; }
+.goal em { font-style: normal;
+           box-shadow: inset 0 -0.45em 0 color-mix(in srgb, var(--seal) 14%, transparent); }
+.note-band { border-left: 3px solid var(--note); padding: .55rem 1rem; margin: 2rem 0 0;
+             color: var(--note); background: color-mix(in srgb, var(--note) 6%, transparent); }
+.note-band p { margin: .15rem 0; }
+section { margin-top: 2.6rem; }
+h2 { font: 600 12px var(--mono); letter-spacing: .2em; text-transform: uppercase;
+     color: var(--ink-soft); border-bottom: 1px solid var(--ink);
+     padding-bottom: .45rem; margin: 0 0 .2rem; }
+.row { display: grid; grid-template-columns: 6.8rem 1fr; gap: 1rem;
+       padding: .8rem 0; border-bottom: 1px solid var(--rule); }
+.row time { font: 12px var(--mono); color: var(--ink-soft); padding-top: .25rem; }
+.row .body p { margin: .2rem 0 0; }
+.row .body > :first-child { margin-top: 0; }
+.row .why { color: var(--ink-soft); }
+.row .id { font: 11px var(--mono); color: var(--ink-soft); opacity: .8; }
+.row.proposed .body > p:first-child::before { content: "proposed "; font: 600 11px var(--mono);
+       color: var(--note); letter-spacing: .08em; }
+.work { background: var(--card); border: 1px solid var(--rule); border-left: 3px solid var(--seal);
+        border-radius: 3px; padding: .9rem 1.1rem; margin: .8rem 0; }
+.work.blocked { border-left-color: var(--note); }
+.work.next, .work.done { border-left-color: var(--rule); }
+.work h3 { font: 600 15px var(--sans); margin: 0; }
+.work h3 a { text-decoration: none; }
+.work h3 code { color: var(--seal); }
+.work p { margin: .35rem 0 0; }
+.work .meta { color: var(--ink-soft); font-size: 13.5px; }
+.alert { color: var(--note); }
+.hash { font: 12px var(--mono); color: var(--ink-soft); white-space: nowrap; }
+.hash b { font-weight: 500; color: var(--seal); }
+.hash.v-provisional b { color: var(--ink-soft); }
+.hash.v-abandoned b, .hash.v-unverifiable b { color: var(--note); }
+.st { letter-spacing: .08em; }
+.st-active { color: var(--seal); }
+.st-blocked { color: var(--note); }
+.st-next, .st-done { color: var(--ink-soft); }
+.facts { list-style: none; padding: 0; margin: 1.6rem 0 0;
+         color: var(--ink-soft); font-size: 13.5px; }
+.facts li { margin: .3rem 0; }
+.plates { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+          gap: 1rem; margin-top: 1rem; }
+.plate { text-decoration: none; color: inherit; }
+figure { margin: 0; }
+.plate img, .plate .doc { width: 100%; height: 6.4rem; object-fit: cover; display: block;
+        border: 1px solid var(--rule); border-radius: 2px; background: var(--card); }
+.plate .doc { display: flex; align-items: center; justify-content: center;
+        font: 13px var(--mono); color: var(--ink-soft); }
+.plate figcaption { font-size: 12.5px; margin-top: .4rem; overflow-wrap: anywhere; }
+.plate figcaption span { display: block; font: 11px var(--mono); color: var(--ink-soft); }
+.log { list-style: none; padding: 0; margin: .6rem 0 0; }
+.log li { display: grid; grid-template-columns: 6.8rem 8.5rem 1fr; gap: 1rem;
+          padding: .34rem 0; font-size: 13.5px; border-bottom: 1px dotted var(--rule); }
+.log time, .log .type { font: 12px var(--mono); color: var(--ink-soft); }
+.log .type { color: var(--seal); }
+.prose { white-space: pre-wrap; }
+.projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+            gap: 1rem; margin-top: 1.4rem; }
+.project { display: block; background: var(--card); border: 1px solid var(--rule);
+           border-top: 3px solid var(--seal); border-radius: 3px; padding: 1rem 1.2rem;
+           color: inherit; text-decoration: none; }
+.project:hover { border-color: var(--seal); }
+.project h2 { font: 600 19px var(--serif); border: 0; padding: 0; margin: 0;
+              text-transform: none; letter-spacing: 0; color: var(--ink); }
+.project .goal-line { font: 400 15px/1.5 var(--serif); margin: .5rem 0 0; }
+.project p { margin: .35rem 0 0; }
+.project footer { margin-top: .8rem; }
+.counts { font: 12px var(--mono); color: var(--ink-soft); }
+.counts b { font-weight: 600; }
+.counts .on-active { color: var(--seal); }
+.counts .on-blocked { color: var(--note); }
+.counts .zero { opacity: .55; }
+footer { margin-top: 3.5rem; color: var(--ink-soft); font: 12px var(--mono); }
 ul { padding-left: 1.3rem; margin: .4rem 0; }
 li { margin: .3rem 0; }
-code { font: .85em ui-monospace, "SF Mono", Menlo, monospace; background: var(--border);
-       padding: .1em .35em; border-radius: 4px; }
-footer { color: var(--muted); margin-top: 2.5rem; font-size: .85rem; }
 `;
