@@ -71,6 +71,7 @@ grep -q "machine B started the work" "$STATE_A" || fail "B's report missing from
 VIEW_A="$ROOT/A/ws/.superself/view"
 grep -q "machine B started the work" "$VIEW_A/demo.html" || fail "project view not refreshed by fold"
 grep -q "prove two-machine sync" "$VIEW_A/workspace.html" || fail "workspace view missing project summary"
+grep -q "machine B started the work" "$VIEW_A/demo/$WID.html" || fail "work detail page missing report history"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked into store history"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
 
