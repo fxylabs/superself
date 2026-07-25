@@ -73,6 +73,8 @@ grep -q "machine B started the work" "$VIEW_A/demo.html" || fail "project view n
 grep -q "prove two-machine sync" "$VIEW_A/workspace.html" || fail "workspace view missing project summary"
 grep -q "machine B started the work" "$VIEW_A/demo/$WID.html" || fail "work detail page missing report history"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked into store history"
+cd "$ROOT/A/ws" && SELF lang ko > /dev/null
+grep -q "워크스페이스" "$VIEW_A/workspace.html" || fail "lang ko did not localize views"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
 
 echo "proof OK"
