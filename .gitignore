@@ -7,3 +7,13 @@ artifacts/
 !.env.example
 *.log
 .DS_Store
+
+# local planning records — project state lives in the self store, not here;
+# tracked docs (strategy, maintainers, viewer-theming) are unaffected
+/docs/0*-*.md
+/docs/alpha/
+/docs/plugins/
+/docs/product-policy.md
+/docs/progress.md
+/handoff.md
+/project-manifest.json
