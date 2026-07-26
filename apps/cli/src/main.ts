@@ -6,7 +6,7 @@ import { ingestArtifacts, runArtifact } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
-import { workId } from "./ids.js";
+import { assigneeId, workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, WorkState } from "./model.js";
@@ -33,7 +33,7 @@ import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
-import { printContext, printLog, printStatus, printWorkList } from "./views.js";
+import { printContext, printLog, printStatus, printWorkList, WorkFilter } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
@@ -53,10 +53,12 @@ const USAGE = `usage: self <command>
   goal set "<text>"                          set the project goal
   decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
   decide confirm <event-id>                  confirm a proposed decision
-  work                                       list open work
+  work [--assignee <agent> | --unassigned]   list open work, or only what one agent owns
   work add "<required outcome>"              create a work unit
   work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
+  work assign <id> <agent>                   route a work unit to an agent or runtime
+  work unassign <id>                         return a work unit to the unowned queue
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id>        find an artifact or open it with the OS default app
@@ -432,9 +434,19 @@ const TRANSITIONS: Record<string, string> = {
 function cmdWork(rest: string[]): void
 {
     const ctx = requireProject(process.cwd());
-    if (rest.length === 0)
+    if (rest.length === 0 || rest[0].startsWith("-"))
     {
-        printWorkList(ctx);
+        printWorkList(ctx, workFilter(rest));
+        return;
+    }
+    if (rest[0] === "assign")
+    {
+        assignWork(ctx, rest.slice(1));
+        return;
+    }
+    if (rest[0] === "unassign")
+    {
+        unassignWork(ctx, rest[1]);
         return;
     }
     if (rest[0] === "add")
@@ -460,9 +472,45 @@ function cmdWork(rest: string[]): void
     const type = TRANSITIONS[rest[0]];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|start|block|unblock|done`);
+        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|start|block|unblock|done|assign|unassign`);
     }
     transitionWork(ctx, type, rest.slice(1));
+}
+
+function workFilter(args: string[]): WorkFilter
+{
+    const { values } = parseArgs({
+        args,
+        options: { assignee: { type: "string" }, unassigned: { type: "boolean" } }
+    });
+    if (values.assignee !== undefined && values.unassigned === true)
+    {
+        throw new CliError("self work takes --assignee <agent> or --unassigned, not both");
+    }
+    if (values.unassigned === true)
+    {
+        return { unassigned: true };
+    }
+    return values.assignee === undefined ? {} : { assignee: assigneeId(values.assignee) };
+}
+
+// Reassignment is another assignment, not an edit: the fold shows the latest
+// hand and the log keeps every earlier one.
+function assignWork(ctx: ProjectContext, args: string[]): void
+{
+    const work = requireOpenWork(ctx, args[0]);
+    const assignee = assigneeId(requireText(args[1], "work assign <work-id> <agent>"));
+    recordEvent(ctx, makeEvent(ctx.project, "work.assigned", { work: work.id, assignee }), `${work.id} → ${assignee}`);
+}
+
+function unassignWork(ctx: ProjectContext, id: string | undefined): void
+{
+    const work = requireOpenWork(ctx, id);
+    if (work.assignee === undefined)
+    {
+        throw new CliError(`${work.id} is not assigned — nothing to clear`);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "work.unassigned", { work: work.id }), `${work.id} ← ${work.assignee}`);
 }
 
 function transitionWork(ctx: ProjectContext, type: string, args: string[]): void

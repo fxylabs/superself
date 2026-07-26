@@ -1,5 +1,5 @@
 import { eventSummary, readEvents } from "./logfile.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { assigneeNote, buildModel, ProjectModel, WorkState } from "./model.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { loadVerdicts, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
@@ -31,7 +31,7 @@ export function printContext(ctx: CliContext): void
     pushList(lines, "Conventions", model.conventions.map((c) => `- ${c.text}`));
     pushList(lines, "Work in progress", inProgressLines(model));
     pushList(lines, "Waiting on you", waitingLines(model));
-    pushList(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- ${w.id} ${w.outcome}`));
+    pushList(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- ${w.id} ${w.outcome}${assigneeNote(w)}`));
     pushList(lines, "Health", model.health.map((h) => `- ${h}`));
     console.log(lines.join("\n").replace(/\n+$/, ""));
 }
@@ -43,11 +43,11 @@ function inProgressLines(model: ProjectModel): string[]
         const latest = work.reports[work.reports.length - 1];
         const report = latest === undefined ? "" : ` — ${latest.text}`;
         const next = work.next === undefined ? "" : ` (next: ${work.next})`;
-        return `- ${work.id} ${work.outcome}${report}${next}`;
+        return `- ${work.id} ${work.outcome}${assigneeNote(work)}${report}${next}`;
     });
     const blocked = model.works
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
-        .map((w) => `- ${w.id} ${w.outcome} — blocked on ${w.blockedOn}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`);
+        .map((w) => `- ${w.id} ${w.outcome}${assigneeNote(w)} — blocked on ${w.blockedOn}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`);
     return [...active, ...blocked];
 }
 
@@ -159,30 +159,60 @@ function countLine(works: WorkState[]): string
     return `${count("active")} active, ${count("blocked")} blocked, ${count("next")} next, ${count("done")} done`;
 }
 
-export function printWorkList(ctx: CliContext & { project: string }): void
+// An empty filter is the whole open queue; the other two answer "who owns
+// this?" and "what owns nobody?" without reading any report prose.
+export interface WorkFilter
+{
+    assignee?: string;
+    unassigned?: boolean;
+}
+
+export function printWorkList(ctx: CliContext & { project: string }, filter: WorkFilter = {}): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const open = model.works.filter((w) => w.status !== "done");
-    if (open.length === 0)
+    const shown = open.filter((work) => matchesFilter(work, filter));
+    if (shown.length === 0)
     {
-        console.log("no open work");
+        console.log(emptyListLine(filter));
     }
-    for (const work of open)
+    for (const work of shown)
     {
         console.log(styled ? workLines(work) : plainWorkLine(work));
     }
     const done = model.works.length - open.length;
-    if (done > 0)
+    // A filtered list is a question about open work, so the done tally would
+    // answer something nobody asked.
+    if (done > 0 && shown.length === open.length)
     {
         console.log(styled ? `${green("✓")} ${dim(`${done} done — see log`)}` : `(${done} done — see log)`);
     }
 }
 
+function matchesFilter(work: WorkState, filter: WorkFilter): boolean
+{
+    if (filter.unassigned === true)
+    {
+        return work.assignee === undefined;
+    }
+    return filter.assignee === undefined || work.assignee === filter.assignee;
+}
+
+function emptyListLine(filter: WorkFilter): string
+{
+    if (filter.unassigned === true)
+    {
+        return "no unassigned work";
+    }
+    return filter.assignee === undefined ? "no open work" : `no open work assigned to ${filter.assignee}`;
+}
+
 function plainWorkLine(work: WorkState): string
 {
     const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
+    const assignee = work.assignee === undefined ? "" : ` → ${work.assignee}`;
     const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
-    return `${work.id}  ${work.status}${blocked}  ${work.outcome}${reports}`;
+    return `${work.id}  ${work.status}${blocked}${assignee}  ${work.outcome}${reports}`;
 }
 
 function workLines(work: WorkState): string
@@ -190,6 +220,10 @@ function workLines(work: WorkState): string
     const glyph = work.status === "active" ? blue("●") : work.status === "blocked" ? red("■") : "○";
     const indent = " ".repeat(work.id.length + 4);
     const lines = [`${glyph} ${dim(work.id)}  ${work.outcome}`];
+    if (work.assignee !== undefined)
+    {
+        lines.push(indent + dim(`assigned to ${work.assignee}`));
+    }
     if (work.status === "blocked")
     {
         lines.push(indent + red(`blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`));

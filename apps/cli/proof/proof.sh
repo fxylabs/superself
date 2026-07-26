@@ -357,4 +357,56 @@ grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinke
 BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
 echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
+# a work unit carries an optional execution assignee: absent until someone
+# routes it, and never required for the unit to be valid
+cd "$ROOT/A/ws/demo"
+WA="$(SELF work add "route this to an agent" | tail -1)"
+SELF work start "$WA"
+WORKA="$ROOT/A/ws/.superself/projects/demo/work/$WA.md"
+grep -q "Assignee" "$WORKA" && fail "a unit created without an assignee claimed one"
+SELF work | grep -q "$WA" || fail "unassigned work missing from the work list"
+SELF work --unassigned | grep -q "$WA" || fail "unassigned work missing from the unowned queue"
+
+# assignment is queryable everywhere state is read
+SELF work assign "$WA" opus-5-agent
+grep -q "Assignee: opus-5-agent" "$WORKA" || fail "assignment did not reach the work brief"
+SELF work show "$WA" | grep -q "Assignee: opus-5-agent" || fail "work show does not name the assignee"
+SELF work | grep -q "opus-5-agent" || fail "the work list does not show the assignee"
+SELF work --assignee opus-5-agent | grep -q "$WA" || fail "assignee lookup missed its own work"
+SELF work --unassigned | grep -q "$WA" && fail "assigned work still read as unowned"
+SELF context | grep -q "assignee: opus-5-agent" || fail "context does not name the responsible agent"
+grep -q "assignee: opus-5-agent" "$STATE_A" || fail "folded state does not carry the assignee"
+grep -q "assignee opus-5-agent" "$VIEW_A/demo/$WA.html" || fail "work view missing the assignee chip"
+grep -q "assignee opus-5-agent" "$VIEW_A/demo.html" || fail "project view missing the assignee"
+
+# reassignment supersedes without erasing: the fold shows the current hand,
+# the log keeps every earlier one
+SELF work assign "$WA" sonnet-5-agent
+grep -q "Assignee: sonnet-5-agent" "$WORKA" || fail "reassignment did not take"
+grep -q "Assignee: opus-5-agent" "$WORKA" && fail "a superseded assignee survived the fold"
+grep -q '"assignee":"opus-5-agent"' "$LOG_A" || fail "assignment history lost from the event log"
+SELF work --assignee opus-5-agent | grep -q "$WA" && fail "the previous assignee still owns the work"
+
+# clearing returns the unit to the unowned queue
+SELF work unassign "$WA"
+grep -q "Assignee" "$WORKA" && fail "clearing left an assignee behind"
+SELF work --unassigned | grep -q "$WA" || fail "cleared work did not return to the unowned queue"
+CLEARED="$(SELF work unassign "$WA" 2>&1 || true)"
+echo "$CLEARED" | grep -q "is not assigned" || fail "clearing unassigned work recorded an empty event"
+BADNAME="$(SELF work assign "$WA" "two words" 2>&1 || true)"
+echo "$BADNAME" | grep -q "not an assignee identity" || fail "an unvalidated assignee was accepted"
+BOTH="$(SELF work --assignee opus-5-agent --unassigned 2>&1 || true)"
+echo "$BOTH" | grep -q "not both" || fail "two contradictory work filters were accepted"
+
+# the assignment is derived state: a rebuild from the log alone restores it
+SELF work assign "$WA" opus-5-agent
+rm -rf "$ROOT/A/ws/.superself/projects/demo/work"
+SELF fold > /dev/null
+grep -q "Assignee: opus-5-agent" "$WORKA" || fail "a rebuild from the log lost the assignment"
+
+# any linked checkout of the project answers the same question
+cd "$ROOT/A/ws/demo-wt"
+SELF work --assignee opus-5-agent | grep -q "$WA" || fail "a linked worktree cannot look up the assignee"
+cd "$ROOT/A/ws/demo"
+
 echo "proof OK"

@@ -41,6 +41,11 @@ export interface WorkState
     status: "next" | "active" | "blocked" | "done";
     blockedOn?: string;
     blockedWhy?: string;
+    // Who executes this unit — an agent, a model, a runtime. Optional by
+    // design: work created before anyone routes it, and work nobody routes at
+    // all, are ordinary states, not missing data. The latest assignment wins;
+    // every earlier one stays recoverable from the log.
+    assignee?: string;
     reports: ReportEntry[];
     evidence: string[];
     artifacts: ArtifactMeta[];
@@ -61,6 +66,13 @@ export interface ProjectModel
     works: WorkState[];
     openQuestions: string[];
     health: string[];
+}
+
+// One phrase for every surface, so "who executes this" reads the same in the
+// terminal, in the folded markdown, and in the derived views.
+export function assigneeNote(work: WorkState): string
+{
+    return work.assignee === undefined ? "" : ` (assignee: ${work.assignee})`;
 }
 
 export function buildModel(storeDir: string, slug: string, now: Date): ProjectModel
@@ -227,6 +239,14 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
         work.status = "blocked";
         work.blockedOn = String(event.payload.on);
         work.blockedWhy = event.payload.why === undefined ? undefined : String(event.payload.why);
+    }
+    if (event.type === "work.assigned")
+    {
+        work.assignee = String(event.payload.assignee);
+    }
+    if (event.type === "work.unassigned")
+    {
+        work.assignee = undefined;
     }
     if (event.type === "work.done")
     {

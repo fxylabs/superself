@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
-import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
+import { assigneeNote, buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
 import { evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
@@ -106,7 +106,7 @@ function renderState(model: ProjectModel): string
     section(lines, "Conventions", model.conventions.map((c) => `- ${c.text} _(${c.id})_`));
     section(lines, "Work in progress", model.works.filter((w) => w.status === "active").map(workLine));
     section(lines, "Blocked", model.works.filter((w) => w.status === "blocked").map(blockedLine));
-    section(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- **${w.id}** ${w.outcome}`));
+    section(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- **${w.id}** ${w.outcome}${assigneeNote(w)}`));
     section(lines, "Open questions", model.openQuestions.map((q) => `- ${q}`));
     section(lines, "Health", model.health.map((h) => `- ${h}`));
     return lines.join("\n").replace(/\n+$/, "\n");
@@ -142,13 +142,13 @@ function workLine(work: WorkState): string
     const latest = work.reports[work.reports.length - 1];
     const report = latest === undefined ? "" : ` — ${latest.text}`;
     const next = work.next === undefined ? "" : ` (next: ${work.next})`;
-    return `- **${work.id}** ${work.outcome}${report}${next}`;
+    return `- **${work.id}** ${work.outcome}${assigneeNote(work)}${report}${next}`;
 }
 
 function blockedLine(work: WorkState): string
 {
     const why = work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`;
-    return `- **${work.id}** ${work.outcome} — waiting on ${work.blockedOn}${why}`;
+    return `- **${work.id}** ${work.outcome}${assigneeNote(work)} — waiting on ${work.blockedOn}${why}`;
 }
 
 function renderWork(work: WorkState, verdicts: Record<string, Verdict>): string
@@ -159,6 +159,10 @@ function renderWork(work: WorkState, verdicts: Record<string, Verdict>): string
 export function renderWorkBody(work: WorkState, verdicts: Record<string, Verdict> = {}): string
 {
     const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
+    if (work.assignee !== undefined)
+    {
+        lines.push(`- Assignee: ${work.assignee}`);
+    }
     if (work.status === "blocked")
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);

@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { DecisionState, ProjectModel, WorkState } from "./model.js";
+import { assigneeNote, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { CliContext, ensureDir, StoreConfig } from "./paths.js";
 import { Verdict } from "./reachability.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
@@ -278,7 +278,7 @@ function waitingRows(model: ProjectModel): WaitingRow[]
     return [
         ...model.works.filter((w) => w.status === "blocked").map((w) => ({
             kind: "blocked",
-            text: firstLine(`${w.outcome} — waiting on ${w.blockedOn ?? "?"}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`),
+            text: firstLine(`${w.outcome}${assigneeNote(w)} — waiting on ${w.blockedOn ?? "?"}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`),
             ref: w.id,
             action: "open",
             href: `${w.id}.html`,
@@ -385,6 +385,7 @@ function workRow(slug: string, work: WorkState, verdicts: Record<string, Verdict
 {
     const latest = work.reports[work.reports.length - 1];
     const sub = [
+        work.assignee === undefined ? "" : `assignee ${work.assignee}`,
         latest === undefined ? "" : `latest: ${firstLine(latest.text)}`,
         work.evidence.length === 0 ? "" : `evidence ${work.evidence.map((c) => `${c} ${verdicts[c] ?? "unchecked"}`).join(" · ")}`
     ].filter((part) => part !== "").join(" · ");
@@ -395,7 +396,8 @@ function workRow(slug: string, work: WorkState, verdicts: Record<string, Verdict
 
 function nextRow(slug: string, work: WorkState): string
 {
-    return `<tr><td class="n">${workLink(slug, work)}</td><td>${esc(work.outcome)}</td></tr>`;
+    const sub = work.assignee === undefined ? "" : `<span class="hf-sub">assignee ${esc(work.assignee)}</span>`;
+    return `<tr><td class="n">${workLink(slug, work)}</td><td>${esc(work.outcome)}${sub}</td></tr>`;
 }
 
 /* ── work detail ───────────────────────────────────────────────────── */
@@ -403,6 +405,7 @@ function nextRow(slug: string, work: WorkState): string
 function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<string, Verdict>, rail: Rail): string
 {
     const chips = [
+        work.assignee === undefined ? "" : `<span class="wd-chip">assignee ${esc(work.assignee)}</span>`,
         `<span class="wd-chip">created ${day(work.ts)}</span>`,
         work.next === undefined ? "" : `<span class="wd-chip">next: ${esc(work.next)}</span>`,
         ...work.branches.map((b) => `<span class="wd-chip">branch ${esc(b)}</span>`)

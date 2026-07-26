@@ -47,14 +47,17 @@ sits next to git:
 - `self project add` registers a project through a local marker file that never
   enters the code repository; projects live wherever they already are, inside
   or outside the workspace directory, because the pointer decides the store;
-- typed event verbs — `goal set`, `decide`, `work add/start/block/unblock/done`,
-  `report`, `convention add` — append to a per-project JSONL log;
+- typed event verbs — `goal set`, `decide`,
+  `work add/start/assign/unassign/block/unblock/done`, `report`,
+  `convention add` — append to a per-project JSONL log;
 - every event immediately refolds canonical markdown (project state plus one
   file per open work unit) and lands as exactly one commit in the workspace
   repository, so state has log, blame, and revert;
 - `self context` prints the derived context an agent needs at session start;
-  `self status`, `self work`, and `self log` read state; `self search` greps the
-  whole workspace with current-project results ranked first; `self setup` shows
+  `self status`, `self work`, and `self log` read state — `self work
+  --assignee <agent>` and `self work --unassigned` answer who executes what;
+  `self search` greps the whole workspace with current-project results ranked
+  first; `self setup` shows
   the project, workspace, store, and machine pointer the current directory
   resolves to;
 - canonical files are generated output — hand edits are detected as drift and
