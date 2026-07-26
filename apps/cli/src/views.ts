@@ -94,12 +94,13 @@ function renderProjectContext(model: ProjectModel): string
 
 function renderProject(model: ProjectModel, options: ProjectContextOptions): string
 {
+    const project = shellArgument(model.slug);
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
-        lines.push(detail(model.description, options.detailLimit, `self search --project ${model.slug}`), "");
+        lines.push(detail(model.description, options.detailLimit, `self search --project ${project}`), "");
     }
-    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self search --project ${model.slug}`)}`, "");
+    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self search --project ${project}`)}`, "");
     const decisionLines = [...options.decisions];
     if (options.omittedDecisions > 0)
     {
@@ -107,7 +108,7 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     }
     pushList(lines, "Decisions", decisionLines);
     pushList(lines, "Conventions", model.conventions.map((convention) =>
-        `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${model.slug}`)}`));
+        `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${project}`)}`));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
     pushList(lines, "Waiting on you", waitingItems(model).map((item) =>
         detail(item.full, options.detailLimit, item.recovery)));
@@ -144,7 +145,8 @@ function renderMinimalProjectContext(model: ProjectModel, confirmed: string[]): 
 
 function renderMinimalProject(model: ProjectModel, decisions: string[], omittedDecisions: number): string
 {
-    const recovery = `self search --project ${model.slug}`;
+    const project = shellArgument(model.slug);
+    const recovery = `self search --project ${project}`;
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
@@ -154,12 +156,12 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
     const decisionLines = [...decisions];
     if (omittedDecisions > 0)
     {
-        decisionLines.unshift(`- … ${omittedDecisions} confirmed decision${omittedDecisions === 1 ? "" : "s"} omitted; run \`self search --type decision --project ${model.slug}\``);
+        decisionLines.unshift(`- … ${omittedDecisions} confirmed decision${omittedDecisions === 1 ? "" : "s"} omitted; run \`self search --type decision --project ${project}\``);
     }
     pushList(lines, "Decisions", decisionLines);
     pushList(lines, "Conventions", [...model.conventions]
         .sort(compareDated)
-        .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${model.slug}\``));
+        .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
     const progressing = [...model.works]
         .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
         .sort((left, right) => left.id.localeCompare(right.id));
@@ -187,7 +189,8 @@ function renderAggregateProject(model: ProjectModel): string
     const active = model.works.filter((work) => work.status === "active").length;
     const blocked = model.works.filter((work) => work.status === "blocked").length;
     const waiting = waitingItems(model).length;
-    const recovery = `self search --project ${model.slug}`;
+    const project = shellArgument(model.slug);
+    const recovery = `self search --project ${project}`;
     return [
         `# ${takeCharacters(model.slug, 200)}`,
         "",
@@ -196,7 +199,7 @@ function renderAggregateProject(model: ProjectModel): string
         `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
         `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`self work\``,
         `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
-        `- decisions: run \`self search --type decision --project ${model.slug}\``
+        `- decisions: run \`self search --type decision --project ${project}\``
     ].join("\n");
 }
 
@@ -273,6 +276,7 @@ function reportExcerpt(text: string, work: string, limit: number): string
 
 function waitingItems(model: ProjectModel): WaitingItem[]
 {
+    const project = shellArgument(model.slug);
     const questions = model.works
         .filter((work) => work.status === "blocked" && work.blockedOn === "decision")
         .sort((left, right) => left.id.localeCompare(right.id))
@@ -287,7 +291,7 @@ function waitingItems(model: ProjectModel): WaitingItem[]
         .map((decision): WaitingItem => ({
             full: `- proposal: ${decision.text} (confirm with \`self decide confirm ${decision.id}\`)`,
             identity: `proposal ${decision.id}`,
-            recovery: `self search ${decision.id} --type decision --project ${model.slug}`
+            recovery: `self search ${decision.id} --type decision --project ${project}`
         }));
     return [...questions, ...proposals];
 }
@@ -377,6 +381,14 @@ function contextLength(text: string): number
 function takeCharacters(text: string, count: number): string
 {
     return Array.from(text).slice(0, Math.max(0, count)).join("");
+}
+
+// Context recovery commands are pasted into POSIX shells. Always quote a
+// project slug as one literal argument; the '"'"' sequence is the portable
+// way to embed a single quote inside a single-quoted shell word.
+function shellArgument(value: string): string
+{
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 export function printStatus(ctx: CliContext): void

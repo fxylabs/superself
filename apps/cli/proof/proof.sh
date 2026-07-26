@@ -7,6 +7,13 @@ CLI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
+# Recovery commands are rendered with the installed command name. Expose this
+# proof's just-built CLI under that name so executing one cannot hit an older
+# machine-global installation.
+mkdir -p "$ROOT/bin"
+ln -s "$CLI_DIR/bin/self.mjs" "$ROOT/bin/self"
+export PATH="$ROOT/bin:$PATH"
+
 SELF()
 {
     node "$CLI_DIR/bin/self.mjs" "$@"
@@ -128,7 +135,7 @@ AGGREGATE_CONTEXT="$(SELF context)"
 AGGREGATE_CHARS="$(printf '%s\n' "$AGGREGATE_CONTEXT" | wc -m | tr -d ' ')"
 [ "$AGGREGATE_CHARS" -le 12000 ] || fail "aggregate exception exceeded 12,000 characters ($AGGREGATE_CHARS)"
 echo "$AGGREGATE_CONTEXT" | grep -q "even as identity rows" || fail "mathematical protected overflow was not disclosed"
-echo "$AGGREGATE_CONTEXT" | grep -q 'self search --project demo' || fail "aggregate overflow has no valid project pull path"
+echo "$AGGREGATE_CONTEXT" | grep -q "self search --project 'demo'" || fail "aggregate overflow has no valid project pull path"
 SELF search --project demo | grep -q "budget proof active outcome must survive" || fail "project-only recovery did not expose canonical state"
 cp "$ROOT/demo-log-before-budget-fixture" "$LOG_A"
 SELF fold > /dev/null
@@ -151,6 +158,22 @@ echo "$WORKSPACE_OVERFLOW" | grep -q "project summaries omitted" || fail "worksp
 echo "$WORKSPACE_OVERFLOW" | grep -q 'self status' || fail "workspace omission has no valid recovery path"
 SELF status | grep -q "workspace-budget-300" || fail "workspace status did not recover an omitted project summary"
 cp "$ROOT/registry-before-budget-fixture" "$REGISTRY_A"
+
+# Slugs remain backwards-compatible and may contain shell syntax. Every
+# generated recovery command must quote the slug as one POSIX argument.
+mkdir -p "$ROOT/odd-project"
+cd "$ROOT/odd-project"
+git init -q
+ODD_SLUG="odd slug;touch slug-pwned;'quoted'"
+ODD_DESCRIPTION="odd slug recovery marker $(awk 'BEGIN { for (i = 0; i < 16000; i++) printf "q" }')"
+SELF project add --name "$ODD_SLUG" --desc "$ODD_DESCRIPTION" --no-connect > /dev/null
+ODD_CONTEXT="$(SELF context)"
+ODD_RECOVERY="$(printf '%s\n' "$ODD_CONTEXT" | sed -n 's/.*`\(self search --project [^`]*\)`.*/\1/p' | head -1)"
+[ -n "$ODD_RECOVERY" ] || fail "spaced slug context emitted no project recovery command"
+echo "$ODD_RECOVERY" | grep -F -q "'\"'\"'" || fail "single quote in project slug was not POSIX-escaped"
+ODD_RECOVERED="$(eval "$ODD_RECOVERY")"
+echo "$ODD_RECOVERED" | grep -q "odd slug recovery marker" || fail "quoted project recovery did not return the intended state"
+[ ! -e slug-pwned ] || fail "project slug executed shell metacharacters"
 cd "$ROOT/A/ws"
 SELF remote add "$ROOT/remote.git"
 SELF sync
