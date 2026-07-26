@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
-import { checkoutOf } from "./gitutil.js";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { checkoutTops, realPath, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
 
@@ -53,16 +53,23 @@ export function resolveContext(cwd: string): CliContext | null
     {
         throw new CliError(`${workspaceDir} holds no workspace store — run \`self workspace <path>\` to point this machine at one`);
     }
-    if (marker === null)
+    if (marker !== null)
+    {
+        return {
+            workspaceDir,
+            storeDir,
+            project: JSON.parse(readFileSync(marker, "utf8")).project,
+            projectDir: dirname(marker)
+        };
+    }
+    // No marker here, so the repository answers instead: registration is one
+    // act per project, not one per checkout of it.
+    const match = checkoutProject(storeDir, cwd);
+    if (match === null)
     {
         return { workspaceDir, storeDir };
     }
-    return {
-        workspaceDir,
-        storeDir,
-        project: JSON.parse(readFileSync(marker, "utf8")).project,
-        projectDir: dirname(marker)
-    };
+    return { workspaceDir, storeDir, project: match.slug, projectDir: match.dir };
 }
 
 // The machine's workspace is the single source. Markers written before that
@@ -103,17 +110,18 @@ export function requireProject(cwd: string): CliContext & { project: string; pro
     return ctx as CliContext & { project: string; projectDir: string };
 }
 
-// A worktree of a registered project carries the committed discipline block
-// but not the git-excluded marker. Naming `self project add` there sends the
-// agent to the one command that must not run — hence the split message.
+// Reached only when neither a marker nor the repository answers. Inside a
+// checkout that does hold a registered project, the directory is simply the
+// wrong one — say where the project sits rather than sending the agent to
+// `self project add`, the one command that must not run there.
 function unregisteredMessage(storeDir: string, cwd: string): string
 {
-    const sibling = siblingSlug(storeDir, cwd);
-    if (sibling === null)
+    const elsewhere = checkoutMatches(storeDir, cwd)[0];
+    if (elsewhere !== undefined)
     {
-        return "not inside a registered project — run `self project add` in the project directory first";
+        return `this repository's registered project "${elsewhere.slug}" is at ${elsewhere.dir} — run self from there (\`self project add\` here would register a duplicate)`;
     }
-    return `this checkout of the registered project "${sibling}" is not linked on this machine — run \`self project link ${sibling}\` here (\`self project add\` would register a duplicate)`;
+    return "not inside a registered project — run `self project add` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine";
 }
 
 export function projectStateDir(storeDir: string, slug: string): string
@@ -166,32 +174,103 @@ export function readLinks(storeDir: string): Record<string, string[]>
 export function resolveProjectPath(storeDir: string, slug: string, from: string = process.cwd()): string | null
 {
     const linked = readLinks(storeDir)[slug] ?? [];
-    const active = linked.find((path) => contains(path, from)) ?? linked.filter((path) => existsSync(path)).pop();
+    const active = linked.find((path) => contains(path, from));
     if (active !== undefined)
     {
         return active;
     }
-    const entry = readRegistry(storeDir).find((item) => item.slug === slug);
-    return entry?.path ?? null;
+    // An unlinked checkout is still the one the command ran in; only when the
+    // command came from somewhere else does another checkout stand in.
+    const match = checkoutProject(storeDir, from);
+    if (match !== null && match.slug === slug)
+    {
+        return match.dir;
+    }
+    const fallback = linked.filter((path) => existsSync(path)).pop();
+    return fallback ?? readRegistry(storeDir).find((item) => item.slug === slug)?.path ?? null;
+}
+
+export interface CheckoutMatch
+{
+    slug: string;
+    dir: string;
+}
+
+interface RepositoryLink
+{
+    slug: string;
+    path: string;
+    top: string;
+}
+
+// Every project this machine has linked inside one of `tops`, the working
+// trees of a single repository. A linked path outside all of them is ruled
+// out on a string comparison; the few that remain are confirmed against their
+// own top level, so a nested repository is never taken for the checkout it
+// sits in.
+function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
+{
+    const links = readLinks(storeDir);
+    const found: RepositoryLink[] = [];
+    for (const entry of readRegistry(storeDir))
+    {
+        for (const linked of links[entry.slug] ?? [])
+        {
+            const path = realPath(linked);
+            if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path)))
+            {
+                continue;
+            }
+            const top = topOf(path);
+            if (top !== null && tops.includes(top))
+            {
+                found.push({ slug: entry.slug, path, top });
+            }
+        }
+    }
+    return found;
+}
+
+// Where each project registered in this repository sits inside the checkout
+// `dir` belongs to, deepest first. A project is identified by its repository,
+// so one linked checkout answers for every other checkout of it — including
+// worktrees created long after registration. The registered path keeps its
+// position under its own top level, which is what stops a monorepo where
+// `apps/foo` is registered from claiming the whole worktree.
+export function checkoutMatches(storeDir: string, dir: string): CheckoutMatch[]
+{
+    const target = realPath(resolve(dir));
+    const here = topOf(target);
+    if (here === null)
+    {
+        return [];
+    }
+    return repositoryLinks(storeDir, checkoutTops(target))
+        .map((link) => ({ slug: link.slug, dir: join(here, relative(link.top, link.path)) }))
+        .sort((a, b) => b.dir.length - a.dir.length);
+}
+
+// The project this directory belongs to on the strength of its repository
+// alone. Two registered projects can share one repository, so the deepest
+// mapped directory containing the current one wins.
+export function checkoutProject(storeDir: string, dir: string): CheckoutMatch | null
+{
+    const target = realPath(resolve(dir));
+    return checkoutMatches(storeDir, target).find((match) => contains(match.dir, target)) ?? null;
 }
 
 // The slug of a project already registered at another checkout of this same
-// repository — the worktree case, where `self project add` would register a
-// duplicate and `self project link` is the right action.
+// repository — the case `self project add` must refuse, because the project
+// is registered already and a second entry would split its state in two.
 export function siblingSlug(storeDir: string, dir: string): string | null
 {
-    const here = checkoutOf(dir);
+    const target = realPath(resolve(dir));
+    const here = topOf(target);
     if (here === null)
     {
         return null;
     }
-    const links = readLinks(storeDir);
-    const sibling = (path: string): boolean =>
-    {
-        const there = existsSync(path) ? checkoutOf(path) : null;
-        return there !== null && there.common === here.common && there.top !== here.top;
-    };
-    return readRegistry(storeDir).find((entry) => (links[entry.slug] ?? []).some(sibling))?.slug ?? null;
+    return repositoryLinks(storeDir, checkoutTops(target)).find((link) => link.top !== here)?.slug ?? null;
 }
 
 function contains(parent: string, child: string): boolean

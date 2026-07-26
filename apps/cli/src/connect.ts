@@ -91,14 +91,14 @@ function renderMachineBlock(): string
         "The `self` CLI version-controls project state — goals, decisions, work",
         "units, reports — outside the code repository.",
         "",
-        "- A registered project has a `.self` file at its root and its own superself",
-        "  block in AGENTS.md or CLAUDE.md: run `self context` at session start and",
-        "  follow that block.",
+        "- A registered project carries its own superself block in AGENTS.md or",
+        "  CLAUDE.md: run `self context` at session start and follow that block.",
+        "  `self setup` tells you which project, if any, a directory resolves to.",
         "- In an unregistered project, ask the user once whether to register it with",
         "  `self project add`. Never register a project on your own.",
-        "- Another checkout of a registered project — a git worktree — is not a new",
-        "  project and not an exemption from this discipline: run `self project link`",
-        "  there, then continue as usual.",
+        "- Every checkout of a registered git repository — worktrees included —",
+        "  resolves on its own: work there as usual, and never run",
+        "  `self project add` to attach one.",
         MACHINE_END
     ].join("\n");
 }

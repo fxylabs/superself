@@ -11,6 +11,7 @@ import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, WorkState } from "./model.js";
 import {
+    checkoutProject,
     CliContext,
     ensureDir,
     isStore,
@@ -46,7 +47,7 @@ const USAGE = `usage: self <command>
   theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
-  project link [slug] [path]                 link this checkout of a registered project on this machine
+  project link [slug] [path]                 attach a registered project's directory on this machine
   remote add <url>                           connect the workspace store to a git remote
   sync                                       pull, refold, and push the workspace store
   clone <url> [dir]                          clone a workspace store onto a new machine
@@ -315,8 +316,9 @@ function projectLink(args: string[]): void
         throw new CliError(`"${projectDir}" does not exist`);
     }
     // Omitting the slug is the worktree case: the repository already answers
-    // which project this checkout belongs to.
-    const slug = args[0] ?? requireText(siblingSlug(ctx.storeDir, projectDir) ?? undefined, "project link <slug> [path]");
+    // which project this checkout belongs to. Linking it only saves the probe.
+    const inferred = checkoutProject(ctx.storeDir, projectDir)?.slug ?? siblingSlug(ctx.storeDir, projectDir);
+    const slug = args[0] ?? requireText(inferred ?? undefined, "project link <slug> [path]");
     if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);

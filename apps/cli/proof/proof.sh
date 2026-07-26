@@ -296,27 +296,64 @@ grep -q '"'"$MERGED"'": "settled"' "$ROOT/B/ws/.superself/projects/demo/evidence
 grep -q "$DOOMED (unknown)" "$ROOT/B/ws/.superself/projects/demo/work/$WID2.md" || fail "unlinked refold dropped a synced verdict"
 machine A
 
-# a worktree of a registered project is guided to link, never to a duplicate add
+# a worktree of a registered project works with no marker and no link: the
+# repository, not a file in one working tree, says which project this is
 cd "$ROOT/A/ws/demo"
 git worktree add -q "$ROOT/A/ws/demo-wt" -b side-branch
 cd "$ROOT/A/ws/demo-wt"
 [ -f .self ] && fail "the marker leaked into a fresh worktree"
-SELF setup | grep -q 'self project link demo' || fail "setup did not recognize the sibling checkout"
-ERR="$(SELF work 2>&1 || true)"
-echo "$ERR" | grep -q "self project link demo" || fail "unregistered worktree not guided to link"
-echo "$ERR" | grep -q "self project add\` would register a duplicate" || fail "the misleading add advice was not corrected"
+SELF context | grep -q "prove two-machine sync" || fail "a fresh worktree did not resolve its project from the repository"
+SETUP_WT="$(SELF setup)"
+echo "$SETUP_WT" | grep -q "^project    demo" || fail "setup did not name the project a worktree resolves to"
+echo "$SETUP_WT" | grep -q "$ROOT/A/ws/demo-wt (via this repository)" || fail "setup did not map the project onto this checkout"
+grep -q "demo-wt" "$ROOT/A/ws/.superself/links.jsonl" && fail "resolving a checkout registered it"
+
+# resolving is not registering: a duplicate add is still refused
 ADD="$(SELF project add --name demo-copy 2>&1 || true)"
 echo "$ADD" | grep -q "self project link demo" || fail "project add did not refuse the sibling checkout"
 grep -q '"slug":"demo-copy"' "$ROOT/A/ws/.superself/registry.jsonl" && fail "a duplicate project was registered"
-SELF project link
-[ -f .self ] || fail "project link did not infer the slug from the repository"
-SELF context | grep -q "prove two-machine sync" || fail "linked worktree has no project context"
 
-# both checkouts stay linked, and a fold refreshes only the one it runs in
-SELF setup | grep -q "more checkout" || fail "setup hid the second linked checkout"
+# events from the unlinked worktree attach to that worktree, not to a sibling
+SELF report "$WID" "reported from an unlinked worktree"
+grep -q '"branch":"side-branch"' "$LOG_A" || fail "an event from an unlinked worktree recorded another checkout's branch"
 SELF convention add "worktree folds refresh the active checkout"
 grep -q "worktree folds refresh the active checkout" "$ROOT/A/ws/demo-wt/CLAUDE.md" || fail "fold skipped the active checkout's block"
 grep -q "worktree folds refresh the active checkout" "$ROOT/A/ws/demo/CLAUDE.md" && fail "fold wrote into a checkout it was not run from"
+
+# linking a resolved checkout is still allowed, and stays an optimization
+SELF project link
+[ -f .self ] || fail "project link did not infer the slug from the repository"
+SELF setup | grep -q "more checkout" || fail "setup hid the second linked checkout"
+cd "$ROOT/A/ws/demo"
+
+# a monorepo maps the registered directory into each checkout: the worktree
+# root is not the project, and the deepest registered directory wins
+mkdir -p "$ROOT/A/ws/mono/apps/foo/inner"
+cd "$ROOT/A/ws/mono"
+git init -q
+echo root > root.txt && echo leaf > apps/foo/inner/leaf.txt
+git add . && git commit -qm "monorepo tree"
+cd "$ROOT/A/ws/mono/apps/foo"
+SELF project add --name foo --desc "registered below the repository root" --no-connect > /dev/null
+SELF goal set "prove the mapped directory resolves"
+cd "$ROOT/A/ws/mono"
+git worktree add -q "$ROOT/A/ws/mono-wt" -b mono-side
+cd "$ROOT/A/ws/mono-wt/apps/foo"
+SELF setup | grep -q "^project    foo" || fail "the registered subdirectory did not resolve in a worktree"
+SELF context | grep -q "prove the mapped directory resolves" || fail "the mapped directory resolved to no project state"
+cd "$ROOT/A/ws/mono-wt/apps/foo/inner"
+SELF setup | grep -q "^project    foo" || fail "a directory below the project did not resolve"
+cd "$ROOT/A/ws/mono-wt"
+ROOTERR="$(SELF work 2>&1 || true)"
+echo "$ROOTERR" | grep -q 'registered project "foo" is at' || fail "the worktree root claimed a project registered below it"
+echo "$ROOTERR" | grep -q "/A/ws/mono-wt/apps/foo" || fail "the message did not name the mapped directory in this checkout"
+cd "$ROOT/A/ws/mono"
+SELF project add --name mono --desc "the repository root beside apps/foo" --no-connect > /dev/null
+SELF goal set "prove the repository root is its own project"
+cd "$ROOT/A/ws/mono-wt"
+SELF setup | grep -q "^project    mono" || fail "the worktree root did not resolve to the root project"
+cd "$ROOT/A/ws/mono-wt/apps/foo"
+SELF setup | grep -q "^project    foo" || fail "the shallower project won over the directory the command ran in"
 cd "$ROOT/A/ws/demo"
 
 # events record the branch they were made on, and one work unit collects every
