@@ -13,10 +13,18 @@
 - The initial repository bootstrap before the first `main` commit is the only
   exception to the issue and branch requirements above.
 - Sign off every commit with `git commit -s` to certify the repository DCO.
+- Opening the pull request is not the end of the work. An accepted issue is
+  delivered only when a fresh review session signs it off, the merge, tag, and
+  npm publication land, and the machine running `self` proves the exact
+  published version answers in a real workspace. The states, gates, and
+  evidence are defined in
+  [docs/maintainers/issue-delivery-lifecycle.md](docs/maintainers/issue-delivery-lifecycle.md)
+  and enforced by `tools/delivery`.
 
 ## Project verification
 
 - Type check: `pnpm typecheck`.
+- Proof suites: `pnpm proof`.
 - Production build: `pnpm build`.
 
 <!-- superself:begin -->

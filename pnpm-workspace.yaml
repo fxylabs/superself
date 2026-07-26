@@ -1,5 +1,6 @@
 packages:
   - apps/*
+  - tools/*
 
 # Vite 8/Rolldown and esbuild ship native binaries as optional dependencies.
 # Keep installs reproducible for local macOS development and Linux CI.

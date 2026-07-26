@@ -1,0 +1,23 @@
+{
+    "name": "@superself/delivery",
+    "version": "0.0.0",
+    "description": "Repo-owned delivery lifecycle ledger for accepted Superself issues.",
+    "license": "Apache-2.0",
+    "private": true,
+    "type": "module",
+    "bin": {
+        "delivery": "bin/delivery.mjs"
+    },
+    "engines": {
+        "node": ">=22.12.0"
+    },
+    "scripts": {
+        "build": "tsc",
+        "typecheck": "tsc --noEmit",
+        "proof": "tsc && bash proof/proof.sh"
+    },
+    "devDependencies": {
+        "@types/node": "22.10.5",
+        "typescript": "5.9.3"
+    }
+}

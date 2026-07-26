@@ -177,3 +177,11 @@ have the right to contribute under those terms.
 
 Version changes, tags, and GitHub Releases are maintainer-managed. See
 [docs/maintainers/releases.md](docs/maintainers/releases.md).
+
+## Delivery lifecycle
+
+An open pull request is not a delivered issue. Agent runners that carry an
+accepted issue all the way to a machine running the published build follow
+[docs/maintainers/issue-delivery-lifecycle.md](docs/maintainers/issue-delivery-lifecycle.md),
+which defines the states, the gates between them, and the evidence an issue must
+record before it closes.

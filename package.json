@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "pnpm --filter superself build",
-    "typecheck": "pnpm --filter superself typecheck",
-    "proof": "pnpm --filter superself proof"
+    "typecheck": "pnpm -r typecheck",
+    "proof": "pnpm -r proof"
   }
 }
