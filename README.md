@@ -75,11 +75,12 @@ sits next to git:
   concurrent appends from different machines merge cleanly, and
   `self project link` reconnects each project checkout to the cloned store;
 - `self view` opens a live, read-only HTML dashboard — a workspace overview,
-  one project in detail, or any work unit's full report history — rendered at
-  fold time as self-contained files that auto-refresh in the browser, so an
-  open tab tracks state with no server; `self init` asks for the language the
-  views render in (`self lang` changes it later), while the recorded state
-  keeps whatever language your workspace conventions choose.
+  one project in detail, any work unit's full report history, and a full page
+  of decisions, events, and artifacts each — rendered at fold time as
+  self-contained files that auto-refresh in the browser, so an open tab tracks
+  state with no server; `self init` asks for the language the views render in
+  (`self lang` changes it later) and `self theme` picks the accent, while the
+  recorded state keeps whatever language your workspace conventions choose.
 
 The CLI is the first application shell. A read-only viewer is a later, optional
 layer — never a required surface.
