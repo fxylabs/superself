@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
+import { checkoutOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
 
@@ -97,9 +98,22 @@ export function requireProject(cwd: string): CliContext & { project: string; pro
     const ctx = requireWorkspace(cwd);
     if (ctx.project === undefined || ctx.projectDir === undefined)
     {
-        throw new CliError("not inside a registered project — run `self project add` in the project directory first");
+        throw new CliError(unregisteredMessage(ctx.storeDir, cwd));
     }
     return ctx as CliContext & { project: string; projectDir: string };
+}
+
+// A worktree of a registered project carries the committed discipline block
+// but not the git-excluded marker. Naming `self project add` there sends the
+// agent to the one command that must not run — hence the split message.
+function unregisteredMessage(storeDir: string, cwd: string): string
+{
+    const sibling = siblingSlug(storeDir, cwd);
+    if (sibling === null)
+    {
+        return "not inside a registered project — run `self project add` in the project directory first";
+    }
+    return `this checkout of the registered project "${sibling}" is not linked on this machine — run \`self project link ${sibling}\` here (\`self project add\` would register a duplicate)`;
 }
 
 export function projectStateDir(storeDir: string, slug: string): string
@@ -129,25 +143,61 @@ export function readStoreConfig(storeDir: string): StoreConfig
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 }
 
-export function readLinks(storeDir: string): Record<string, string>
+// One slug holds every checkout linked on this machine, not just the newest:
+// parallel worktrees of one repository are normal, and last-wins repointing
+// silently moved where a fold refreshes the managed block.
+export function readLinks(storeDir: string): Record<string, string[]>
 {
-    const links: Record<string, string> = {};
+    const links: Record<string, string[]> = {};
     for (const entry of readJsonl(join(storeDir, LINKS_FILE)))
     {
-        links[entry.slug] = entry.path;
+        const paths = links[entry.slug] ?? (links[entry.slug] = []);
+        if (!paths.includes(entry.path))
+        {
+            paths.push(entry.path);
+        }
     }
     return links;
 }
 
-export function resolveProjectPath(storeDir: string, slug: string): string | null
+// Single-path needs resolve to the checkout the command was run from, so a
+// fold never writes into a worktree another session is holding.
+export function resolveProjectPath(storeDir: string, slug: string, from: string = process.cwd()): string | null
 {
-    const linked = readLinks(storeDir)[slug];
-    if (linked !== undefined)
+    const linked = readLinks(storeDir)[slug] ?? [];
+    const active = linked.find((path) => contains(path, from)) ?? linked.filter((path) => existsSync(path)).pop();
+    if (active !== undefined)
     {
-        return linked;
+        return active;
     }
     const entry = readRegistry(storeDir).find((item) => item.slug === slug);
     return entry?.path ?? null;
+}
+
+// The slug of a project already registered at another checkout of this same
+// repository — the worktree case, where `self project add` would register a
+// duplicate and `self project link` is the right action.
+export function siblingSlug(storeDir: string, dir: string): string | null
+{
+    const here = checkoutOf(dir);
+    if (here === null)
+    {
+        return null;
+    }
+    const links = readLinks(storeDir);
+    const sibling = (path: string): boolean =>
+    {
+        const there = existsSync(path) ? checkoutOf(path) : null;
+        return there !== null && there.common === here.common && there.top !== here.top;
+    };
+    return readRegistry(storeDir).find((entry) => (links[entry.slug] ?? []).some(sibling))?.slug ?? null;
+}
+
+function contains(parent: string, child: string): boolean
+{
+    const base = resolve(parent);
+    const target = resolve(child);
+    return target === base || target.startsWith(base + sep);
 }
 
 function readJsonl(file: string): any[]

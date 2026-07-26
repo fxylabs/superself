@@ -208,6 +208,29 @@ grep -q '"'"$MERGED"'": "settled"' "$ROOT/B/ws/.superself/projects/demo/evidence
 grep -q "$DOOMED (abandoned)" "$ROOT/B/ws/.superself/projects/demo/work/$WID2.md" || fail "unlinked refold dropped a synced verdict"
 machine A
 
+# a worktree of a registered project is guided to link, never to a duplicate add
+cd "$ROOT/A/ws/demo"
+git worktree add -q "$ROOT/A/ws/demo-wt" -b side-branch
+cd "$ROOT/A/ws/demo-wt"
+[ -f .self ] && fail "the marker leaked into a fresh worktree"
+SELF setup | grep -q 'self project link demo' || fail "setup did not recognize the sibling checkout"
+ERR="$(SELF work 2>&1 || true)"
+echo "$ERR" | grep -q "self project link demo" || fail "unregistered worktree not guided to link"
+echo "$ERR" | grep -q "self project add\` would register a duplicate" || fail "the misleading add advice was not corrected"
+ADD="$(SELF project add --name demo-copy 2>&1 || true)"
+echo "$ADD" | grep -q "self project link demo" || fail "project add did not refuse the sibling checkout"
+grep -q '"slug":"demo-copy"' "$ROOT/A/ws/.superself/registry.jsonl" && fail "a duplicate project was registered"
+SELF project link
+[ -f .self ] || fail "project link did not infer the slug from the repository"
+SELF context | grep -q "prove two-machine sync" || fail "linked worktree has no project context"
+
+# both checkouts stay linked, and a fold refreshes only the one it runs in
+SELF setup | grep -q "more checkout" || fail "setup hid the second linked checkout"
+SELF convention add "worktree folds refresh the active checkout"
+grep -q "worktree folds refresh the active checkout" "$ROOT/A/ws/demo-wt/CLAUDE.md" || fail "fold skipped the active checkout's block"
+grep -q "worktree folds refresh the active checkout" "$ROOT/A/ws/demo/CLAUDE.md" && fail "fold wrote into a checkout it was not run from"
+cd "$ROOT/A/ws/demo"
+
 # a proposal never displaces a confirmed decision; confirming it does
 cd "$ROOT/A/ws/demo"
 SELF decide "old rule stands" --why "integrity check"
