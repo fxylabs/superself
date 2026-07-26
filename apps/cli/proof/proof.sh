@@ -53,11 +53,24 @@ git init -q
 # Project registration must preserve a hook another tool already owns.
 printf '#!/bin/sh\nprintf "ran\\n" >> "%s"\n' "$ROOT/existing-hook.log" > .git/hooks/post-commit
 chmod +x .git/hooks/post-commit
-SELF project add --name demo --desc "sync proof project"
+# An effective global hooks directory is shared infrastructure: registration
+# warns and leaves it byte-for-byte alone. Once that override is removed,
+# connect can safely install into this repository's own hooks directory.
+mkdir -p "$ROOT/shared-hooks"
+printf '#!/bin/sh\nprintf "global\\n"\n' > "$ROOT/shared-hooks/post-commit"
+chmod +x "$ROOT/shared-hooks/post-commit"
+cp "$ROOT/shared-hooks/post-commit" "$ROOT/global-hook-before"
+git config --global core.hooksPath "$ROOT/shared-hooks"
+ADD_OUTPUT="$(SELF project add --name demo --desc "sync proof project" 2>&1)"
+echo "$ADD_OUTPUT" | grep -q "core.hooksPath is configured at global scope" || fail "global hooksPath was not diagnosed"
+cmp "$ROOT/global-hook-before" "$ROOT/shared-hooks/post-commit" > /dev/null || fail "project add mutated the global hook"
+grep -q "superself:post-commit" "$ROOT/shared-hooks/post-commit" && fail "superself installed into a shared hooks directory"
+git config --global --unset core.hooksPath
+SELF connect > /dev/null
 grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
 grep -q "Report: <work-id> <summary>" CLAUDE.md || fail "managed block did not teach commit trailers"
-[ -x .git/hooks/post-commit ] || fail "project add did not install an executable post-commit hook"
-grep -q "superself:post-commit" .git/hooks/post-commit || fail "installed post-commit hook is not managed"
+[ -x .git/hooks/post-commit ] || fail "connect did not install an executable post-commit hook"
+grep -q "superself:post-commit" .git/hooks/post-commit || fail "connected post-commit hook is not managed"
 SELF goal set "prove two-machine sync"
 WID=$(SELF work add "events from both machines merge cleanly" | tail -1)
 
@@ -84,7 +97,24 @@ WORK_A="$ROOT/A/ws/.superself/projects/demo/work/$WID.md"
 [ "$(grep '^- Evidence:' "$WORK_A" | grep -o "$TRAILER_HEAD" | wc -l)" -eq 1 ] || fail "report and trailer paths duplicated aggregate evidence"
 
 git commit -q --amend --no-edit
+AMENDED_HEAD="$(git rev-parse --short=12 HEAD)"
+[ "$AMENDED_HEAD" != "$TRAILER_HEAD" ] || fail "amend proof did not rewrite the commit"
 [ "$(grep -c '"kind":"commit-trailer"' "$LOG_A")" -eq 2 ] || fail "amending duplicated trailer events"
+[ "$(grep -c '"type":"report.added".*"text":"trailer report harvested"' "$LOG_A")" -eq 1 ] || fail "amending duplicated the logical report"
+[ "$(grep -c '"type":"decision.proposed".*"text":"trailer decisions stay proposed"' "$LOG_A")" -eq 1 ] || fail "amending duplicated the logical proposal"
+[ "$(grep -c '"type":"evidence.attached"' "$LOG_A")" -eq 2 ] || fail "amending did not move both assertions onto the rewritten commit"
+grep '^- Evidence:' "$WORK_A" | grep -q "$AMENDED_HEAD" || fail "rewritten commit is missing from current work evidence"
+grep '^- Evidence:' "$WORK_A" | grep -q "$TRAILER_HEAD" && fail "rewritten-away commit stayed in current work evidence"
+SELF harvest | grep -q "already harvested" || fail "rewritten HEAD was not idempotent after evidence attachment"
+[ "$(grep -c '"type":"evidence.attached"' "$LOG_A")" -eq 2 ] || fail "retry duplicated rewritten evidence"
+
+# Make the rewritten-away object truly disappear. Its historical report stays
+# in the log, but current evidence and health must follow the live commit.
+git reflog expire --expire=now --all
+git gc --prune=now
+git cat-file -e "$TRAILER_HEAD^{commit}" 2>/dev/null && fail "rewrite proof did not prune the old commit"
+SELF fold > /dev/null
+SELF status | grep -q "$TRAILER_HEAD" && fail "health still flags evidence superseded by a rewrite"
 
 # A colon-bearing subject is not a trailer, and neither a missing installation
 # nor a harvesting error can make a commit fail.
@@ -95,7 +125,11 @@ PATH=/usr/bin:/bin git commit -q --allow-empty -m "commit without superself on P
 mkdir -p "$ROOT/no-workspace-config"
 XDG_CONFIG_HOME="$ROOT/no-workspace-config" git commit -q --allow-empty -m "commit without a workspace pointer"
 printf 'invalid trailer commit\n\nReport: w-missing cannot resolve\n' > "$ROOT/invalid-trailer-message"
-git commit -q --allow-empty -F "$ROOT/invalid-trailer-message" || fail "a harvesting error blocked the code commit"
+if ! WARNING="$(git commit -q --allow-empty -F "$ROOT/invalid-trailer-message" 2>&1)"
+then
+    fail "a harvesting error blocked the code commit"
+fi
+echo "$WARNING" | grep -q 'commit succeeded, but trailer harvest failed; run `self harvest` to retry' || fail "hook hid the harvest failure and recovery command"
 [ "$(wc -l < "$LOG_A")" -eq "$BEFORE_EVENTS" ] || fail "an invalid trailer partially changed state"
 
 cd "$ROOT/A/ws"

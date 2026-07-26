@@ -12,6 +12,9 @@ export interface EventRefs
     work?: string;
     commits?: string[];
     artifacts?: string[];
+    // A later evidence event can move one logical assertion onto a rewritten
+    // commit without repeating the report or decision itself.
+    assertion?: string;
     // The branch the command ran on. History ("this happened here"), never a
     // live pointer: branches get renamed, deleted, and reused.
     branch?: string;

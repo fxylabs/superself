@@ -43,6 +43,7 @@ export interface WorkState
     blockedWhy?: string;
     reports: ReportEntry[];
     evidence: string[];
+    evidenceRefs: Array<{ hash: string; branch?: string }>;
     artifacts: ArtifactMeta[];
     // Every branch this unit was worked on, oldest first. Derived, never
     // asserted: one unit runs on several branches, and one branch carries
@@ -103,6 +104,11 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (event.type === "report.added")
     {
         applyReport(model, event);
+        return;
+    }
+    if (event.type === "evidence.attached")
+    {
+        applyEvidence(model, event);
         return;
     }
     if (event.type === "convention.added")
@@ -204,6 +210,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             status: "next",
             reports: [],
             evidence: [],
+            evidenceRefs: [],
             artifacts: [],
             branches: branchOf(event)
         });
@@ -246,11 +253,48 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     const commits = event.refs?.commits ?? [];
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
     work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
-    work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
+    addEvidence(work, commits, event.refs?.branch);
     work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
     {
         work.next = String(event.payload.next);
+    }
+}
+
+function applyEvidence(model: ProjectModel, event: SelfEvent): void
+{
+    const work = model.works.find((item) => item.id === event.refs?.work);
+    if (work === undefined)
+    {
+        return;
+    }
+    work.lastEventTs = event.ts;
+    noteBranch(work, event);
+    const replaced = Array.isArray(event.payload.replaces)
+        ? event.payload.replaces.map(String)
+        : [];
+    work.evidence = work.evidence.filter((hash) => !replaced.includes(hash));
+    work.evidenceRefs = work.evidenceRefs.filter((item) => !replaced.includes(item.hash));
+    addEvidence(work, event.refs?.commits ?? [], event.refs?.branch);
+}
+
+function addEvidence(work: WorkState, commits: string[], branch: string | undefined): void
+{
+    for (const hash of commits)
+    {
+        if (!work.evidence.includes(hash))
+        {
+            work.evidence.push(hash);
+        }
+        const existing = work.evidenceRefs.find((item) => item.hash === hash);
+        if (existing === undefined)
+        {
+            work.evidenceRefs.push({ hash, branch });
+        }
+        else if (existing.branch === undefined)
+        {
+            existing.branch = branch;
+        }
     }
 }
 

@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { git } from "./gitutil.js";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { git, gitCommonDir } from "./gitutil.js";
 
 const SIGNATURE = "# superself:post-commit:v1";
 
@@ -14,6 +14,10 @@ export function installPostCommitHook(projectDir: string): boolean
         return false;
     }
     const hook = resolved.out;
+    if (!safeToManage(projectDir, hook))
+    {
+        return false;
+    }
     mkdirSync(dirname(hook), { recursive: true });
     const next = postCommitHook();
     if (existsSync(hook))
@@ -34,6 +38,56 @@ export function installPostCommitHook(projectDir: string): boolean
     return true;
 }
 
+function safeToManage(projectDir: string, hook: string): boolean
+{
+    const configured = git(projectDir, "config", "--show-scope", "--show-origin", "--get", "core.hooksPath");
+    if (configured.ok)
+    {
+        const [scope] = configured.out.split("\t");
+        if (scope !== "local" && scope !== "worktree")
+        {
+            warn(`core.hooksPath is configured at ${scope} scope`);
+            return false;
+        }
+    }
+    const common = gitCommonDir(projectDir);
+    const top = git(projectDir, "rev-parse", "--show-toplevel");
+    const directory = canonical(dirname(hook));
+    const owned = (common !== null && contains(canonical(common), directory))
+        || (top.ok && contains(canonical(top.out), directory));
+    if (!owned)
+    {
+        warn("core.hooksPath points outside this repository");
+        return false;
+    }
+    return true;
+}
+
+function canonical(path: string): string
+{
+    let ancestor = resolve(path);
+    while (!existsSync(ancestor))
+    {
+        const parent = dirname(ancestor);
+        if (parent === ancestor)
+        {
+            return resolve(path);
+        }
+        ancestor = parent;
+    }
+    return resolve(realpathSync(ancestor), relative(ancestor, resolve(path)));
+}
+
+function contains(parent: string, child: string): boolean
+{
+    return child === parent || child.startsWith(parent + sep);
+}
+
+function warn(reason: string): void
+{
+    console.warn(`self: post-commit hook not installed because ${reason}; run \`self harvest\` after stateful commits`);
+}
+
 function nextBackup(hook: string): string
 {
     let index = 1;
@@ -44,9 +98,9 @@ function nextBackup(hook: string): string
     return join(dirname(hook), `post-commit.superself.before.${index}`);
 }
 
-// A post-commit hook cannot reject the commit, but an uncaught failure still
-// leaves alarming output in the terminal. Every path here is deliberately a
-// quiet success, including machines where superself is not installed.
+// The hook never rejects a code commit. A harvesting failure is different
+// from an absent CLI, though: keep the commit successful and name the recovery
+// command instead of silently losing the state assertion.
 function postCommitHook(): string
 {
     return [
@@ -60,7 +114,9 @@ function postCommitHook(): string
         "    fi",
         "done",
         "if command -v self >/dev/null 2>&1; then",
-        "    self harvest >/dev/null 2>&1 || :",
+        "    if ! self harvest >/dev/null 2>&1; then",
+        "        printf '%s\\n' 'self: commit succeeded, but trailer harvest failed; run `self harvest` to retry' >&2",
+        "    fi",
         "fi",
         "exit 0",
         ""

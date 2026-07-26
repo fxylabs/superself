@@ -47,7 +47,9 @@ Decide: sessions should use JWT rather than cookies
 
 Reports attach the new commit as evidence. Decisions harvested from commits
 are proposals until a person confirms them. Existing hooks still run, a clone
-without `self` commits normally, and `self harvest` can retry HEAD safely.
+without `self` commits normally, and `self harvest` can retry HEAD safely. A
+shared or global `core.hooksPath` is left untouched with a warning; run `self
+harvest` explicitly in that configuration.
 
 ## What agents get
 

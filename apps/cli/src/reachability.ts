@@ -114,14 +114,11 @@ export function evidenceOf(works: WorkState[]): Evidence[]
     const seen = new Map<string, Evidence>();
     for (const work of works.filter((item) => item.status !== "done"))
     {
-        for (const report of work.reports)
+        for (const item of work.evidenceRefs)
         {
-            for (const hash of report.commits)
+            if (!seen.has(item.hash) || seen.get(item.hash)?.branch === undefined)
             {
-                if (!seen.has(hash) || seen.get(hash)?.branch === undefined)
-                {
-                    seen.set(hash, { hash, branch: report.branch });
-                }
+                seen.set(item.hash, item);
             }
         }
     }

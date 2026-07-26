@@ -51,8 +51,23 @@ export function harvestHead(ctx: ProjectContext): HarvestResult
     let skipped = 0;
     for (const assertion of assertions)
     {
-        if (events.some((event) => duplicateOf(event, assertion, commit)))
+        const original = events.find((event) => duplicateOf(event, assertion, commit));
+        if (original !== undefined)
         {
+            const current = currentCommits(events, original);
+            if (!current.includes(commit))
+            {
+                const refs: EventRefs = { assertion: original.id, commits: [commit] };
+                if (original.refs?.work !== undefined)
+                {
+                    refs.work = original.refs.work;
+                }
+                const event = makeEvent(ctx.project, "evidence.attached", { text: assertion.summary, replaces: current }, refs);
+                recordEvent(ctx, event, `${assertion.summary} evidence moved to ${commit}`);
+                events.push(event);
+                recorded += 1;
+                continue;
+            }
             skipped += 1;
             continue;
         }
@@ -62,6 +77,19 @@ export function harvestHead(ctx: ProjectContext): HarvestResult
         recorded += 1;
     }
     return { recorded, skipped };
+}
+
+function currentCommits(events: SelfEvent[], original: SelfEvent): string[]
+{
+    let current = original.refs?.commits ?? [];
+    for (const event of events)
+    {
+        if (event.type === "evidence.attached" && event.refs?.assertion === original.id)
+        {
+            current = event.refs.commits ?? [];
+        }
+    }
+    return current;
 }
 
 // Only the final, blank-line-delimited paragraph is a trailer block. This
