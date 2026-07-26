@@ -20,6 +20,7 @@ interface Assertion
     payload: Record<string, unknown>;
     refs: EventRefs;
     summary: string;
+    completedWork: boolean;
 }
 
 export interface HarvestResult
@@ -56,11 +57,27 @@ export function harvestRewrites(ctx: ProjectContext, mappings: string): HarvestR
 function harvestMany(ctx: ProjectContext, revisions: string[]): HarvestResult
 {
     const total: HarvestResult = { recorded: 0, skipped: 0 };
+    const failures: string[] = [];
     for (const revision of revisions)
     {
-        const result = harvestCommit(ctx, revision);
-        total.recorded += result.recorded;
-        total.skipped += result.skipped;
+        try
+        {
+            const result = harvestCommit(ctx, revision);
+            total.recorded += result.recorded;
+            total.skipped += result.skipped;
+        }
+        catch (error)
+        {
+            if (!(error instanceof CliError))
+            {
+                throw error;
+            }
+            failures.push(`${revision.slice(0, 12)}: ${error.message}`);
+        }
+    }
+    if (failures.length > 0)
+    {
+        throw new CliError(`harvest processed ${revisions.length} commits (${total.recorded} recorded, ${total.skipped} already current) with ${failures.length} failure(s):\n- ${failures.join("\n- ")}`);
     }
     return total;
 }
@@ -85,11 +102,19 @@ function harvestCommit(ctx: ProjectContext, revision: string): HarvestResult
     }
     const assertions = validate(ctx, trailers, commit, revisionOf(ctx.projectDir, revision));
     const events = readEvents(ctx.storeDir, ctx.project);
+    const prepared = assertions.map((assertion) => ({
+        assertion,
+        original: events.find((event) => duplicateOf(event, assertion, commit))
+    }));
+    const completed = prepared.find((item) => item.assertion.completedWork && item.original === undefined);
+    if (completed !== undefined)
+    {
+        throw new CliError(`Report: trailer names completed work ${completed.assertion.refs.work}`);
+    }
     let recorded = 0;
     let skipped = 0;
-    for (const assertion of assertions)
+    for (const { assertion, original } of prepared)
     {
-        const original = events.find((event) => duplicateOf(event, assertion, commit));
         if (original !== undefined)
         {
             const current = currentCommits(events, original);
@@ -218,7 +243,8 @@ function validate(ctx: ProjectContext, trailers: Trailer[], commit: string, revi
                 type: "decision.proposed",
                 payload: { text: trailer.value, source },
                 refs: { commits: [commit] },
-                summary: trailer.value
+                summary: trailer.value,
+                completedWork: false
             };
         }
         const report = trailer.value.match(/^(w-[a-z0-9]+)\s+(.+)$/);
@@ -231,16 +257,13 @@ function validate(ctx: ProjectContext, trailers: Trailer[], commit: string, revi
         {
             throw new CliError(`Report: trailer names unknown work id "${report[1]}"`);
         }
-        if (work.status === "done")
-        {
-            throw new CliError(`Report: trailer names completed work ${report[1]}`);
-        }
         return {
             trailer,
             type: "report.added",
             payload: { text: report[2], source },
             refs: { work: work.id, commits: [commit] },
-            summary: `${work.id} ${report[2]}`
+            summary: `${work.id} ${report[2]}`,
+            completedWork: work.status === "done"
         };
     });
 }

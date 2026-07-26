@@ -206,6 +206,30 @@ SELF fold > /dev/null
 SELF status | grep -q "$REBASE_OLD" && fail "health flags evidence retired by post-rewrite"
 git checkout -q "$PRIMARY_BRANCH"
 
+# A report harvested while work is open remains eligible for evidence
+# reconciliation after that work is done. A genuinely new report does not.
+WDONE="$(SELF work add "completed trailer reconciliation" | tail -1)"
+SELF work start "$WDONE" > /dev/null
+printf 'done-work source\n\nReport: %s known completed assertion\n' "$WDONE" > "$ROOT/done-work-message"
+git commit -q --allow-empty -F "$ROOT/done-work-message"
+DONE_OLD="$(git rev-parse --short=12 HEAD)"
+SELF work done "$WDONE" > /dev/null
+GIT_COMMITTER_DATE="2030-01-03T00:00:00Z" git commit -q --amend --no-edit --allow-empty
+DONE_NEW="$(git rev-parse --short=12 HEAD)"
+[ "$DONE_NEW" != "$DONE_OLD" ] || fail "completed-work amend did not rewrite the commit"
+[ "$(grep -c '"type":"report.added".*"text":"known completed assertion"' "$LOG_A")" -eq 1 ] || fail "completed work reconciliation duplicated its known report"
+DONE_DETAIL="$(SELF work show "$WDONE")"
+echo "$DONE_DETAIL" | grep '^- Evidence:' | grep -q "$DONE_NEW" || fail "completed work did not reconcile onto the rewritten evidence"
+echo "$DONE_DETAIL" | grep '^- Evidence:' | grep -q "$DONE_OLD" && fail "completed work kept the rewritten-away current evidence"
+
+printf 'new done-work assertion\n\nReport: %s genuinely new completed assertion\n' "$WDONE" > "$ROOT/new-done-work-message"
+if ! DONE_WARNING="$(git commit -q --allow-empty -F "$ROOT/new-done-work-message" 2>&1)"
+then
+    fail "a new completed-work trailer blocked the code commit"
+fi
+echo "$DONE_WARNING" | grep -q 'trailer harvest failed' || fail "new completed-work trailer failure was hidden"
+grep -q '"type":"report.added".*"text":"genuinely new completed assertion"' "$LOG_A" && fail "new trailer was recorded against completed work"
+
 # A colon-bearing subject is not a trailer, and neither a missing installation
 # nor a harvesting error can make a commit fail.
 BEFORE_EVENTS="$(wc -l < "$LOG_A")"
@@ -228,6 +252,29 @@ then
 fi
 echo "$REWRITE_WARNING" | grep -q 'rewrite succeeded, but trailer reconciliation failed; run `self harvest --all` to retry' || fail "post-rewrite hid its failure and recovery command"
 [ "$(wc -l < "$LOG_A")" -eq "$BEFORE_EVENTS" ] || fail "an invalid trailer partially changed state"
+
+# Batch recovery reports aggregate failure only after processing later useful
+# revisions. Cover both the explicit history scan and post-rewrite map path.
+printf 'valid after invalid history\n\nReport: %s all continued after invalid\n' "$WID" > "$ROOT/valid-after-invalid-message"
+PATH=/usr/bin:/bin git commit -q --allow-empty -F "$ROOT/valid-after-invalid-message"
+if ALL_OUTPUT="$(SELF harvest --all 2>&1)"
+then
+    fail "harvest --all hid aggregate history failures"
+fi
+echo "$ALL_OUTPUT" | grep -q 'harvest processed .* with 2 failure(s)' || fail "harvest --all did not report aggregate failures honestly"
+echo "$ALL_OUTPUT" | grep -q "completed work $WDONE" || fail "harvest --all omitted the completed-work failure"
+echo "$ALL_OUTPUT" | grep -q 'unknown work id "w-missing"' || fail "harvest --all omitted the malformed historical trailer"
+grep -q '"type":"report.added".*"text":"all continued after invalid"' "$LOG_A" || fail "harvest --all stopped before a later valid trailer"
+
+printf 'valid after invalid rewrite\n\nReport: %s rewrite continued after invalid\n' "$WID" > "$ROOT/valid-after-invalid-rewrite-message"
+PATH=/usr/bin:/bin git commit -q --allow-empty -F "$ROOT/valid-after-invalid-rewrite-message"
+VALID_REWRITE_HEAD="$(git rev-parse HEAD)"
+if ! BATCH_WARNING="$(printf '%s %s\n%s %s\n' "$INVALID_HEAD" "$INVALID_HEAD" "$VALID_REWRITE_HEAD" "$VALID_REWRITE_HEAD" | .git/hooks/post-rewrite rebase 2>&1)"
+then
+    fail "aggregate post-rewrite failure escaped the non-blocking hook"
+fi
+echo "$BATCH_WARNING" | grep -q 'trailer reconciliation failed; run `self harvest --all` to retry' || fail "aggregate post-rewrite failure gave no recovery path"
+grep -q '"type":"report.added".*"text":"rewrite continued after invalid"' "$LOG_A" || fail "rewrite mapping stopped before a later valid trailer"
 
 cd "$ROOT/A/ws"
 SELF remote add "$ROOT/remote.git"
