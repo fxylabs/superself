@@ -29,6 +29,11 @@ and every project refolds when it changes. Green and amber are reserved for
 status meaning — settled, done, live, health, blocked — so no theme may use
 them as an accent.
 
+The browser-tab icon is generated from the same table, so it always carries
+the accent the pages are rendered in. It follows `self theme` only: a
+`theme.css` override changes the pages but not the icon, which is markup
+rather than CSS.
+
 ## Overriding tokens
 
 Create a file named `theme.css` in the store root (the `.superself` directory
