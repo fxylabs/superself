@@ -66,6 +66,20 @@ echo "$ADD_OUTPUT" | grep -q "core.hooksPath is configured at global scope" || f
 cmp "$ROOT/global-hook-before" "$ROOT/shared-hooks/post-commit" > /dev/null || fail "project add mutated the global hook"
 grep -q "superself:post-commit" "$ROOT/shared-hooks/post-commit" && fail "superself installed into a shared hooks directory"
 git config --global --unset core.hooksPath
+
+# A repository-owned, tracked hooks directory is still user configuration,
+# not a directory self may wrap or rewrite automatically.
+mkdir -p .githooks
+printf '#!/bin/sh\nprintf "local\\n"\n' > .githooks/post-commit
+chmod +x .githooks/post-commit
+git add .githooks/post-commit
+cp .githooks/post-commit "$ROOT/local-hook-before"
+git config --local core.hooksPath .githooks
+CONNECT_OUTPUT="$(SELF connect 2>&1)"
+echo "$CONNECT_OUTPUT" | grep -q "core.hooksPath is configured at local scope" || fail "local hooksPath was not diagnosed"
+cmp "$ROOT/local-hook-before" .githooks/post-commit > /dev/null || fail "connect mutated a configured local hook"
+grep -q "superself:post-commit" .githooks/post-commit && fail "superself installed into a configured local hooks directory"
+git config --local --unset core.hooksPath
 SELF connect > /dev/null
 grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
 grep -q "Report: <work-id> <summary>" CLAUDE.md || fail "managed block did not teach commit trailers"
@@ -96,7 +110,7 @@ SELF report "$WID" "manual report on the same commit"
 WORK_A="$ROOT/A/ws/.superself/projects/demo/work/$WID.md"
 [ "$(grep '^- Evidence:' "$WORK_A" | grep -o "$TRAILER_HEAD" | wc -l)" -eq 1 ] || fail "report and trailer paths duplicated aggregate evidence"
 
-git commit -q --amend --no-edit
+GIT_COMMITTER_DATE="2030-01-01T00:00:00Z" git commit -q --amend --no-edit
 AMENDED_HEAD="$(git rev-parse --short=12 HEAD)"
 [ "$AMENDED_HEAD" != "$TRAILER_HEAD" ] || fail "amend proof did not rewrite the commit"
 [ "$(grep -c '"kind":"commit-trailer"' "$LOG_A")" -eq 2 ] || fail "amending duplicated trailer events"
@@ -115,6 +129,39 @@ git gc --prune=now
 git cat-file -e "$TRAILER_HEAD^{commit}" 2>/dev/null && fail "rewrite proof did not prune the old commit"
 SELF fold > /dev/null
 SELF status | grep -q "$TRAILER_HEAD" && fail "health still flags evidence superseded by a rewrite"
+
+# A cherry-pick is not a rewrite when the source branch remains live: both
+# incarnations stay current. Amending the picked side then replaces only that
+# side's vanished hash and preserves the source evidence.
+PRIMARY_BRANCH="$(git branch --show-current)"
+CHERRY_BASE="$(git rev-parse HEAD)"
+git checkout -q -b trailer-source
+printf 'cherry source\n\nReport: %s parallel cherry evidence\n' "$WID" > "$ROOT/cherry-message"
+echo cherry > cherry.txt
+git add cherry.txt
+git commit -q -F "$ROOT/cherry-message"
+SOURCE_HEAD="$(git rev-parse --short=12 HEAD)"
+git checkout -q -b trailer-target "$CHERRY_BASE"
+git commit -q --allow-empty -m "distinct cherry-pick base"
+git cherry-pick "$SOURCE_HEAD" > /dev/null
+PICKED_HEAD="$(git rev-parse --short=12 HEAD)"
+[ "$PICKED_HEAD" != "$SOURCE_HEAD" ] || fail "cherry-pick proof did not create a distinct incarnation"
+[ "$(grep -c '"type":"report.added".*"text":"parallel cherry evidence"' "$LOG_A")" -eq 1 ] || fail "cherry-pick duplicated the logical report"
+grep '^- Evidence:' "$WORK_A" | grep -q "$SOURCE_HEAD" || fail "live cherry-pick source evidence was dropped"
+grep '^- Evidence:' "$WORK_A" | grep -q "$PICKED_HEAD" || fail "cherry-picked evidence was not unioned"
+
+GIT_COMMITTER_DATE="2030-01-02T00:00:00Z" git commit -q --amend --no-edit
+REPICKED_HEAD="$(git rev-parse --short=12 HEAD)"
+[ "$REPICKED_HEAD" != "$PICKED_HEAD" ] || fail "cherry-side amend did not rewrite the commit"
+grep '^- Evidence:' "$WORK_A" | grep -q "$SOURCE_HEAD" || fail "amending cherry-pick side removed the still-live source"
+grep '^- Evidence:' "$WORK_A" | grep -q "$REPICKED_HEAD" || fail "amended cherry-pick evidence is missing"
+grep '^- Evidence:' "$WORK_A" | grep -q "$PICKED_HEAD" && fail "rewritten cherry-pick hash stayed current"
+git reflog expire --expire=now --all
+git gc --prune=now
+git cat-file -e "$PICKED_HEAD^{commit}" 2>/dev/null && fail "cherry-side rewrite did not prune the old picked commit"
+SELF fold > /dev/null
+SELF status | grep -q "$PICKED_HEAD" && fail "health flags the replaced cherry-pick incarnation"
+git checkout -q "$PRIMARY_BRANCH"
 
 # A colon-bearing subject is not a trailer, and neither a missing installation
 # nor a harvesting error can make a commit fail.

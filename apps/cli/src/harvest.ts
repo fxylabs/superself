@@ -57,13 +57,14 @@ export function harvestHead(ctx: ProjectContext): HarvestResult
             const current = currentCommits(events, original);
             if (!current.includes(commit))
             {
+                const replaces = current.filter((hash) => !reachableFromRef(ctx.projectDir, hash));
                 const refs: EventRefs = { assertion: original.id, commits: [commit] };
                 if (original.refs?.work !== undefined)
                 {
                     refs.work = original.refs.work;
                 }
-                const event = makeEvent(ctx.project, "evidence.attached", { text: assertion.summary, replaces: current }, refs);
-                recordEvent(ctx, event, `${assertion.summary} evidence moved to ${commit}`);
+                const event = makeEvent(ctx.project, "evidence.attached", { text: assertion.summary, replaces }, refs);
+                recordEvent(ctx, event, `${assertion.summary} evidence now includes ${commit}`);
                 events.push(event);
                 recorded += 1;
                 continue;
@@ -81,15 +82,37 @@ export function harvestHead(ctx: ProjectContext): HarvestResult
 
 function currentCommits(events: SelfEvent[], original: SelfEvent): string[]
 {
-    let current = original.refs?.commits ?? [];
+    let current = [...(original.refs?.commits ?? [])];
     for (const event of events)
     {
         if (event.type === "evidence.attached" && event.refs?.assertion === original.id)
         {
-            current = event.refs.commits ?? [];
+            const replaced = Array.isArray(event.payload.replaces)
+                ? event.payload.replaces.map(String)
+                : [];
+            current = current.filter((hash) => !replaced.includes(hash));
+            for (const hash of event.refs.commits ?? [])
+            {
+                if (!current.includes(hash))
+                {
+                    current.push(hash);
+                }
+            }
         }
     }
     return current;
+}
+
+// A cherry-picked incarnation can remain live beside the new commit. Remove
+// old evidence only after Git's refs positively show that no branch, tag, or
+// other real ref still contains it; reflogs alone do not keep it current.
+function reachableFromRef(projectDir: string, commit: string): boolean
+{
+    if (!git(projectDir, "cat-file", "-e", `${commit}^{commit}`).ok)
+    {
+        return false;
+    }
+    return git(projectDir, "for-each-ref", "--contains", commit, "--format=%(refname)").out !== "";
 }
 
 // Only the final, blank-line-delimited paragraph is a trailer block. This

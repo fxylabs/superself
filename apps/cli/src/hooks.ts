@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { git, gitCommonDir } from "./gitutil.js";
 
 const SIGNATURE = "# superself:post-commit:v1";
@@ -44,20 +44,13 @@ function safeToManage(projectDir: string, hook: string): boolean
     if (configured.ok)
     {
         const [scope] = configured.out.split("\t");
-        if (scope !== "local" && scope !== "worktree")
-        {
-            warn(`core.hooksPath is configured at ${scope} scope`);
-            return false;
-        }
+        warn(`core.hooksPath is configured at ${scope} scope`);
+        return false;
     }
     const common = gitCommonDir(projectDir);
-    const top = git(projectDir, "rev-parse", "--show-toplevel");
-    const directory = canonical(dirname(hook));
-    const owned = (common !== null && contains(canonical(common), directory))
-        || (top.ok && contains(canonical(top.out), directory));
-    if (!owned)
+    if (common === null || canonical(dirname(hook)) !== join(canonical(common), "hooks"))
     {
-        warn("core.hooksPath points outside this repository");
+        warn("the resolved hook is not in Git's default common hooks directory");
         return false;
     }
     return true;
@@ -76,11 +69,6 @@ function canonical(path: string): string
         ancestor = parent;
     }
     return resolve(realpathSync(ancestor), relative(ancestor, resolve(path)));
-}
-
-function contains(parent: string, child: string): boolean
-{
-    return child === parent || child.startsWith(parent + sep);
 }
 
 function warn(reason: string): void
