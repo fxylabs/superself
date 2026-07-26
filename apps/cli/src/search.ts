@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { eventSummary, readEvents } from "./logfile.js";
 import { CliContext, projectStateDir, readRegistry } from "./paths.js";
+import { bold, dim, styled } from "./style.js";
 
 export function runSearch(ctx: CliContext, query: string, type?: string, projectFilter?: string): void
 {
@@ -40,7 +41,9 @@ function searchLog(storeDir: string, slug: string, needle: string, type: string)
         }
         if (JSON.stringify(event).toLowerCase().includes(needle))
         {
-            console.log(`${slug}  ${event.ts.slice(0, 10)}  ${event.type}  [${event.id}]  ${eventSummary(event)}`);
+            console.log(styled
+                ? `${dim(`${slug}  ${event.ts.slice(0, 10)}  ${event.type}`)}  ${highlight(eventSummary(event), needle)}  ${dim(`[${event.id}]`)}`
+                : `${slug}  ${event.ts.slice(0, 10)}  ${event.type}  [${event.id}]  ${eventSummary(event)}`);
             hits++;
         }
     }
@@ -58,12 +61,24 @@ function searchFiles(storeDir: string, slug: string, needle: string): number
         {
             if (lines[i].toLowerCase().includes(needle))
             {
-                console.log(`${slug}  ${rel}:${i + 1}  ${lines[i].trim()}`);
+                console.log(styled
+                    ? `${dim(`${slug}  ${rel}:${i + 1}`)}  ${highlight(lines[i].trim(), needle)}`
+                    : `${slug}  ${rel}:${i + 1}  ${lines[i].trim()}`);
                 hits++;
             }
         }
     }
     return hits;
+}
+
+function highlight(text: string, needle: string): string
+{
+    const index = text.toLowerCase().indexOf(needle);
+    if (index < 0)
+    {
+        return text;
+    }
+    return text.slice(0, index) + bold(text.slice(index, index + needle.length)) + text.slice(index + needle.length);
 }
 
 function stateFiles(dir: string): string[]
