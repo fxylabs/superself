@@ -314,6 +314,10 @@ function renderWorkPage(slug: string, work: WorkState, verdicts: Record<string, 
     {
         facts.push(`<li>next: ${esc(work.next)}</li>`);
     }
+    if (work.branches.length > 0)
+    {
+        facts.push(`<li>branches ${work.branches.map((b) => `<code>${esc(b)}</code>`).join(" · ")}</li>`);
+    }
     if (work.evidence.length > 0)
     {
         facts.push(`<li>evidence ${work.evidence.map((c) => hashChip(c, verdicts)).join(" ")}</li>`);

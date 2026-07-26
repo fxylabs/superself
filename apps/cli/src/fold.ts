@@ -137,6 +137,10 @@ export function renderWorkBody(work: WorkState, verdicts: Record<string, Verdict
     {
         lines.push(`- Next action: ${work.next}`);
     }
+    if (work.branches.length > 0)
+    {
+        lines.push(`- Branches: ${work.branches.join(", ")}`);
+    }
     if (work.evidence.length > 0)
     {
         const marked = work.evidence.map((hash) => verdicts[hash] === undefined ? hash : `${hash} (${verdicts[hash]})`);

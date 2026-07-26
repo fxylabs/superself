@@ -74,6 +74,14 @@ function realPath(path: string): string
     return existsSync(path) ? realpathSync(path) : path;
 }
 
+// A detached HEAD reports the literal "HEAD"; record nothing rather than a
+// name that points at no branch.
+export function currentBranch(dir: string): string | null
+{
+    const result = git(dir, "rev-parse", "--abbrev-ref", "HEAD");
+    return result.ok && result.out !== "" && result.out !== "HEAD" ? result.out : null;
+}
+
 export function excludeLocally(dir: string, pattern: string): void
 {
     const common = gitCommonDir(dir);

@@ -37,6 +37,10 @@ export interface WorkState
     reports: ReportEntry[];
     evidence: string[];
     artifacts: ArtifactMeta[];
+    // Every branch this unit was worked on, oldest first. Derived, never
+    // asserted: one unit runs on several branches, and one branch carries
+    // several units.
+    branches: string[];
     next?: string;
 }
 
@@ -162,6 +166,24 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
     };
 }
 
+// Events written before branches were recorded carry none; absence reads as
+// unknown, so the whole log stays foldable.
+function branchOf(event: SelfEvent): string[]
+{
+    return event.refs?.branch === undefined ? [] : [event.refs.branch];
+}
+
+function noteBranch(work: WorkState, event: SelfEvent): void
+{
+    for (const branch of branchOf(event))
+    {
+        if (!work.branches.includes(branch))
+        {
+            work.branches.push(branch);
+        }
+    }
+}
+
 function applyWork(model: ProjectModel, event: SelfEvent): void
 {
     if (event.type === "work.created")
@@ -174,7 +196,8 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             status: "next",
             reports: [],
             evidence: [],
-            artifacts: []
+            artifacts: [],
+            branches: branchOf(event)
         });
         return;
     }
@@ -184,6 +207,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
         return;
     }
     work.lastEventTs = event.ts;
+    noteBranch(work, event);
     if (event.type === "work.started" || event.type === "work.unblocked")
     {
         work.status = "active";
@@ -210,6 +234,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
         return;
     }
     work.lastEventTs = event.ts;
+    noteBranch(work, event);
     const commits = event.refs?.commits ?? [];
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
     work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts });
