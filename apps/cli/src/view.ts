@@ -822,17 +822,27 @@ ${body}
 `;
 }
 
-// The product mark is the `self` wordmark, unreadable at 16px, so the tab
-// carries its initial on the page's own background. Inline SVG in a data:
-// URI keeps the page free of network requests, and the stroke takes the
-// accent of the theme the page was rendered in.
+// The superself logo symbol — two interlocking crescents forming an S — as
+// authored in the product repository (src/assets/icons/logo-symbol.svg, a
+// 166×192 box filled with currentColor). Kept verbatim so the viewer and the
+// product never draw slightly different marks.
+const LOGO_SYMBOL = [
+    "M137.954 26.8921C133.611 24.0908 129.082 22.0243 124.451 20.6696C120.622 15.8133 116.032 11.5655 110.752 8.16724C84.6518 -8.64033 51.2852 1.32481 36.2178 30.4281C21.1606 59.5313 30.1043 96.7514 56.2048 113.559C61.4948 116.969 67.0937 119.265 72.7645 120.539C57.728 101.481 54.4757 73.1244 66.4864 49.9221C78.4972 26.7313 102.128 15.687 124.451 20.6811C141.412 39.8077 145.58 69.9098 132.942 94.329L158.033 110.494C173.183 81.2182 164.198 43.7915 137.954 26.8921Z",
+    "M108.874 78.4409C103.584 75.0312 97.9952 72.7236 92.314 71.4492C107.351 90.5185 110.603 118.876 98.5921 142.078C86.5814 165.28 62.951 176.324 40.6278 171.33C23.7798 152.284 19.7042 122.239 32.3427 97.8201L7.39499 81.7473C-7.75478 111.023 1.1169 148.369 27.207 165.177H27.1967C31.5194 167.955 36.0272 169.999 40.6278 171.342C44.4564 176.187 49.0466 180.423 54.3264 183.833C80.4268 200.64 113.793 190.675 128.861 161.572C143.918 132.469 134.974 95.2485 108.874 78.4409Z"
+];
+
+// The symbol on the page's own background, sized so a 16px tab keeps the
+// crescents distinct: 12.5 of 16 units tall, centered. Inline SVG in a data:
+// URI keeps the page free of network requests, and the fill takes the accent
+// of the theme the page was rendered in.
 function favicon(): string
 {
     const accent = (THEMES[THEME] ?? THEMES.violet).accent;
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>` +
         `<rect width='16' height='16' rx='3.5' fill='#101014'/>` +
-        `<path d='M10.6 5.4c-.5-.7-1.4-1.1-2.5-1.1-1.5 0-2.5.8-2.5 1.9 0 2.4 5 1.2 5 3.6 0 1.1-1 1.9-2.6 1.9-1.2 0-2.2-.5-2.7-1.3'` +
-        ` fill='none' stroke='${accent}' stroke-width='1.5' stroke-linecap='round'/></svg>`;
+        `<g fill='${accent}' transform='translate(2.6 1.75) scale(0.0651)'>` +
+        LOGO_SYMBOL.map((d) => `<path d='${d}'/>`).join("") +
+        `</g></svg>`;
     return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
