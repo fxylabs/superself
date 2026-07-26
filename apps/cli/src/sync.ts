@@ -11,7 +11,8 @@ const ATTRIBUTES = [
     "projects/*/log.jsonl merge=union",
     "projects/*/state.md merge=derived",
     "projects/*/work/*.md merge=derived",
-    "projects/*/.hashes.json merge=derived"
+    "projects/*/.hashes.json merge=derived",
+    "projects/*/evidence.json merge=derived"
 ].join("\n") + "\n";
 
 export function ensureSyncConfig(storeDir: string): void

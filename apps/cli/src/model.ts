@@ -1,6 +1,6 @@
 import { readEvents } from "./logfile.js";
 import { readRegistry } from "./paths.js";
-import { SelfEvent } from "./types.js";
+import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
@@ -14,6 +14,7 @@ export interface DecisionState
     status: "proposed" | "confirmed" | "superseded";
     humanConfirmed: boolean;
     expired: boolean;
+    supersedes: string[];
 }
 
 export interface ReportEntry
@@ -21,6 +22,10 @@ export interface ReportEntry
     ts: string;
     text: string;
     commits: string[];
+    artifacts: ArtifactMeta[];
+    // The branch these commits were reported from — what lets the fold tell a
+    // discarded branch from a squash-merged one.
+    branch?: string;
 }
 
 export interface WorkState
@@ -34,6 +39,11 @@ export interface WorkState
     blockedWhy?: string;
     reports: ReportEntry[];
     evidence: string[];
+    artifacts: ArtifactMeta[];
+    // Every branch this unit was worked on, oldest first. Derived, never
+    // asserted: one unit runs on several branches, and one branch carries
+    // several units.
+    branches: string[];
     next?: string;
 }
 
@@ -103,16 +113,10 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     }
 }
 
+// A proposal must not displace a confirmed decision: its supersedes refs are
+// carried on the proposal and applied only at the moment it is confirmed.
 function applyDecision(model: ProjectModel, event: SelfEvent): void
 {
-    for (const id of event.refs?.supersedes ?? [])
-    {
-        const target = model.decisions.find((decision) => decision.id === id);
-        if (target !== undefined)
-        {
-            target.status = "superseded";
-        }
-    }
     if (event.type === "decision.proposed")
     {
         model.decisions.push(newDecision(event, "proposed", false));
@@ -125,15 +129,29 @@ function applyDecision(model: ProjectModel, event: SelfEvent): void
     const confirms = event.refs?.confirms;
     if (confirms === undefined)
     {
+        applySupersedes(model, event.refs?.supersedes ?? []);
         model.decisions.push(newDecision(event, "confirmed", event.origin.confirmed));
         return;
     }
     const target = model.decisions.find((decision) => decision.id === confirms);
     if (target !== undefined && target.status === "proposed")
     {
+        applySupersedes(model, target.supersedes);
         target.status = "confirmed";
         target.humanConfirmed = event.origin.confirmed;
         target.ts = event.ts;
+    }
+}
+
+function applySupersedes(model: ProjectModel, ids: string[]): void
+{
+    for (const id of ids)
+    {
+        const target = model.decisions.find((decision) => decision.id === id);
+        if (target !== undefined)
+        {
+            target.status = "superseded";
+        }
     }
 }
 
@@ -146,8 +164,27 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
         ts: event.ts,
         status,
         humanConfirmed,
-        expired: false
+        expired: false,
+        supersedes: event.refs?.supersedes ?? []
     };
+}
+
+// Events written before branches were recorded carry none; absence reads as
+// unknown, so the whole log stays foldable.
+function branchOf(event: SelfEvent): string[]
+{
+    return event.refs?.branch === undefined ? [] : [event.refs.branch];
+}
+
+function noteBranch(work: WorkState, event: SelfEvent): void
+{
+    for (const branch of branchOf(event))
+    {
+        if (!work.branches.includes(branch))
+        {
+            work.branches.push(branch);
+        }
+    }
 }
 
 function applyWork(model: ProjectModel, event: SelfEvent): void
@@ -161,7 +198,9 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             lastEventTs: event.ts,
             status: "next",
             reports: [],
-            evidence: []
+            evidence: [],
+            artifacts: [],
+            branches: branchOf(event)
         });
         return;
     }
@@ -171,6 +210,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
         return;
     }
     work.lastEventTs = event.ts;
+    noteBranch(work, event);
     if (event.type === "work.started" || event.type === "work.unblocked")
     {
         work.status = "active";
@@ -197,9 +237,12 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
         return;
     }
     work.lastEventTs = event.ts;
+    noteBranch(work, event);
     const commits = event.refs?.commits ?? [];
-    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits });
+    const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
+    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
+    work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
     {
         work.next = String(event.payload.next);

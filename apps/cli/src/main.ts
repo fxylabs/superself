@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { ingestArtifacts, runArtifact } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
@@ -16,13 +17,16 @@ import {
     LINKS_FILE,
     MARKER_FILE,
     projectStateDir,
+    readLinks,
     readRegistry,
     readStoreConfig,
     requireProject,
     requireWorkspace,
+    siblingSlug,
     STORE_DIR
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
+import { loadVerdicts } from "./reachability.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
@@ -39,7 +43,7 @@ const USAGE = `usage: self <command>
   lang [<code>]                              show or set the language of the HTML views
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
-  project link <slug> [path]                 reconnect a registered project on this machine
+  project link [slug] [path]                 link this checkout of a registered project on this machine
   remote add <url>                           connect the workspace store to a git remote
   sync                                       pull, refold, and push the workspace store
   clone <url> [dir]                          clone a workspace store onto a new machine
@@ -50,7 +54,9 @@ const USAGE = `usage: self <command>
   work add "<required outcome>"              create a work unit
   work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
-  report <work-id> "<summary>" [--file path] [--evidence c] [--next n]
+  report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
+  artifact list [--work id] [--project slug]  list artifacts from the derived registry
+  artifact search <query> | open <id>        find an artifact or open it with the OS default app
   convention add "<text>" | drop <event-id>  record or retire a convention
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
@@ -79,6 +85,7 @@ async function main(argv: string[]): Promise<void>
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
+        case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
@@ -216,7 +223,7 @@ function cmdProject(rest: string[]): void
         projectLink(rest.slice(1));
         return;
     }
-    throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"] | link <slug> [path]');
+    throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]');
 }
 
 function projectAdd(args: string[]): void
@@ -229,6 +236,11 @@ function projectAdd(args: string[]): void
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(positionals[0] ?? process.cwd());
     const slug = values.name ?? basename(projectDir);
+    const sibling = siblingSlug(ctx.storeDir, projectDir);
+    if (sibling !== null)
+    {
+        throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling}\` instead of registering a duplicate`);
+    }
     if (readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is already registered`);
@@ -253,16 +265,18 @@ function projectAdd(args: string[]): void
 
 function projectLink(args: string[]): void
 {
-    const slug = requireText(args[0], "project link <slug> [path]");
     const ctx = requireWorkspace(process.cwd());
-    if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
-    {
-        throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
-    }
     const projectDir = resolve(args[1] ?? process.cwd());
     if (!existsSync(projectDir))
     {
         throw new CliError(`"${projectDir}" does not exist`);
+    }
+    // Omitting the slug is the worktree case: the repository already answers
+    // which project this checkout belongs to.
+    const slug = args[0] ?? requireText(siblingSlug(ctx.storeDir, projectDir) ?? undefined, "project link <slug> [path]");
+    if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
+    {
+        throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
     }
     linkProject(ctx, slug, projectDir);
     foldProject(ctx.storeDir, slug);
@@ -282,7 +296,10 @@ function cmdView(rest: string[]): void
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
     excludeLocally(ctx.storeDir, LINKS_FILE);
-    appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
+    if (!(readLinks(ctx.storeDir)[slug] ?? []).includes(projectDir))
+    {
+        appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
+    }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
 }
@@ -386,7 +403,7 @@ function cmdWork(rest: string[]): void
         {
             throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
         }
-        console.log(renderWorkBody(work).trimEnd());
+        console.log(renderWorkBody(work, loadVerdicts(ctx.storeDir, ctx.project)).trimEnd());
         return;
     }
     const type = TRANSITIONS[rest[0]];
@@ -426,7 +443,12 @@ function cmdReport(rest: string[]): void
     const ctx = requireProject(process.cwd());
     const { values, positionals } = parseArgs({
         args: rest,
-        options: { evidence: { type: "string", multiple: true }, next: { type: "string" }, file: { type: "string" } },
+        options: {
+            evidence: { type: "string", multiple: true },
+            artifact: { type: "string", multiple: true },
+            next: { type: "string" },
+            file: { type: "string" }
+        },
         allowPositionals: true
     });
     const work = requireOpenWork(ctx, positionals[0]);
@@ -443,6 +465,12 @@ function cmdReport(rest: string[]): void
     if (values.next !== undefined)
     {
         payload.next = values.next;
+    }
+    if (values.artifact !== undefined && values.artifact.length > 0)
+    {
+        const metas = ingestArtifacts(ctx.storeDir, ctx.project, values.artifact);
+        payload.artifacts = metas;
+        refs.artifacts = metas.map((meta) => meta.id);
     }
     recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`);
 }

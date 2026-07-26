@@ -96,6 +96,9 @@ function renderMachineBlock(): string
         "  follow that block.",
         "- In an unregistered project, ask the user once whether to register it with",
         "  `self project add`. Never register a project on your own.",
+        "- Another checkout of a registered project — a git worktree — is not a new",
+        "  project and not an exemption from this discipline: run `self project link`",
+        "  there, then continue as usual.",
         MACHINE_END
     ].join("\n");
 }
