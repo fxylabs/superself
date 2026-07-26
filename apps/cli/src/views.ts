@@ -2,6 +2,7 @@ import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { loadVerdicts, verdictSignals } from "./reachability.js";
+import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
 
 // Console surfaces reuse the verdicts persisted by the last fold, so they
 // agree with canonical state without re-running git.
@@ -76,10 +77,50 @@ export function printStatus(ctx: CliContext): void
         return;
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
+    if (styled)
+    {
+        printStyledStatus(model);
+        return;
+    }
     console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
     console.log(`work: ${countLine(model.works)}`);
     console.log(`waiting on you: ${model.openQuestions.length + model.decisions.filter((d) => d.status === "proposed" && !d.expired).length}`);
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
+}
+
+function printStyledStatus(model: ProjectModel): void
+{
+    console.log(`${bold(model.slug)} — ${model.goal ?? dim("(goal not set)")}`);
+    console.log(countGlyphs(model.works));
+    const waiting = model.openQuestions.length + model.decisions.filter((d) => d.status === "proposed" && !d.expired).length;
+    if (waiting > 0)
+    {
+        console.log(yellow(`⚠ waiting on you: ${waiting}`));
+    }
+    for (const signal of model.health)
+    {
+        console.log(yellow(`⚠ ${signal}`));
+    }
+    if (waiting === 0 && model.health.length === 0)
+    {
+        console.log(`${green("✓")} ${dim("nothing waiting, health ok")}`);
+    }
+}
+
+const STATUS_GLYPHS: [string, string][] = [
+    ["active", blue("●")],
+    ["blocked", red("■")],
+    ["next", "○"],
+    ["done", green("✓")]
+];
+
+function countGlyphs(works: WorkState[]): string
+{
+    const parts = STATUS_GLYPHS
+        .map(([status, glyph]) => ({ glyph, status, n: works.filter((w) => w.status === status).length }))
+        .filter((part) => part.n > 0)
+        .map((part) => `${part.glyph} ${part.n} ${part.status}`);
+    return parts.length === 0 ? dim("no work yet") : parts.join("   ");
 }
 
 function printWorkspaceOverview(ctx: CliContext): void
@@ -90,12 +131,26 @@ function printWorkspaceOverview(ctx: CliContext): void
         console.log("no projects registered — run `self project add` inside a project directory");
         return;
     }
-    for (const entry of registry)
+    const models = registry.map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
+    if (styled)
     {
-        const model = modelWithVerdicts(ctx.storeDir, entry.slug);
-        const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-        console.log(`${entry.slug} — ${model.goal ?? "(no goal)"} (${countLine(model.works)})${health}`);
+        const width = Math.max(...models.map((model) => model.slug.length));
+        console.log(models.map((model) => overviewBlock(model, width)).join("\n\n"));
+        return;
     }
+    for (const model of models)
+    {
+        const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
+        console.log(`${model.slug} — ${model.goal ?? "(no goal)"} (${countLine(model.works)})${health}`);
+    }
+}
+
+function overviewBlock(model: ProjectModel, width: number): string
+{
+    const health = model.health.length === 0 ? "" : `   ${yellow(`⚠ ${model.health.length}`)}`;
+    const indent = " ".repeat(width + 2);
+    const goal = fit(model.goal ?? "(no goal)", termWidth() - indent.length);
+    return `${bold(model.slug.padEnd(width))}  ${countGlyphs(model.works)}${health}\n${indent}${dim(goal)}`;
 }
 
 function countLine(works: WorkState[]): string
@@ -114,15 +169,36 @@ export function printWorkList(ctx: CliContext & { project: string }): void
     }
     for (const work of open)
     {
-        const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
-        const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
-        console.log(`${work.id}  ${work.status}${blocked}  ${work.outcome}${reports}`);
+        console.log(styled ? workLines(work) : plainWorkLine(work));
     }
     const done = model.works.length - open.length;
     if (done > 0)
     {
-        console.log(`(${done} done — see log)`);
+        console.log(styled ? `${green("✓")} ${dim(`${done} done — see log`)}` : `(${done} done — see log)`);
     }
+}
+
+function plainWorkLine(work: WorkState): string
+{
+    const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
+    const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
+    return `${work.id}  ${work.status}${blocked}  ${work.outcome}${reports}`;
+}
+
+function workLines(work: WorkState): string
+{
+    const glyph = work.status === "active" ? blue("●") : work.status === "blocked" ? red("■") : "○";
+    const indent = " ".repeat(work.id.length + 4);
+    const lines = [`${glyph} ${dim(work.id)}  ${work.outcome}`];
+    if (work.status === "blocked")
+    {
+        lines.push(indent + red(`blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`));
+    }
+    if (work.reports.length > 0)
+    {
+        lines.push(indent + dim(`${work.reports.length} report(s) · self work show ${work.id}`));
+    }
+    return lines.join("\n");
 }
 
 export function printLog(ctx: CliContext & { project: string }, limit: number): void
@@ -130,6 +206,37 @@ export function printLog(ctx: CliContext & { project: string }, limit: number): 
     const events = readEvents(ctx.storeDir, ctx.project);
     for (const event of events.slice(-limit))
     {
-        console.log(`${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`);
+        if (styled)
+        {
+            const ts = event.ts.slice(5, 16).replace("T", " ");
+            const width = Math.max(20, termWidth() - 37 - event.id.length);
+            const summary = fit(eventSummary(event).split("\n", 1)[0], width);
+            console.log(`${dim(ts)}  ${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}`);
+        }
+        else
+        {
+            console.log(`${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`);
+        }
     }
+}
+
+function eventStyle(type: string): (text: string) => string
+{
+    if (type === "work.blocked")
+    {
+        return red;
+    }
+    if (type === "work.done")
+    {
+        return green;
+    }
+    if (type.startsWith("work."))
+    {
+        return blue;
+    }
+    if (type.startsWith("decision.") || type === "goal.set")
+    {
+        return yellow;
+    }
+    return dim;
 }
