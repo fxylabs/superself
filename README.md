@@ -8,8 +8,8 @@ so you pick up where you left off across sessions, models, and tools instead
 of re-explaining your project every session.
 
 > [!IMPORTANT]
-> Superself is in an early architecture and packaging phase. The current code is
-> a tested vertical slice, not a published end-user release.
+> Superself is an early alpha. `npm install -g superself` installs the `self`
+> CLI; expect breaking changes while the event schema and verbs settle.
 
 ## Why Superself
 
