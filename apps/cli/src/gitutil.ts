@@ -2,12 +2,6 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-export interface Checkout
-{
-    common: string;
-    top: string;
-}
-
 export function git(cwd: string, ...args: string[]): { ok: boolean; out: string; err: string }
 {
     const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -58,20 +52,55 @@ export function gitCommonDir(dir: string): string | null
     return result.ok ? realPath(result.out) : null;
 }
 
-// Every linked worktree of one repository shares a common directory while
-// keeping its own top level. That pair identifies a checkout, and two
-// checkouts of one repository are the case `self project add` must not treat
-// as a new project.
-export function checkoutOf(dir: string): Checkout | null
+// Scope resolution asks about the same directories repeatedly, and a one-shot
+// CLI process never sees a worktree appear underneath it. Probe each once.
+const tops = new Map<string, string | null>();
+
+// The working tree a directory sits in — its identity as a checkout, since
+// every linked worktree of one repository keeps its own top level.
+export function topOf(dir: string): string | null
 {
-    const common = gitCommonDir(dir);
-    const top = git(dir, "rev-parse", "--show-toplevel");
-    return common !== null && top.ok ? { common, top: realPath(top.out) } : null;
+    if (!tops.has(dir))
+    {
+        const result = git(dir, "rev-parse", "--show-toplevel");
+        tops.set(dir, result.ok ? realPath(result.out) : null);
+    }
+    return tops.get(dir) ?? null;
 }
 
-function realPath(path: string): string
+const real = new Map<string, string>();
+
+// Paths reach the store through `resolve`, which keeps symlinks, while git
+// answers with the resolved path: comparing the two needs both in the same
+// form. Memoized with the probes below — resolution normalizes the same
+// handful of paths once per registered project.
+export function realPath(path: string): string
 {
-    return existsSync(path) ? realpathSync(path) : path;
+    if (!real.has(path))
+    {
+        real.set(path, existsSync(path) ? realpathSync(path) : path);
+    }
+    return real.get(path) ?? path;
+}
+
+const worktrees = new Map<string, string[]>();
+
+// The top level of every working tree of this repository, in a single probe.
+// Two checkouts of one repository are the case `self project add` must not
+// treat as a new project, and the case scope resolution answers from: this
+// list says which of the paths the store knows are checkouts of the
+// repository the command is standing in.
+export function checkoutTops(dir: string): string[]
+{
+    if (!worktrees.has(dir))
+    {
+        const listed = git(dir, "worktree", "list", "--porcelain");
+        worktrees.set(dir, !listed.ok ? [] : listed.out
+            .split("\n")
+            .filter((line) => line.startsWith("worktree "))
+            .map((line) => realPath(line.slice("worktree ".length))));
+    }
+    return worktrees.get(dir) ?? [];
 }
 
 // A detached HEAD reports the literal "HEAD"; record nothing rather than a

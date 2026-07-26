@@ -18,6 +18,7 @@ import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import {
+    checkoutProject,
     CliContext,
     ensureDir,
     isStore,
@@ -401,8 +402,9 @@ function projectLink(args: string[]): void
         throw new CliError(`"${projectDir}" does not exist`);
     }
     // Omitting the slug is the worktree case: the repository already answers
-    // which project this checkout belongs to.
-    const slug = wanted ?? requireText(siblingSlug(ctx.storeDir, projectDir) ?? undefined, "project link <slug> [path]");
+    // which project this checkout belongs to. Linking it only saves the probe.
+    const inferred = checkoutProject(ctx.storeDir, projectDir)?.slug ?? siblingSlug(ctx.storeDir, projectDir);
+    const slug = wanted ?? requireText(inferred ?? undefined, "project link <slug> [path]");
     if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);

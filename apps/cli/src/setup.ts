@@ -4,6 +4,8 @@ import { git } from "./gitutil.js";
 import { machineConfigPath } from "./machine.js";
 import { dim, styled } from "./style.js";
 import {
+    checkoutMatches,
+    checkoutProject,
     findUp,
     isStore,
     MARKER_FILE,
@@ -11,7 +13,6 @@ import {
     readRegistry,
     readStoreConfig,
     resolveProjectPath,
-    siblingSlug,
     STORE_DIR,
     workspaceDirFor
 } from "./paths.js";
@@ -33,12 +34,21 @@ function projectLines(marker: string | null, cwd: string, workspaceDir: string |
         ];
     }
     const storeDir = workspaceDir === null ? null : join(workspaceDir, STORE_DIR);
-    const sibling = storeDir !== null && isStore(storeDir) ? siblingSlug(storeDir, cwd) : null;
-    if (sibling === null)
+    if (storeDir === null || !isStore(storeDir))
     {
         return [row("project", "(none) — this directory is not registered; run `self project add`")];
     }
-    return [row("project", `(unlinked) — another checkout of "${sibling}"; run \`self project link ${sibling}\``)];
+    const match = checkoutProject(storeDir, cwd);
+    if (match !== null)
+    {
+        return [row("project", match.slug), row("", `${match.dir} (via this repository)`)];
+    }
+    const elsewhere = checkoutMatches(storeDir, cwd)[0];
+    if (elsewhere !== undefined)
+    {
+        return [row("project", `(none here) — this repository's "${elsewhere.slug}" is at ${elsewhere.dir}`)];
+    }
+    return [row("project", "(none) — this directory is not registered; run `self project add`")];
 }
 
 function workspaceLines(workspaceDir: string | null): string[]
@@ -64,8 +74,8 @@ function workspaceLines(workspaceDir: string | null): string[]
 
 function projectLine(storeDir: string, slug: string): string
 {
-    const others = (readLinks(storeDir)[slug] ?? []).length - 1;
     const active = resolveProjectPath(storeDir, slug) ?? "(not linked on this machine)";
+    const others = (readLinks(storeDir)[slug] ?? []).filter((path) => path !== active).length;
     return `${slug} → ${active}${others > 0 ? ` (+${others} more checkout${others > 1 ? "s" : ""})` : ""}`;
 }
 
