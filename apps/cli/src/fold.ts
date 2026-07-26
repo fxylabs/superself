@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
-import { ensureDir, projectStateDir, readStoreConfig, resolveProjectPath } from "./paths.js";
+import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
 import { evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
 import { writeViews } from "./view.js";
@@ -34,10 +34,39 @@ export function foldProject(storeDir: string, slug: string): void
         }
     }
     writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
-    writeViews(storeDir, model, readStoreConfig(storeDir).lang ?? "en", verdicts);
+    const chromeMoved = writeViews(storeDir, model, readStoreConfig(storeDir), verdicts);
     if (projectDir !== null && existsSync(projectDir))
     {
         refreshBlocks(projectDir, model);
+    }
+    if (chromeMoved)
+    {
+        refoldOthers(storeDir, slug);
+    }
+}
+
+let bringingForward = false;
+
+// A fold only rewrites the project it runs in, so a new viewer would reach
+// every other project's pages whenever each next happened to record an
+// event — until then the workspace shows two designs at once. When the
+// viewer itself moves, bring the rest forward in the same run.
+function refoldOthers(storeDir: string, slug: string): void
+{
+    if (bringingForward)
+    {
+        return;
+    }
+    bringingForward = true;
+    const others = readRegistry(storeDir).filter((entry) => entry.slug !== slug);
+    for (const entry of others)
+    {
+        foldProject(storeDir, entry.slug);
+    }
+    bringingForward = false;
+    if (others.length > 0)
+    {
+        console.log(`viewer updated — refolded ${others.length} other project${others.length === 1 ? "" : "s"}`);
     }
 }
 

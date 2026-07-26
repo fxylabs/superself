@@ -19,12 +19,17 @@ fail()
 }
 
 # each simulated machine keeps its own home and workspace pointer, so the
-# proof can never reach the real one
+# proof can never reach the real one. Each home carries a git identity, as a
+# developer machine would: without one, Linux leaves ident empty and every
+# direct commit into a proof project repo dies, while macOS quietly fills it
+# from the account name and hides the difference.
 machine()
 {
     export HOME="$ROOT/$1/home"
     export XDG_CONFIG_HOME="$ROOT/$1/config"
     mkdir -p "$HOME"
+    git config --global user.name "proof $1"
+    git config --global user.email "proof-$1@superself.local"
 }
 
 git init -q --bare "$ROOT/remote.git"
@@ -97,17 +102,29 @@ grep -q "machine B started the work" "$VIEW_A/demo/$WID.html" || fail "work deta
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked into store history"
 cd "$ROOT/A/ws" && SELF lang ko > /dev/null
 grep -q 'lang="ko"' "$VIEW_A/workspace.html" || fail "lang ko not recorded in view metadata"
-grep -q "Workspace record" "$VIEW_A/workspace.html" || fail "labels did not stay English-base under lang ko"
+grep -q "WAITING ON YOU" "$VIEW_A/workspace.html" || fail "labels did not stay English-base under lang ko"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
 
 # a machine-local theme.css restyles every page at the next fold and never syncs
-echo ':root { --seal: #123abc; }' > "$ROOT/A/ws/.superself/theme.css"
+echo ':root { --sv-accent: #123abc; }' > "$ROOT/A/ws/.superself/theme.css"
 cd "$ROOT/A/ws/demo" && SELF fold > /dev/null
-grep -q -- "--seal: #123abc" "$VIEW_A/demo.html" || fail "theme.css override not inlined into the project view"
-grep -q -- "--seal: #123abc" "$VIEW_A/workspace.html" || fail "theme.css override missing from the workspace view"
-grep -q -- "--seal: #123abc" "$VIEW_A/demo/$WID.html" || fail "theme.css override missing from the work view"
-grep -q -- "--seal: #1d5c43" "$VIEW_A/demo.html" || fail "default theme tokens missing from the project view"
+grep -q -- "--sv-accent: #123abc" "$VIEW_A/demo.html" || fail "theme.css override not inlined into the project view"
+grep -q -- "--sv-accent: #123abc" "$VIEW_A/workspace.html" || fail "theme.css override missing from the workspace view"
+grep -q -- "--sv-accent: #123abc" "$VIEW_A/demo/$WID.html" || fail "theme.css override missing from the work view"
+grep -q -- "--sv-accent: #a78bfa" "$VIEW_A/demo.html" || fail "default design tokens missing from the project view"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "theme.css" && fail "theme.css leaked into store history"
+
+# the accent theme is workspace state: one verb sets it, every page carries it
+cd "$ROOT/A/ws"
+SELF theme | grep -q "^violet$" || fail "theme did not report the default accent"
+SELF theme cyan > /dev/null
+grep -q 'data-theme="cyan"' "$VIEW_A/demo.html" || fail "theme cyan did not reach the project view"
+grep -q 'data-theme="cyan"' "$VIEW_A/workspace.html" || fail "theme cyan did not reach the workspace view"
+grep -q 'rel="icon".*%2322d3ee' "$VIEW_A/demo.html" || fail "the favicon did not follow the accent theme"
+BADTHEME="$(SELF theme mauve 2>&1 || true)"
+echo "$BADTHEME" | grep -q "is not a viewer theme" || fail "an unknown theme name was accepted"
+SELF theme violet > /dev/null
+cd "$ROOT/A/ws/demo"
 
 # the machine pointer, not the directory tree, decides the workspace
 mkdir -p "$ROOT/outside/app"
@@ -159,8 +176,37 @@ echo "$BAD" | grep -q "does not exist" || fail "missing artifact path not reject
 grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/demo.html" || fail "project view missing the artifact"
 grep -q "$AID-launch.html" "$VIEW_A/demo/$WID.html" || fail "work view missing the artifact"
 grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/workspace.html" || fail "workspace view missing the recent-artifact strip"
-grep -q 'class="attention' "$VIEW_A/demo.html" || fail "project view missing the attention band"
-grep -q 'class="attention' "$VIEW_A/workspace.html" || fail "workspace view missing the attention line"
+grep -q 'aria-label="waiting on you"' "$VIEW_A/demo.html" || fail "project view missing the attention panel"
+grep -q 'aria-label="waiting on you"' "$VIEW_A/workspace.html" || fail "workspace view missing the attention panel"
+
+# the App Rail shell: every page carries the rail, the app bar, and a query
+# bar that states the fold it was rendered from
+for PAGE in "$VIEW_A/demo.html" "$VIEW_A/workspace.html" "$VIEW_A/demo/$WID.html"
+do
+    grep -q 'aria-label="workspace rail"' "$PAGE" || fail "$(basename "$PAGE") is missing the workspace rail"
+    grep -q 'class="c2-query"' "$PAGE" || fail "$(basename "$PAGE") is missing the query bar"
+    grep -q 'class="c2-logo"' "$PAGE" || fail "$(basename "$PAGE") is missing the logo symbol beside the wordmark"
+done
+FOLD_ID="$(SELF log -n 1 | sed -E 's/.*\[([^]]+)\].*/\1/' | cut -c1-8)"
+grep -q "fold $FOLD_ID" "$VIEW_A/demo.html" || fail "the query bar does not name the state the page was folded from"
+grep -q 'class="dr-side"' "$VIEW_A/demo.html" || fail "project view missing the record column"
+grep -q 'class="dr-side"' "$VIEW_A/demo/$WID.html" || fail "work detail missing its record column"
+
+# full-list pages carry what the dashboard panels cap
+grep -q "$AID-launch.html" "$VIEW_A/demo/artifacts.html" || fail "artifacts page missing an artifact"
+grep -q "machine A made this decision" "$VIEW_A/demo/decisions.html" || fail "decisions page missing a decision"
+grep -q "machine B started the work" "$VIEW_A/demo/events.html" || fail "events page missing an event"
+grep -q 'class="dr-side"' "$VIEW_A/demo/artifacts.html" && fail "a list page rendered the record column"
+
+# a changed viewer reaches every project, not only the one being folded —
+# otherwise the workspace shows two designs until each project happens to
+# record an event
+rm -f "$VIEW_A/.chrome"
+FORWARD="$(cd "$ROOT/A/ws/demo" && SELF fold)"
+echo "$FORWARD" | grep -q "refolded .* other project" || fail "a moved viewer did not bring other projects' pages forward"
+grep -q 'aria-label="workspace rail"' "$VIEW_A/outside.html" || fail "another project's page kept the old viewer"
+AGAIN="$(cd "$ROOT/A/ws/demo" && SELF fold)"
+echo "$AGAIN" | grep -q "other project" && fail "an unchanged viewer refolded every project again"
 
 # artifacts travel with the store: machine B sees bytes and registry after sync
 cd "$ROOT/A/ws" && SELF sync
@@ -302,5 +348,13 @@ grep -q "old rule stands" "$STATE_A" || fail "a mere proposal displaced a confir
 SELF decide confirm "$PROP_ID"
 grep -q "old rule stands" "$STATE_A" && fail "confirming the proposal did not supersede the old decision"
 grep -q "new rule replaces it" "$STATE_A" || fail "confirmed proposal missing from state"
+
+# a decision belongs to a work unit only when the command says so
+cd "$ROOT/A/ws/demo"
+SELF decide "this one came out of the work" --work "$WID3"
+grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID3.html" || fail "a linked decision did not reach the work record column"
+grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinked work unit claimed a decision"
+BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
+echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
 echo "proof OK"

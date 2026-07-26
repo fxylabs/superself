@@ -1,18 +1,40 @@
 # Theming the superself viewer
 
-Every fold renders self-contained HTML views — a workspace page, one page per
-project, one page per work unit — into `<store>/view/`. The stylesheet inside
-each page has two layers:
+Every fold renders self-contained HTML views into `<store>/view/`: a workspace
+page, one page per project, one page per work unit, and a decisions, events,
+and artifacts page per project. The stylesheet inside each page has three
+layers:
 
-1. **Theme tokens** — a single `:root` block of CSS custom properties. Every
-   color and font family in the viewer flows from these.
-2. **Layout** — structural rules that reference only the tokens. The layout
+1. **Design tokens** — a `:root` block of `--sv-*` custom properties. Every
+   color, family, and measurement in the viewer flows from these.
+2. **Accent themes** — `[data-theme="…"]` blocks that swap the three accent
+   tokens. The `<html>` element carries the theme the workspace is set to.
+3. **Layout** — structural rules that reference only the tokens. The layout
    and the markup beneath it form a stable contract; themes never touch them.
 
-To restyle the viewer, override tokens. Nothing else is needed, and nothing
-else is supported.
+To restyle the viewer, pick an accent theme or override tokens. Nothing else
+is needed, and nothing else is supported.
 
-## How to apply a theme
+## Picking an accent theme
+
+The accent is not a single brand color. Four themes ship with the viewer:
+
+```
+self theme            # print the current one
+self theme cyan       # violet (default) | cyan | orange | mono
+```
+
+The choice is workspace state, stored in the store config and synced with it,
+and every project refolds when it changes. Green and amber are reserved for
+status meaning — settled, done, live, health, blocked — so no theme may use
+them as an accent.
+
+The browser-tab icon is the superself logo symbol, filled from the same table,
+so it always carries the accent the pages are rendered in. It follows
+`self theme` only: a `theme.css` override changes the pages but not the icon,
+which is markup rather than CSS.
+
+## Overriding tokens
 
 Create a file named `theme.css` in the store root (the `.superself` directory
 that holds `registry.jsonl`):
@@ -22,9 +44,9 @@ that holds `registry.jsonl`):
 ```
 
 On the next fold — any recorded event, or an explicit `self fold` — its
-contents are inlined into every rendered page *after* the default tokens, so
-whatever you set wins. Open pages pick the change up on their next
-auto-reload.
+contents are inlined into every rendered page *after* the tokens and the
+theme blocks, so whatever you set wins. Open pages pick the change up on
+their next auto-reload.
 
 `theme.css` is machine-local by design: the fold git-excludes it from the
 store repository, so your styling never syncs to other machines and never
@@ -41,108 +63,113 @@ Two rules:
 
 ## Token reference
 
-The default theme (the "quiet ledger" look):
-
 ```css
 :root {
-    --paper: #f1f2ee;          /* page background */
-    --ink: #182420;            /* primary text */
-    --ink-soft: #5c6b62;       /* secondary text: dates, ids, metadata */
-    --rule: #d3dad2;           /* hairlines: ledger rules, card borders */
-    --seal: #1d5c43;           /* accent: links, active work, settled evidence */
-    --note: #a34a2f;           /* attention: alerts, blocked work, proposals */
-    --card: #ffffff;           /* raised surfaces: work cards, project cards, plates */
-    --mono: "SF Mono", ui-monospace, Menlo, monospace;
-    --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+    --sv-bg: #101014;              /* page background */
+    --sv-bg-bar: #131319;          /* app bar */
+    --sv-bg-rail: #0c0c10;         /* workspace rail */
+    --sv-bg-side: #0e0e13;         /* record column */
+    --sv-surface: #14141a;         /* panel surface */
+    --sv-surface-raised: #17171f;  /* query bar, active nav row, chips */
+    --sv-border: #232330;          /* frame borders */
+    --sv-border-panel: #26262f;    /* panel borders */
+    --sv-rule: #202029;            /* row hairlines */
+    --sv-text: #f2f2f7;            /* headings */
+    --sv-body: #d6d6de;            /* body text */
+    --sv-muted: #8f8fa3;           /* labels, breadcrumb */
+    --sv-faint: #6e6e80;           /* ids, timestamps */
+    --sv-ok: #34d399;              /* status only: settled, done, live */
+    --sv-ok-line: #34d39944;
+    --sv-warn: #f0a44b;            /* status only: health, blocked */
+    --sv-warn-line: #f0a44b44;
+    --sv-accent: #a78bfa;          /* themeable */
+    --sv-accent-soft: #a78bfa1a;
+    --sv-accent-line: #a78bfa4d;
+    --sv-sans: "Inter", "Pretendard Variable", Pretendard, …;
+    --sv-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sv-rail-w: 180px;            /* workspace rail column */
+    --sv-side-w: 300px;            /* record column */
+    --sv-main-max: 1040px;         /* dashboards and list pages */
+    --sv-doc-max: 760px;           /* work detail, a reading column */
+    --sv-panel-gap: 20px;
+    --sv-radius: 10px;
 }
 ```
 
 The sans stack prefers locally installed Inter and Pretendard (for Korean)
-and falls back to system fonts — views make no network requests, so fonts
-are never downloaded.
+and falls back to system fonts — views make no network requests, so fonts are
+never downloaded. Sans carries prose; mono carries data: section labels, ids,
+hashes, timestamps, event types, and the query bar.
 
-What each token controls:
+The accent appears in six places and nowhere else: the product mark, count
+chips, action links (`confirm`, `inspect`, `open`), the active status pill,
+the `decide` event type, and the attention panel's border.
 
-| Token | Controls |
-| --- | --- |
-| `--paper` | Background of every page, and text on the app bar |
-| `--ink` | Body text, headings, and the app-bar background |
-| `--ink-soft` | Dates, event types, ids, captions, footers, muted text |
-| `--rule` | Row separators, card borders, plate frames, the rail of queued/done work |
-| `--seal` | Links, eyebrow labels, active-work rail, work ids, event types, settled evidence, active counts |
-| `--note` | Alert band, blocked-work rail, "proposed" markers, abandoned/unverifiable evidence, blocked counts |
-| `--card` | Background of work cards, project cards, and artifact plates |
-| `--mono` | Dates, ids, hashes, labels, section titles, footers |
-| `--sans` | Body text, page titles, the goal line, project-card titles |
-
-Semi-transparent tints (the goal underline, the alert-band background) are
-derived from `--seal` and `--note` with `color-mix()`, so they follow your
-overrides automatically.
-
-## Worked example: a dark variant
+## Worked example: a light variant
 
 ```css
 /* <store>/theme.css */
 :root {
-    --paper: #14161a;
-    --ink: #e6e4de;
-    --ink-soft: #97a09a;
-    --rule: #2e3630;
-    --seal: #6fbf94;
-    --note: #e08a70;
-    --card: #1c1f24;
+    --sv-bg: #f4f4f6;
+    --sv-bg-bar: #ffffff;
+    --sv-bg-rail: #ececef;
+    --sv-bg-side: #f0f0f3;
+    --sv-surface: #ffffff;
+    --sv-surface-raised: #f7f7f9;
+    --sv-border: #dcdce2;
+    --sv-border-panel: #e2e2e8;
+    --sv-rule: #ebebf0;
+    --sv-text: #14141a;
+    --sv-body: #3a3a45;
+    --sv-muted: #6b6b7a;
+    --sv-faint: #8b8b99;
 }
 ```
 
-Fonts are untouched, so the ledger keeps its voice on a dark page. There is
-no automatic light/dark switching: the viewer renders exactly one theme,
-yours.
+Accent and status tokens are untouched, so meaning survives the inversion.
+There is no automatic light/dark switching: the viewer renders exactly one
+theme, yours.
 
-## Worked example: a dense mono variant
+## Worked example: wider dashboards
 
 ```css
 /* <store>/theme.css */
-:root {
-    --sans: ui-monospace, "SF Mono", Menlo, monospace;
-    --seal: #2757d6;
-    --note: #b3362c;
-    --rule: #d8d8d4;
-}
-body { font-size: 13px; line-height: 1.5; }
-main { max-width: 56rem; }
+:root { --sv-main-max: 1320px; --sv-side-w: 340px; }
+body { font-size: 13px; }
 ```
 
-The last two rules show that a theme *may* reach past the tokens into plain
-CSS — everything is inlined, so any selector works. Do this sparingly: only
-the tokens and the class names listed below are stable.
+A theme *may* reach past the tokens into plain CSS — everything is inlined,
+so any selector works. Do this sparingly: only the tokens and the class names
+below are stable.
 
 ## Stable class contract
 
-Themes that go beyond tokens can rely on these class names:
-
-- Page chrome: `main` (`main.wide` on the workspace and project pages),
-  `.topbar` (the sticky app bar; carries a `.mark` product mark, a `.trail`
-  breadcrumb with `.crumb` links and `.sep` separators, and a `.fold-stamp`
-  timestamp), `.eyebrow`, `.desc`, `.goal`, `.note-band`, `footer`
-- Project dashboard: `.board-head` (the one-line header; carries `.desc`,
-  `.goal-line`, `.counts`, and a `.stamp` timestamp), `.attention` (modifier
-  `.attention.calm` for the empty state; entries `.att` with a `.kind` chip),
-  `.board` (the main grid; `.span` panels stretch across all columns),
-  `.queue` (one-line queued work), `.empty` (panel empty states), `.fold`
-  (`<details>` collapse used by decisions, conventions, and done)
-- Ledger rows: `.row` (modifier `.row.proposed`), with `time`, `.body`,
-  `.why`, `.id` inside
-- Work cards: `.work` with status modifiers `.active` / `.blocked` / `.next`
-  / `.done`, plus `.meta` and `.alert`
-- Evidence: `.hash` with verdict modifiers `.v-settled` / `.v-provisional` /
-  `.v-abandoned` / `.v-unverifiable`; status words use `.st` with
-  `.st-active` / `.st-blocked` / `.st-next` / `.st-done`
-- Artifacts: `.plates`, `.plate`, `.doc`
-- Event log: `.log` with `time` and `.type` inside
-- Workspace cards: `.projects`, `.project`, `.goal-line`, `.counts` (with
-  `.on-active`, `.on-blocked`, `.zero`) — `.goal-line` and `.counts` also
-  appear in the project-page header, and `.counts` in the workspace
-  attention line
+- Shell: `.sv-shell` (modifier `.sv-shell.two` on pages with no record
+  column), `.dr-rail`, `.dr-main`, `.dr-side`
+- Rail: `.c2-mark` (product mark), `.dr-ws` (workspace name), `.dr-nav` with
+  `a.on` for the current project, `.dr-dot` with `.ok` / `.warn`, `.dr-foot`
+  (fold stamp)
+- App bar: `.c2-bar`, `.c2-back`, `.c2-crumb`, `.c2-query`
+- Body: `.c2-body` (modifier `.c2-body.wd-doc` for the reading column),
+  `.c2-goal`, `.c2-note`
+- Panels: `.c2-panel` (modifier `.c2-attention`), `.c2-panel-head` with `h2`,
+  `.c2-count`, `.c2-open` (the ↗ link), `.c2-empty`, `.c2-more` (the
+  "N of M · view all →" footer), `.c2-fold` (a `<details>` overflow)
+- Tables: `td.k` (kind, `.warn` modifier), `td.n` (id), `td.act` (action),
+  `td.r` (right column), `.hf-sub` (the second line of a row)
+- Status: `.pill` with `.p-active` / `.p-blocked` / `.p-next` / `.p-done`
+- Event feed: `.c2-feed`, `.c2-live`, `.c2-ev` with `time`, `code.e-report` /
+  `code.e-decide` / `code.e-work`, `span`, `em`
+- Record column: `.dr-dec` (decision row, `.dr-prop` marker), `.dr-evi`
+  (evidence row, verdict modifiers `.v-settled` / `.v-provisional` /
+  `.v-abandoned` / `.v-unknown` / `.v-unverifiable`), `.dr-art` (artifact
+  row, `.dr-doc` for the non-image thumbnail)
+- Work detail: `.wd-head`, `.wd-title`, `.wd-meta` with `.wd-chip`,
+  `.wd-note`, `.wd-report` (modifier `.is-past`), `.wd-report-head`,
+  `.wd-prose`
+- List pages: `.af-grid`, `.af-card` (modifier `.af-text` for decisions),
+  `.af-plate` (`.af-doc` for the non-image plate), `.af-meta` with `.mono`
+  and `.dim`
 
 **Guaranteed stable across versions:** the token names and the class names
 above. **Not guaranteed:** the element structure inside each class, default
