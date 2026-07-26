@@ -357,4 +357,10 @@ grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinke
 BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
 echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
+# the installed build names its own version. Without this, a machine that just
+# ran a global install has no way to prove which package it is now running.
+VERSION="$(SELF --version)"
+echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+' || fail "self --version did not print a semantic version"
+[ "$VERSION" = "$(node -p "require('$CLI_DIR/package.json').version")" ] || fail "self --version disagreed with the package manifest"
+
 echo "proof OK"

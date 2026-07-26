@@ -69,7 +69,8 @@ const USAGE = `usage: self <command>
   setup                                      print the workspace, project, and store this directory resolves to
   log [-n N]                                 print recent events
   search <query> [--type t] [--project p]    grep state across the workspace
-  fold                                       re-derive canonical files from the log`;
+  fold                                       re-derive canonical files from the log
+  --version                                  print the installed CLI version`;
 
 async function main(argv: string[]): Promise<void>
 {
@@ -99,8 +100,19 @@ async function main(argv: string[]): Promise<void>
         case "log": cmdLog(rest); break;
         case "search": cmdSearch(rest); break;
         case "fold": cmdFold(); break;
+        case "--version":
+        case "-v": console.log(installedVersion()); break;
         default: printUsage(); break;
     }
+}
+
+// The one fact a machine can check after a global install: which build of the
+// CLI it is actually running. Read from the package manifest that ships beside
+// dist/, so the answer can never drift from the published version.
+function installedVersion(): string
+{
+    const manifest = join(import.meta.dirname, "..", "package.json");
+    return JSON.parse(readFileSync(manifest, "utf8")).version;
 }
 
 // Dim the description column so the command column stands out; piped output is untouched.
