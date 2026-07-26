@@ -48,6 +48,37 @@ SELF project add --name demo --desc "sync proof project"
 grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
 SELF goal set "prove two-machine sync"
 WID=$(SELF work add "events from both machines merge cleanly" | tail -1)
+
+# Agent context is a hard 12,000-character push. Reports claim a bounded
+# excerpt first, then the newest whole decisions fill the remainder. Protected
+# state stays visible and every omission names its pull path.
+BUDGET_WID=$(SELF work add "budget proof active outcome must survive" | tail -1)
+SELF work start "$BUDGET_WID"
+LONG_REPORT="$(awk 'BEGIN { for (i = 0; i < 16000; i++) printf "r" }')"
+SELF report "$BUDGET_WID" "$LONG_REPORT"
+SELF convention add "budget proof convention must survive"
+SELF decide "budget proof proposal must survive" --proposed
+DECISION_FILL="$(awk 'BEGIN { for (i = 0; i < 2600; i++) printf "d" }')"
+for index in 1 2 3 4 5 6
+do
+    SELF decide "budget decision $index $DECISION_FILL"
+done
+PROJECT_CONTEXT="$(SELF context)"
+PROJECT_CHARS="$(printf '%s\n' "$PROJECT_CONTEXT" | wc -m | tr -d ' ')"
+[ "$PROJECT_CHARS" -le 12000 ] || fail "project context exceeded 12,000 characters ($PROJECT_CHARS)"
+echo "$PROJECT_CONTEXT" | grep -q "budget proof active outcome must survive" || fail "context budget dropped an active work outcome"
+echo "$PROJECT_CONTEXT" | grep -q "budget proof convention must survive" || fail "context budget dropped a convention"
+echo "$PROJECT_CONTEXT" | grep -q "budget proof proposal must survive" || fail "context budget dropped a waiting item"
+echo "$PROJECT_CONTEXT" | grep -q "self work show $BUDGET_WID" || fail "report excerpt has no recovery path"
+echo "$PROJECT_CONTEXT" | grep -q 'self search --type decision' || fail "omitted decisions have no recovery path"
+echo "$PROJECT_CONTEXT" | grep -q "budget decision 6" || fail "newest decisions did not win the remaining budget"
+echo "$PROJECT_CONTEXT" | grep -q "budget decision 1" && fail "oldest decisions displaced newer decisions"
+SELF search --type decision | grep -q "budget decision 1" || fail "type-only decision recovery command does not work"
+cd "$ROOT/A/ws"
+WORKSPACE_CONTEXT="$(SELF context)"
+WORKSPACE_CHARS="$(printf '%s\n' "$WORKSPACE_CONTEXT" | wc -m | tr -d ' ')"
+[ "$WORKSPACE_CHARS" -le 12000 ] || fail "workspace context exceeded 12,000 characters ($WORKSPACE_CHARS)"
+echo "$WORKSPACE_CONTEXT" | grep -q "demo" || fail "workspace context lost its registered project"
 cd "$ROOT/A/ws"
 SELF remote add "$ROOT/remote.git"
 SELF sync

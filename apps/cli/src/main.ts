@@ -68,7 +68,7 @@ const USAGE = `usage: self <command>
   status                                     print a short state summary
   setup                                      print the workspace, project, and store this directory resolves to
   log [-n N]                                 print recent events
-  search <query> [--type t] [--project p]    grep state across the workspace
+  search [query] [--type t] [--project p]    grep state (query optional with --type)
   fold                                       re-derive canonical files from the log`;
 
 async function main(argv: string[]): Promise<void>
@@ -615,7 +615,9 @@ function cmdSearch(rest: string[]): void
         options: { type: { type: "string" }, project: { type: "string" } },
         allowPositionals: true
     });
-    const query = requireText(positionals[0], "search <query>");
+    const query = positionals[0] ?? (values.type === undefined
+        ? requireText(undefined, "search <query> or search --type <type>")
+        : "");
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
 }
 
