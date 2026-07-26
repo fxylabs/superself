@@ -47,9 +47,13 @@ Decide: sessions should use JWT rather than cookies
 
 Reports attach the new commit as evidence. Decisions harvested from commits
 are proposals until a person confirms them. Existing hooks still run, a clone
-without `self` commits normally, and `self harvest` can retry HEAD safely. A
-configured `core.hooksPath` at any scope is left untouched with a warning; run
-`self harvest` explicitly in that configuration.
+without `self` commits normally, and `self harvest` can retry HEAD safely.
+Amend and rebase reconciliation runs automatically from `post-rewrite`. Git
+has no branch-deletion hook: after deleting a parallel source branch, run
+`self harvest` on the surviving trailer commit to retire the stale sibling;
+`self harvest --all` retries every reachable trailer. A configured
+`core.hooksPath` at any scope is left untouched with a warning, so harvesting
+stays explicit in that configuration.
 
 ## What agents get
 

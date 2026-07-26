@@ -6,8 +6,8 @@ import { ingestArtifacts, runArtifact } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
-import { harvestHead } from "./harvest.js";
-import { installPostCommitHook } from "./hooks.js";
+import { harvestAll, harvestHead, harvestRewrites } from "./harvest.js";
+import { installProjectHooks } from "./hooks.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -61,7 +61,7 @@ const USAGE = `usage: self <command>
   work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
-  harvest                                    harvest HEAD's Report: and Decide: trailers
+  harvest [--all]                            harvest HEAD trailers (--all: retry reachable history)
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id>        find an artifact or open it with the OS default app
   convention add "<text>" | drop <event-id>  record or retire a convention
@@ -93,7 +93,7 @@ async function main(argv: string[]): Promise<void>
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
-        case "harvest": cmdHarvest(); break;
+        case "harvest": cmdHarvest(rest); break;
         case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
@@ -350,7 +350,7 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
     }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
-    installPostCommitHook(projectDir);
+    installProjectHooks(projectDir);
 }
 
 function cmdRemote(rest: string[]): void
@@ -535,14 +535,19 @@ function cmdReport(rest: string[]): void
 // The hook must be safe in an unregistered clone or on a machine where the
 // workspace has not been restored yet. Explicit `self harvest` shares that
 // quiet no-op so the generated hook needs no knowledge of store layout.
-function cmdHarvest(): void
+function cmdHarvest(args: string[]): void
 {
     const ctx = resolveContext(process.cwd());
     if (ctx?.project === undefined || ctx.projectDir === undefined)
     {
         return;
     }
-    const result = harvestHead(ctx as ProjectContext);
+    const project = ctx as ProjectContext;
+    const result = args[0] === "--rewrite"
+        ? harvestRewrites(project, readFileSync(0, "utf8"))
+        : args[0] === "--all"
+            ? harvestAll(project)
+            : harvestHead(project);
     if (result.recorded === 0)
     {
         console.log(result.skipped === 0 ? "no Report: or Decide: trailers on HEAD" : "HEAD trailers already harvested");
@@ -652,7 +657,7 @@ function cmdConnect(rest: string[]): void
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const files = connectProject(ctx.projectDir, model);
-    installPostCommitHook(ctx.projectDir);
+    installProjectHooks(ctx.projectDir);
     console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
 }
 

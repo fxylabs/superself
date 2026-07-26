@@ -53,6 +53,8 @@ git init -q
 # Project registration must preserve a hook another tool already owns.
 printf '#!/bin/sh\nprintf "ran\\n" >> "%s"\n' "$ROOT/existing-hook.log" > .git/hooks/post-commit
 chmod +x .git/hooks/post-commit
+printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s"\ncat >> "%s"\n' "$ROOT/existing-rewrite-args.log" "$ROOT/existing-rewrite-map.log" > .git/hooks/post-rewrite
+chmod +x .git/hooks/post-rewrite
 # An effective global hooks directory is shared infrastructure: registration
 # warns and leaves it byte-for-byte alone. Once that override is removed,
 # connect can safely install into this repository's own hooks directory.
@@ -65,6 +67,7 @@ ADD_OUTPUT="$(SELF project add --name demo --desc "sync proof project" 2>&1)"
 echo "$ADD_OUTPUT" | grep -q "core.hooksPath is configured at global scope" || fail "global hooksPath was not diagnosed"
 cmp "$ROOT/global-hook-before" "$ROOT/shared-hooks/post-commit" > /dev/null || fail "project add mutated the global hook"
 grep -q "superself:post-commit" "$ROOT/shared-hooks/post-commit" && fail "superself installed into a shared hooks directory"
+[ -e "$ROOT/shared-hooks/post-rewrite" ] && fail "superself added post-rewrite to a shared hooks directory"
 git config --global --unset core.hooksPath
 
 # A repository-owned, tracked hooks directory is still user configuration,
@@ -79,12 +82,17 @@ CONNECT_OUTPUT="$(SELF connect 2>&1)"
 echo "$CONNECT_OUTPUT" | grep -q "core.hooksPath is configured at local scope" || fail "local hooksPath was not diagnosed"
 cmp "$ROOT/local-hook-before" .githooks/post-commit > /dev/null || fail "connect mutated a configured local hook"
 grep -q "superself:post-commit" .githooks/post-commit && fail "superself installed into a configured local hooks directory"
+[ -e .githooks/post-rewrite ] && fail "superself added post-rewrite to a configured local hooks directory"
 git config --local --unset core.hooksPath
 SELF connect > /dev/null
 grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
 grep -q "Report: <work-id> <summary>" CLAUDE.md || fail "managed block did not teach commit trailers"
 [ -x .git/hooks/post-commit ] || fail "connect did not install an executable post-commit hook"
 grep -q "superself:post-commit" .git/hooks/post-commit || fail "connected post-commit hook is not managed"
+[ -x .git/hooks/post-rewrite ] || fail "connect did not install an executable post-rewrite hook"
+grep -q "superself:post-rewrite" .git/hooks/post-rewrite || fail "connected post-rewrite hook is not managed"
+[ -x .git/hooks/post-commit.superself.before.1 ] || fail "existing post-commit hook was not preserved"
+[ -x .git/hooks/post-rewrite.superself.before.1 ] || fail "existing post-rewrite hook was not preserved"
 SELF goal set "prove two-machine sync"
 WID=$(SELF work add "events from both machines merge cleanly" | tail -1)
 
@@ -113,6 +121,8 @@ WORK_A="$ROOT/A/ws/.superself/projects/demo/work/$WID.md"
 GIT_COMMITTER_DATE="2030-01-01T00:00:00Z" git commit -q --amend --no-edit
 AMENDED_HEAD="$(git rev-parse --short=12 HEAD)"
 [ "$AMENDED_HEAD" != "$TRAILER_HEAD" ] || fail "amend proof did not rewrite the commit"
+grep -q "^amend$" "$ROOT/existing-rewrite-args.log" || fail "existing post-rewrite hook did not receive the amend command"
+grep -q "$TRAILER_HEAD.*$AMENDED_HEAD" "$ROOT/existing-rewrite-map.log" || fail "existing post-rewrite hook did not receive the amend map"
 [ "$(grep -c '"kind":"commit-trailer"' "$LOG_A")" -eq 2 ] || fail "amending duplicated trailer events"
 [ "$(grep -c '"type":"report.added".*"text":"trailer report harvested"' "$LOG_A")" -eq 1 ] || fail "amending duplicated the logical report"
 [ "$(grep -c '"type":"decision.proposed".*"text":"trailer decisions stay proposed"' "$LOG_A")" -eq 1 ] || fail "amending duplicated the logical proposal"
@@ -156,11 +166,44 @@ REPICKED_HEAD="$(git rev-parse --short=12 HEAD)"
 grep '^- Evidence:' "$WORK_A" | grep -q "$SOURCE_HEAD" || fail "amending cherry-pick side removed the still-live source"
 grep '^- Evidence:' "$WORK_A" | grep -q "$REPICKED_HEAD" || fail "amended cherry-pick evidence is missing"
 grep '^- Evidence:' "$WORK_A" | grep -q "$PICKED_HEAD" && fail "rewritten cherry-pick hash stayed current"
+git branch -q -D trailer-source
+SELF harvest > /dev/null
+grep '^- Evidence:' "$WORK_A" | grep -q "$SOURCE_HEAD" && fail "explicit harvest kept evidence after its cherry source branch was deleted"
+grep '^- Evidence:' "$WORK_A" | grep -q "$REPICKED_HEAD" || fail "reconciling a deleted source removed the surviving cherry-pick"
 git reflog expire --expire=now --all
 git gc --prune=now
 git cat-file -e "$PICKED_HEAD^{commit}" 2>/dev/null && fail "cherry-side rewrite did not prune the old picked commit"
+git cat-file -e "$SOURCE_HEAD^{commit}" 2>/dev/null && fail "deleted cherry source evidence was not pruned"
 SELF fold > /dev/null
 SELF status | grep -q "$PICKED_HEAD" && fail "health flags the replaced cherry-pick incarnation"
+SELF status | grep -q "$SOURCE_HEAD" && fail "health flags reconciled evidence from a deleted cherry source"
+git checkout -q "$PRIMARY_BRANCH"
+
+# During a real rebase, post-commit can run while the old topic ref is still
+# live. post-rewrite receives the complete map after ref movement and removes
+# that now-stale incarnation automatically.
+git checkout -q -b trailer-rebase
+printf 'rebase source\n\nReport: %s actual rebase evidence\n' "$WID" > "$ROOT/rebase-message"
+echo rebase > rebase.txt
+git add rebase.txt
+git commit -q -F "$ROOT/rebase-message"
+REBASE_OLD="$(git rev-parse --short=12 HEAD)"
+git checkout -q "$PRIMARY_BRANCH"
+git commit -q --allow-empty -m "advance rebase base"
+git checkout -q trailer-rebase
+git rebase "$PRIMARY_BRANCH" > /dev/null
+REBASE_NEW="$(git rev-parse --short=12 HEAD)"
+[ "$REBASE_NEW" != "$REBASE_OLD" ] || fail "actual rebase did not rewrite the trailer commit"
+[ "$(grep -c '"type":"report.added".*"text":"actual rebase evidence"' "$LOG_A")" -eq 1 ] || fail "rebase duplicated the logical report"
+grep '^- Evidence:' "$WORK_A" | grep -q "$REBASE_NEW" || fail "rebased commit is missing from current evidence"
+grep '^- Evidence:' "$WORK_A" | grep -q "$REBASE_OLD" && fail "post-rewrite did not retire the old rebased evidence"
+grep -q "^rebase$" "$ROOT/existing-rewrite-args.log" || fail "existing post-rewrite hook did not receive the rebase command"
+grep -q "$REBASE_OLD.*$REBASE_NEW" "$ROOT/existing-rewrite-map.log" || fail "existing post-rewrite hook did not receive the rebase map"
+git reflog expire --expire=now --all
+git gc --prune=now
+git cat-file -e "$REBASE_OLD^{commit}" 2>/dev/null && fail "old rebased evidence was not pruned"
+SELF fold > /dev/null
+SELF status | grep -q "$REBASE_OLD" && fail "health flags evidence retired by post-rewrite"
 git checkout -q "$PRIMARY_BRANCH"
 
 # A colon-bearing subject is not a trailer, and neither a missing installation
@@ -177,6 +220,13 @@ then
     fail "a harvesting error blocked the code commit"
 fi
 echo "$WARNING" | grep -q 'commit succeeded, but trailer harvest failed; run `self harvest` to retry' || fail "hook hid the harvest failure and recovery command"
+[ -x .git/hooks/post-rewrite ] || fail "post-rewrite hook disappeared"
+INVALID_HEAD="$(git rev-parse HEAD)"
+if ! REWRITE_WARNING="$(printf '%s %s\n' "$INVALID_HEAD" "$INVALID_HEAD" | .git/hooks/post-rewrite rebase 2>&1)"
+then
+    fail "a reconciliation error escaped the non-blocking post-rewrite hook"
+fi
+echo "$REWRITE_WARNING" | grep -q 'rewrite succeeded, but trailer reconciliation failed; run `self harvest --all` to retry' || fail "post-rewrite hid its failure and recovery command"
 [ "$(wc -l < "$LOG_A")" -eq "$BEFORE_EVENTS" ] || fail "an invalid trailer partially changed state"
 
 cd "$ROOT/A/ws"

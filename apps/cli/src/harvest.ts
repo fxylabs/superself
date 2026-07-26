@@ -1,4 +1,4 @@
-import { headCommit, git, gitInput } from "./gitutil.js";
+import { git, gitInput } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import { buildModel } from "./model.js";
 import { CliContext } from "./paths.js";
@@ -30,22 +30,60 @@ export interface HarvestResult
 
 export function harvestHead(ctx: ProjectContext): HarvestResult
 {
-    const commit = headCommit(ctx.projectDir);
-    if (commit === null)
+    return harvestCommit(ctx, "HEAD");
+}
+
+export function harvestAll(ctx: ProjectContext): HarvestResult
+{
+    const revisions = git(ctx.projectDir, "rev-list", "--reverse", "HEAD");
+    if (!revisions.ok)
     {
         return { recorded: 0, skipped: 0 };
     }
-    const message = git(ctx.projectDir, "show", "-s", "--format=%B", "HEAD");
+    return harvestMany(ctx, revisions.out.split("\n").filter(Boolean));
+}
+
+export function harvestRewrites(ctx: ProjectContext, mappings: string): HarvestResult
+{
+    const revisions = mappings.split("\n").flatMap((line): string[] =>
+    {
+        const parts = line.trim().split(/\s+/);
+        return parts.length >= 2 && !/^0+$/.test(parts[1]) ? [parts[1]] : [];
+    });
+    return harvestMany(ctx, [...new Set(revisions)]);
+}
+
+function harvestMany(ctx: ProjectContext, revisions: string[]): HarvestResult
+{
+    const total: HarvestResult = { recorded: 0, skipped: 0 };
+    for (const revision of revisions)
+    {
+        const result = harvestCommit(ctx, revision);
+        total.recorded += result.recorded;
+        total.skipped += result.skipped;
+    }
+    return total;
+}
+
+function harvestCommit(ctx: ProjectContext, revision: string): HarvestResult
+{
+    const resolved = git(ctx.projectDir, "rev-parse", "--short=12", `${revision}^{commit}`);
+    if (!resolved.ok)
+    {
+        return { recorded: 0, skipped: 0 };
+    }
+    const commit = resolved.out;
+    const message = git(ctx.projectDir, "show", "-s", "--format=%B", revision);
     if (!message.ok)
     {
-        throw new CliError(`could not read HEAD for trailer harvesting: ${message.err}`);
+        throw new CliError(`could not read ${revision} for trailer harvesting: ${message.err}`);
     }
     const trailers = parseTrailers(message.out);
     if (trailers.length === 0)
     {
         return { recorded: 0, skipped: 0 };
     }
-    const assertions = validate(ctx, trailers, commit, revisionOf(ctx.projectDir));
+    const assertions = validate(ctx, trailers, commit, revisionOf(ctx.projectDir, revision));
     const events = readEvents(ctx.storeDir, ctx.project);
     let recorded = 0;
     let skipped = 0;
@@ -55,9 +93,9 @@ export function harvestHead(ctx: ProjectContext): HarvestResult
         if (original !== undefined)
         {
             const current = currentCommits(events, original);
-            if (!current.includes(commit))
+            const replaces = current.filter((hash) => hash !== commit && !reachableFromRef(ctx.projectDir, hash));
+            if (!current.includes(commit) || replaces.length > 0)
             {
-                const replaces = current.filter((hash) => !reachableFromRef(ctx.projectDir, hash));
                 const refs: EventRefs = { assertion: original.id, commits: [commit] };
                 if (original.refs?.work !== undefined)
                 {
@@ -249,9 +287,9 @@ function isSource(value: unknown): value is { kind: string; token: string; value
         && "revision" in value && typeof value.revision === "string";
 }
 
-function revisionOf(projectDir: string): string
+function revisionOf(projectDir: string, revision: string): string
 {
-    const diff = git(projectDir, "show", "--pretty=format:", "--no-ext-diff", "--binary", "HEAD");
+    const diff = git(projectDir, "show", "--pretty=format:", "--no-ext-diff", "--binary", revision);
     if (diff.ok && diff.out !== "")
     {
         const patch = gitInput(projectDir, diff.out + "\n", "patch-id", "--stable");
@@ -263,7 +301,7 @@ function revisionOf(projectDir: string): string
     }
     // Empty and merge commits may have no patch-id. A tree id still makes a
     // no-change amend stable while avoiding dependence on the rewritten hash.
-    const tree = git(projectDir, "rev-parse", "HEAD^{tree}");
+    const tree = git(projectDir, "rev-parse", `${revision}^{tree}`);
     return tree.ok ? `tree:${tree.out}` : "tree:unknown";
 }
 

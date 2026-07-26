@@ -64,9 +64,12 @@ sits next to git:
   trailer block can contain `Report: <work-id> <summary>` or `Decide: <text>`;
   reports attach the commit automatically, while decisions stay proposed until
   a person confirms them. Existing hooks are chained, and `self harvest` safely
-  retries HEAD without duplicating events. A configured `core.hooksPath` at
-  any scope is never modified; the CLI warns and leaves `self harvest` as the
-  explicit recovery path instead;
+  retries HEAD without duplicating events. Amend and rebase reconciliation runs
+  from a chained `post-rewrite` hook; after deleting a parallel source branch,
+  run `self harvest` on the surviving trailer commit to retire its stale sibling
+  (`self harvest --all` retries reachable history). A configured
+  `core.hooksPath` at any scope is never modified; the CLI warns and leaves
+  explicit harvesting as the recovery path instead;
 - `self project add` renders an agent-onboarding block into `AGENTS.md` and
   `CLAUDE.md` — the instruction files agent tools already read — so any
   terminal agent learns the protocol and current conventions; the block
