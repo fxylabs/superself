@@ -21,10 +21,20 @@ export function ulid(): string
 
 export function workId(): string
 {
+    return "w-" + shortId();
+}
+
+export function artifactId(): string
+{
+    return "a-" + shortId();
+}
+
+function shortId(): string
+{
     let id = "";
     for (const byte of randomBytes(5))
     {
         id += CROCKFORD[byte % 32];
     }
-    return "w-" + id;
+    return id;
 }

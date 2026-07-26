@@ -12,6 +12,9 @@ export interface EventRefs
     work?: string;
     commits?: string[];
     artifacts?: string[];
+    // The branch the command ran on. History ("this happened here"), never a
+    // live pointer: branches get renamed, deleted, and reused.
+    branch?: string;
 }
 
 export interface SelfEvent
@@ -23,6 +26,13 @@ export interface SelfEvent
     project: string;
     payload: Record<string, unknown>;
     refs?: EventRefs;
+}
+
+export interface ArtifactMeta
+{
+    id: string;
+    name: string;
+    path: string;
 }
 
 export interface RegistryEntry
