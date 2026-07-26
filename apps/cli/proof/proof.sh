@@ -115,6 +115,7 @@ SELF theme | grep -q "^violet$" || fail "theme did not report the default accent
 SELF theme cyan > /dev/null
 grep -q 'data-theme="cyan"' "$VIEW_A/demo.html" || fail "theme cyan did not reach the project view"
 grep -q 'data-theme="cyan"' "$VIEW_A/workspace.html" || fail "theme cyan did not reach the workspace view"
+grep -q 'rel="icon".*%2322d3ee' "$VIEW_A/demo.html" || fail "the favicon did not follow the accent theme"
 BADTHEME="$(SELF theme mauve 2>&1 || true)"
 echo "$BADTHEME" | grep -q "is not a viewer theme" || fail "an unknown theme name was accepted"
 SELF theme violet > /dev/null

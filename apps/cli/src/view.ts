@@ -23,14 +23,21 @@ const EVENTS_PAGE = 300;
 const SUMMARY_EVENTS = 8;
 const SUMMARY_DECISIONS = 6;
 
-const THEMES = ["violet", "cyan", "orange", "mono"];
+// One table feeds both the CSS theme blocks and the favicon, so the browser
+// tab can never drift from the accent the pages are rendered in.
+const THEMES: Record<string, { accent: string; soft: string; line: string }> = {
+    violet: { accent: "#a78bfa", soft: "#a78bfa1a", line: "#a78bfa4d" },
+    cyan: { accent: "#22d3ee", soft: "#22d3ee1a", line: "#22d3ee4d" },
+    orange: { accent: "#ff6b35", soft: "#ff6b351a", line: "#ff6b354d" },
+    mono: { accent: "#e9e9f2", soft: "#e9e9f214", line: "#3a3a46" }
+};
 
 export function validTheme(name: string): string
 {
     const theme = name.trim().toLowerCase();
-    if (!THEMES.includes(theme))
+    if (THEMES[theme] === undefined)
     {
-        throw new CliError(`"${name}" is not a viewer theme — pick one of ${THEMES.join(", ")}`);
+        throw new CliError(`"${name}" is not a viewer theme — pick one of ${Object.keys(THEMES).join(", ")}`);
     }
     return theme;
 }
@@ -801,10 +808,10 @@ function page(shell: Shell): string
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(shell.title)} — superself</title>
-<link rel="icon" href="${FAVICON}">
+<link rel="icon" href="${favicon()}">
 <style>
 /* design tokens — override via <store>/theme.css (docs/viewer-theming.md) */
-${TOKENS}${userTheme}/* layout — stable contract: restyle through tokens, never edit this file */
+${TOKENS}${themeBlocks()}${userTheme}/* layout — stable contract: restyle through tokens, never edit this file */
 ${LAYOUT_CSS}</style>
 </head>
 <body>
@@ -815,12 +822,19 @@ ${body}
 `;
 }
 
-// Inline SVG favicon so the browser tab reads as an app, not a local file;
-// a data: URI keeps the page free of network requests.
-const FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
-    "%3Crect width='16' height='16' rx='3.5' fill='%23101014'/%3E" +
-    "%3Cpath d='M10.6 5.4c-.5-.7-1.4-1.1-2.5-1.1-1.5 0-2.5.8-2.5 1.9 0 2.4 5 1.2 5 3.6 0 1.1-1 1.9-2.6 1.9-1.2 0-2.2-.5-2.7-1.3'" +
-    " fill='none' stroke='%23a78bfa' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E";
+// The product mark is the `self` wordmark, unreadable at 16px, so the tab
+// carries its initial on the page's own background. Inline SVG in a data:
+// URI keeps the page free of network requests, and the stroke takes the
+// accent of the theme the page was rendered in.
+function favicon(): string
+{
+    const accent = (THEMES[THEME] ?? THEMES.violet).accent;
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>` +
+        `<rect width='16' height='16' rx='3.5' fill='#101014'/>` +
+        `<path d='M10.6 5.4c-.5-.7-1.4-1.1-2.5-1.1-1.5 0-2.5.8-2.5 1.9 0 2.4 5 1.2 5 3.6 0 1.1-1 1.9-2.6 1.9-1.2 0-2.2-.5-2.7-1.3'` +
+        ` fill='none' stroke='${accent}' stroke-width='1.5' stroke-linecap='round'/></svg>`;
+    return "data:image/svg+xml," + encodeURIComponent(svg);
+}
 
 // Reload to pick up refolds, but never while the reader is interacting:
 // any pointer or key activity in the last 10s, or a live text selection, defers it.
@@ -867,10 +881,15 @@ const TOKENS = `:root {
     --sv-panel-gap: 20px;
     --sv-radius: 10px;
 }
-[data-theme="cyan"] { --sv-accent: #22d3ee; --sv-accent-soft: #22d3ee1a; --sv-accent-line: #22d3ee4d; }
-[data-theme="orange"] { --sv-accent: #ff6b35; --sv-accent-soft: #ff6b351a; --sv-accent-line: #ff6b354d; }
-[data-theme="mono"] { --sv-accent: #e9e9f2; --sv-accent-soft: #e9e9f214; --sv-accent-line: #3a3a46; }
 `;
+
+function themeBlocks(): string
+{
+    return Object.entries(THEMES)
+        .map(([name, set]) => `[data-theme="${name}"] { --sv-accent: ${set.accent};` +
+            ` --sv-accent-soft: ${set.soft}; --sv-accent-line: ${set.line}; }`)
+        .join("\n") + "\n";
+}
 
 const LAYOUT_CSS = `* { box-sizing: border-box; }
 body { margin: 0; background: var(--sv-bg); color: var(--sv-body);
