@@ -19,12 +19,17 @@ fail()
 }
 
 # each simulated machine keeps its own home and workspace pointer, so the
-# proof can never reach the real one
+# proof can never reach the real one. Each home carries a git identity, as a
+# developer machine would: without one, Linux leaves ident empty and every
+# direct commit into a proof project repo dies, while macOS quietly fills it
+# from the account name and hides the difference.
 machine()
 {
     export HOME="$ROOT/$1/home"
     export XDG_CONFIG_HOME="$ROOT/$1/config"
     mkdir -p "$HOME"
+    git config --global user.name "proof $1"
+    git config --global user.email "proof-$1@superself.local"
 }
 
 git init -q --bare "$ROOT/remote.git"
