@@ -17,10 +17,12 @@ import {
     LINKS_FILE,
     MARKER_FILE,
     projectStateDir,
+    readLinks,
     readRegistry,
     readStoreConfig,
     requireProject,
     requireWorkspace,
+    siblingSlug,
     STORE_DIR
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
@@ -41,7 +43,7 @@ const USAGE = `usage: self <command>
   lang [<code>]                              show or set the language of the HTML views
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
-  project link <slug> [path]                 reconnect a registered project on this machine
+  project link [slug] [path]                 link this checkout of a registered project on this machine
   remote add <url>                           connect the workspace store to a git remote
   sync                                       pull, refold, and push the workspace store
   clone <url> [dir]                          clone a workspace store onto a new machine
@@ -221,7 +223,7 @@ function cmdProject(rest: string[]): void
         projectLink(rest.slice(1));
         return;
     }
-    throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"] | link <slug> [path]');
+    throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]');
 }
 
 function projectAdd(args: string[]): void
@@ -234,6 +236,11 @@ function projectAdd(args: string[]): void
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(positionals[0] ?? process.cwd());
     const slug = values.name ?? basename(projectDir);
+    const sibling = siblingSlug(ctx.storeDir, projectDir);
+    if (sibling !== null)
+    {
+        throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling}\` instead of registering a duplicate`);
+    }
     if (readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is already registered`);
@@ -258,16 +265,18 @@ function projectAdd(args: string[]): void
 
 function projectLink(args: string[]): void
 {
-    const slug = requireText(args[0], "project link <slug> [path]");
     const ctx = requireWorkspace(process.cwd());
-    if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
-    {
-        throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
-    }
     const projectDir = resolve(args[1] ?? process.cwd());
     if (!existsSync(projectDir))
     {
         throw new CliError(`"${projectDir}" does not exist`);
+    }
+    // Omitting the slug is the worktree case: the repository already answers
+    // which project this checkout belongs to.
+    const slug = args[0] ?? requireText(siblingSlug(ctx.storeDir, projectDir) ?? undefined, "project link <slug> [path]");
+    if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
+    {
+        throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
     }
     linkProject(ctx, slug, projectDir);
     foldProject(ctx.storeDir, slug);
@@ -287,7 +296,10 @@ function cmdView(rest: string[]): void
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
     excludeLocally(ctx.storeDir, LINKS_FILE);
-    appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
+    if (!(readLinks(ctx.storeDir)[slug] ?? []).includes(projectDir))
+    {
+        appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
+    }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
 }
