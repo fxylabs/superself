@@ -23,6 +23,9 @@ export interface ReportEntry
     text: string;
     commits: string[];
     artifacts: ArtifactMeta[];
+    // The branch these commits were reported from — what lets the fold tell a
+    // discarded branch from a squash-merged one.
+    branch?: string;
 }
 
 export interface WorkState
@@ -237,7 +240,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     noteBranch(work, event);
     const commits = event.refs?.commits ?? [];
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts });
+    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
     work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
