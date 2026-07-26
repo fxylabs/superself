@@ -1,0 +1,35 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm Trusted Publishing (OIDC) — no token secret
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      # node 22 bundles npm 10; OIDC publishing needs npm 11.5+
+      - run: npm install -g npm@11
+      - run: pnpm install --frozen-lockfile
+      - name: The tag must name the version being published
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./apps/cli/package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG does not match package version $PKG" >&2
+            exit 1
+          fi
+      # prepublishOnly runs the full proof before anything uploads
+      - run: npm publish
+        working-directory: apps/cli
