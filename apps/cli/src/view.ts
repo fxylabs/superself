@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { DecisionState, ProjectModel, WorkState } from "./model.js";
@@ -10,6 +12,7 @@ import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";
 const THEME_FILE = "theme.css";
+const CHROME_FILE = ".chrome";
 
 // Panel caps from the Event Console canon: a dashboard shows the latest
 // slice, and the full record lives on its own page.
@@ -20,6 +23,9 @@ const CAP_DECISIONS = 5;
 const CAP_ARTIFACTS = 4;
 const CAP_WORKSPACE_ARTIFACTS = 6;
 const EVENTS_PAGE = 300;
+// The full log wraps and shows the whole opening line; dashboard rows clip in
+// CSS, so this only has to be wide enough that the cap never bites first.
+const EVENT_TEXT = 400;
 const SUMMARY_EVENTS = 8;
 const SUMMARY_DECISIONS = 6;
 
@@ -130,7 +136,9 @@ let LANG = "en";
 let THEME = "violet";
 let USER_THEME = "";
 
-export function writeViews(storeDir: string, model: ProjectModel, config: StoreConfig, verdicts: Record<string, Verdict> = {}): void
+// Returns whether this fold rendered a different viewer than the one already
+// on disk — the caller uses it to bring every other project's pages forward.
+export function writeViews(storeDir: string, model: ProjectModel, config: StoreConfig, verdicts: Record<string, Verdict> = {}): boolean
 {
     LANG = config.lang ?? "en";
     THEME = config.theme ?? "violet";
@@ -164,6 +172,32 @@ export function writeViews(storeDir: string, model: ProjectModel, config: StoreC
     writeFileSync(join(workDir, "events.html"), renderEventsPage(model, feed, rail(1, model.slug)));
     writeFileSync(join(workDir, "artifacts.html"), renderArtifactsPage(model, rail(1, model.slug)));
     writeFileSync(join(dir, "workspace.html"), renderWorkspacePage(summaries, rail(0)));
+    return chromeMoved(dir);
+}
+
+// The viewer is code baked into every page at the moment its project was last
+// folded, so a stamp of that code is what tells a later fold that the pages it
+// is not rewriting have fallen behind. The stamp is this module's own bytes:
+// hashing the stylesheet alone missed changes to the markup around it, and a
+// hand-bumped revision is a step someone eventually forgets.
+function chromeMoved(dir: string): boolean
+{
+    const stamp = createHash("sha256").update(viewerSource()).digest("hex").slice(0, 16);
+    const file = join(dir, CHROME_FILE);
+    if (existsSync(file) && readFileSync(file, "utf8").trim() === stamp)
+    {
+        return false;
+    }
+    writeFileSync(file, stamp + "\n");
+    return true;
+}
+
+// Falls back to the stylesheet if this module cannot be read as a file, so a
+// bundled build still detects the changes that matter most.
+function viewerSource(): string
+{
+    const self = fileURLToPath(import.meta.url);
+    return existsSync(self) ? readFileSync(self, "utf8") : TOKENS + themeBlocks() + LAYOUT_CSS;
 }
 
 // The override is inlined into a <style> element, so it must never be able
@@ -285,6 +319,11 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
     const next = model.works.filter((w) => w.status === "next");
     const done = model.works.filter((w) => w.status === "done");
     const waiting = waitingRows(model);
+    const decisions = decisionOrder(model.decisions);
+    const artifacts = artifactRows(model);
+    // Decisions carry a sentence of text and a reason, so they read in the
+    // main column; the 300px record column reflowed them into a ragged
+    // ribbon. Artifacts are a name and two ids and stay one glance away.
     const main = [
         `<p class="c2-goal">${esc(model.goal ?? "goal not set")}</p>`,
         waitingPanel(waiting, model.slug, ""),
@@ -293,20 +332,21 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
         panel("NEXT", next.length, "",
             next.length === 0 ? empty("queue is empty") : capped(
                 next.map((w) => nextRow(model.slug, w)), CAP_NEXT, "next work")),
+        panel("DECISIONS", 0, `${model.slug}/decisions.html`,
+            decisions.length === 0 ? empty("no decisions yet")
+                : table(decisions.slice(0, CAP_DECISIONS).map(decisionCells)),
+            more(decisions.length, CAP_DECISIONS, `${model.slug}/decisions.html`, "all decisions")),
         eventPanel(events.slice(0, CAP_EVENTS), events.length, `${model.slug}/events.html`),
         foldPanel("CONVENTIONS", model.conventions.map((c) => `<div class="dr-dec"><time>${day(c.ts)}</time><p>${esc(c.text)}</p></div>`)),
         foldPanel("DONE", done.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}</p></div>`))
     ].join("\n");
-    const decisions = decisionOrder(model.decisions);
-    const artifacts = artifactRows(model);
-    const record = [
-        panel("DECISIONS", 0, `${model.slug}/decisions.html`,
-            decisions.length === 0 ? empty("no decisions yet") : decisions.slice(0, CAP_DECISIONS).map(decisionRow).join("\n"),
-            more(decisions.length, CAP_DECISIONS, `${model.slug}/decisions.html`, "all decisions")),
-        panel("ARTIFACTS", artifacts.length, `${model.slug}/artifacts.html`,
-            artifacts.length === 0 ? empty("no artifacts yet") : artifacts.slice(0, CAP_ARTIFACTS).map((r) => artifactRow(r, "..")).join("\n"),
-            more(artifacts.length, CAP_ARTIFACTS, `${model.slug}/artifacts.html`, "all artifacts"))
-    ].join("\n");
+    // With decisions moved into the main column the record column carries
+    // artifacts alone, so a project that has none gets the width back instead
+    // of a 300px column saying so.
+    const record = artifacts.length === 0 ? undefined
+        : panel("ARTIFACTS", artifacts.length, `${model.slug}/artifacts.html`,
+            artifacts.slice(0, CAP_ARTIFACTS).map((r) => artifactRow(r, "..")).join("\n"),
+            more(artifacts.length, CAP_ARTIFACTS, `${model.slug}/artifacts.html`, "all artifacts"));
     return page({
         title: model.slug,
         crumb: `${esc(rail.workspace)} / <b>${esc(model.slug)}</b>`,
@@ -434,7 +474,7 @@ function renderEventsPage(model: ProjectModel, events: SummaryEvent[], rail: Rai
     const main = [
         `<p class="c2-goal">Events — ${count(events.length, "record")}</p>`,
         note,
-        `<section class="c2-panel c2-feed" aria-label="event log">` +
+        `<section class="c2-panel c2-feed c2-log" aria-label="event log">` +
             `${shown.map((event) => eventRow(event)).join("\n")}</section>`
     ].filter((part) => part !== "").join("\n");
     return listPage(model.slug, "events", `events | project == "${model.slug}" | ${count(events.length, "item")}`, main, rail);
@@ -492,20 +532,18 @@ function renderWorkspacePage(summaries: ProjectSummary[], rail: Rail): string
         panel("WAITING ON YOU", waiting.length, "", waitingBody, "", true),
         panel("PROJECTS", summaries.length, "",
             summaries.length === 0 ? empty("no projects registered") : table(summaries.map(projectRow))),
+        panel("DECISIONS", 0, "",
+            decisions.length === 0 ? empty("no decisions yet")
+                : table(decisions.map((d) =>
+                    `<tr><td class="n"><a href="${esc(d.slug)}.html">${esc(d.slug)}</a></td>` +
+                    `<td class="n">${day(d.ts)}</td><td>${esc(d.text)}</td></tr>`))),
         events.length === 0 ? panel("EVENTS", 0, "", empty("no events yet"))
             : `<section class="c2-panel c2-feed" aria-label="events">` +
                 `<div class="c2-panel-head"><h2>EVENTS</h2><span class="c2-live">live</span></div>` +
                 events.map((e) => eventRow(e, e.slug)).join("\n") + `</section>`
     ].join("\n");
-    const record = [
-        panel("DECISIONS", 0, "",
-            decisions.length === 0 ? empty("no decisions yet")
-                : decisions.map((d) => `<div class="dr-dec"><time>${day(d.ts)}</time>` +
-                    `<p><a href="${esc(d.slug)}.html">${esc(d.slug)}</a> · ${esc(d.text)}</p></div>`).join("\n")),
-        panel("ARTIFACTS", artifacts.length, "",
-            artifacts.length === 0 ? empty("no artifacts yet")
-                : artifacts.map((r) => artifactRow(r, "..")).join("\n"))
-    ].join("\n");
+    const record = artifacts.length === 0 ? undefined
+        : panel("ARTIFACTS", artifacts.length, "", artifacts.map((r) => artifactRow(r, "..")).join("\n"));
     return page({
         title: "Workspace",
         crumb: `<b>${esc(rail.workspace)}</b>`,
@@ -592,6 +630,14 @@ function decisionRow(decision: DecisionState): string
     return `<div class="dr-dec"><time>${day(decision.ts)}</time><p>${esc(decision.text)}${mark}</p></div>`;
 }
 
+// The main-column form: a date column, the decision, and its reason beneath.
+function decisionCells(decision: DecisionState): string
+{
+    const mark = decision.status === "proposed" ? `<i class="dr-prop">proposed</i>` : "";
+    const why = decision.why === undefined ? "" : `<span class="hf-sub">${esc(decision.why)}</span>`;
+    return `<tr><td class="n">${day(decision.ts)}</td><td>${esc(decision.text)}${mark}${why}</td></tr>`;
+}
+
 function decisionCard(decision: DecisionState): string
 {
     const why = decision.why === undefined ? "" : `<small>${esc(decision.why)}</small>`;
@@ -631,7 +677,7 @@ function buildLabels(events: SelfEvent[]): Map<string, string>
 function toFeed(events: SelfEvent[], labels: Map<string, string>): SummaryEvent[]
 {
     return events.map((event) =>
-        ({ id: event.id, ts: event.ts, type: event.type, text: firstLine(eventText(event, labels)) }));
+        ({ id: event.id, ts: event.ts, type: event.type, text: firstLine(eventText(event, labels), EVENT_TEXT) }));
 }
 
 function eventText(event: SelfEvent, labels: Map<string, string>): string
@@ -761,10 +807,13 @@ function shortId(id: string): string
     return id.slice(0, 8);
 }
 
-function firstLine(text: string): string
+// Reports are prose with paragraphs; a row shows the opening line only. The
+// length cap keeps a one-line row honest — rows that clip in CSS instead pass
+// a cap wide enough that the ellipsis never stands in for real text.
+function firstLine(text: string, max = 160): string
 {
     const line = text.split("\n", 1)[0];
-    return line.length > 160 ? line.slice(0, 159) + "…" : line;
+    return line.length > max ? line.slice(0, max - 1) + "…" : line;
 }
 
 function esc(text: string): string
@@ -784,7 +833,7 @@ function renderRail(rail: Rail): string
             `${esc(project.slug)} <i class="dr-dot ${project.warn ? "warn" : "ok"}"></i></a>`)
     ];
     return `<aside class="dr-rail" aria-label="workspace rail">` +
-        `<span class="c2-mark">self</span><p class="dr-ws">${esc(rail.workspace)}</p>` +
+        `<span class="c2-mark">${logoSvg()}self</span><p class="dr-ws">${esc(rail.workspace)}</p>` +
         `<nav class="dr-nav">${links.join("")}</nav>` +
         `<div class="dr-foot">fold ${esc(rail.foldId)}<br>${esc(rail.foldTime)} UTC</div></aside>`;
 }
@@ -830,6 +879,15 @@ const LOGO_SYMBOL = [
     "M137.954 26.8921C133.611 24.0908 129.082 22.0243 124.451 20.6696C120.622 15.8133 116.032 11.5655 110.752 8.16724C84.6518 -8.64033 51.2852 1.32481 36.2178 30.4281C21.1606 59.5313 30.1043 96.7514 56.2048 113.559C61.4948 116.969 67.0937 119.265 72.7645 120.539C57.728 101.481 54.4757 73.1244 66.4864 49.9221C78.4972 26.7313 102.128 15.687 124.451 20.6811C141.412 39.8077 145.58 69.9098 132.942 94.329L158.033 110.494C173.183 81.2182 164.198 43.7915 137.954 26.8921Z",
     "M108.874 78.4409C103.584 75.0312 97.9952 72.7236 92.314 71.4492C107.351 90.5185 110.603 118.876 98.5921 142.078C86.5814 165.28 62.951 176.324 40.6278 171.33C23.7798 152.284 19.7042 122.239 32.3427 97.8201L7.39499 81.7473C-7.75478 111.023 1.1169 148.369 27.207 165.177H27.1967C31.5194 167.955 36.0272 169.999 40.6278 171.342C44.4564 176.187 49.0466 180.423 54.3264 183.833C80.4268 200.64 113.793 190.675 128.861 161.572C143.918 132.469 134.974 95.2485 108.874 78.4409Z"
 ];
+
+// The symbol beside the wordmark in the rail. currentColor inherits the
+// accent from .c2-mark, so it themes without a second color source, and the
+// size lives in the layout CSS rather than the markup.
+function logoSvg(): string
+{
+    return `<svg class="c2-logo" viewBox="0 0 166 192" fill="currentColor" aria-hidden="true">` +
+        LOGO_SYMBOL.map((d) => `<path d="${d}"/>`).join("") + `</svg>`;
+}
 
 // The symbol on the page's own background, sized so a 16px tab keeps the
 // crescents distinct: 12.5 of 16 units tall, centered. Inline SVG in a data:
@@ -912,7 +970,9 @@ a { color: inherit; }
 
 .dr-rail { position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column;
            background: var(--sv-bg-rail); border-right: 1px solid var(--sv-border); padding: 16px 14px; }
-.c2-mark { font: 700 13px var(--sv-mono); color: var(--sv-accent); }
+.c2-mark { display: inline-flex; align-items: center; gap: 7px;
+           font: 700 13px var(--sv-mono); color: var(--sv-accent); }
+.c2-logo { width: 12px; height: 14px; flex: none; display: block; }
 .dr-ws { margin: 14px 0 6px; font: 9px var(--sv-mono); letter-spacing: .14em;
          color: var(--sv-faint); text-transform: uppercase; }
 .dr-nav { display: flex; flex-direction: column; gap: 2px; }
@@ -988,10 +1048,14 @@ td.r { text-align: right; width: 78px; }
 .c2-ev { display: flex; align-items: baseline; gap: 14px; font: 11.5px var(--sv-mono);
          padding: 6px 0; border-bottom: 1px solid var(--sv-rule); }
 .c2-ev:last-child { border-bottom: 0; }
-.c2-ev time { color: var(--sv-faint); white-space: nowrap; }
-.c2-ev code { white-space: nowrap; }
+.c2-ev time { color: var(--sv-faint); white-space: nowrap; flex: none; }
+/* fixed columns: a longer type word must not shift the text column of its row */
+.c2-ev code { width: 4.2rem; flex: none; white-space: nowrap; }
 .c2-ev span { flex: 1; min-width: 0; font: 12.5px var(--sv-sans); color: var(--sv-body); }
-.c2-ev em { font-style: normal; color: var(--sv-faint); white-space: nowrap; }
+.c2-ev em { font-style: normal; color: var(--sv-faint); white-space: nowrap; flex: none;
+            width: 5.2rem; text-align: right; }
+/* a dashboard slice stays one line per event; the full log wraps and shows all */
+.c2-feed:not(.c2-log) .c2-ev span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c2-ev .e-report { color: var(--sv-ok); }
 .c2-ev .e-decide { color: var(--sv-accent); }
 .c2-ev .e-work, .c2-ev .e-goal, .c2-ev .e-convention { color: var(--sv-muted); }

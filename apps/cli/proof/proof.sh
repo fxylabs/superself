@@ -180,6 +180,7 @@ for PAGE in "$VIEW_A/demo.html" "$VIEW_A/workspace.html" "$VIEW_A/demo/$WID.html
 do
     grep -q 'aria-label="workspace rail"' "$PAGE" || fail "$(basename "$PAGE") is missing the workspace rail"
     grep -q 'class="c2-query"' "$PAGE" || fail "$(basename "$PAGE") is missing the query bar"
+    grep -q 'class="c2-logo"' "$PAGE" || fail "$(basename "$PAGE") is missing the logo symbol beside the wordmark"
 done
 FOLD_ID="$(SELF log -n 1 | sed -E 's/.*\[([^]]+)\].*/\1/' | cut -c1-8)"
 grep -q "fold $FOLD_ID" "$VIEW_A/demo.html" || fail "the query bar does not name the state the page was folded from"
@@ -191,6 +192,16 @@ grep -q "$AID-launch.html" "$VIEW_A/demo/artifacts.html" || fail "artifacts page
 grep -q "machine A made this decision" "$VIEW_A/demo/decisions.html" || fail "decisions page missing a decision"
 grep -q "machine B started the work" "$VIEW_A/demo/events.html" || fail "events page missing an event"
 grep -q 'class="dr-side"' "$VIEW_A/demo/artifacts.html" && fail "a list page rendered the record column"
+
+# a changed viewer reaches every project, not only the one being folded —
+# otherwise the workspace shows two designs until each project happens to
+# record an event
+rm -f "$VIEW_A/.chrome"
+FORWARD="$(cd "$ROOT/A/ws/demo" && SELF fold)"
+echo "$FORWARD" | grep -q "refolded .* other project" || fail "a moved viewer did not bring other projects' pages forward"
+grep -q 'aria-label="workspace rail"' "$VIEW_A/outside.html" || fail "another project's page kept the old viewer"
+AGAIN="$(cd "$ROOT/A/ws/demo" && SELF fold)"
+echo "$AGAIN" | grep -q "other project" && fail "an unchanged viewer refolded every project again"
 
 # artifacts travel with the store: machine B sees bytes and registry after sync
 cd "$ROOT/A/ws" && SELF sync
