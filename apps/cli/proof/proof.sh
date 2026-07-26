@@ -56,13 +56,20 @@ BUDGET_WID=$(SELF work add "budget proof active outcome must survive" | tail -1)
 SELF work start "$BUDGET_WID"
 LONG_REPORT="$(awk 'BEGIN { for (i = 0; i < 16000; i++) printf "r" }')"
 SELF report "$BUDGET_WID" "$LONG_REPORT"
+REPORT_ASTRAL="$(awk 'BEGIN { for (i = 0; i < 800; i++) printf "😀" }')"
+SELF report "$BUDGET_WID" "chronological newest report marker $REPORT_ASTRAL"
 SELF convention add "budget proof convention must survive"
 SELF decide "budget proof proposal must survive" --proposed
+ASTRAL_FILL="$(awk 'BEGIN { for (i = 0; i < 5000; i++) printf "😀" }')"
+SELF decide "astral budget decision $ASTRAL_FILL"
+LATE_OUTPUT="$(SELF decide "confirmed-later proposal must sort newest" --proposed)"
+LATE_ID="$(echo "$LATE_OUTPUT" | sed -E 's/.*\[([^]]+)\].*/\1/')"
 DECISION_FILL="$(awk 'BEGIN { for (i = 0; i < 2600; i++) printf "d" }')"
 for index in 1 2 3 4 5 6
 do
     SELF decide "budget decision $index $DECISION_FILL"
 done
+SELF decide confirm "$LATE_ID"
 PROJECT_CONTEXT="$(SELF context)"
 PROJECT_CHARS="$(printf '%s\n' "$PROJECT_CONTEXT" | wc -m | tr -d ' ')"
 [ "$PROJECT_CHARS" -le 12000 ] || fail "project context exceeded 12,000 characters ($PROJECT_CHARS)"
@@ -72,13 +79,78 @@ echo "$PROJECT_CONTEXT" | grep -q "budget proof proposal must survive" || fail "
 echo "$PROJECT_CONTEXT" | grep -q "self work show $BUDGET_WID" || fail "report excerpt has no recovery path"
 echo "$PROJECT_CONTEXT" | grep -q 'self search --type decision' || fail "omitted decisions have no recovery path"
 echo "$PROJECT_CONTEXT" | grep -q "budget decision 6" || fail "newest decisions did not win the remaining budget"
+echo "$PROJECT_CONTEXT" | grep -q "confirmed-later proposal must sort newest" || fail "a later confirmation did not make its proposal newest"
 echo "$PROJECT_CONTEXT" | grep -q "budget decision 1" && fail "oldest decisions displaced newer decisions"
+echo "$PROJECT_CONTEXT" | grep -q "chronological newest report marker" || fail "latest report did not reach context"
+echo "$PROJECT_CONTEXT" | grep -q "😀" || fail "astral characters did not exercise the context character count"
 SELF search --type decision | grep -q "budget decision 1" || fail "type-only decision recovery command does not work"
+
+# Union merges can place older reports after newer ones in the JSONL file.
+# Protected-only overflow must compact structurally, never slice later WIP or
+# waiting sections by position.
+LOG_A="$ROOT/A/ws/.superself/projects/demo/log.jsonl"
+cp "$LOG_A" "$ROOT/demo-log-before-budget-fixture"
+printf '{"id":"old-report-after-new","ts":"2000-01-01T00:00:00.000Z","type":"report.added","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"text":"out-of-order stale report"},"refs":{"work":"%s"}}\n' "$BUDGET_WID" >> "$LOG_A"
+SELF fold > /dev/null
+ORDERED_REPORT_CONTEXT="$(SELF context)"
+echo "$ORDERED_REPORT_CONTEXT" | grep -q "chronological newest report marker" || fail "JSONL order displaced the chronologically newest report"
+echo "$ORDERED_REPORT_CONTEXT" | grep -q "out-of-order stale report" && fail "an appended old report displaced the newest report"
+PROTECTED_TEXT="$(awk 'BEGIN { for (i = 0; i < 2000; i++) printf "p" }')"
+for index in $(seq 1 90)
+do
+    WID_FIX="$(printf 'w-p%03d' "$index")"
+    printf '{"id":"protected-work-%03d-created","ts":"2099-01-01T00:00:00.000Z","type":"work.created","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"work":"%s","outcome":"protected outcome %03d %s"}}\n' "$index" "$WID_FIX" "$index" "$PROTECTED_TEXT" >> "$LOG_A"
+    printf '{"id":"protected-work-%03d-started","ts":"2099-01-01T00:00:01.000Z","type":"work.started","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"work":"%s"}}\n' "$index" "$WID_FIX" >> "$LOG_A"
+done
+for index in $(seq 1 20)
+do
+    printf '{"id":"protected-convention-%03d","ts":"2099-01-01T00:00:00.000Z","type":"convention.added","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"text":"protected convention %03d %s"}}\n' "$index" "$index" "$PROTECTED_TEXT" >> "$LOG_A"
+    printf '{"id":"protected-proposal-%03d","ts":"2099-01-01T00:00:00.000Z","type":"decision.proposed","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"text":"protected proposal %03d %s"}}\n' "$index" "$index" "$PROTECTED_TEXT" >> "$LOG_A"
+done
+SELF fold > /dev/null
+PROTECTED_CONTEXT="$(SELF context)"
+PROTECTED_CHARS="$(printf '%s\n' "$PROTECTED_CONTEXT" | wc -m | tr -d ' ')"
+[ "$PROTECTED_CHARS" -le 12000 ] || fail "protected-only context exceeded 12,000 characters ($PROTECTED_CHARS)"
+echo "$PROTECTED_CONTEXT" | grep -q "## Work in progress" || fail "protected compaction sliced the WIP section"
+echo "$PROTECTED_CONTEXT" | grep -q "## Waiting on you" || fail "protected compaction sliced the waiting section"
+echo "$PROTECTED_CONTEXT" | grep -q "w-p001" || fail "protected compaction lost its first work identity"
+echo "$PROTECTED_CONTEXT" | grep -q "w-p090" || fail "protected compaction lost its last work identity"
+echo "$PROTECTED_CONTEXT" | grep -q "protected-proposal-020" || fail "protected compaction lost a waiting identity"
+
+# When even identity rows cannot fit, the mathematical exception is explicit
+# and its project-only pull command must expose the canonical state.
+for index in $(seq 21 240)
+do
+    printf '{"id":"protected-convention-%03d","ts":"2099-01-01T00:00:00.000Z","type":"convention.added","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"text":"aggregate convention %03d"}}\n' "$index" "$index" >> "$LOG_A"
+done
+SELF fold > /dev/null
+AGGREGATE_CONTEXT="$(SELF context)"
+AGGREGATE_CHARS="$(printf '%s\n' "$AGGREGATE_CONTEXT" | wc -m | tr -d ' ')"
+[ "$AGGREGATE_CHARS" -le 12000 ] || fail "aggregate exception exceeded 12,000 characters ($AGGREGATE_CHARS)"
+echo "$AGGREGATE_CONTEXT" | grep -q "even as identity rows" || fail "mathematical protected overflow was not disclosed"
+echo "$AGGREGATE_CONTEXT" | grep -q 'self search --project demo' || fail "aggregate overflow has no valid project pull path"
+SELF search --project demo | grep -q "budget proof active outcome must survive" || fail "project-only recovery did not expose canonical state"
+cp "$ROOT/demo-log-before-budget-fixture" "$LOG_A"
+SELF fold > /dev/null
+
 cd "$ROOT/A/ws"
 WORKSPACE_CONTEXT="$(SELF context)"
 WORKSPACE_CHARS="$(printf '%s\n' "$WORKSPACE_CONTEXT" | wc -m | tr -d ' ')"
 [ "$WORKSPACE_CHARS" -le 12000 ] || fail "workspace context exceeded 12,000 characters ($WORKSPACE_CHARS)"
 echo "$WORKSPACE_CONTEXT" | grep -q "demo" || fail "workspace context lost its registered project"
+REGISTRY_A="$ROOT/A/ws/.superself/registry.jsonl"
+cp "$REGISTRY_A" "$ROOT/registry-before-budget-fixture"
+for index in $(seq 1 300)
+do
+    printf '{"slug":"workspace-budget-%03d","added":"2099-01-01T00:00:00.000Z"}\n' "$index" >> "$REGISTRY_A"
+done
+WORKSPACE_OVERFLOW="$(SELF context)"
+WORKSPACE_OVERFLOW_CHARS="$(printf '%s\n' "$WORKSPACE_OVERFLOW" | wc -m | tr -d ' ')"
+[ "$WORKSPACE_OVERFLOW_CHARS" -le 12000 ] || fail "overflowing workspace context exceeded 12,000 characters ($WORKSPACE_OVERFLOW_CHARS)"
+echo "$WORKSPACE_OVERFLOW" | grep -q "project summaries omitted" || fail "workspace omission was silent"
+echo "$WORKSPACE_OVERFLOW" | grep -q 'self status' || fail "workspace omission has no valid recovery path"
+SELF status | grep -q "workspace-budget-300" || fail "workspace status did not recover an omitted project summary"
+cp "$ROOT/registry-before-budget-fixture" "$REGISTRY_A"
 cd "$ROOT/A/ws"
 SELF remote add "$ROOT/remote.git"
 SELF sync

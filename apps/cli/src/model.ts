@@ -23,6 +23,7 @@ export interface DecisionState
 
 export interface ReportEntry
 {
+    id: string;
     ts: string;
     text: string;
     commits: string[];
@@ -245,7 +246,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     noteBranch(work, event);
     const commits = event.refs?.commits ?? [];
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
+    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
     work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)

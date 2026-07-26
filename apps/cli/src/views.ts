@@ -18,6 +18,13 @@ interface ProjectContextOptions
     compactOptional: boolean;
 }
 
+interface WaitingItem
+{
+    full: string;
+    identity: string;
+    recovery: string;
+}
+
 // Console surfaces reuse the verdicts persisted by the last fold, so they
 // agree with canonical state without re-running git.
 function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
@@ -40,8 +47,9 @@ export function printContext(ctx: CliContext): void
 
 function renderProjectContext(model: ProjectModel): string
 {
-    const confirmed = model.decisions
+    const confirmed = [...model.decisions]
         .filter((decision) => decision.status === "confirmed")
+        .sort(compareDated)
         .map((decision) => `- ${decision.text}${decision.why === undefined ? "" : ` — ${decision.why}`}`);
     let options: ProjectContextOptions = {
         decisions: [],
@@ -58,6 +66,10 @@ function renderProjectContext(model: ProjectModel): string
     if (contextLength(renderProject(model, options)) > CONTEXT_BODY_LIMIT)
     {
         options = { ...options, compactOptional: true, detailLimit: largestDetailLimit(model, options) };
+    }
+    if (contextLength(renderProject(model, options)) > CONTEXT_BODY_LIMIT)
+    {
+        return renderMinimalProjectContext(model, confirmed);
     }
 
     // Report excerpts and the non-decision sections claim their space first.
@@ -77,7 +89,7 @@ function renderProjectContext(model: ProjectModel): string
         }
         options = candidate;
     }
-    return capContext(renderProject(model, options), "… additional context omitted; run `self work`, `self status`, and `self search` for the full state");
+    return renderProject(model, options);
 }
 
 function renderProject(model: ProjectModel, options: ProjectContextOptions): string
@@ -85,9 +97,9 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
-        lines.push(detail(model.description, options.detailLimit, `self view ${model.slug}`), "");
+        lines.push(detail(model.description, options.detailLimit, `self search --project ${model.slug}`), "");
     }
-    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self view ${model.slug}`)}`, "");
+    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self search --project ${model.slug}`)}`, "");
     const decisionLines = [...options.decisions];
     if (options.omittedDecisions > 0)
     {
@@ -95,10 +107,10 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     }
     pushList(lines, "Decisions", decisionLines);
     pushList(lines, "Conventions", model.conventions.map((convention) =>
-        `- ${detail(convention.text, options.detailLimit, "self search --type convention")}`));
+        `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${model.slug}`)}`));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
-    pushList(lines, "Waiting on you", waitingLines(model).map((item) =>
-        detail(item, options.detailLimit, "self work; self search --type decision")));
+    pushList(lines, "Waiting on you", waitingItems(model).map((item) =>
+        detail(item.full, options.detailLimit, item.recovery)));
     const next = model.works.filter((work) => work.status === "next");
     pushList(lines, "Next", options.compactOptional && next.length > 0
         ? [`- … ${next.length} next work item${next.length === 1 ? "" : "s"} omitted; run \`self work\``]
@@ -107,6 +119,85 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
         ? [`- … ${model.health.length} health signal${model.health.length === 1 ? "" : "s"} omitted; run \`self status\``]
         : model.health.map((health) => `- ${detail(health, options.detailLimit, "self status")}`));
     return lines.join("\n").replace(/\n+$/, "");
+}
+
+function renderMinimalProjectContext(model: ProjectModel, confirmed: string[]): string
+{
+    let selected: string[] = [];
+    let omitted = confirmed.length;
+    if (contextLength(renderMinimalProject(model, selected, omitted)) > CONTEXT_BODY_LIMIT)
+    {
+        return renderAggregateProject(model);
+    }
+    for (let index = confirmed.length - 1; index >= 0; index--)
+    {
+        const candidate = [confirmed[index], ...selected];
+        if (contextLength(renderMinimalProject(model, candidate, index)) > CONTEXT_BODY_LIMIT)
+        {
+            break;
+        }
+        selected = candidate;
+        omitted = index;
+    }
+    return renderMinimalProject(model, selected, omitted);
+}
+
+function renderMinimalProject(model: ProjectModel, decisions: string[], omittedDecisions: number): string
+{
+    const recovery = `self search --project ${model.slug}`;
+    const lines: string[] = [`# ${model.slug}`, ""];
+    if (model.description !== undefined)
+    {
+        lines.push(`Description: omitted; run \`${recovery}\``, "");
+    }
+    lines.push(`Goal: omitted; run \`${recovery}\``, "");
+    const decisionLines = [...decisions];
+    if (omittedDecisions > 0)
+    {
+        decisionLines.unshift(`- … ${omittedDecisions} confirmed decision${omittedDecisions === 1 ? "" : "s"} omitted; run \`self search --type decision --project ${model.slug}\``);
+    }
+    pushList(lines, "Decisions", decisionLines);
+    pushList(lines, "Conventions", [...model.conventions]
+        .sort(compareDated)
+        .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${model.slug}\``));
+    const progressing = [...model.works]
+        .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
+        .sort((left, right) => left.id.localeCompare(right.id));
+    pushList(lines, "Work in progress", progressing.map((work) =>
+        `- ${work.status} work ${work.id}; run \`self work show ${work.id}\``));
+    pushList(lines, "Waiting on you", waitingItems(model).map((item) =>
+        `- ${item.identity}; run \`${item.recovery}\``));
+    const next = model.works.filter((work) => work.status === "next").length;
+    if (next > 0)
+    {
+        pushList(lines, "Next", [`- … ${next} next work item${next === 1 ? "" : "s"} omitted; run \`self work\``]);
+    }
+    if (model.health.length > 0)
+    {
+        pushList(lines, "Health", [`- … ${model.health.length} health signal${model.health.length === 1 ? "" : "s"} omitted; run \`self status\``]);
+    }
+    return lines.join("\n").replace(/\n+$/, "");
+}
+
+// If even one identity-and-pointer row per protected item cannot fit, listing
+// a prefix would silently privilege log order. Aggregate every protected
+// category instead and say exactly where the complete canonical state lives.
+function renderAggregateProject(model: ProjectModel): string
+{
+    const active = model.works.filter((work) => work.status === "active").length;
+    const blocked = model.works.filter((work) => work.status === "blocked").length;
+    const waiting = waitingItems(model).length;
+    const recovery = `self search --project ${model.slug}`;
+    return [
+        `# ${takeCharacters(model.slug, 200)}`,
+        "",
+        `Protected context is larger than ${CONTEXT_LIMIT.toLocaleString("en-US")} characters even as identity rows.`,
+        `- description/goal: run \`${recovery}\``,
+        `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
+        `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`self work\``,
+        `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
+        `- decisions: run \`self search --type decision --project ${model.slug}\``
+    ].join("\n");
 }
 
 function largestReportExcerpt(model: ProjectModel, options: ProjectContextOptions): number
@@ -155,7 +246,7 @@ function inProgressLines(model: ProjectModel, reportLimit: number, detailLimit: 
 {
     const active = model.works.filter((w) => w.status === "active").map((work) =>
     {
-        const latest = work.reports[work.reports.length - 1];
+        const latest = [...work.reports].sort(compareDated).at(-1);
         const outcome = detail(work.outcome, detailLimit, `self work show ${work.id}`);
         const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit);
         const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, `self work show ${work.id}`)})`;
@@ -180,13 +271,30 @@ function reportExcerpt(text: string, work: string, limit: number): string
     return ` — latest report: ${excerpt}${ellipsis} (full: ${recovery})`;
 }
 
-function waitingLines(model: ProjectModel): string[]
+function waitingItems(model: ProjectModel): WaitingItem[]
 {
-    const questions = model.openQuestions.map((q) => `- ${q}`);
-    const proposals = model.decisions
+    const questions = model.works
+        .filter((work) => work.status === "blocked" && work.blockedOn === "decision")
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((work): WaitingItem => ({
+            full: `- ${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`,
+            identity: `blocked work ${work.id}`,
+            recovery: `self work show ${work.id}`
+        }));
+    const proposals = [...model.decisions]
         .filter((d) => d.status === "proposed" && !d.expired)
-        .map((d) => `- proposal: ${d.text} (confirm with \`self decide confirm ${d.id}\`)`);
+        .sort(compareDated)
+        .map((decision): WaitingItem => ({
+            full: `- proposal: ${decision.text} (confirm with \`self decide confirm ${decision.id}\`)`,
+            identity: `proposal ${decision.id}`,
+            recovery: `self search ${decision.id} --type decision --project ${model.slug}`
+        }));
     return [...questions, ...proposals];
+}
+
+function compareDated(left: { ts: string; id: string }, right: { ts: string; id: string }): number
+{
+    return left.ts.localeCompare(right.ts) || left.id.localeCompare(right.id);
 }
 
 function pushList(lines: string[], title: string, items: string[]): void
@@ -239,41 +347,26 @@ function renderWorkspaceContext(ctx: CliContext): string
     {
         kept.push(workspaceOmission(omitted));
     }
-    return capContext(kept.join("\n"), "… workspace context omitted; run `self setup` for the full project list");
+    return kept.length === 0
+        ? workspaceOmission(models.length)
+        : kept.join("\n");
 }
 
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail(model.goal ?? "(no goal)", 500, `self view ${model.slug}`);
+    const goal = detail(model.goal ?? "(no goal)", 500, "self status");
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 
 function workspaceOmission(count: number): string
 {
-    return `… ${count} project${count === 1 ? "" : "s"} omitted; run \`self setup\` for the full workspace list`;
-}
-
-function capContext(text: string, recovery: string): string
-{
-    if (contextLength(text) <= CONTEXT_BODY_LIMIT)
-    {
-        return text;
-    }
-    const suffix = `\n\n${recovery}`;
-    const room = Math.max(0, CONTEXT_BODY_LIMIT - contextLength(suffix));
-    let prefix = takeCharacters(text, room);
-    const newline = prefix.lastIndexOf("\n");
-    if (newline >= Math.floor(room / 2))
-    {
-        prefix = prefix.slice(0, newline);
-    }
-    return takeCharacters(prefix.trimEnd() + suffix, CONTEXT_BODY_LIMIT);
+    return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`self status\` from the workspace for the full summaries`;
 }
 
 function writeContext(text: string): void
 {
-    process.stdout.write(capContext(text, "… context omitted; use `self search`, `self work`, or `self setup` to pull full state") + "\n");
+    process.stdout.write(text + "\n");
 }
 
 function contextLength(text: string): number
