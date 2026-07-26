@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./gitutil.js";
 import { projectStateDir } from "./paths.js";
-import { WorkState } from "./model.js";
+import { isClosed, WorkState } from "./model.js";
 
 // settled: reachable from the default branch — counts as progress, final.
 // provisional: exists on a live branch that has not merged yet.
@@ -112,7 +112,7 @@ function discarded(projectDir: string, mainRef: string | null, item: Evidence): 
 export function evidenceOf(works: WorkState[]): Evidence[]
 {
     const seen = new Map<string, Evidence>();
-    for (const work of works.filter((item) => item.status !== "done"))
+    for (const work of works.filter((item) => !isClosed(item)))
     {
         for (const report of work.reports)
         {
@@ -134,7 +134,7 @@ export function evidenceOf(works: WorkState[]): Evidence[]
 export function verdictSignals(works: WorkState[], verdicts: Record<string, Verdict>): string[]
 {
     const signals: string[] = [];
-    for (const work of works.filter((item) => item.status !== "done"))
+    for (const work of works.filter((item) => !isClosed(item)))
     {
         for (const hash of work.evidence)
         {

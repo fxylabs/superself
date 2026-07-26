@@ -357,4 +357,144 @@ grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinke
 BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
 echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
+# ── asynchronous intake ────────────────────────────────────────────────
+# A long work item runs while the user keeps submitting directives. Every
+# capture must return its id without waiting for that item, and every
+# directive must route exactly once.
+cd "$ROOT/A/ws/demo"
+LONG="$(SELF work add "long investigation that holds the foreground" | tail -1)"
+SELF work start "$LONG"
+SELF report "$LONG" "still running — this is the turn the user cannot wait for"
+
+START=$(date +%s)
+CAPS=()
+for i in 1 2 3 4 5 6 7 8 9 10
+do
+    CAPS+=("$(SELF capture "directive number $i submitted while $LONG runs" --source console | tail -1)")
+done
+ELAPSED=$(( $(date +%s) - START ))
+[ "$ELAPSED" -lt 60 ] || fail "ten captures took ${ELAPSED}s — intake is not acknowledging without waiting"
+[ "${#CAPS[@]}" -eq 10 ] || fail "not every directive returned a capture id"
+for CID in "${CAPS[@]}"
+do
+    echo "$CID" | grep -q "^c-" || fail "capture did not return a c- id"
+done
+SELF work show "$LONG" | grep -q "Status: active" || fail "the long work item stopped while directives were captured"
+[ "$(SELF capture list | wc -l | tr -d ' ')" -eq 10 ] || fail "captured directives did not all reach the unrouted list"
+grep -q "Captured, not routed yet" "$ROOT/A/ws/.superself/projects/demo/state.md" || fail "captures missing from folded state"
+grep -q "directive number 7" "$ROOT/A/ws/.superself/projects/demo/state.md" || fail "a capture body did not reach canonical state"
+grep -q "CAPTURED IDEAS" "$VIEW_A/demo.html" || fail "the project view has no captured-ideas panel"
+
+# a retried submission with the same key is the same directive, not a second one
+K1="$(SELF capture "retried directive" --key retry-1 | tail -1)"
+K2="$(SELF capture "retried directive" --key retry-1 | tail -1)"
+[ "$K1" = "$K2" ] || fail "an idempotency key minted a second capture"
+SELF capture "retried directive" --key retry-1 --json | grep -q '"duplicate":true' || fail "a repeat submission did not report itself as a duplicate"
+
+# ── triage: one directive, one routing ─────────────────────────────────
+SELF capture link "${CAPS[0]}" --new "route the first directive to its own work unit"
+NEWWORK="$(SELF capture show "${CAPS[0]}" | grep Routing | sed -E 's/.*→ (w-[a-z0-9]+).*/\1/')"
+echo "$NEWWORK" | grep -q "^w-" || fail "linking as new did not create a work unit"
+AGAIN="$(SELF capture link "${CAPS[0]}" --new "second reading" 2>&1 || true)"
+echo "$AGAIN" | grep -q "already routed" || fail "a directive was routed twice"
+
+SELF capture link "${CAPS[1]}" --work "$NEWWORK" --as addition
+grep -q "Added by later directives" "$ROOT/A/ws/.superself/projects/demo/work/$NEWWORK.md" || fail "an addition did not reach the work brief"
+SELF capture link "${CAPS[2]}" --work "$NEWWORK" --as reprioritization --priority 10
+SELF work queue | head -1 | grep -q "$NEWWORK" || fail "reprioritization did not move the unit to the front of the queue"
+SELF capture link "${CAPS[3]}" --work "$NEWWORK" --as supersession --outcome "the corrected required outcome"
+SELF work show "$NEWWORK" | grep -q "the corrected required outcome" || fail "supersession did not replace the required outcome"
+SELF capture link "${CAPS[4]}" --work "$NEWWORK" --as status
+SELF context | grep -q "was asked for status" || fail "a status request did not surface as waiting on you"
+SELF report "$NEWWORK" "answering the status request"
+SELF context | grep -q "was asked for status" && fail "a report after the request left it open"
+SELF capture drop "${CAPS[5]}" --why "duplicate of an earlier directive"
+SELF capture show "${CAPS[5]}" | grep -q "dropped" || fail "a dropped directive was not recorded as routed"
+[ "$(SELF capture list | wc -l | tr -d ' ')" -eq 5 ] || fail "routed directives stayed in the unrouted list"
+SELF capture list --all | grep -q "${CAPS[0]}" || fail "the original input was lost once it was routed"
+
+# ── cancellation ───────────────────────────────────────────────────────
+CANCELME="$(SELF work add "work that a later directive overtakes" | tail -1)"
+SELF capture link "${CAPS[6]}" --work "$CANCELME" --as cancellation --why "the user changed their mind"
+SELF work | grep -q "$CANCELME" && fail "a cancelled work unit stayed in the open list"
+[ -f "$ROOT/A/ws/.superself/projects/demo/work/$CANCELME.md" ] && fail "a cancelled work unit kept its brief file"
+SELF capture show "${CAPS[6]}" | grep -q "cancellation" || fail "the directive behind a cancellation was not preserved"
+grep -q '"type":"work.cancelled"' "$LOG_A" || fail "cancellation left no lifecycle event"
+
+# ── dependencies wake by themselves ────────────────────────────────────
+FIRST="$(SELF work add "the dependency that has to finish first" | tail -1)"
+SECOND="$(SELF work add "the work that waits for it" | tail -1)"
+SELF work depend "$SECOND" --on "$FIRST"
+SELF work queue | grep -q "$SECOND" && fail "work waiting on a dependency was offered to the queue"
+SELF stream | grep -q "$SECOND" || fail "waiting work vanished from the stream"
+CYCLE="$(SELF work depend "$FIRST" --on "$SECOND" 2>&1 || true)"
+echo "$CYCLE" | grep -q "deadlock" || fail "a dependency cycle was accepted"
+SELF work start "$FIRST"
+SELF report "$FIRST" "the dependency is finished"
+SELF work done "$FIRST" --without-evidence --why "no code changed"
+SELF work queue | grep -q "$SECOND" || fail "the dependent unit did not wake when its dependency finished"
+
+# ── the approval boundary ──────────────────────────────────────────────
+RISKY="$(SELF work add "a high-risk action the user must sign off on" | tail -1)"
+SELF work approval "$RISKY" --why "it deletes production data"
+SELF work queue | grep -q "$RISKY" && fail "work waiting on approval was offered to the queue"
+SELF context | grep -q "needs your approval" || fail "a pending approval did not reach waiting-on-you"
+SELF work approve "$RISKY"
+SELF work queue | grep -q "$RISKY" || fail "approving did not make the work eligible again"
+
+# ── lease, heartbeat, and restart recovery ─────────────────────────────
+CLAIMED="$(SELF work claim --worker runner-1 --lease 3 --json)"
+echo "$CLAIMED" | grep -q '"worker"' && true
+LEASED="$(echo "$CLAIMED" | sed -E 's/.*"work":"([^"]+)".*/\1/')"
+echo "$LEASED" | grep -q "^w-" || fail "claim did not lease a ready work unit"
+[ "$LEASED" = "$NEWWORK" ] || fail "claim ignored priority order"
+RECLAIM="$(SELF work claim --worker runner-1 --lease 3 --json | sed -E 's/.*"work":"([^"]+)".*/\1/')"
+[ "$RECLAIM" = "$LEASED" ] || fail "re-claiming under a live lease took a second work unit"
+SELF work heartbeat "$LEASED" --lease 2 --worker runner-1 > /dev/null
+WRONG="$(SELF work heartbeat "$LEASED" --worker runner-2 2>&1 || true)"
+echo "$WRONG" | grep -q "leased by runner-1" || fail "a heartbeat from the wrong worker was accepted"
+sleep 3
+SELF status | grep -q "lease held by runner-1 expired" || fail "an expired lease raised no signal"
+SELF work recover | grep -q "$LEASED" || fail "recovery did not requeue the expired lease"
+SELF work queue | grep -q "$LEASED" || fail "a recovered work unit did not return to the queue"
+SELF work claim --worker runner-2 --json | grep -q "$LEASED" || fail "another worker could not take over recovered work"
+SELF work release "$LEASED" --why "handing it back"
+SELF work queue | grep -q "$LEASED" || fail "releasing did not return the work to the queue"
+
+# the queue survives a restart because it is derived, never stored: every
+# lifecycle answer must come back identical from a cold refold
+QUEUE_BEFORE="$(SELF work queue)"
+SELF fold > /dev/null
+[ "$(SELF work queue)" = "$QUEUE_BEFORE" ] || fail "the queue did not survive a refold"
+
+# ── the aggregated stream ──────────────────────────────────────────────
+STREAM="$(SELF stream)"
+echo "$STREAM" | grep -q "^Needs you" || fail "the stream has no needs-you section"
+echo "$STREAM" | grep -q "^Running" || fail "the stream has no running section"
+echo "$STREAM" | grep -q "^Queued" || fail "the stream has no queued section"
+echo "$STREAM" | grep -q "^Captured ideas" || fail "the stream has no captured-ideas section"
+echo "$STREAM" | grep -q "$LONG" || fail "the long-running work item is missing from the stream"
+SELF stream --json | grep -q '"needsYou"' || fail "the stream has no machine-readable form"
+
+# a console subscribes to the log instead of keeping its own copy of state
+SELF stream --follow --json --for 4 > "$ROOT/follow.ndjson" &
+FOLLOWER=$!
+sleep 1
+LATE="$(SELF capture "a directive submitted while a console is subscribed" | tail -1)"
+wait "$FOLLOWER"
+grep -q "$LATE" "$ROOT/follow.ndjson" || fail "the event subscription missed a capture"
+grep -q '"type":"capture.recorded"' "$ROOT/follow.ndjson" || fail "the subscription did not emit whole events"
+
+# ── completion still needs proof ───────────────────────────────────────
+UNPROVEN="$(SELF work add "work nobody reported on" | tail -1)"
+NOREPORT="$(SELF work done "$UNPROVEN" 2>&1 || true)"
+echo "$NOREPORT" | grep -q "has no report" || fail "work completed with no report at all"
+SELF report "$UNPROVEN" "said it was done" --evidence "000000000000"
+SELF work done "$UNPROVEN"
+SELF work | grep -q "$UNPROVEN" && fail "work with reported evidence could not complete"
+
+# every capture body stays in the store and out of the project repository
+git -C "$ROOT/A/ws/demo" ls-files | grep -q "capture" && fail "a directive leaked into the project repository"
+grep -rq "directive number 7" "$ROOT/A/ws/demo" 2>/dev/null && fail "a directive body was written into the project checkout"
+
 echo "proof OK"

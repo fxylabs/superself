@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
-import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
+import { buildModel, CaptureState, DecisionState, DEFAULT_PRIORITY, isClosed, ProjectModel, queueOrder, WorkState } from "./model.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
 import { evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
@@ -23,7 +23,7 @@ export function foldProject(storeDir: string, slug: string): void
     for (const work of model.works)
     {
         const rel = join("work", `${work.id}.md`);
-        if (work.status === "done")
+        if (isClosed(work))
         {
             rmSync(join(dir, rel), { force: true });
             delete hashes[rel];
@@ -106,7 +106,9 @@ function renderState(model: ProjectModel): string
     section(lines, "Conventions", model.conventions.map((c) => `- ${c.text} _(${c.id})_`));
     section(lines, "Work in progress", model.works.filter((w) => w.status === "active").map(workLine));
     section(lines, "Blocked", model.works.filter((w) => w.status === "blocked").map(blockedLine));
-    section(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- **${w.id}** ${w.outcome}`));
+    section(lines, "Next", queueOrder(model).map(queuedLine));
+    section(lines, "Waiting", model.works.filter((w) => w.waiting !== undefined && !isClosed(w)).map(waitingLine));
+    section(lines, "Captured, not routed yet", capturedLines(model.captures));
     section(lines, "Open questions", model.openQuestions.map((q) => `- ${q}`));
     section(lines, "Health", model.health.map((h) => `- ${h}`));
     return lines.join("\n").replace(/\n+$/, "\n");
@@ -151,6 +153,35 @@ function blockedLine(work: WorkState): string
     return `- **${work.id}** ${work.outcome} — waiting on ${work.blockedOn}${why}`;
 }
 
+function queuedLine(work: WorkState): string
+{
+    const priority = work.priority === DEFAULT_PRIORITY ? "" : ` _(priority ${work.priority})_`;
+    return `- **${work.id}** ${work.outcome}${priority}`;
+}
+
+function waitingLine(work: WorkState): string
+{
+    const why = work.waiting === "approval"
+        ? `approval: ${work.approval?.why}`
+        : `${work.dependsOn.join(", ")}`;
+    return `- **${work.id}** ${work.outcome} — waiting on ${why}`;
+}
+
+// Directives no one has read yet. They belong in canonical state because a
+// capture that only lives in a console is exactly the loss this prevents.
+function capturedLines(captures: CaptureState[]): string[]
+{
+    return captures
+        .filter((capture) => capture.link === undefined)
+        .map((capture) => `- **${capture.id}** ${firstLine(capture.text)} _(${day(capture.ts)})_`);
+}
+
+function firstLine(text: string, max = 160): string
+{
+    const line = text.split("\n", 1)[0];
+    return line.length <= max ? line : line.slice(0, max - 1) + "…";
+}
+
 function renderWork(work: WorkState, verdicts: Record<string, Verdict>): string
 {
     return GENERATED_NOTE + "\n\n" + renderWorkBody(work, verdicts);
@@ -163,6 +194,7 @@ export function renderWorkBody(work: WorkState, verdicts: Record<string, Verdict
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);
     }
+    lines.push(...scheduleLines(work));
     if (work.next !== undefined)
     {
         lines.push(`- Next action: ${work.next}`);
@@ -181,6 +213,15 @@ export function renderWorkBody(work: WorkState, verdicts: Record<string, Verdict
         lines.push(`- Artifacts: ${work.artifacts.map((a) => `${a.id} ${a.name}`).join(", ")}`);
     }
     lines.push("");
+    if (work.additions.length > 0)
+    {
+        lines.push("## Added by later directives", "");
+        for (const note of work.additions)
+        {
+            lines.push(`- ${day(note.ts)} — ${note.text} _(${note.capture})_`);
+        }
+        lines.push("");
+    }
     if (work.reports.length > 0)
     {
         lines.push("## Reports (latest first)", "");
@@ -199,6 +240,31 @@ export function renderWorkBody(work: WorkState, verdicts: Record<string, Verdict
         lines.push("");
     }
     return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+// Everything that decides whether this unit may run right now, and who holds
+// it while it does. Absent lines mean the default: level priority, no waits,
+// no lease.
+function scheduleLines(work: WorkState): string[]
+{
+    const lines: string[] = [];
+    if (work.priority !== DEFAULT_PRIORITY)
+    {
+        lines.push(`- Priority: ${work.priority}`);
+    }
+    if (work.dependsOn.length > 0)
+    {
+        lines.push(`- Depends on: ${work.dependsOn.join(", ")}`);
+    }
+    if (work.approval !== undefined)
+    {
+        lines.push(`- Approval: ${work.approval.granted ? "granted" : "required"} — ${work.approval.why}`);
+    }
+    if (work.lease !== undefined)
+    {
+        lines.push(`- Lease: ${work.lease.worker} until ${work.lease.expires}${work.leaseExpired ? " (expired)" : ""}`);
+    }
+    return lines;
 }
 
 function day(ts: string): string

@@ -29,6 +29,16 @@ export function artifactId(): string
     return "a-" + shortId();
 }
 
+export function captureId(): string
+{
+    return "c-" + shortId();
+}
+
+export function leaseId(): string
+{
+    return "l-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";

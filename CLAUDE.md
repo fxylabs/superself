@@ -11,7 +11,18 @@ command is unavailable.
   after committing — HEAD is attached as evidence automatically.
 - Record decisions the user confirmed: `self decide "<text>" --why "<reason>"`.
   Use `--proposed` when the user has not confirmed. One decision per event.
+- A directive that arrives while you are busy goes to `self capture "<what they said>"`
+  first — it records the words verbatim and returns immediately. Read it later with
+  `self capture link <capture-id> --new "<required outcome>"`, or `--work <id> --as
+  addition|supersession|cancellation|reprioritization|status`. Never drop a directive
+  into your own notes: it is lost the moment the session ends.
+- `self stream` is the one board over everything: needs you, changed, running, queued,
+  captured ideas. Check it before asking the user what to do next.
 - Blocked? `self work block <id> --on decision|dependency|external --why "..."`.
+  Waiting on other work? `self work depend <id> --on <work-id>` — it wakes by itself.
+  About to do something the user must sign off on? `self work approval <id> --why "..."`.
+- Completing a unit needs a report and verification evidence: `self work done` refuses
+  without them unless you state why none exists.
 - Picking up existing work? `self work show <id>` prints its full brief and
   report history. Leave a brief for the next session with `self report <id> --file <path>`.
 - Proposed next work, or suggested continuing in the next session, and the

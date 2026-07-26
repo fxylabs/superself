@@ -1,5 +1,5 @@
 import { eventSummary, readEvents } from "./logfile.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { buildModel, isClosed, ProjectModel, queueOrder, WorkState } from "./model.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { loadVerdicts, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
@@ -31,7 +31,13 @@ export function printContext(ctx: CliContext): void
     pushList(lines, "Conventions", model.conventions.map((c) => `- ${c.text}`));
     pushList(lines, "Work in progress", inProgressLines(model));
     pushList(lines, "Waiting on you", waitingLines(model));
-    pushList(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- ${w.id} ${w.outcome}`));
+    pushList(lines, "Next", queueOrder(model).map((w) => `- ${w.id} ${w.outcome}`));
+    pushList(lines, "Waiting on a dependency", model.works
+        .filter((w) => w.waiting === "dependency")
+        .map((w) => `- ${w.id} ${w.outcome} — after ${w.dependsOn.join(", ")}`));
+    pushList(lines, "Captured, not routed yet", model.captures
+        .filter((capture) => capture.link === undefined)
+        .map((capture) => `- ${capture.id} ${capture.text.split("\n", 1)[0]}`));
     pushList(lines, "Health", model.health.map((h) => `- ${h}`));
     console.log(lines.join("\n").replace(/\n+$/, ""));
 }
@@ -111,6 +117,7 @@ const STATUS_GLYPHS: [string, string][] = [
     ["active", blue("●")],
     ["blocked", red("■")],
     ["next", "○"],
+    ["cancelled", dim("×")],
     ["done", green("✓")]
 ];
 
@@ -156,13 +163,13 @@ function overviewBlock(model: ProjectModel, width: number): string
 function countLine(works: WorkState[]): string
 {
     const count = (status: string): number => works.filter((w) => w.status === status).length;
-    return `${count("active")} active, ${count("blocked")} blocked, ${count("next")} next, ${count("done")} done`;
+    return `${count("active")} active, ${count("blocked")} blocked, ${count("next")} next, ${count("cancelled")} cancelled, ${count("done")} done`;
 }
 
 export function printWorkList(ctx: CliContext & { project: string }): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const open = model.works.filter((w) => w.status !== "done");
+    const open = model.works.filter((w) => !isClosed(w));
     if (open.length === 0)
     {
         console.log("no open work");
@@ -171,10 +178,10 @@ export function printWorkList(ctx: CliContext & { project: string }): void
     {
         console.log(styled ? workLines(work) : plainWorkLine(work));
     }
-    const done = model.works.length - open.length;
-    if (done > 0)
+    const closed = model.works.length - open.length;
+    if (closed > 0)
     {
-        console.log(styled ? `${green("✓")} ${dim(`${done} done — see log`)}` : `(${done} done — see log)`);
+        console.log(styled ? `${green("✓")} ${dim(`${closed} closed — see log`)}` : `(${closed} closed — see log)`);
     }
 }
 

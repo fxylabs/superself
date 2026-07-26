@@ -32,7 +32,10 @@ export function makeEvent(
 
 // The branch is stamped here, not by each verb: every event is made from one
 // checkout, and that is the only place holding it.
-export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string): void
+// Machine callers ask for `quiet` and print their own JSON: the acknowledgement
+// line is for a person watching a terminal, and mixing it into a JSON stream
+// would make the surface unparseable.
+export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, quiet = false): void
 {
     const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
     if (branch !== null)
@@ -43,6 +46,10 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string):
     appendFileSync(join(dir, "log.jsonl"), JSON.stringify(event) + "\n");
     foldProject(ctx.storeDir, event.project);
     commitAll(ctx.storeDir, `${event.type} ${event.project}: ${truncate(summary, 60)}`);
+    if (quiet)
+    {
+        return;
+    }
     console.log(styled
         ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`
         : `${event.type} recorded [${event.id}]`);

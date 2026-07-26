@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { DecisionState, ProjectModel, WorkState } from "./model.js";
+import { CaptureState, DecisionState, ProjectModel, queueOrder, WorkState } from "./model.js";
 import { CliContext, ensureDir, StoreConfig } from "./paths.js";
 import { Verdict } from "./reachability.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
@@ -18,6 +18,7 @@ const CHROME_FILE = ".chrome";
 // slice, and the full record lives on its own page.
 const CAP_WAITING = 10;
 const CAP_NEXT = 5;
+const CAP_CAPTURED = 6;
 const CAP_EVENTS = 5;
 const CAP_DECISIONS = 5;
 const CAP_ARTIFACTS = 4;
@@ -316,7 +317,8 @@ function waitingOf(summary: ProjectSummary): WaitingRow[]
 function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts: Record<string, Verdict>, rail: Rail): string
 {
     const active = model.works.filter((w) => w.status === "active");
-    const next = model.works.filter((w) => w.status === "next");
+    const next = queueOrder(model);
+    const captured = model.captures.filter((capture) => capture.link === undefined);
     const done = model.works.filter((w) => w.status === "done");
     const waiting = waitingRows(model);
     const decisions = decisionOrder(model.decisions);
@@ -332,6 +334,9 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
         panel("NEXT", next.length, "",
             next.length === 0 ? empty("queue is empty") : capped(
                 next.map((w) => nextRow(model.slug, w)), CAP_NEXT, "next work")),
+        panel("CAPTURED IDEAS", captured.length, "",
+            captured.length === 0 ? empty("every directive is routed")
+                : capped(captured.map(capturedRow), CAP_CAPTURED, "capture")),
         panel("DECISIONS", 0, `${model.slug}/decisions.html`,
             decisions.length === 0 ? empty("no decisions yet")
                 : table(decisions.slice(0, CAP_DECISIONS).map(decisionCells)),
@@ -381,10 +386,19 @@ function warnClass(row: WaitingRow): string
     return row.warn === true ? " warn" : "";
 }
 
+// One row per unrouted directive: the raw input, waiting to be read. Ids are
+// shown so the reader can route it with `self capture link <id>`.
+function capturedRow(capture: CaptureState): string
+{
+    return `<tr><td class="n">${esc(capture.id)}</td><td>${esc(firstLine(capture.text))}</td>` +
+        `<td class="r"><time>${day(capture.ts)}</time></td></tr>`;
+}
+
 function workRow(slug: string, work: WorkState, verdicts: Record<string, Verdict>): string
 {
     const latest = work.reports[work.reports.length - 1];
     const sub = [
+        work.lease === undefined ? "" : `leased by ${work.lease.worker}${work.leaseExpired ? " (expired)" : ""}`,
         latest === undefined ? "" : `latest: ${firstLine(latest.text)}`,
         work.evidence.length === 0 ? "" : `evidence ${work.evidence.map((c) => `${c} ${verdicts[c] ?? "unchecked"}`).join(" · ")}`
     ].filter((part) => part !== "").join(" · ");
@@ -1042,6 +1056,7 @@ td.r { text-align: right; width: 78px; }
 .p-done { color: var(--sv-ok); border-color: var(--sv-ok-line); }
 .p-blocked { color: var(--sv-warn); border-color: var(--sv-warn-line); }
 .p-next { color: var(--sv-faint); border-color: var(--sv-border-panel); }
+.p-cancelled { color: var(--sv-faint); border-color: var(--sv-border-panel); text-decoration: line-through; }
 
 .c2-live { font: 9px var(--sv-mono); color: var(--sv-ok); border: 1px solid var(--sv-ok-line);
            border-radius: 4px; padding: 1px 6px; letter-spacing: .1em; }
@@ -1059,6 +1074,7 @@ td.r { text-align: right; width: 78px; }
 .c2-ev .e-report { color: var(--sv-ok); }
 .c2-ev .e-decide { color: var(--sv-accent); }
 .c2-ev .e-work, .c2-ev .e-goal, .c2-ev .e-convention { color: var(--sv-muted); }
+.c2-ev .e-capture { color: var(--sv-accent); }
 
 .dr-side { position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column;
            gap: 16px; padding: 20px 18px; background: var(--sv-bg-side);

@@ -7,15 +7,17 @@ import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
+import { runCapture } from "./intake.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
-import { buildModel, WorkState } from "./model.js";
+import { buildModel, isClosed, WorkState } from "./model.js";
 import {
     CliContext,
     ensureDir,
     isStore,
     LINKS_FILE,
     MARKER_FILE,
+    ProjectContext,
     projectStateDir,
     readLinks,
     readRegistry,
@@ -27,16 +29,27 @@ import {
     StoreConfig
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
+import {
+    approveWork,
+    cancelWork,
+    claimWork,
+    dependWork,
+    heartbeatWork,
+    printQueue,
+    prioritizeWork,
+    recoverWork,
+    releaseWork,
+    requireApproval
+} from "./queue.js";
 import { loadVerdicts } from "./reachability.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
+import { runStream } from "./stream.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
-import { CliError, EventRefs } from "./types.js";
-
-type ProjectContext = CliContext & { project: string; projectDir: string };
+import { CliError, EventRefs, requireText } from "./types.js";
 
 const USAGE = `usage: self <command>
 
@@ -53,10 +66,28 @@ const USAGE = `usage: self <command>
   goal set "<text>"                          set the project goal
   decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
   decide confirm <event-id>                  confirm a proposed decision
+  capture "<directive>" [--source s] [--key k]
+                                             record a directive now; prints its capture id
+  capture list [--all] | show <id>           list unrouted captures, or read one in full
+  capture link <id> --new "<outcome>"        route a capture to a new work unit
+  capture link <id> --work <w> --as addition|supersession|cancellation|reprioritization|status
+  capture drop <id> --why "<reason>"         route a capture to nothing, on purpose
   work                                       list open work
   work add "<required outcome>"              create a work unit
   work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
+                                             (done: needs a report and evidence, or --without-evidence --why w)
+  work queue                                 list ready work, most urgent first
+  work claim [--worker w] [--lease secs]     lease the next ready work unit
+  work heartbeat <id> [--lease secs]         extend a live lease
+  work release <id> [--why w]                hand a leased work unit back to the queue
+  work recover                               requeue every work unit whose lease expired
+  work cancel <id> --why "<reason>"          stop a work unit for good
+  work priority <id> <number>                reorder the queue; lower runs sooner
+  work depend <id> --on <work-id>            wait for another unit; wakes when it is done
+  work approval <id> --why "<what>"          stop this unit at the approval boundary
+  work approve <id>                          give the approval it waits on
+  stream [--since iso] [--follow] [--for s]  one board: needs you, changed, running, queued, captured
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id>        find an artifact or open it with the OS default app
@@ -69,7 +100,10 @@ const USAGE = `usage: self <command>
   setup                                      print the workspace, project, and store this directory resolves to
   log [-n N]                                 print recent events
   search <query> [--type t] [--project p]    grep state across the workspace
-  fold                                       re-derive canonical files from the log`;
+  fold                                       re-derive canonical files from the log
+
+The capture, work-queue, and stream verbs accept --json, so a console or an
+MCP server can drive them without keeping a second copy of this state.`;
 
 async function main(argv: string[]): Promise<void>
 {
@@ -87,6 +121,8 @@ async function main(argv: string[]): Promise<void>
         case "clone": cloneStore(requireText(rest[0], "clone <url> [dir]"), rest[1]); break;
         case "goal": cmdGoal(rest); break;
         case "decide": cmdDecide(rest); break;
+        case "capture": runCapture(requireProject(process.cwd()), rest); break;
+        case "stream": await runStream(requireProject(process.cwd()), rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
         case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
@@ -429,12 +465,33 @@ const TRANSITIONS: Record<string, string> = {
     done: "work.done"
 };
 
+// Scheduling verbs: everything about who holds a work unit, what it waits on,
+// and where it sits in the queue.
+const SCHEDULING: Record<string, (ctx: ProjectContext, args: string[]) => void> = {
+    queue: printQueue,
+    claim: claimWork,
+    heartbeat: heartbeatWork,
+    release: releaseWork,
+    recover: recoverWork,
+    cancel: cancelWork,
+    priority: prioritizeWork,
+    depend: dependWork,
+    approval: requireApproval,
+    approve: approveWork
+};
+
 function cmdWork(rest: string[]): void
 {
     const ctx = requireProject(process.cwd());
     if (rest.length === 0)
     {
         printWorkList(ctx);
+        return;
+    }
+    const scheduling = SCHEDULING[rest[0]];
+    if (scheduling !== undefined)
+    {
+        scheduling(ctx, rest.slice(1));
         return;
     }
     if (rest[0] === "add")
@@ -460,7 +517,7 @@ function cmdWork(rest: string[]): void
     const type = TRANSITIONS[rest[0]];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|start|block|unblock|done`);
+        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|show|start|block|unblock|done|${Object.keys(SCHEDULING).join("|")}`);
     }
     transitionWork(ctx, type, rest.slice(1));
 }
@@ -469,7 +526,7 @@ function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
 {
     const { values, positionals } = parseArgs({
         args,
-        options: { on: { type: "string" }, why: { type: "string" } },
+        options: { on: { type: "string" }, why: { type: "string" }, "without-evidence": { type: "boolean" } },
         allowPositionals: true
     });
     const work = requireOpenWork(ctx, positionals[0]);
@@ -486,7 +543,37 @@ function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
             payload.why = values.why;
         }
     }
+    if (type === "work.done")
+    {
+        requireCompletionProof(work, values["without-evidence"] === true, values.why);
+        if (values["without-evidence"] === true)
+        {
+            payload.withoutEvidence = values.why;
+        }
+    }
     recordEvent(ctx, makeEvent(ctx.project, type, payload), `${work.id} ${work.outcome}`);
+}
+
+// Completion is the one transition a background worker can reach on its own,
+// so it is the one that has to carry proof. A unit with no report says nothing
+// happened; a unit with no commit says nothing is checkable. Work that
+// genuinely produces neither still closes, but it has to say so in writing.
+function requireCompletionProof(work: WorkState, without: boolean, why: string | undefined): void
+{
+    if (work.reports.length === 0)
+    {
+        throw new CliError(`${work.id} has no report — completion needs one: self report ${work.id} "<what was achieved>"`);
+    }
+    if (work.evidence.length > 0)
+    {
+        return;
+    }
+    if (!without)
+    {
+        throw new CliError(`${work.id} has no verification evidence — report a commit (\`self report ${work.id} "…" --evidence <hash>\`)`
+            + `, or close it with \`self work done ${work.id} --without-evidence --why "<why none exists>"\``);
+    }
+    requireText(why, `work done ${work.id} --without-evidence --why "<why no evidence exists>"`);
 }
 
 function cmdReport(rest: string[]): void
@@ -547,9 +634,9 @@ function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
     {
         throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
     }
-    if (work.status === "done")
+    if (isClosed(work))
     {
-        throw new CliError(`${wanted} is already done`);
+        throw new CliError(`${wanted} is already ${work.status}`);
     }
     return work;
 }
@@ -638,15 +725,6 @@ function cmdFold(): void
     foldProject(ctx.storeDir, ctx.project);
     commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
     console.log(`refolded ${ctx.project}`);
-}
-
-function requireText(value: string | undefined, usage: string): string
-{
-    if (value === undefined || value.trim() === "")
-    {
-        throw new CliError(`usage: self ${usage}`);
-    }
-    return value;
 }
 
 try

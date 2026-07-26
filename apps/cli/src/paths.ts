@@ -93,14 +93,16 @@ export function requireWorkspace(cwd: string): CliContext
     return ctx;
 }
 
-export function requireProject(cwd: string): CliContext & { project: string; projectDir: string }
+export type ProjectContext = CliContext & { project: string; projectDir: string };
+
+export function requireProject(cwd: string): ProjectContext
 {
     const ctx = requireWorkspace(cwd);
     if (ctx.project === undefined || ctx.projectDir === undefined)
     {
         throw new CliError(unregisteredMessage(ctx.storeDir, cwd));
     }
-    return ctx as CliContext & { project: string; projectDir: string };
+    return ctx as ProjectContext;
 }
 
 // A worktree of a registered project carries the committed discipline block

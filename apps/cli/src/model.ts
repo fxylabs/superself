@@ -5,6 +5,58 @@ import { ArtifactMeta, SelfEvent } from "./types.js";
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
 
+// Priority orders the queue; lower runs sooner. Everything starts level so
+// that reprioritizing one directive never silently reorders the rest.
+export const DEFAULT_PRIORITY = 100;
+
+// How a captured directive relates to the work it was routed to. "new" mints a
+// unit; the rest attach to one that already exists; "dropped" routes it to
+// nothing on purpose, which is still a routing decision and still recorded.
+export type LinkKind =
+    | "new"
+    | "addition"
+    | "supersession"
+    | "cancellation"
+    | "reprioritization"
+    | "status"
+    | "dropped";
+
+export interface CaptureLink
+{
+    kind: LinkKind;
+    ts: string;
+    work?: string;
+    why?: string;
+}
+
+// The immutable directive as the user submitted it. Interpretation lives in
+// `link`, which is folded from a separate event, so re-reading the raw input
+// is always possible however often the reading of it changes.
+export interface CaptureState
+{
+    id: string;
+    text: string;
+    ts: string;
+    source?: string;
+    key?: string;
+    link?: CaptureLink;
+}
+
+export interface Lease
+{
+    id: string;
+    worker: string;
+    ts: string;
+    expires: string;
+}
+
+export interface CaptureNote
+{
+    ts: string;
+    capture: string;
+    text: string;
+}
+
 export interface DecisionState
 {
     id: string;
@@ -38,7 +90,7 @@ export interface WorkState
     outcome: string;
     ts: string;
     lastEventTs: string;
-    status: "next" | "active" | "blocked" | "done";
+    status: "next" | "active" | "blocked" | "done" | "cancelled";
     blockedOn?: string;
     blockedWhy?: string;
     reports: ReportEntry[];
@@ -49,6 +101,37 @@ export interface WorkState
     // several units.
     branches: string[];
     next?: string;
+    priority: number;
+    // Work units that must be done before this one may be leased.
+    dependsOn: string[];
+    approval?: { why: string; granted: boolean };
+    lease?: Lease;
+    // Later directives that widened this unit, and requests for its status,
+    // each pointing back at the capture that carried them.
+    additions: CaptureNote[];
+    statusRequests: CaptureNote[];
+    // Derived below from dependencies, approval, and the clock: never stored,
+    // so a dependency finishing wakes its dependents with no extra event and a
+    // restart re-reads the same answer.
+    waiting?: "dependency" | "approval";
+    ready: boolean;
+    leaseExpired: boolean;
+}
+
+// Work that no longer belongs to any queue: finished, or cancelled by a
+// directive that overtook it.
+export function isClosed(work: WorkState): boolean
+{
+    return work.status === "done" || work.status === "cancelled";
+}
+
+// Ready work, most urgent first: priority decides, and among equals the
+// directive that arrived first runs first, so a busy queue stays fair.
+export function queueOrder(model: ProjectModel): WorkState[]
+{
+    return model.works
+        .filter((work) => work.ready)
+        .sort((a, b) => a.priority - b.priority || a.ts.localeCompare(b.ts));
 }
 
 export interface ProjectModel
@@ -59,6 +142,7 @@ export interface ProjectModel
     decisions: DecisionState[];
     conventions: { id: string; ts: string; text: string }[];
     works: WorkState[];
+    captures: CaptureState[];
     openQuestions: string[];
     health: string[];
 }
@@ -72,6 +156,7 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         decisions: [],
         conventions: [],
         works: [],
+        captures: [],
         openQuestions: [],
         health: []
     };
@@ -98,6 +183,11 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (event.type.startsWith("work."))
     {
         applyWork(model, event);
+        return;
+    }
+    if (event.type.startsWith("capture."))
+    {
+        applyCapture(model, event);
         return;
     }
     if (event.type === "report.added")
@@ -196,17 +286,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
 {
     if (event.type === "work.created")
     {
-        model.works.push({
-            id: String(event.payload.work),
-            outcome: String(event.payload.outcome),
-            ts: event.ts,
-            lastEventTs: event.ts,
-            status: "next",
-            reports: [],
-            evidence: [],
-            artifacts: [],
-            branches: branchOf(event)
-        });
+        model.works.push(newWork(event));
         return;
     }
     const work = model.works.find((item) => item.id === event.payload.work);
@@ -231,6 +311,134 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     if (event.type === "work.done")
     {
         work.status = "done";
+        work.lease = undefined;
+    }
+    applySchedule(work, event);
+}
+
+function newWork(event: SelfEvent): WorkState
+{
+    return {
+        id: String(event.payload.work),
+        outcome: String(event.payload.outcome),
+        ts: event.ts,
+        lastEventTs: event.ts,
+        status: "next",
+        reports: [],
+        evidence: [],
+        artifacts: [],
+        branches: branchOf(event),
+        priority: DEFAULT_PRIORITY,
+        dependsOn: [],
+        additions: [],
+        statusRequests: [],
+        ready: false,
+        leaseExpired: false
+    };
+}
+
+// The scheduling half of a work unit's life: who holds it, what it waits on,
+// and where it sits in the queue.
+function applySchedule(work: WorkState, event: SelfEvent): void
+{
+    if (event.type === "work.leased")
+    {
+        work.status = "active";
+        work.lease = {
+            id: String(event.payload.lease),
+            worker: String(event.payload.worker),
+            ts: event.ts,
+            expires: String(event.payload.expires)
+        };
+    }
+    if (event.type === "work.heartbeat" && work.lease !== undefined)
+    {
+        work.lease.expires = String(event.payload.expires);
+    }
+    if (event.type === "work.released")
+    {
+        work.status = "next";
+        work.lease = undefined;
+    }
+    if (event.type === "work.cancelled")
+    {
+        work.status = "cancelled";
+        work.lease = undefined;
+    }
+    applyWaits(work, event);
+}
+
+function applyWaits(work: WorkState, event: SelfEvent): void
+{
+    if (event.type === "work.prioritized")
+    {
+        work.priority = Number(event.payload.priority);
+    }
+    if (event.type === "work.depends")
+    {
+        const on = Array.isArray(event.payload.on) ? event.payload.on.map(String) : [];
+        work.dependsOn.push(...on.filter((id) => !work.dependsOn.includes(id)));
+    }
+    if (event.type === "work.approval.required")
+    {
+        work.approval = { why: String(event.payload.why), granted: false };
+    }
+    if (event.type === "work.approved" && work.approval !== undefined)
+    {
+        work.approval.granted = true;
+    }
+    if (event.type === "work.outcome.changed")
+    {
+        work.outcome = String(event.payload.outcome);
+    }
+}
+
+function applyCapture(model: ProjectModel, event: SelfEvent): void
+{
+    if (event.type === "capture.recorded")
+    {
+        model.captures.push({
+            id: String(event.payload.capture),
+            text: String(event.payload.text),
+            ts: event.ts,
+            source: event.payload.source === undefined ? undefined : String(event.payload.source),
+            key: event.payload.key === undefined ? undefined : String(event.payload.key)
+        });
+        return;
+    }
+    const capture = model.captures.find((item) => item.id === event.payload.capture);
+    if (capture === undefined || event.type !== "capture.linked")
+    {
+        return;
+    }
+    const link: CaptureLink = {
+        kind: event.payload.as as LinkKind,
+        ts: event.ts,
+        work: event.refs?.work,
+        why: event.payload.why === undefined ? undefined : String(event.payload.why)
+    };
+    capture.link = link;
+    noteOnWork(model, capture, link);
+}
+
+// An addition and a status request change nothing about the unit's lifecycle;
+// they are the relation itself, so the fold reads them off the capture rather
+// than duplicating the text into another event.
+function noteOnWork(model: ProjectModel, capture: CaptureState, link: CaptureLink): void
+{
+    const work = model.works.find((item) => item.id === link.work);
+    if (work === undefined)
+    {
+        return;
+    }
+    const note: CaptureNote = { ts: link.ts, capture: capture.id, text: capture.text };
+    if (link.kind === "addition")
+    {
+        work.additions.push(note);
+    }
+    if (link.kind === "status")
+    {
+        work.statusRequests.push(note);
     }
 }
 
@@ -263,18 +471,72 @@ function deriveSignals(model: ProjectModel, now: Date): void
             decision.expired = true;
         }
     }
+    deriveQueue(model, now);
     for (const work of model.works)
     {
         if (work.status === "blocked" && work.blockedOn === "decision")
         {
             model.openQuestions.push(`${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`);
         }
-        if (work.status === "active" && ageDays(work.lastEventTs, now) > STALL_DAYS)
+        if (work.status === "active" && !work.leaseExpired && ageDays(work.lastEventTs, now) > STALL_DAYS)
         {
             const days = Math.floor(ageDays(work.lastEventTs, now));
             model.health.push(`${work.id} looks stalled — no events for ${days} days`);
         }
+        askedOf(work, model);
     }
+}
+
+// Eligibility is recomputed from the log and the clock on every read, so a
+// dependency reaching done wakes its dependents without an event of their own
+// and a restarted process reaches the same answer as the one that died.
+function deriveQueue(model: ProjectModel, now: Date): void
+{
+    const done = new Set(model.works.filter((work) => work.status === "done").map((work) => work.id));
+    for (const work of model.works)
+    {
+        work.leaseExpired = work.status === "active"
+            && work.lease !== undefined
+            && new Date(work.lease.expires).getTime() <= now.getTime();
+        work.waiting = waitingReason(work, done);
+        work.ready = work.status === "next" && work.waiting === undefined;
+        if (work.leaseExpired && work.lease !== undefined)
+        {
+            model.health.push(`${work.id} lease held by ${work.lease.worker} expired — run \`self work recover\` to requeue it`);
+        }
+        if (work.waiting === "approval" && work.approval !== undefined)
+        {
+            model.openQuestions.push(`${work.id} needs your approval: ${work.approval.why}`);
+        }
+    }
+}
+
+function waitingReason(work: WorkState, done: Set<string>): "dependency" | "approval" | undefined
+{
+    if (work.approval !== undefined && !work.approval.granted)
+    {
+        return "approval";
+    }
+    return work.dependsOn.some((id) => !done.has(id)) ? "dependency" : undefined;
+}
+
+// A status request stays open until a report lands after it was asked: the
+// answer to "where is this" is a report, not an acknowledgement.
+function askedOf(work: WorkState, model: ProjectModel): void
+{
+    for (const request of work.statusRequests)
+    {
+        if (!work.reports.some((report) => report.ts > request.ts))
+        {
+            model.openQuestions.push(`${work.id} was asked for status: ${firstLine(request.text)}`);
+        }
+    }
+}
+
+function firstLine(text: string): string
+{
+    const line = text.split("\n", 1)[0];
+    return line.length <= 120 ? line : line.slice(0, 119) + "…";
 }
 
 function ageDays(ts: string, now: Date): number

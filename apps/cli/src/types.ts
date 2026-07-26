@@ -10,6 +10,8 @@ export interface EventRefs
     confirms?: string;
     supersedes?: string[];
     work?: string;
+    // The captured directive an interpretation or lifecycle event came out of.
+    capture?: string;
     commits?: string[];
     artifacts?: string[];
     // The branch the command ran on. History ("this happened here"), never a
@@ -45,4 +47,13 @@ export interface RegistryEntry
 
 export class CliError extends Error
 {
+}
+
+export function requireText(value: string | undefined, usage: string): string
+{
+    if (value === undefined || value.trim() === "")
+    {
+        throw new CliError(`usage: self ${usage}`);
+    }
+    return value;
 }
