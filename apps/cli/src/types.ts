@@ -12,6 +12,9 @@ export interface EventRefs
     work?: string;
     commits?: string[];
     artifacts?: string[];
+    // The branch the command ran on. History ("this happened here"), never a
+    // live pointer: branches get renamed, deleted, and reused.
+    branch?: string;
 }
 
 export interface SelfEvent

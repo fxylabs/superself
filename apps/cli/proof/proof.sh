@@ -231,6 +231,24 @@ grep -q "worktree folds refresh the active checkout" "$ROOT/A/ws/demo-wt/CLAUDE.
 grep -q "worktree folds refresh the active checkout" "$ROOT/A/ws/demo/CLAUDE.md" && fail "fold wrote into a checkout it was not run from"
 cd "$ROOT/A/ws/demo"
 
+# events record the branch they were made on, and one work unit collects every
+# branch it ran on — the relation is derived, never an asserted field
+cd "$ROOT/A/ws/demo"
+git checkout -q -b branch-one
+WID3="$(SELF work add "one unit, two branches" | tail -1)"
+SELF work start "$WID3"
+SELF report "$WID3" "worked here first"
+git checkout -q -b branch-two
+SELF report "$WID3" "continued here"
+WORK3="$ROOT/A/ws/.superself/projects/demo/work/$WID3.md"
+grep -q '"branch":"branch-one"' "$LOG_A" || fail "event did not record the branch it was made on"
+grep -q "Branches: branch-one, branch-two" "$WORK3" || fail "work unit did not collect both of its branches"
+git checkout -q --detach
+SELF report "$WID3" "detached head"
+grep -q '"branch":"HEAD"' "$LOG_A" && fail "a detached HEAD was recorded as a branch name"
+grep -q "Branches: branch-one, branch-two$" "$WORK3" || fail "detached HEAD added a branch to the work unit"
+git checkout -q main
+
 # a proposal never displaces a confirmed decision; confirming it does
 cd "$ROOT/A/ws/demo"
 SELF decide "old rule stands" --why "integrity check"
