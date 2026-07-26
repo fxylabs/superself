@@ -30,6 +30,8 @@ command is unavailable.
 - Substantive work attaches to a work unit: `self work add "<required outcome>"`,
   then `self work start <id>`. Report progress with `self report <id> "<summary>"`
   after committing — HEAD is attached as evidence automatically.
+- Or record state in the commit itself with final trailers: `Report: <work-id> <summary>`
+  and `Decide: <text>`. Trailer decisions are always proposals until confirmed.
 - Record decisions the user confirmed: `self decide "<text>" --why "<reason>"`.
   Use `--proposed` when the user has not confirmed. One decision per event.
 - Blocked? `self work block <id> --on decision|dependency|external --why "..."`.

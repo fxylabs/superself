@@ -7,6 +7,12 @@ CLI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
+# Installed hooks resolve the published command by name. The proof exposes the
+# just-built package exactly that way without reaching any real installation.
+mkdir -p "$ROOT/bin"
+ln -s "$CLI_DIR/bin/self.mjs" "$ROOT/bin/self"
+export PATH="$ROOT/bin:$PATH"
+
 SELF()
 {
     node "$CLI_DIR/bin/self.mjs" "$@"
@@ -44,10 +50,54 @@ grep -q "ask the user once" "$ROOT/A/home/.claude/CLAUDE.md" || fail "machine bl
 grep -q "$ROOT/A/ws" "$ROOT/A/config/superself/machine.json" || fail "init did not record the machine workspace"
 cd "$ROOT/A/ws/demo"
 git init -q
+# Project registration must preserve a hook another tool already owns.
+printf '#!/bin/sh\nprintf "ran\\n" >> "%s"\n' "$ROOT/existing-hook.log" > .git/hooks/post-commit
+chmod +x .git/hooks/post-commit
 SELF project add --name demo --desc "sync proof project"
 grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
+grep -q "Report: <work-id> <summary>" CLAUDE.md || fail "managed block did not teach commit trailers"
+[ -x .git/hooks/post-commit ] || fail "project add did not install an executable post-commit hook"
+grep -q "superself:post-commit" .git/hooks/post-commit || fail "installed post-commit hook is not managed"
 SELF goal set "prove two-machine sync"
 WID=$(SELF work add "events from both machines merge cleanly" | tail -1)
+
+# A final commit trailer block records one report and one unconfirmed proposal,
+# each carrying HEAD and branch. Re-running and a no-change amend stay exact-once.
+printf 'stateful commit\n\nReport: %s trailer report harvested\nDecide: trailer decisions stay proposed\nSigned-off-by: Proof A <proof-A@superself.local>\n' "$WID" > "$ROOT/trailer-message"
+echo trailer > trailer.txt
+git add trailer.txt
+git commit -q -F "$ROOT/trailer-message"
+TRAILER_HEAD="$(git rev-parse --short=12 HEAD)"
+LOG_A="$ROOT/A/ws/.superself/projects/demo/log.jsonl"
+[ "$(grep -c '"kind":"commit-trailer"' "$LOG_A")" -eq 2 ] || fail "commit trailers did not produce exactly two events"
+grep -q '"type":"report.added".*"confirmed":false.*"text":"trailer report harvested".*"work":"'"$WID"'".*"commits":\["'"$TRAILER_HEAD"'"\]' "$LOG_A" || fail "Report trailer event lost its semantics or commit evidence"
+grep -q '"type":"decision.proposed".*"confirmed":false.*"text":"trailer decisions stay proposed".*"commits":\["'"$TRAILER_HEAD"'"\]' "$LOG_A" || fail "Decide trailer was not an unconfirmed proposal with evidence"
+grep -q '"branch":"master"' "$LOG_A" || grep -q '"branch":"main"' "$LOG_A" || fail "trailer event did not record its branch"
+[ "$(wc -l < "$ROOT/existing-hook.log")" -eq 1 ] || fail "the existing post-commit hook was not chained exactly once"
+
+SELF harvest | grep -q "already harvested" || fail "manual harvesting did not report the idempotent no-op"
+[ "$(grep -c '"kind":"commit-trailer"' "$LOG_A")" -eq 2 ] || fail "manual harvesting duplicated trailer events"
+# HEAD auto-evidence from a regular report coexists without duplicating the
+# work's aggregate evidence entry.
+SELF report "$WID" "manual report on the same commit"
+WORK_A="$ROOT/A/ws/.superself/projects/demo/work/$WID.md"
+[ "$(grep '^- Evidence:' "$WORK_A" | grep -o "$TRAILER_HEAD" | wc -l)" -eq 1 ] || fail "report and trailer paths duplicated aggregate evidence"
+
+git commit -q --amend --no-edit
+[ "$(grep -c '"kind":"commit-trailer"' "$LOG_A")" -eq 2 ] || fail "amending duplicated trailer events"
+
+# A colon-bearing subject is not a trailer, and neither a missing installation
+# nor a harvesting error can make a commit fail.
+BEFORE_EVENTS="$(wc -l < "$LOG_A")"
+git commit -q --allow-empty -m "Decide: this is only a subject"
+[ "$(wc -l < "$LOG_A")" -eq "$BEFORE_EVENTS" ] || fail "a commit subject was harvested as a trailer"
+PATH=/usr/bin:/bin git commit -q --allow-empty -m "commit without superself on PATH"
+mkdir -p "$ROOT/no-workspace-config"
+XDG_CONFIG_HOME="$ROOT/no-workspace-config" git commit -q --allow-empty -m "commit without a workspace pointer"
+printf 'invalid trailer commit\n\nReport: w-missing cannot resolve\n' > "$ROOT/invalid-trailer-message"
+git commit -q --allow-empty -F "$ROOT/invalid-trailer-message" || fail "a harvesting error blocked the code commit"
+[ "$(wc -l < "$LOG_A")" -eq "$BEFORE_EVENTS" ] || fail "an invalid trailer partially changed state"
+
 cd "$ROOT/A/ws"
 SELF remote add "$ROOT/remote.git"
 SELF sync
@@ -65,6 +115,7 @@ cd "$ROOT/B/ws/demo"
 git init -q
 SELF project link demo
 [ -f .self ] || fail "project link did not restore the marker"
+[ -x .git/hooks/post-commit ] || fail "project link did not restore the post-commit hook"
 grep -q "workspace" .self && fail "marker carried a machine path"
 SELF context | grep -q "prove two-machine sync" || fail "context not derivable on machine B"
 

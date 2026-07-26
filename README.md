@@ -60,6 +60,11 @@ sits next to git:
 - canonical files are generated output — hand edits are detected as drift and
   overwritten with a warning; reports attach to work units and auto-reference
   the project's HEAD commit as evidence;
+- project registration installs a non-blocking `post-commit` hook. A final
+  trailer block can contain `Report: <work-id> <summary>` or `Decide: <text>`;
+  reports attach the commit automatically, while decisions stay proposed until
+  a person confirms them. Existing hooks are chained, and `self harvest` safely
+  retries HEAD without duplicating events;
 - `self project add` renders an agent-onboarding block into `AGENTS.md` and
   `CLAUDE.md` — the instruction files agent tools already read — so any
   terminal agent learns the protocol and current conventions; the block

@@ -18,6 +18,16 @@ export function git(cwd: string, ...args: string[]): { ok: boolean; out: string;
     };
 }
 
+export function gitInput(cwd: string, input: string, ...args: string[]): { ok: boolean; out: string; err: string }
+{
+    const result = spawnSync("git", args, { cwd, input, encoding: "utf8" });
+    return {
+        ok: result.status === 0,
+        out: (result.stdout ?? "").trim(),
+        err: (result.stderr ?? "").trim()
+    };
+}
+
 export function configureStoreIdentity(storeDir: string): void
 {
     git(storeDir, "config", "user.name", "superself");

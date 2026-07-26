@@ -34,6 +34,21 @@ Every verb appends an event to an append-only log inside the workspace store
 project state, work briefs, HTML views — are derived from the log by `self
 fold` and never hand-edited.
 
+## Record state while committing
+
+`self project add`, `self project link`, and `self connect` install or refresh
+a non-blocking `post-commit` hook. Put state assertions in the commit's final
+trailer block:
+
+```text
+Report: w-xxxxx email verification remains
+Decide: sessions should use JWT rather than cookies
+```
+
+Reports attach the new commit as evidence. Decisions harvested from commits
+are proposals until a person confirms them. Existing hooks still run, a clone
+without `self` commits normally, and `self harvest` can retry HEAD safely.
+
 ## What agents get
 
 `self context` prints the project's current truth — goal, active decisions,
