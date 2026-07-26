@@ -194,9 +194,51 @@ SELF report "$WID2" "evidence in all states" --evidence "$MERGED" --evidence "$L
 WORK2="$ROOT/A/ws/.superself/projects/demo/work/$WID2.md"
 grep -q "$MERGED (settled)" "$WORK2" || fail "merged evidence not settled"
 grep -q "$LIVE (provisional)" "$WORK2" || fail "live-branch evidence not provisional"
-grep -q "$DOOMED (abandoned)" "$WORK2" || fail "discarded-branch evidence not abandoned"
+grep -q "$DOOMED (unknown)" "$WORK2" || fail "a hash handed in from elsewhere was judged instead of left unknown"
 grep -q "000000000000 (unverifiable)" "$WORK2" || fail "unknown hash not unverifiable"
-SELF status | grep -q "discarded with its branch" || fail "abandoned evidence raised no health signal"
+
+# a squash-merged branch, deleted as GitHub deletes it, must never read as
+# abandoned: the merge rewrote the commit, so unreachable says nothing
+git checkout -q -b squashed
+echo squash > squashed.txt && git add . && git commit -qm "work to squash"
+WSQ="$(SELF work add "squash merge classification" | tail -1)"
+SELF work start "$WSQ"
+SELF report "$WSQ" "done on the squash branch"
+SQUASHED="$(git rev-parse --short=12 HEAD)"
+git checkout -q main
+git merge -q --squash squashed && git commit -qm "squash PR"
+git branch -q -D squashed
+SELF fold > /dev/null
+WORKSQ="$ROOT/A/ws/.superself/projects/demo/work/$WSQ.md"
+grep -q "$SQUASHED (unknown)" "$WORKSQ" || fail "squash-merged evidence did not read as unknown"
+SELF status | grep -q "abandoned" && fail "a squash-merged branch raised an abandonment signal"
+
+# a branch that still exists and was reset off its own commit is the one case
+# that is genuinely discarded
+git checkout -q -b reset-away
+echo gone > gone.txt && git add . && git commit -qm "work to discard"
+WRS="$(SELF work add "reset-away classification" | tail -1)"
+SELF work start "$WRS"
+SELF report "$WRS" "reported from the branch that will be reset"
+RESET="$(git rev-parse --short=12 HEAD)"
+git reset -q --hard HEAD~1
+SELF fold > /dev/null
+WORKRS="$ROOT/A/ws/.superself/projects/demo/work/$WRS.md"
+grep -q "$RESET (abandoned)" "$WORKRS" || fail "a branch reset off its own commit did not read as abandoned"
+SELF status | grep -q "was reset away on its branch" || fail "genuinely abandoned evidence raised no health signal"
+git checkout -q main
+
+# with no default branch in the checkout, nothing may be called merged
+mkdir -p "$ROOT/nodefault/app"
+cd "$ROOT/nodefault/app"
+git init -q -b topic
+echo x > x.txt && git add . && git commit -qm "only branch here"
+SELF project add --name nodefault --no-connect > /dev/null
+WND="$(SELF work add "no default branch" | tail -1)"
+SELF work start "$WND"
+SELF report "$WND" "reported with no main or master present"
+grep -q "(settled)" "$ROOT/A/ws/.superself/projects/nodefault/work/$WND.md" && fail "unmerged work settled because HEAD stood in for a default branch"
+cd "$ROOT/A/ws/demo"
 
 # the unlinked machine skips the recheck and keeps the synced verdicts
 cd "$ROOT/A/ws" && SELF sync
@@ -205,7 +247,7 @@ cd "$ROOT/B/ws"
 rm "$ROOT/B/ws/demo/.self" "$ROOT/B/ws/.superself/links.jsonl"
 SELF sync
 grep -q '"'"$MERGED"'": "settled"' "$ROOT/B/ws/.superself/projects/demo/evidence.json" || fail "verdicts did not sync"
-grep -q "$DOOMED (abandoned)" "$ROOT/B/ws/.superself/projects/demo/work/$WID2.md" || fail "unlinked refold dropped a synced verdict"
+grep -q "$DOOMED (unknown)" "$ROOT/B/ws/.superself/projects/demo/work/$WID2.md" || fail "unlinked refold dropped a synced verdict"
 machine A
 
 # a worktree of a registered project is guided to link, never to a duplicate add

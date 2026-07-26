@@ -631,6 +631,7 @@ h2 { font: 600 11px var(--mono); letter-spacing: .18em; text-transform: uppercas
         background: var(--seal); }
 .hash b { font-weight: 500; color: var(--ink); }
 .hash.v-provisional::before { background: var(--ink-soft); }
+.hash.v-unknown::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-soft); }
 .hash.v-abandoned::before, .hash.v-unverifiable::before { background: var(--note); }
 .st { display: inline-block; font: 600 10.5px var(--mono); letter-spacing: .1em;
       text-transform: uppercase; padding: .05rem .55rem; border-radius: 999px;
