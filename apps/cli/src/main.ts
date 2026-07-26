@@ -42,7 +42,7 @@ const USAGE = `usage: self <command>
 
   init [--lang <code>] [--agents]             initialize the current directory as a workspace
   workspace [<path>]                         show or set the workspace this machine uses
-  lang [<code>]                              show or set the language of the HTML views
+  lang [<code>]                              show or set the workspace language for human-facing outputs
   theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
@@ -145,7 +145,7 @@ async function cmdInit(rest: string[]): Promise<void>
     excludeLocally(cwd, STORE_DIR + "/");
     commitAll(storeDir, "self init");
     setMachineWorkspace(cwd);
-    console.log(`workspace initialized at ${storeDir} (views in "${lang}")`);
+    console.log(`workspace initialized at ${storeDir} (language "${lang}")`);
     if (values.agents === true || await askAgents())
     {
         connectMachineAgents();
@@ -200,7 +200,7 @@ async function askLang(): Promise<string>
         return "en";
     }
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question("language for the HTML views (en, ko, …) [en]: ");
+    const answer = await rl.question("workspace language for human-facing documents and artifacts (en, ko, …) [en]: ");
     rl.close();
     return answer.trim() === "" ? "en" : answer.trim();
 }
@@ -225,7 +225,7 @@ function cmdLang(rest: string[]): void
     }
     const lang = validLang(rest[0]);
     writeConfig(ctx, { lang }, `lang set ${lang}`);
-    console.log(`views now render in "${lang}"`);
+    console.log(`workspace language is now "${lang}"`);
 }
 
 function cmdTheme(rest: string[]): void
@@ -241,8 +241,8 @@ function cmdTheme(rest: string[]): void
     console.log(`views now render with the "${theme}" accent`);
 }
 
-// A view setting reaches every page only through a refold, so writing the
-// config and re-rendering every project is one step.
+// Workspace settings reach rendered pages and managed agent blocks through a
+// refold, so writing config and re-folding every project is one step.
 function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
 {
     const config = { ...readStoreConfig(ctx.storeDir), ...patch };
@@ -301,7 +301,8 @@ function projectAdd(args: string[]): void
     console.log(`project "${slug}" registered`);
     if (values["no-connect"] !== true)
     {
-        const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()));
+        const lang = readStoreConfig(ctx.storeDir).lang ?? "en";
+        const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()), lang);
         console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
     }
 }
@@ -628,7 +629,8 @@ function cmdConnect(rest: string[]): void
     }
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const files = connectProject(ctx.projectDir, model);
+    const lang = readStoreConfig(ctx.storeDir).lang ?? "en";
+    const files = connectProject(ctx.projectDir, model, lang);
     console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
 }
 

@@ -57,7 +57,7 @@ function workspaceLines(workspaceDir: string | null): string[]
         row("workspace", workspaceDir),
         row("store", `${storeDir} (${storeState(storeDir)})`),
         row("pointer", machineConfigPath()),
-        row("views", readStoreConfig(storeDir).lang ?? "en"),
+        row("language", `${readStoreConfig(storeDir).lang ?? "en"} — human-facing documents and artifacts; records stay English`),
         ...registry.map((entry, index) => row(index === 0 ? "projects" : "", projectLine(storeDir, entry.slug)))
     ];
 }

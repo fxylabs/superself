@@ -103,6 +103,10 @@ git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked
 cd "$ROOT/A/ws" && SELF lang ko > /dev/null
 grep -q 'lang="ko"' "$VIEW_A/workspace.html" || fail "lang ko not recorded in view metadata"
 grep -q "WAITING ON YOU" "$VIEW_A/workspace.html" || fail "labels did not stay English-base under lang ko"
+cd "$ROOT/A/ws/demo"
+SELF context | grep -q "Language: ko — human-facing documents and artifacts; records stay English" || fail "workspace language missing from agent context"
+grep -q "Language: ko — human-facing documents and artifacts; records stay English" CLAUDE.md || fail "self lang did not refresh the managed block"
+cd "$ROOT/A/ws"
 git -C "$ROOT/A/ws/.superself" ls-files | grep -q "links.jsonl" && fail "links.jsonl leaked into store history"
 
 # a machine-local theme.css restyles every page at the next fold and never syncs
@@ -159,6 +163,7 @@ echo "$SETUP" | grep -q "^project    demo" || fail "setup did not name the proje
 echo "$SETUP" | grep -q "^workspace .*/A/ws$" || fail "setup did not name the workspace"
 echo "$SETUP" | grep -q "^store .*commits" || fail "setup did not describe the store"
 echo "$SETUP" | grep -q "^pointer .*machine.json$" || fail "setup did not name the machine pointer"
+echo "$SETUP" | grep -q "^language  *ko — human-facing documents and artifacts; records stay English$" || fail "setup did not describe the workspace language"
 
 # artifacts: ingested at report time, listed and searched from the derived registry
 cd "$ROOT/A/ws/demo"

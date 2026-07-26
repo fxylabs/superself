@@ -16,12 +16,12 @@ const MACHINE_TARGETS = [
     [".gemini", "GEMINI.md"]
 ];
 
-export function connectProject(projectDir: string, model: ProjectModel): string[]
+export function connectProject(projectDir: string, model: ProjectModel, lang: string): string[]
 {
     const written: string[] = [];
     for (const name of TARGETS)
     {
-        upsertBlock(join(projectDir, name), renderBlock(model), true, BEGIN, END);
+        upsertBlock(join(projectDir, name), renderBlock(model, lang), true, BEGIN, END);
         written.push(name);
     }
     return written;
@@ -48,14 +48,14 @@ export function machineBlock(): string
     return renderMachineBlock();
 }
 
-export function refreshBlocks(projectDir: string, model: ProjectModel): void
+export function refreshBlocks(projectDir: string, model: ProjectModel, lang: string): void
 {
     for (const name of TARGETS)
     {
         const file = join(projectDir, name);
         if (existsSync(file) && readFileSync(file, "utf8").includes(BEGIN))
         {
-            upsertBlock(file, renderBlock(model), false, BEGIN, END);
+            upsertBlock(file, renderBlock(model, lang), false, BEGIN, END);
         }
     }
 }
@@ -103,7 +103,7 @@ function renderMachineBlock(): string
     ].join("\n");
 }
 
-function renderBlock(model: ProjectModel): string
+function renderBlock(model: ProjectModel, lang: string): string
 {
     const lines: string[] = [
         BEGIN,
@@ -114,6 +114,7 @@ function renderBlock(model: ProjectModel): string
         "command is unavailable.",
         "",
         "- Session start: run `self context` and treat its output as current truth.",
+        `- Language: ${lang} — human-facing documents and artifacts; records stay English.`,
         "- Substantive work attaches to a work unit: `self work add \"<required outcome>\"`,",
         "  then `self work start <id>`. Report progress with `self report <id> \"<summary>\"`",
         "  after committing — HEAD is attached as evidence automatically.",

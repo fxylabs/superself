@@ -78,9 +78,10 @@ sits next to git:
   one project in detail, any work unit's full report history, and a full page
   of decisions, events, and artifacts each — rendered at fold time as
   self-contained files that auto-refresh in the browser, so an open tab tracks
-  state with no server; `self init` asks for the language the views render in
-  (`self lang` changes it later) and `self theme` picks the accent, while the
-  recorded state keeps whatever language your workspace conventions choose.
+  state with no server; `self init` records the workspace language agents use
+  for human-facing documents and artifacts (`self lang` changes it later and
+  refreshes their managed blocks), while view chrome and state records stay in
+  English; `self theme` picks the viewer accent.
 
 The CLI is the first application shell. A read-only viewer is a later, optional
 layer — never a required surface.

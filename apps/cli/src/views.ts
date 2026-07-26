@@ -1,6 +1,6 @@
 import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
-import { CliContext, readRegistry } from "./paths.js";
+import { CliContext, readRegistry, readStoreConfig } from "./paths.js";
 import { loadVerdicts, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
 
@@ -15,13 +15,15 @@ function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 
 export function printContext(ctx: CliContext): void
 {
+    const language = languageLine(ctx.storeDir);
     if (ctx.project === undefined)
     {
+        console.log(language + "\n");
         printWorkspaceOverview(ctx);
         return;
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
-    const lines: string[] = [`# ${model.slug}`, ""];
+    const lines: string[] = [`# ${model.slug}`, "", language, ""];
     if (model.description !== undefined)
     {
         lines.push(model.description, "");
@@ -34,6 +36,12 @@ export function printContext(ctx: CliContext): void
     pushList(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- ${w.id} ${w.outcome}`));
     pushList(lines, "Health", model.health.map((h) => `- ${h}`));
     console.log(lines.join("\n").replace(/\n+$/, ""));
+}
+
+function languageLine(storeDir: string): string
+{
+    const lang = readStoreConfig(storeDir).lang ?? "en";
+    return `Language: ${lang} — human-facing documents and artifacts; records stay English`;
 }
 
 function inProgressLines(model: ProjectModel): string[]
