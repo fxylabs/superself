@@ -42,12 +42,25 @@ SELF init --agents
 grep -q "superself:machine:begin" "$ROOT/A/home/.claude/CLAUDE.md" || fail "init did not tell this machine's agents about self"
 grep -q "ask the user once" "$ROOT/A/home/.claude/CLAUDE.md" || fail "machine block does not forbid registering on its own"
 grep -q "$ROOT/A/ws" "$ROOT/A/config/superself/machine.json" || fail "init did not record the machine workspace"
+# Stores created before workspace language was recorded have no lang field;
+# every agent-facing surface must still receive the stable English default.
+echo '{}' > "$ROOT/A/ws/.superself/config.json"
 cd "$ROOT/A/ws/demo"
 git init -q
 SELF project add --name demo --desc "sync proof project"
 grep -q "superself:begin" CLAUDE.md || fail "project add did not render the managed block"
+SELF context | grep -q "Language: en — human-facing documents and artifacts; records stay English" || fail "context did not default a missing workspace language to en"
+grep -q "Language: en — human-facing documents and artifacts; records stay English" CLAUDE.md || fail "managed block did not default a missing workspace language to en"
+SELF lang en > /dev/null
 SELF goal set "prove two-machine sync"
 WID=$(SELF work add "events from both machines merge cleanly" | tail -1)
+# A second connected project proves workspace setting changes traverse the
+# registry rather than refreshing only the checkout the command runs from.
+mkdir -p "$ROOT/A/ws/second"
+cd "$ROOT/A/ws/second"
+git init -q
+SELF project add --name second --desc "workspace language propagation target"
+cd "$ROOT/A/ws/demo"
 cd "$ROOT/A/ws"
 SELF remote add "$ROOT/remote.git"
 SELF sync
@@ -103,6 +116,8 @@ git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^view/" && fail "views leaked
 cd "$ROOT/A/ws" && SELF lang ko > /dev/null
 grep -q 'lang="ko"' "$VIEW_A/workspace.html" || fail "lang ko not recorded in view metadata"
 grep -q "WAITING ON YOU" "$VIEW_A/workspace.html" || fail "labels did not stay English-base under lang ko"
+SELF context | grep -q "Language: ko — human-facing documents and artifacts; records stay English" || fail "workspace context omitted the workspace language"
+grep -q "Language: ko — human-facing documents and artifacts; records stay English" "$ROOT/A/ws/second/CLAUDE.md" || fail "self lang did not refresh a second connected project's managed block"
 cd "$ROOT/A/ws/demo"
 SELF context | grep -q "Language: ko — human-facing documents and artifacts; records stay English" || fail "workspace language missing from agent context"
 grep -q "Language: ko — human-facing documents and artifacts; records stay English" CLAUDE.md || fail "self lang did not refresh the managed block"

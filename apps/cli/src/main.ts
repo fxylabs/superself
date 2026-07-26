@@ -42,7 +42,7 @@ const USAGE = `usage: self <command>
 
   init [--lang <code>] [--agents]             initialize the current directory as a workspace
   workspace [<path>]                         show or set the workspace this machine uses
-  lang [<code>]                              show or set the workspace language for human-facing outputs
+  lang [<code>]                              show or set the workspace language for human-facing documents and artifacts
   theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
