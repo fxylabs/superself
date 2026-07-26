@@ -23,7 +23,8 @@ import {
     requireProject,
     requireWorkspace,
     siblingSlug,
-    STORE_DIR
+    STORE_DIR,
+    StoreConfig
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { loadVerdicts } from "./reachability.js";
@@ -31,7 +32,7 @@ import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
-import { openFile, viewFile } from "./view.js";
+import { openFile, validTheme, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
@@ -42,6 +43,7 @@ const USAGE = `usage: self <command>
   init [--lang <code>] [--agents]             initialize the current directory as a workspace
   workspace [<path>]                         show or set the workspace this machine uses
   lang [<code>]                              show or set the language of the HTML views
+  theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
   project link [slug] [path]                 link this checkout of a registered project on this machine
@@ -49,7 +51,7 @@ const USAGE = `usage: self <command>
   sync                                       pull, refold, and push the workspace store
   clone <url> [dir]                          clone a workspace store onto a new machine
   goal set "<text>"                          set the project goal
-  decide "<text>" [--why w] [--proposed] [--supersedes id]
+  decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
   decide confirm <event-id>                  confirm a proposed decision
   work                                       list open work
   work add "<required outcome>"              create a work unit
@@ -78,6 +80,7 @@ async function main(argv: string[]): Promise<void>
         case "init": await cmdInit(rest); break;
         case "workspace": cmdWorkspace(rest); break;
         case "lang": cmdLang(rest); break;
+        case "theme": cmdTheme(rest); break;
         case "project": cmdProject(rest); break;
         case "remote": cmdRemote(rest); break;
         case "sync": syncStore(requireWorkspace(process.cwd())); break;
@@ -221,14 +224,34 @@ function cmdLang(rest: string[]): void
         return;
     }
     const lang = validLang(rest[0]);
-    const config = { ...readStoreConfig(ctx.storeDir), lang };
+    writeConfig(ctx, { lang }, `lang set ${lang}`);
+    console.log(`views now render in "${lang}"`);
+}
+
+function cmdTheme(rest: string[]): void
+{
+    const ctx = requireWorkspace(process.cwd());
+    if (rest[0] === undefined)
+    {
+        console.log(readStoreConfig(ctx.storeDir).theme ?? "violet");
+        return;
+    }
+    const theme = validTheme(rest[0]);
+    writeConfig(ctx, { theme }, `theme set ${theme}`);
+    console.log(`views now render with the "${theme}" accent`);
+}
+
+// A view setting reaches every page only through a refold, so writing the
+// config and re-rendering every project is one step.
+function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
+{
+    const config = { ...readStoreConfig(ctx.storeDir), ...patch };
     writeFileSync(join(ctx.storeDir, "config.json"), JSON.stringify(config) + "\n");
     for (const entry of readRegistry(ctx.storeDir))
     {
         foldProject(ctx.storeDir, entry.slug);
     }
-    commitAll(ctx.storeDir, `lang set ${lang}`);
-    console.log(`views now render in "${lang}"`);
+    commitAll(ctx.storeDir, message);
 }
 
 function cmdProject(rest: string[]): void
@@ -357,7 +380,8 @@ function cmdDecide(rest: string[]): void
         options: {
             proposed: { type: "boolean" },
             why: { type: "string" },
-            supersedes: { type: "string", multiple: true }
+            supersedes: { type: "string", multiple: true },
+            work: { type: "string" }
         },
         allowPositionals: true
     });
@@ -367,7 +391,9 @@ function cmdDecide(rest: string[]): void
     {
         payload.why = values.why;
     }
-    const refs = resolveSupersedes(ctx, values.supersedes);
+    // The work link is stated, never inferred from what happens to be open:
+    // most decisions belong to the project, not to a unit of work.
+    const refs = decisionRefs(ctx, values.supersedes, values.work);
     const type = values.proposed === true ? "decision.proposed" : "decision.confirmed";
     recordEvent(ctx, makeEvent(ctx.project, type, payload, refs, values.proposed !== true), text);
 }
@@ -382,13 +408,18 @@ function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
     recordEvent(ctx, makeEvent(ctx.project, "decision.confirmed", {}, { confirms: target.id }, true), String(target.payload.text));
 }
 
-function resolveSupersedes(ctx: ProjectContext, prefixes: string[] | undefined): EventRefs | undefined
+function decisionRefs(ctx: ProjectContext, prefixes: string[] | undefined, work: string | undefined): EventRefs | undefined
 {
-    if (prefixes === undefined || prefixes.length === 0)
+    const refs: EventRefs = {};
+    if (prefixes !== undefined && prefixes.length > 0)
     {
-        return undefined;
+        refs.supersedes = prefixes.map((prefix) => findEventByPrefix(ctx.storeDir, ctx.project, prefix).id);
     }
-    return { supersedes: prefixes.map((prefix) => findEventByPrefix(ctx.storeDir, ctx.project, prefix).id) };
+    if (work !== undefined)
+    {
+        refs.work = requireKnownWork(ctx, work);
+    }
+    return Object.keys(refs).length === 0 ? undefined : refs;
 }
 
 const TRANSITIONS: Record<string, string> = {
@@ -493,6 +524,18 @@ function cmdReport(rest: string[]): void
         refs.artifacts = metas.map((meta) => meta.id);
     }
     recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`);
+}
+
+// A decision may look back at finished work, so this accepts any unit the
+// log knows — unlike requireOpenWork, which gates the verbs that move it.
+function requireKnownWork(ctx: ProjectContext, id: string): string
+{
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    if (!model.works.some((item) => item.id === id))
+    {
+        throw new CliError(`unknown work id "${id}" — run \`self work\` to list ids`);
+    }
+    return id;
 }
 
 function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState

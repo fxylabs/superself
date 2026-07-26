@@ -15,6 +15,10 @@ export interface DecisionState
     humanConfirmed: boolean;
     expired: boolean;
     supersedes: string[];
+    // The work unit this decision came out of, when the command said so.
+    // Never inferred: a decision recorded during one unit's session is not
+    // thereby a decision about it.
+    work?: string;
 }
 
 export interface ReportEntry
@@ -165,7 +169,8 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
         status,
         humanConfirmed,
         expired: false,
-        supersedes: event.refs?.supersedes ?? []
+        supersedes: event.refs?.supersedes ?? [],
+        work: event.refs?.work
     };
 }
 

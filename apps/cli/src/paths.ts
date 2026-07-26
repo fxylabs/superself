@@ -135,6 +135,7 @@ export function readRegistry(storeDir: string): RegistryEntry[]
 export interface StoreConfig
 {
     lang?: string;
+    theme?: string;
 }
 
 export function readStoreConfig(storeDir: string): StoreConfig
