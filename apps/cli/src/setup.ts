@@ -7,9 +7,11 @@ import {
     findUp,
     isStore,
     MARKER_FILE,
+    readLinks,
     readRegistry,
     readStoreConfig,
     resolveProjectPath,
+    siblingSlug,
     STORE_DIR,
     workspaceDirFor
 } from "./paths.js";
@@ -17,19 +19,26 @@ import {
 export function printSetup(cwd: string): void
 {
     const marker = findUp(cwd, MARKER_FILE);
-    console.log([...projectLines(marker), ...workspaceLines(workspaceDirFor(marker))].join("\n"));
+    const workspaceDir = workspaceDirFor(marker);
+    console.log([...projectLines(marker, cwd, workspaceDir), ...workspaceLines(workspaceDir)].join("\n"));
 }
 
-function projectLines(marker: string | null): string[]
+function projectLines(marker: string | null, cwd: string, workspaceDir: string | null): string[]
 {
-    if (marker === null)
+    if (marker !== null)
+    {
+        return [
+            row("project", JSON.parse(readFileSync(marker, "utf8")).project),
+            row("", `${dirname(marker)} (via ${MARKER_FILE})`)
+        ];
+    }
+    const storeDir = workspaceDir === null ? null : join(workspaceDir, STORE_DIR);
+    const sibling = storeDir !== null && isStore(storeDir) ? siblingSlug(storeDir, cwd) : null;
+    if (sibling === null)
     {
         return [row("project", "(none) — this directory is not registered; run `self project add`")];
     }
-    return [
-        row("project", JSON.parse(readFileSync(marker, "utf8")).project),
-        row("", `${dirname(marker)} (via ${MARKER_FILE})`)
-    ];
+    return [row("project", `(unlinked) — another checkout of "${sibling}"; run \`self project link ${sibling}\``)];
 }
 
 function workspaceLines(workspaceDir: string | null): string[]
@@ -55,7 +64,9 @@ function workspaceLines(workspaceDir: string | null): string[]
 
 function projectLine(storeDir: string, slug: string): string
 {
-    return `${slug} → ${resolveProjectPath(storeDir, slug) ?? "(not linked on this machine)"}`;
+    const others = (readLinks(storeDir)[slug] ?? []).length - 1;
+    const active = resolveProjectPath(storeDir, slug) ?? "(not linked on this machine)";
+    return `${slug} → ${active}${others > 0 ? ` (+${others} more checkout${others > 1 ? "s" : ""})` : ""}`;
 }
 
 function storeState(storeDir: string): string

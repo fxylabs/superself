@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { foldProject } from "./fold.js";
-import { commitAll } from "./gitutil.js";
+import { commitAll, currentBranch } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { CliContext, ensureDir, projectStateDir } from "./paths.js";
 import { bold, dim, green, styled } from "./style.js";
@@ -30,8 +30,15 @@ export function makeEvent(
     return event;
 }
 
+// The branch is stamped here, not by each verb: every event is made from one
+// checkout, and that is the only place holding it.
 export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string): void
 {
+    const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
+    if (branch !== null)
+    {
+        event.refs = { ...event.refs, branch };
+    }
     const dir = ensureDir(projectStateDir(ctx.storeDir, event.project));
     appendFileSync(join(dir, "log.jsonl"), JSON.stringify(event) + "\n");
     foldProject(ctx.storeDir, event.project);

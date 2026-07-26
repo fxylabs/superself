@@ -1,7 +1,17 @@
 import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { CliContext, readRegistry } from "./paths.js";
+import { loadVerdicts, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
+
+// Console surfaces reuse the verdicts persisted by the last fold, so they
+// agree with canonical state without re-running git.
+function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
+{
+    const model = buildModel(storeDir, slug, new Date());
+    model.health.push(...verdictSignals(model.works, loadVerdicts(storeDir, slug)));
+    return model;
+}
 
 export function printContext(ctx: CliContext): void
 {
@@ -10,7 +20,7 @@ export function printContext(ctx: CliContext): void
         printWorkspaceOverview(ctx);
         return;
     }
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const model = modelWithVerdicts(ctx.storeDir, ctx.project);
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
@@ -66,7 +76,7 @@ export function printStatus(ctx: CliContext): void
         printWorkspaceOverview(ctx);
         return;
     }
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const model = modelWithVerdicts(ctx.storeDir, ctx.project);
     if (styled)
     {
         printStyledStatus(model);
@@ -121,7 +131,7 @@ function printWorkspaceOverview(ctx: CliContext): void
         console.log("no projects registered — run `self project add` inside a project directory");
         return;
     }
-    const models = registry.map((entry) => buildModel(ctx.storeDir, entry.slug, new Date()));
+    const models = registry.map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
     if (styled)
     {
         const width = Math.max(...models.map((model) => model.slug.length));
