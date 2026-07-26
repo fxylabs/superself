@@ -5,7 +5,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write # create the GitHub Release for the tag being published
   id-token: write # npm Trusted Publishing (OIDC) — no token secret
 
 jobs:
@@ -33,3 +33,25 @@ jobs:
       # prepublishOnly runs the full proof before anything uploads
       - run: npm publish
         working-directory: apps/cli
+      # The registry, not the workflow, is the authority on what shipped: a
+      # publish that lands a different version must not leave a release behind.
+      - name: The registry must serve the version that was tagged
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PUBLISHED="$(npm view "superself@$VERSION" version)"
+          if [ "$PUBLISHED" != "$VERSION" ]; then
+            echo "npm serves $PUBLISHED for $GITHUB_REF_NAME, not $VERSION" >&2
+            exit 1
+          fi
+      # A published package with no visible release leaves the delivery
+      # lifecycle unable to prove the release step ever happened.
+      - name: Publish the GitHub Release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --generate-notes --verify-tag $PRERELEASE

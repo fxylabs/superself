@@ -96,6 +96,12 @@ Until packaging exists, a maintainer release is:
 7. create an annotated tag on that merge commit;
 8. create a GitHub Release and mark prereleases correctly.
 
+A `v*` tag publishes the CLI package through the Trusted Publishing workflow.
+When an agent runner drives that release as part of closing an accepted issue,
+the tag, the published version, and the version installed on the maintainer's
+machine are gated against each other by
+[issue-delivery-lifecycle.md](issue-delivery-lifecycle.md).
+
 When CLI or desktop artifacts are published, replace manual tagging with one
 GitHub Actions workflow that computes the version, creates the tag, builds every
 platform from that tag, verifies all required assets, and only then publishes
