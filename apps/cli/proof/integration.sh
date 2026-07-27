@@ -3,6 +3,11 @@
 # produced it: superself PR #43 -> #44 -> #52, three branches touching the same
 # CLI files, two of them claiming the same architecture contract.
 #
+# Both merge lanes are proved. The train merges into a configured integration
+# branch (`next`) autonomously — receipts, fence, exact-head CI, order, and no
+# human anywhere — and promotion of `next` into main is the one human gate,
+# bound to the exact candidate and the exact release bytes.
+#
 # Everything here is deterministic and offline. The repository is real git, so
 # every digest is computed from bytes; nothing outside this temporary root is
 # read or written, and no network is used.
@@ -51,6 +56,25 @@ sha256_of()
     ' "$1"
 }
 
+# Drives one CLI command under a real pseudo-terminal, typing one line. This is
+# a human at a terminal reduced to what a proof can hold: the command sees a
+# tty on stdin and stdout, and the typed line arrives through the terminal —
+# there is no pipe here for the CLI to be fooled by.
+pty_self()
+{
+    local typed="$1"
+    shift
+    # The feeder stays open after the line: closing it immediately delivers an
+    # EOF to the terminal before the prompt has read, which is not what a
+    # human's terminal ever does.
+    if script --version > /dev/null 2>&1
+    then
+        { printf '%s\n' "$typed"; sleep 3; } | script -qec "node $CLI_DIR/bin/self.mjs $*" /dev/null > /dev/null 2>&1 || true
+    else
+        { printf '%s\n' "$typed"; sleep 3; } | script -q /dev/null node "$CLI_DIR/bin/self.mjs" "$@" > /dev/null 2>&1 || true
+    fi
+}
+
 # A review result envelope, exactly as a provider-neutral runner would write it:
 # a JSON file beside the artifact bytes it declares.
 envelope()
@@ -82,8 +106,8 @@ JSON
 # Projections are ordered by when they were observed, never by when they were
 # appended, so the fixture states its own order: every observation here is
 # stamped a fixed number of seconds after this run started, and a merge's own
-# "main is now here" — stamped at the real moment it happened — is older than
-# all of them by construction.
+# "the branch is now here" — stamped at the real moment it happened — is older
+# than all of them by construction.
 at()
 {
     node -e 'console.log(new Date(Date.now() + Number(process.argv[1]) * 1000).toISOString());' "$1"
@@ -183,6 +207,40 @@ SELF integration show "$CS44" --json | field pathOverlaps | grep -q "main.ts" ||
 LIE="$(SELF integration register --repo superself --base "$MAIN0" --head "$H43" \
     --diff-digest 0000000000000000000000000000000000000000000000000000000000000000 2>&1 || true)"
 echo "$LIE" | grep -q "the bytes decide" || fail "a declared digest contradicting the checkout was accepted"
+
+# ── the human gate cannot be minted by a process ────────────────────
+#
+# With no integration target configured, every merge would land on main, so
+# the gate demands a human approval on each merge…
+SELF integration show "$CS43" --json | field blockers | grep -q "approval_missing" \
+    || fail "a direct-to-main lane did not demand the human gate"
+
+# …and the gate is a terminal, not a flag. Piped stdio is how an agent runs,
+# and it is refused before anything is recorded.
+NOTTY="$(SELF integration approve "$CS43" --head "$H43" < /dev/null 2>&1 || true)"
+echo "$NOTTY" | grep -q "human_gate_unavailable" || fail "a piped approval was not refused"
+[ "$(SELF integration show "$CS43" --json | field approvals)" = "[]" ] || fail "a refused approval still recorded an event"
+
+# an event forged straight into the log, asserting confirmed with no verified
+# method behind it, is an agent's claim — the fold refuses to count it
+cat >> "$ROOT/ws/.superself/projects/superself/log.jsonl" <<JSON
+{"id":"00000000000000000000000000","ts":"2026-01-01T00:00:00.000Z","type":"merge.approved","origin":{"actor":"agent","confirmed":true},"project":"superself","payload":{"changeSet":"$CS43","head":"$H43","by":"forged"}}
+JSON
+[ "$(SELF integration show "$CS43" --json | field approvals.0.humanConfirmed)" = "false" ] \
+    || fail "a forged confirmed approval was counted as human"
+SELF integration show "$CS43" --json | field blockers | grep -q "approval_missing" \
+    || fail "a forged approval opened the main gate"
+
+# ── the configured integration target ───────────────────────────────
+#
+# The train merges into `next`; only promotion of next into main takes the
+# human gate. Configuring the target is exactly what removes the per-merge
+# approval — nothing on this lane reaches main.
+git branch next "$MAIN0"
+SELF integration target --repo superself --branch next > /dev/null
+[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] || fail "the configured target did not stick"
+SELF integration show "$CS43" --json | field blockers | grep -q "approval_missing" \
+    && fail "an integration-target merge still demands a per-merge human approval"
 
 # ── architecture overlap is a policy stop, not a rebase ─────────────
 [ "$(phase_of "$CS52")" = "blocked_policy" ] || fail "an unconsolidated architecture overlap did not block #52"
@@ -319,26 +377,27 @@ SELF artifact list --project superself | grep -q "report.md" || fail "review art
 
 # ── conflict-free base movement preserves the receipt ───────────────
 #
-# main moves under #43 for reasons that have nothing to do with it. The feature
-# bytes are the same bytes, so the review that read them still reads them.
-git checkout -q main
+# The integration branch moves under #43 for reasons that have nothing to do
+# with it. The feature bytes are the same bytes, so the review that read them
+# still reads them.
+git checkout -q next
 echo "release notes" > NOTES.md
 git add NOTES.md
-git commit -qm "an unrelated main advance"
-MAIN1="$(git rev-parse HEAD)"
-SELF integration observe main --repo superself --head "$MAIN1" --at "$AT10" > /dev/null
+git commit -qm "an unrelated advance of the integration branch"
+NEXT1="$(git rev-parse HEAD)"
+SELF integration observe target --repo superself --head "$NEXT1" --at "$AT10" > /dev/null
 git checkout -q pr43
-git rebase -q "$MAIN1" > /dev/null
+git rebase -q "$NEXT1" > /dev/null
 H43B="$(git rev-parse HEAD)"
 IA1="$(SELF integration attempt start "$CS43" --fence "$FENCE" --action rebase | tail -1)"
 BUSY="$(SELF integration attempt start "$CS44" --fence "$FENCE" --action rebase 2>&1 || true)"
 echo "$BUSY" | grep -q "lane_busy" || fail "two integration attempts ran on one repository at once"
-SELF integration attempt finish "$IA1" --outcome completed --head "$H43B" --base "$MAIN1" \
-    --command "git rebase main:0" | grep -q "receipts preserved" || fail "a conflict-free rebase did not preserve the receipt"
+SELF integration attempt finish "$IA1" --outcome completed --head "$H43B" --base "$NEXT1" \
+    --command "git rebase next:0" | grep -q "receipts preserved" || fail "a conflict-free rebase did not preserve the receipt"
 [ "$(digest_of "$CS43")" = "$D43" ] || fail "a conflict-free rebase changed the feature digest"
 SELF review list "$CS43" | grep -q "current" || fail "the change receipt did not survive conflict-free base movement"
 
-# ── the exact merge gate ────────────────────────────────────────────
+# ── the exact merge gate, with no human anywhere on this lane ───────
 NOCI="$(SELF integration merge "$CS43" --fence "$FENCE" --merge-commit "$MAIN0" --main-before "$MAIN0" --main-after "$MAIN0" --json || true)"
 [ "$(echo "$NOCI" | field code)" = "ci_not_green" ] || fail "a merge with no CI result on the exact head was allowed"
 
@@ -347,22 +406,19 @@ RED="$(SELF integration merge "$CS43" --fence "$FENCE" --merge-commit "$MAIN0" -
 [ "$(echo "$RED" | field code)" = "ci_not_green" ] || fail "a merge on failing CI was allowed"
 SELF integration observe ci --repo superself --head "$H43B" --check ci --conclusion success --at "$AT15" > /dev/null
 
-NOAPPROVAL="$(SELF integration merge "$CS43" --fence "$FENCE" --merge-commit "$MAIN0" --main-before "$MAIN0" --main-after "$MAIN0" --json || true)"
-[ "$(echo "$NOAPPROVAL" | field code)" = "approval_missing" ] || fail "a merge with no human approval was allowed"
-
-SELF integration approve "$CS43" --head "$H43B" > /dev/null
-[ "$(phase_of "$CS43")" = "merge_ready" ] || fail "#43 did not reach merge_ready with every prerequisite met"
+# receipts, fence, exact-head CI and order are the whole integration-target
+# gate: nothing demands an approval, and merge_ready arrives without one
+[ "$(phase_of "$CS43")" = "merge_ready" ] || fail "#43 did not reach merge_ready autonomously on the integration target"
 
 STALE="$(SELF integration merge "$CS43" --fence 99 --merge-commit "$MAIN0" --main-before "$MAIN0" --main-after "$MAIN0" --json || true)"
 [ "$(echo "$STALE" | field code)" = "stale_fence" ] || fail "a merge under a stale fence was allowed"
 
-# an approval names one head, and a review names the bytes under it; a push
-# after both takes both with it
-echo "// #43 one more push after approval" >> views.ts
-git commit -qam "an extra push after approval"
+# a review names the bytes under a head; a push after it takes both with it
+echo "// #43 one more push after review" >> views.ts
+git commit -qam "an extra push after review"
 H43C="$(git rev-parse HEAD)"
 SELF integration head "$CS43" --head "$H43C" > /dev/null
-[ "$(phase_of "$CS43")" != "merge_ready" ] || fail "a head that changed after approval stayed merge_ready"
+[ "$(phase_of "$CS43")" != "merge_ready" ] || fail "a head that changed after review stayed merge_ready"
 SELF integration show "$CS43" --json | field blockers.0.code | grep -q "change_receipt_missing" \
     || fail "a new head did not put the change review back in front of the merge"
 
@@ -370,8 +426,8 @@ git reset -q --hard "$H43B"
 SELF integration head "$CS43" --head "$H43B" > /dev/null
 [ "$(phase_of "$CS43")" = "merge_ready" ] || fail "returning to the reviewed bytes did not restore the receipt"
 
-# a digest declared with no checkout to check it against can be reviewed,
-# approved and green — and still does not survive the last look at the bytes
+# a digest declared with no checkout to check it against can be reviewed and
+# green — and still does not survive the last look at the bytes
 FAKE=2222222222222222222222222222222222222222222222222222222222222222
 OFFLINE="$(SELF integration register --repo superself --base "$MAIN0" --head "$H52" --offline \
     --diff-digest "$FAKE" --check ci --rank 9 | tail -1)"
@@ -381,18 +437,28 @@ SELF status | grep -q "declared feature digest" || fail "a declared digest raise
 envelope "$ROOT/revfake" "$OFFLINE" change "$MAIN0" "$H52" "$FAKE" approve
 SELF review ingest --file "$ROOT/revfake/envelope.json" > /dev/null
 SELF integration observe ci --repo superself --head "$H52" --check ci --conclusion success --at "$AT05" > /dev/null
-SELF integration approve "$OFFLINE" --head "$H52" > /dev/null
 DRIFT="$(SELF integration merge "$OFFLINE" --fence "$FENCE" --merge-commit x --main-before y --main-after z --json || true)"
 [ "$(echo "$DRIFT" | field code)" = "digest_drift" ] || fail "a merge landed bytes it never re-read against the repository"
 SELF integration close "$OFFLINE" --as abandoned --why "registered only to prove the drift gate" > /dev/null
 
-git checkout -q main
+# ── the merge receipt proves the merge that really happened ─────────
+git checkout -q next
 git merge -q --no-ff pr43 -m "merge #43"
 MERGE43="$(git rev-parse HEAD)"
+GHOST=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+BADSHA="$(SELF integration merge "$CS43" --fence "$FENCE" --merge-commit xyz --main-before "$NEXT1" --main-after "$MERGE43" --json || true)"
+[ "$(echo "$BADSHA" | field code)" = "commit_malformed" ] || fail "a merge receipt naming a malformed commit id was recorded"
+GHOSTREF="$(SELF integration merge "$CS43" --fence "$FENCE" --merge-commit "$GHOST" --main-before "$NEXT1" --main-after "$MERGE43" --json || true)"
+[ "$(echo "$GHOSTREF" | field code)" = "commit_unknown" ] || fail "a merge receipt naming a commit that does not exist was recorded"
+UNREL="$(SELF integration merge "$CS43" --fence "$FENCE" --merge-commit "$MAIN0" --main-before "$NEXT1" --main-after "$MAIN0" --json || true)"
+[ "$(echo "$UNREL" | field code)" = "merge_unrelated" ] || fail "a merge receipt whose commit does not contain the reviewed head was recorded"
+
 SELF integration merge "$CS43" --fence "$FENCE" --merge-commit "$MERGE43" \
-    --main-before "$MAIN1" --main-after "$MERGE43" --json > "$ROOT/merge43.json"
+    --main-before "$NEXT1" --main-after "$MERGE43" --json > "$ROOT/merge43.json"
 [ "$(field changeSet < "$ROOT/merge43.json")" = "$CS43" ] || fail "the merge receipt does not name the change set"
 [ "$(field head < "$ROOT/merge43.json")" = "$H43B" ] || fail "the merge receipt does not carry the exact reviewed head"
+[ "$(field target < "$ROOT/merge43.json")" = "next" ] || fail "the merge receipt does not name the integration target it landed on"
 [ "$(field ci.0.conclusion < "$ROOT/merge43.json")" = "success" ] || fail "the merge receipt does not carry the exact CI conclusion"
 [ "$(phase_of "$CS43")" = "merged" ] || fail "#43 did not settle as merged"
 [ -f "$ROOT/ws/.superself/projects/superself/integration/$CS43.md" ] && fail "a merged change set kept a current canonical file"
@@ -403,7 +469,7 @@ envelope "$ROOT/rev44" "$CS44" change "$MAIN0" "$H44" "$D44" approve
 SELF review ingest --file "$ROOT/rev44/envelope.json" > /dev/null
 [ "$(phase_of "$CS44")" = "integration" ] || fail "#44 with an approved change review is not in the lane"
 
-SELF integration observe main --repo superself --head "$MERGE43" --at "$AT20" > /dev/null
+SELF integration observe target --repo superself --head "$MERGE43" --at "$AT20" > /dev/null
 IA2="$(SELF integration attempt start "$CS44" --fence "$FENCE" --action resolve | tail -1)"
 git checkout -q pr44
 # #43 and #44 both appended to main.ts, so this rebase really conflicts, and
@@ -418,7 +484,7 @@ GIT_EDITOR=true git rebase --continue > /dev/null 2>&1
 H44B="$(git rev-parse HEAD)"
 SELF integration attempt finish "$IA2" --outcome completed --head "$H44B" --base "$MERGE43" \
     --conflict-path main.ts --intersection supervisor.process-ownership \
-    --command "git rebase main:1" --command "git rebase --continue:0" | grep -q "bounded review" \
+    --command "git rebase next:1" --command "git rebase --continue:0" | grep -q "bounded review" \
     || fail "a conflict resolution did not create an integration delta"
 [ "$(phase_of "$CS44")" = "delta_review" ] || fail "a change set carrying an unreviewed delta did not ask for a delta review"
 SELF integration show "$CS44" --json | field blockers.0.code | grep -q "delta_review_missing" \
@@ -427,7 +493,6 @@ SELF review list "$CS44" | grep -q "superseded" || fail "the change receipt was 
 
 DELTA="$(SELF integration show "$CS44" --json | field deltas.0.digest)"
 SELF integration observe ci --repo superself --head "$H44B" --check ci --conclusion success --at "$AT25" > /dev/null
-SELF integration approve "$CS44" --head "$H44B" > /dev/null
 BLOCKED="$(SELF integration merge "$CS44" --fence "$FENCE" --merge-commit x --main-before y --main-after z --json || true)"
 [ "$(echo "$BLOCKED" | field code)" = "delta_review_missing" ] || fail "an unreviewed integration delta did not stop the merge"
 
@@ -444,7 +509,7 @@ SELF review ingest --file "$ROOT/rev52/envelope.json" > /dev/null
 EARLY="$(SELF integration attempt start "$CS52" --fence "$FENCE" --action rebase --json || true)"
 [ "$(echo "$EARLY" | field code)" = "predecessor_open" ] || fail "#52 started integrating with #44 still open"
 
-git checkout -q main
+git checkout -q next
 git merge -q --no-ff pr44 -m "merge #44"
 MERGE44="$(git rev-parse HEAD)"
 SELF integration merge "$CS44" --fence "$FENCE" --merge-commit "$MERGE44" \
@@ -457,7 +522,7 @@ envelope "$ROOT/rev52r" "$CSFIX" change "$MAIN0" "$H52" "$D52" reject "two findi
 SELF review ingest --file "$ROOT/rev52r/envelope.json" > /dev/null
 SELF integration show "$CSFIX" --json | field reason | grep -q "reject" || fail "a rejected review is not the standing reason"
 
-# ── the lane converges: stale fence, external main, restart ─────────
+# ── the lane converges: stale fence, external target, restart ───────
 # #52 conflicts with what #44 landed. What is proved here is the attempt and how
 # it is invalidated, not the resolution, so the rebase is abandoned and the
 # checkout left clean for everything below.
@@ -478,13 +543,14 @@ AFTER="$(log_lines)"
 SELF integration reconcile --json | field converged | grep -q "true" || fail "a second reconcile did not converge"
 [ "$(log_lines)" = "$AFTER" ] || fail "reconcile is not idempotent — it wrote again with nothing to say"
 
-# an attempt planned against a main that has since moved is cancelled, never retried
+# an attempt planned against a merge target that has since moved is cancelled,
+# never retried
 FENCE2="$(SELF integration lease acquire --repo superself --holder supervisor | tail -1)"
 [ "$FENCE2" -gt "$FENCE" ] || fail "a new lease did not raise the fence"
 IA4="$(SELF integration attempt start "$CS52" --fence "$FENCE2" --action rebase | tail -1)"
-SELF integration observe main --repo superself --head "$MAIN0" --at "$AT40" > /dev/null
-SELF integration reconcile --json | field actions.0.reason | grep -q "main moved" || fail "an external main advance did not invalidate the attempt"
-SELF integration show "$CS52" --json | grep -q "main_advanced" || fail "the cancellation did not record why"
+SELF integration observe target --repo superself --head "$MAIN0" --at "$AT40" > /dev/null
+SELF integration reconcile --json | field actions.0.reason | grep -q "next moved" || fail "an external target advance did not invalidate the attempt"
+SELF integration show "$CS52" --json | grep -q "target_moved" || fail "the cancellation did not record why"
 
 # ── projections converge: duplicates and late arrivals ──────────────
 SELF integration observe ci --repo superself --head "$H52" --check ci --conclusion success --at "$AT50" --dedupe delivery-7 > /dev/null
@@ -499,15 +565,23 @@ SELF integration show "$CS52" --json | field ci.0.conclusion | grep -q "success"
 cat > "$ROOT/batch.json" <<JSON
 { "schema": "superself.integration-observation/1", "observations": [
   { "kind": "ci", "repository": "superself", "head": "$H52", "check": "ci", "conclusion": "success", "observedAt": "$AT50", "dedupe": "delivery-7" },
-  { "kind": "main", "repository": "superself", "head": "$MERGE44", "observedAt": "$AT55", "dedupe": "delivery-8" }
+  { "kind": "target", "repository": "superself", "head": "$MERGE44", "observedAt": "$AT55", "dedupe": "delivery-8" }
 ] }
 JSON
 SELF integration observe --file "$ROOT/batch.json" --json | field observed | grep -q "^1$" || fail "a replayed batch was not deduplicated to its new observation"
 
+# a redelivery with no delivery id and no stated instant is keyed by what it
+# says, never by the wall clock, so it converges instead of appending twice
+SELF integration observe ci --repo superself --head "$H52" --check ci --conclusion pending > /dev/null
+NOKEY_BEFORE="$(log_lines)"
+SELF integration observe ci --repo superself --head "$H52" --check ci --conclusion pending --json | field duplicates | grep -q "^1$" \
+    || fail "an unkeyed redelivery did not read as a duplicate"
+[ "$(log_lines)" = "$NOKEY_BEFORE" ] || fail "an unkeyed redelivery minted a fresh identity from the wall clock"
+
 # ── an author's push under a running attempt ────────────────────────
 #
 # The third way an in-flight pass stops being valid, after a dead fence and a
-# main that moved: the bytes it planned against are no longer the bytes there.
+# merge target that moved: the bytes it planned against are no longer there.
 IA5="$(SELF integration attempt start "$CS52" --fence "$FENCE2" --action rebase | tail -1)"
 HELD="$(SELF integration lease release --repo superself --fence "$FENCE2" 2>&1 || true)"
 echo "$HELD" | grep -q "still running" || fail "the lane was released with a pass still in flight"
@@ -522,6 +596,81 @@ SELF integration reconcile --json | field actions.0.reason | grep -q "^$CS52 mov
 SELF integration show "$CS52" --json | grep -q "head_moved" || fail "the cancellation did not record the moved head"
 [ "$(SELF integration show "$CS52" --json | field attempts.2.status)" = "cancelled" ] \
     || fail "an invalidated attempt was left running rather than cancelled"
+
+# ── promotion into main: the one human gate ─────────────────────────
+#
+# next now carries #43 and #44, and main has never moved. The promotion pins
+# the exact candidate commit and the exact release bytes main...candidate, and
+# nothing lands on main without a release receipt on those bytes and a human
+# typing the candidate at a real terminal.
+PM="$(SELF integration promote request --repo superself --candidate "$MERGE44" --main "$MAIN0" --json | field promotion)"
+RELD="$(SELF integration promote show "$PM" --json | field digest)"
+[ "$(SELF integration promote show "$PM" --json | field digestSource)" = "computed" ] \
+    || fail "a reachable checkout still left the release digest as a declaration"
+
+# a release review binds to the promotion, never to any one change set
+CSREL="$(SELF review request "$CS52" --scope release 2>&1 || true)"
+echo "$CSREL" | grep -q "unknown promotion" || fail "a release review was requested on a change set"
+SELF review request "$PM" --scope release --json > "$ROOT/relorder.json"
+[ "$(field digest < "$ROOT/relorder.json")" = "$RELD" ] || fail "the release order is not bound to the pinned release digest"
+[ "$(field head < "$ROOT/relorder.json")" = "$MERGE44" ] || fail "the release order is not bound to the exact candidate"
+
+NOREL="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$MERGE44" --json || true)"
+[ "$(echo "$NOREL" | field code)" = "release_receipt_missing" ] || fail "a promotion with no release receipt was allowed"
+
+# a release envelope about another head, other bytes, or no promotion at all
+# binds to nothing
+envelope "$ROOT/revrel" "$PM" release "$MAIN0" "$H52" "$RELD" approve "release audit"
+WRONGHEAD="$(SELF review ingest --file "$ROOT/revrel/envelope.json" 2>&1 || true)"
+echo "$WRONGHEAD" | grep -q "head_mismatch" || fail "a release review of another head was ingested"
+envelope "$ROOT/revrel" "$PM" release "$MAIN0" "$MERGE44" "$FAKE" approve "release audit"
+WRONGBYTES="$(SELF review ingest --file "$ROOT/revrel/envelope.json" 2>&1 || true)"
+echo "$WRONGBYTES" | grep -q "digest_unbound" || fail "a release review of other bytes was ingested"
+envelope "$ROOT/revrel" "$CS52" release "$MAIN0" "$MERGE44" "$RELD" approve "release audit"
+NOPM="$(SELF review ingest --file "$ROOT/revrel/envelope.json" 2>&1 || true)"
+echo "$NOPM" | grep -q "promotion_unknown" || fail "a release review bound to a change set was ingested"
+
+envelope "$ROOT/revrel" "$PM" release "$MAIN0" "$MERGE44" "$RELD" approve "release audit of everything main...candidate"
+SELF review ingest --file "$ROOT/revrel/envelope.json" > /dev/null
+
+# reviewed — and still shut until a human types the candidate
+NOHUMAN="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$MERGE44" --json || true)"
+[ "$(echo "$NOHUMAN" | field code)" = "approval_missing" ] || fail "a promotion with no human approval was allowed"
+
+# a piped approve is an agent, and is refused before anything is recorded
+PIPED="$(SELF integration promote approve "$PM" --candidate "$MERGE44" < /dev/null 2>&1 || true)"
+echo "$PIPED" | grep -q "human_gate_unavailable" || fail "a piped promotion approval was not refused"
+[ "$(SELF integration promote show "$PM" --json | field approvals)" = "[]" ] || fail "a refused promotion approval left an event"
+
+# under a real terminal, a wrong typed challenge approves nothing…
+CHAL="$(printf '%s' "$MERGE44" | cut -c1-12)"
+pty_self wrong-answer integration promote approve "$PM" --candidate "$MERGE44"
+[ "$(SELF integration promote show "$PM" --json | field approvals)" = "[]" ] || fail "a failed typed challenge still approved"
+
+# …and typing the exact candidate is what a human approval is
+pty_self "$CHAL" integration promote approve "$PM" --candidate "$MERGE44" --by maintainer
+[ "$(SELF integration promote show "$PM" --json | field approvals.0.humanConfirmed)" = "true" ] \
+    || fail "a typed terminal confirmation was not counted as human"
+
+# the promotion receipt proves the promotion that really happened
+BADPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after zzz --json || true)"
+[ "$(echo "$BADPM" | field code)" = "commit_malformed" ] || fail "a promotion naming a malformed commit id was recorded"
+MOVEDPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MERGE43" --main-after "$MERGE44" --json || true)"
+[ "$(echo "$MOVEDPM" | field code)" = "release_base_moved" ] || fail "a promotion from a main off the reviewed pin was recorded"
+GHOSTPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$GHOST" --json || true)"
+[ "$(echo "$GHOSTPM" | field code)" = "commit_unknown" ] || fail "a promotion naming a commit that does not exist was recorded"
+UNRELPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$H52" --json || true)"
+[ "$(echo "$UNRELPM" | field code)" = "merge_unrelated" ] || fail "a promotion whose main-after does not contain the candidate was recorded"
+
+git checkout -q main
+git merge -q --ff-only "$MERGE44"
+[ "$(git rev-parse HEAD)" = "$MERGE44" ] || fail "the fixture promotion is not a fast-forward"
+SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$MERGE44" --json > "$ROOT/pm.json"
+[ "$(field candidate < "$ROOT/pm.json")" = "$MERGE44" ] || fail "the promotion receipt does not pin the candidate"
+[ "$(SELF integration promote show "$PM" --json | field recorded.mainAfter)" = "$MERGE44" ] || fail "the promotion did not settle as recorded"
+[ "$(SELF integration status --json | field 0.mainHead)" = "$MERGE44" ] || fail "a recorded promotion did not advance the projected main"
+DOUBLE="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$MERGE44" --json || true)"
+[ "$(echo "$DOUBLE" | field code)" = "promotion_closed" ] || fail "a recorded promotion was recorded twice"
 
 # ── a restart derives the same state from the same log ──────────────
 SNAPSHOT="$(SELF integration list --all --json)"
@@ -541,9 +690,11 @@ node -e '
 
 # ── no receipt without an ingest, and no merge without a receipt ────
 INGESTED="$(grep -c '"type":"review.received"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
-[ "$INGESTED" = "6" ] || fail "review receipts exist that no envelope ingest created (found $INGESTED)"
+[ "$INGESTED" = "7" ] || fail "review receipts exist that no envelope ingest created (found $INGESTED)"
 MERGES="$(grep -c '"type":"merge.recorded"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
 [ "$MERGES" = "2" ] || fail "the log holds a merge nobody gated (found $MERGES)"
+PROMOTED="$(grep -c '"type":"promotion.recorded"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
+[ "$PROMOTED" = "1" ] || fail "the log holds a promotion nobody gated (found $PROMOTED)"
 REBASES="$(grep -c '"type":"attempt.started"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
 [ "$REBASES" = "5" ] || fail "the train planned a duplicate rebase (found $REBASES attempts)"
 

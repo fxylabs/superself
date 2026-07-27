@@ -31,8 +31,16 @@ planned against, conflict paths, semantic intersections, the commands with their
 exit statuses, and how it ended.
 
 **MergeReceipt** — what actually landed. It carries the exact reviewed head, the
-exact CI conclusions used, main before and after, the merge commit, the fence,
-and the approval that caused it.
+exact CI conclusions used, the merge-target branch before and after, the merge
+commit, and the fence. The named commits are validated: full 40-character ids
+always, and where a checkout is reachable they must exist and the merge commit
+must really contain the reviewed head (and be contained in the branch head
+after), or the receipt is refused with a typed code.
+
+**Promotion** — one bid to move the integration branch into main. It pins the
+exact candidate commit, the exact main it will land on, and the digest of the
+release-candidate bytes between them: `sha256(git diff main...candidate)`. The
+release review and the human approval both bind to that pin.
 
 ## The digest is the binding
 
@@ -83,7 +91,50 @@ names one holder, and the other is told it lost rather than walking away with a
 fence it shares.
 
 Implementation and change review run in parallel and take no lease at all.
-Rebase, conflict resolution and merge are the serialized lane.
+Rebase, conflict resolution, merge and promotion are the serialized lane.
+
+## The merge target, and the one lane into main
+
+A repository's train merges into a *configured merge target*, and the target
+decides which gate applies:
+
+- **An integration branch** (`self integration target --repo r --branch next`)
+  makes the lane autonomous. A change set merges into it on receipts, fence,
+  exact-head CI and train order alone — no human approval exists on this path,
+  because nothing here reaches main. Its head is observed with
+  `self integration observe target`, exactly as main's is.
+- **No configured target** means every merge lands directly on main, is
+  therefore itself a promotion, and takes the human gate on each merge.
+
+Promotion of the integration branch into main is its own lane:
+
+```text
+self integration promote request --repo r --candidate <sha> [--main <sha>]
+self review request <promotion> --scope release       # binds to the pinned digest
+self integration promote approve <promotion> --candidate <sha>
+self integration promote record <promotion> --fence N --main-before a --main-after b
+```
+
+`promote record` refuses, in order: a closed promotion (`promotion_closed`), a
+dead fence (`stale_fence`), a missing or non-approving release receipt on the
+exact pinned digest (`release_receipt_missing`), a missing human approval of
+the exact candidate (`approval_missing`), malformed commit ids
+(`commit_malformed`), a main that is no longer the pinned release base
+(`release_base_moved` — the reviewed delta is not what would land), release
+bytes that no longer hash to the pin (`digest_drift`), and — with a reachable
+checkout — commits that do not exist (`commit_unknown`) or a main-after that
+does not contain the candidate (`merge_unrelated`).
+
+## The human gate is a terminal, not a flag
+
+`self integration approve` and `self integration promote approve` read their
+confirmation from an interactive terminal: the human types back the short id
+of the exact commit being approved. The recorded event carries the
+confirmation method, and the fold refuses to count any approval that lacks a
+verified method — so a piped or scripted invocation gets a typed
+`human_gate_unavailable` refusal, and an event that merely asserts
+`confirmed: true` (whoever wrote it) never opens a gate. There is no flag,
+environment variable or payload field that substitutes for the terminal.
 
 ## The merge gate
 
@@ -98,7 +149,8 @@ Rebase, conflict resolution and merge are the serialized lane.
 | `predecessor_open` | an earlier tied train item is not merged |
 | `lease_not_current`, `stale_fence` | the lane is not held, or held at another fence |
 | `ci_checks_undeclared`, `ci_not_green` | the exact head has no green result for a declared check |
-| `approval_missing` | no human approval names this exact head |
+| `approval_missing` | no human approval names this exact head — only when the merge lands on main |
+| `commit_malformed`, `commit_unknown`, `merge_unrelated` | the receipt names commits that are not full ids, do not exist, or do not contain the reviewed head |
 
 Every refusal carries the code, the exact missing prerequisite and the next
 eligible action. With `--json` it is a machine answer with a non-zero exit
@@ -142,10 +194,17 @@ approval closes the gate again, and a fresh approval after a fix reopens it.
 
 ## Reconciliation
 
-GitHub is a projection. CI conclusions and main advances arrive as observations
-carrying a dedupe key and the instant they were observed. The same webhook
-delivered twice is one observation; an observation that arrives late but
-happened earlier never overwrites a newer one.
+GitHub is a projection. CI conclusions and branch advances arrive as
+observations carrying a dedupe key and the instant they were observed. The
+same webhook delivered twice is one observation; an observation that arrives
+late but happened earlier never overwrites a newer one.
+
+A webhook adapter must pass the provider's delivery id as `--dedupe` — that is
+the identity of a delivery, and nothing derived can replace it. Without one,
+the key is derived from what the observation *says* (kind, repository, head,
+check, conclusion, and the `--at` instant only when one was stated); the wall
+clock never enters a derived key, so an undedupe-keyed redelivery converges on
+the same key instead of appending twice.
 
 `self integration reconcile` is the convergence step. It makes a lapsed lease
 durable and cancels every in-flight attempt whose fence is dead, whose main has
@@ -163,6 +222,7 @@ self integration show <id> [--json] | list [--all] [--json] | plan [--repo r] [-
 self integration declare <id> [--domain d] [--depends cs] [--consolidates cs --why w] [--check c] [--rank n]
 self integration head <id> --head h [--base b]
 self integration close <id> --as superseded|abandoned [--why w]
+self integration target --repo r [--branch b]
 self integration lease acquire --repo r --holder h [--ttl minutes] [--expires iso]
 self integration lease release --repo r --fence N | show --repo r [--json]
 self integration attempt start <id> --fence N --action rebase|resolve|merge [--json]
@@ -170,12 +230,17 @@ self integration attempt finish <attempt> --outcome completed|conflict|failed
             [--head h] [--base b] [--conflict-path p] [--intersection d] [--command "cmd:exit"]
 self integration attempt cancel <attempt> --why w
 self integration observe ci --repo r --head h --check c --conclusion x [--at iso] [--dedupe k]
-self integration observe main --repo r --head h [--at iso] [--dedupe k]
+self integration observe main|target --repo r --head h [--at iso] [--dedupe k]
 self integration observe --file <batch.json>
 self integration approve <id> --head h [--by name]
 self integration merge <id> --fence N --merge-commit m --main-before a --main-after b [--json]
+self integration promote request --repo r --candidate c [--main m] [--diff-digest d] [--repo-dir p] [--offline]
+self integration promote approve <promotion> --candidate c [--by name]
+self integration promote record <promotion> --fence N --main-before a --main-after b [--merge-commit m]
+self integration promote show <promotion> [--json]
 self integration reconcile [--repo r] [--json]
-self review request <id> --scope change|integration_delta|release [--json]
+self review request <id> --scope change|integration_delta [--json]
+self review request <promotion> --scope release [--json]
 self review ingest --file <envelope.json> [--json]
 self review list [<id>] [--json] | contract
 ```
@@ -194,6 +259,19 @@ no receipt however loudly the agent approved, that #44's review survives a
 conflict-free base advance and does not survive its conflict resolution, that a
 merge is refused on a stale fence, on red CI, on a moved head and on an
 unreviewed delta, and that reconciling twice writes nothing the second time.
+
+It proves both merge lanes. With the integration target configured, #43 and
+#44 merge into `next` with no human approval anywhere — and before it is
+configured, the same change set shows the `approval_missing` blocker, because
+its merges would land on main. It proves the human gate physically: a piped
+`approve` is refused with `human_gate_unavailable`, an event forged into the
+log with `confirmed: true` and no verified method never counts, a wrong typed
+challenge under a real pseudo-terminal approves nothing, and only the typed
+exact-candidate confirmation opens promotion. And it proves the promotion pin:
+a release envelope naming other bytes or another head is refused, a promotion
+record is refused without the release receipt, without the human approval,
+with malformed or unknown commits, and with a main-after that does not contain
+the candidate.
 
 It also carries a pair of branches with no file in common that declare one
 contract, so the semantic block is proved on an overlap no path comparison can

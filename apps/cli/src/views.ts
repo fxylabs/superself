@@ -76,7 +76,9 @@ function trainLines(model: ProjectModel): string[]
         }
         const lease = repository.lease;
         lines.push(`- ${repository.name} — ${lease !== undefined && lease.live
-            ? `lease held by ${lease.holder} at fence ${lease.fence}` : "no live integration lease"}`);
+            ? `lease held by ${lease.holder} at fence ${lease.fence}` : "no live integration lease"}` +
+            `${repository.integrationBranch === undefined
+                ? "" : `, merges into ${repository.integrationBranch}; only promotion into main takes a human approval`}`);
         for (const changeSet of open)
         {
             lines.push(`  - ${changeSet.order + 1}. ${changeSet.id}${changeSet.pr === undefined ? "" : ` #${changeSet.pr}`} — ` +

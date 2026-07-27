@@ -1,13 +1,13 @@
 import { parseArgs } from "node:util";
 import { commitStaged, stageArtifacts } from "./artifact.js";
-import { ENVELOPE_SCHEMA, ReviewEnvelope, readEnvelope, reviewContract } from "./envelope.js";
+import { ENVELOPE_SCHEMA, ReviewEnvelope, ValidatedEnvelope, readEnvelope, reviewContract } from "./envelope.js";
 import { receiptId } from "./ids.js";
-import { ChangeSet, IntegrationState, ReviewScope, REVIEW_SCOPES, coverage, short } from "./integration.js";
+import { ChangeSet, IntegrationState, Promotion, ReviewScope, REVIEW_SCOPES, coverage, short } from "./integration.js";
 import { refuse, Refusal, strip } from "./lane.js";
 import { ProjectContext } from "./paths.js";
 import { makeEvent, recordEvent, setMachineMode } from "./pipeline.js";
 import { dim, styled } from "./style.js";
-import { loadIntegration, printMachine, requireChangeSet, requireText } from "./trainutil.js";
+import { loadIntegration, printMachine, requireChangeSet, requirePromotion, requireText } from "./trainutil.js";
 import { CliError } from "./types.js";
 
 const REVIEW_USAGE = "usage: self review request <change-set> --scope change|integration_delta|release | ingest --file <envelope.json> | list [<change-set>] | contract";
@@ -42,6 +42,8 @@ export function cmdReview(ctx: ProjectContext, rest: string[]): void
 
 // A request states the bounds a review must not exceed, and the digest its
 // verdict will be bound to. It creates nothing: only an ingested envelope does.
+// A change or delta review is requested on a change set; a release review is
+// requested on a promotion, because that is the thing whose bytes it audits.
 function requestReview(ctx: ProjectContext, args: string[]): void
 {
     const { values, positionals } = parseArgs({
@@ -50,11 +52,13 @@ function requestReview(ctx: ProjectContext, args: string[]): void
         allowPositionals: true
     });
     const state = loadIntegration(ctx);
-    const changeSet = requireChangeSet(state, positionals[0]);
     const scope = requireScope(values.scope);
-    const order = reviewOrder(changeSet, scope);
-    recordEvent(ctx, makeEvent(ctx.project, "review.requested", { changeSet: changeSet.id, scope, digest: order.digest }),
-        `${changeSet.id} ${scope} ${short(order.digest)}`);
+    const order = scope === "release"
+        ? releaseOrder(requirePromotion(state, positionals[0]))
+        : reviewOrder(requireChangeSet(state, positionals[0]), scope);
+    const subject = scope === "release" ? { promotion: order.changeSet } : { changeSet: order.changeSet };
+    recordEvent(ctx, makeEvent(ctx.project, "review.requested", { ...subject, scope, digest: order.digest }),
+        `${order.changeSet} ${scope} ${short(order.digest)}`);
     if (!printMachine(values.json, order))
     {
         printOrder(order);
@@ -113,15 +117,33 @@ function boundsOf(changeSet: ChangeSet, scope: ReviewScope): string[]
             "the change review already covers the feature bytes this delta started from"
         ];
     }
-    if (scope === "release")
-    {
-        return [`the release candidate at ${short(changeSet.head)}`, "no unreleased change set is in scope"];
-    }
     return [
         `the feature diff ${short(changeSet.base)}...${short(changeSet.head)}`,
         `declared domains: ${changeSet.domains.map((domain) => `${domain.name}@${domain.version}`).join(", ") || "none"}`,
         "base movement that resolves without conflict does not require a re-review"
     ];
+}
+
+// A release audit reads exactly what promotion will land on main: the delta
+// from the pinned release base to the exact candidate commit, no more and no
+// less. Its verdict is bound to that digest, not to any one feature.
+function releaseOrder(promotion: Promotion): ReviewOrder
+{
+    return {
+        schema: ENVELOPE_SCHEMA,
+        changeSet: promotion.id,
+        scope: "release",
+        repository: promotion.repository,
+        base: promotion.base,
+        head: promotion.candidate,
+        digest: promotion.digest,
+        bounds: [
+            `the release delta ${short(promotion.base)}...${short(promotion.candidate)} — exactly what promotion lands on main`,
+            "every change set inside the delta already carries its own change and delta receipts",
+            "no change outside this delta is in scope"
+        ],
+        ingest: "self review ingest --file <envelope.json>"
+    };
 }
 
 function printOrder(order: ReviewOrder): void
@@ -155,6 +177,10 @@ function ingestReview(ctx: ProjectContext, args: string[]): void
     const file = requireText(values.file, "review ingest --file <envelope.json>");
     const validated = readEnvelope(file);
     const state = loadIntegration(ctx);
+    if (validated.envelope.scope === "release")
+    {
+        return ingestRelease(ctx, state, validated, values.json);
+    }
     const refusal = bindingRefusal(state, validated.envelope);
     if (refusal !== null)
     {
@@ -166,7 +192,47 @@ function ingestReview(ctx: ProjectContext, args: string[]): void
     {
         return reportDuplicate(already, values.json);
     }
-    recordReceipt(ctx, changeSet, validated.envelope, validated.envelopeDigest, validated.artifactPath, values.json);
+    recordReceipt(ctx, { changeSet: changeSet.id }, changeSet.work, validated, values.json);
+}
+
+// A release envelope binds to a promotion: the exact candidate commit as its
+// head and the exact release-delta digest the promotion pinned. A verdict
+// about any other bytes is a receipt about nothing.
+function ingestRelease(ctx: ProjectContext, state: IntegrationState, validated: ValidatedEnvelope,
+    json: boolean | undefined): void
+{
+    const envelope = validated.envelope;
+    const promotion = state.promotions.find((item) => item.id === envelope.changeSet);
+    if (promotion === undefined)
+    {
+        return refuse(json, {
+            code: "promotion_unknown",
+            detail: `no promotion "${envelope.changeSet}" is requested — a release review binds to a promotion, not a change set`,
+            next: "self integration promote request --repo <name> --candidate <sha>"
+        });
+    }
+    if (envelope.head !== promotion.candidate)
+    {
+        return refuse(json, {
+            code: "head_mismatch",
+            detail: `the envelope reviewed ${short(envelope.head)} and ${promotion.id} promotes ${short(promotion.candidate)}`,
+            next: `self review request ${promotion.id} --scope release`
+        });
+    }
+    if (envelope.digest !== promotion.digest)
+    {
+        return refuse(json, {
+            code: "digest_unbound",
+            detail: `digest ${short(envelope.digest)} is not the release-delta digest ${short(promotion.digest)} of ${promotion.id}`,
+            next: `self review request ${promotion.id} --scope release`
+        });
+    }
+    const already = promotion.receipts.find((receipt) => receipt.envelopeDigest === validated.envelopeDigest);
+    if (already !== undefined)
+    {
+        return reportDuplicate(already, json);
+    }
+    recordReceipt(ctx, { promotion: promotion.id }, undefined, validated, json);
 }
 
 // The same envelope ingested twice is one receipt. A supervisor that crashed
@@ -218,22 +284,23 @@ function digestRefusal(changeSet: ChangeSet, envelope: ReviewEnvelope): Refusal 
     return null;
 }
 
-function recordReceipt(ctx: ProjectContext, changeSet: ChangeSet, envelope: ReviewEnvelope,
-    envelopeDigest: string, artifactPath: string, json: boolean | undefined): void
+function recordReceipt(ctx: ProjectContext, subject: Record<string, string>, work: string | undefined,
+    validated: ValidatedEnvelope, json: boolean | undefined): void
 {
+    const envelope = validated.envelope;
     const id = receiptId();
-    const staged = stageArtifacts(ctx.storeDir, ctx.project, [artifactPath]);
+    const staged = stageArtifacts(ctx.storeDir, ctx.project, [validated.artifactPath]);
     const stored = staged.artifacts[0];
     const payload = strip({
-        receipt: id, changeSet: changeSet.id, scope: envelope.scope, base: envelope.base, head: envelope.head,
+        receipt: id, ...subject, scope: envelope.scope, base: envelope.base, head: envelope.head,
         digest: envelope.digest, verdict: envelope.verdict, findings: envelope.findings, tests: envelope.tests,
-        artifact: { ...stored, sha256: envelope.artifact.sha256 }, envelopeDigest,
+        artifact: { ...stored, sha256: envelope.artifact.sha256 }, envelopeDigest: validated.envelopeDigest,
         reviewer: envelope.reviewer.name, model: envelope.reviewer.model, session: envelope.reviewer.session,
         completedAt: envelope.completedAt
     });
-    const refs = { work: changeSet.work, artifacts: [stored.id] };
+    const refs = { work, artifacts: [stored.id] };
     commitStaged(staged, (recorded) => recordEvent(ctx, makeEvent(ctx.project, "review.received", payload, strip(refs)),
-        `${changeSet.id} ${envelope.scope} ${envelope.verdict}`, recorded));
+        `${Object.values(subject)[0]} ${envelope.scope} ${envelope.verdict}`, recorded));
     if (!printMachine(json, { ok: true, receipt: id, ...payload }))
     {
         console.log(id);

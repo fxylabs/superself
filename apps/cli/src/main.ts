@@ -91,9 +91,12 @@ const USAGE = `usage: self <command>
   integration lease acquire|release|show --repo r [--holder h] [--fence N]
   integration attempt start <id> --fence N --action rebase|resolve|merge
   integration attempt finish <attempt> --outcome completed|conflict|failed [--head h]
-  integration observe ci|main --repo r --head h [--check c] [--conclusion x] [--at iso]
-  integration approve <id> --head h          a maintainer's merge approval, bound to that exact head
+  integration observe ci|main|target --repo r --head h [--check c] [--conclusion x] [--at iso] [--dedupe k]
+  integration target --repo r [--branch b]   configure the autonomous integration branch merges land on
+  integration approve <id> --head h          the human gate on a merge that lands on main (interactive terminal)
   integration merge <id> --fence N --merge-commit m --main-before a --main-after b
+  integration promote request|approve|record|show
+                                             the only lane into main: release review + human approval, exact candidate
   integration reconcile [--repo r]           converge leases and in-flight attempts, idempotently
   review request <id> --scope change|integration_delta|release
   review ingest --file <envelope.json>       the only way a review receipt comes into being
