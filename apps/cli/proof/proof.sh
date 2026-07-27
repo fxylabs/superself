@@ -179,6 +179,145 @@ grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/workspace.html" || fail "work
 grep -q 'aria-label="waiting on you"' "$VIEW_A/demo.html" || fail "project view missing the attention panel"
 grep -q 'aria-label="waiting on you"' "$VIEW_A/workspace.html" || fail "workspace view missing the attention panel"
 
+# a report is atomic across the artifacts it declares: the whole set is checked
+# before a byte is copied, so a rejected member can never half-write a report
+STORE="$ROOT/A/ws/.superself"
+snapshot()
+{
+    (cd "$STORE" && find . -path ./.git -prune -o -print | sort)
+    git -C "$STORE" rev-parse HEAD
+    git -C "$STORE" status --porcelain
+    wc -l < "$STORE/projects/demo/log.jsonl"
+}
+# counted, never matched through a pipe that quits early: `find | grep -q` can
+# report the exit status of a killed find instead of the answer, and an
+# assertion that cannot fail proves nothing. The artifacts root always exists
+# here, so find itself has nothing to fail on.
+count_artifacts()
+{
+    find "$STORE/artifacts" -type f -name "$1" | wc -l | tr -d ' '
+}
+echo "<h1>second page</h1>" > "$ROOT/second.html"
+BEFORE="$(snapshot)"
+HALF="$(SELF report "$WID" "half a set" --artifact "$ROOT/second.html" --artifact "$ROOT/missing.bin" 2>&1 || true)"
+echo "$HALF" | grep -q "does not exist" || fail "a missing member did not reject the whole set"
+[ "$(count_artifacts "*second.html")" -eq 0 ] || fail "a rejected set left orphan artifact bytes"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a rejected set changed the log, the tree, or the store commit"
+
+# a complete set records exactly one report event carrying every artifact
+REPORTS_BEFORE="$(grep -c '"type":"report.added"' "$STORE/projects/demo/log.jsonl")"
+SELF report "$WID" "two pages at once" --artifact "$ROOT/second.html" --artifact "$ROOT/launch.html"
+REPORTS_AFTER="$(grep -c '"type":"report.added"' "$STORE/projects/demo/log.jsonl")"
+[ "$REPORTS_AFTER" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a multi-artifact report did not record exactly one event"
+SELF artifact list --work "$WID" | grep -q "second.html" || fail "the first member of the set was not recorded"
+[ "$(SELF artifact list --work "$WID" | grep -c "launch.html")" -eq 2 ] || fail "the second member of the set was not recorded"
+git -C "$STORE" ls-files | grep -q "second.html" || fail "a set member was not committed with its event"
+[ -z "$(git -C "$STORE" status --porcelain)" ] || fail "a multi-artifact report left the store dirty"
+
+# the same filename twice is two artifacts, never one overwriting the other
+SELF report "$WID" "the same name twice" --artifact "$ROOT/launch.html" --artifact "$ROOT/launch.html"
+[ "$(SELF artifact list --work "$WID" | grep -c "launch.html")" -eq 4 ] || fail "duplicate names did not each get a record"
+[ "$(find "$STORE/artifacts/demo" -name "*-launch.html" | wc -l | tr -d ' ')" -eq 4 ] || fail "duplicate names shared one stored file"
+
+# an unreadable member is rejected before its set is copied, not while copying
+if [ "$(id -u)" != "0" ]
+then
+    echo locked > "$ROOT/locked.bin"
+    chmod 000 "$ROOT/locked.bin"
+    BEFORE="$(snapshot)"
+    LOCKED="$(SELF report "$WID" "unreadable member" --artifact "$ROOT/second.html" --artifact "$ROOT/locked.bin" 2>&1 || true)"
+    echo "$LOCKED" | grep -q "cannot be read" || fail "an unreadable artifact was not rejected"
+    [ "$(snapshot)" = "$BEFORE" ] || fail "an unreadable member left the store changed"
+    chmod 644 "$ROOT/locked.bin"
+fi
+
+# a directory named alongside a valid file rejects the set and copies nothing
+BEFORE="$(snapshot)"
+DIRSET="$(SELF report "$WID" "a directory member" --artifact "$ROOT/second.html" --artifact "$ROOT/A" 2>&1 || true)"
+echo "$DIRSET" | grep -q "is a directory" || fail "a directory artifact was not rejected"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a rejected directory member left the store changed"
+
+# a project's first set takes the directory it created back out with it
+cd "$ROOT/outside/app"
+WOUT="$(SELF work add "a rejected first set leaves no directory" | tail -1)"
+SELF work start "$WOUT"
+FIRST="$(SELF report "$WOUT" "first set fails" --artifact "$ROOT/second.html" --artifact "$ROOT/missing.bin" 2>&1 || true)"
+echo "$FIRST" | grep -q "does not exist" || fail "a project's first artifact set was not rejected"
+[ -d "$STORE/artifacts/outside" ] && fail "a rejected first set left an empty artifact directory behind"
+cd "$ROOT/A/ws/demo"
+
+# a member that passes every check and then fails while being copied. A unix
+# socket is exactly that source: it exists, it is not a directory, it is
+# readable — and it cannot be opened for copying. The failure lands after the
+# preflight, where rollback is the only thing keeping the store whole.
+( node -e 'require("node:net").createServer().listen(process.argv[1], () => process.kill(process.pid, "SIGKILL"))' "$ROOT/queue.sock" ) > /dev/null 2>&1 || true
+[ -S "$ROOT/queue.sock" ] || fail "the proof could not leave a socket behind to fail a copy with"
+STORED_BEFORE="$(count_artifacts "*")"
+BEFORE="$(snapshot)"
+MIDCOPY="$(SELF report "$WID" "a member that cannot be copied" --artifact "$ROOT/second.html" --artifact "$ROOT/queue.sock" 2>&1 || true)"
+echo "$MIDCOPY" | grep -q "could not be copied into the store" || fail "a member that failed while copying was not reported"
+[ "$(count_artifacts "*")" -eq "$STORED_BEFORE" ] || fail "a failed copy left the half of the set it had already written"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a failed copy left the log, the tree, or the store commit changed"
+
+# rollback removes what it created and nothing around it: the shared artifacts
+# root, the project directory it found, and the bytes of earlier reports all
+# stay exactly where they were
+[ -d "$STORE/artifacts" ] || fail "rollback removed the shared artifacts root"
+[ -d "$STORE/artifacts/demo" ] || fail "rollback removed a project directory it did not create"
+[ "$(count_artifacts "*-launch.html")" -eq 4 ] || fail "rollback removed artifacts stored by earlier reports"
+node "$CLI_DIR/proof/rollback-ownership.mjs" "$ROOT/rollback-store" || fail "rollback removed paths it did not create"
+
+# the same failure on a project's first set: the directory this command made
+# goes, the root above it stays
+cd "$ROOT/outside/app"
+BEFORE="$(snapshot)"
+FIRSTCOPY="$(SELF report "$WOUT" "a first set that fails while copying" --artifact "$ROOT/second.html" --artifact "$ROOT/queue.sock" 2>&1 || true)"
+echo "$FIRSTCOPY" | grep -q "could not be copied into the store" || fail "a first set that failed while copying was not reported"
+[ -d "$STORE/artifacts/outside" ] && fail "a failed copy left behind the directory it created"
+[ -d "$STORE/artifacts" ] || fail "a failed first copy took the shared artifacts root with it"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a failed first copy left the store changed"
+cd "$ROOT/A/ws/demo"
+
+# the appended event is the store's truth, and the line rollback stops at. A
+# fold that fails after that line is written costs a refold — never the event,
+# and never the bytes the event already names. The view files are derived and
+# machine-local, so one of them standing in as the failure is the fold's own
+# last step and nothing the store keeps.
+if [ "$(id -u)" != "0" ]
+then
+    chmod 444 "$VIEW_A/demo.json"
+    LATE="$(SELF report "$WID" "the fold fails after the event is durable" --artifact "$ROOT/second.html" 2>&1 || true)"
+    chmod 644 "$VIEW_A/demo.json"
+    echo "$LATE" | grep -q "EACCES" || fail "the proof could not make the fold fail after the event was appended"
+    tail -1 "$STORE/projects/demo/log.jsonl" | grep -q "the fold fails after the event is durable" || fail "the event was not appended before the fold ran"
+    LATE_PATH="$(tail -1 "$STORE/projects/demo/log.jsonl" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')"
+    [ -n "$LATE_PATH" ] || fail "the durable report recorded no artifact path"
+    [ -f "$STORE/$LATE_PATH" ] || fail "a durable report lost the bytes it names"
+    SELF artifact list --work "$WID" | grep -q "second.html" || fail "the durable report is missing from the derived registry"
+    # and the store catches up by itself: the next event folds and commits what
+    # the interrupted one left, bytes included
+    SELF report "$WID" "the next event folds what the failed one left"
+    [ -z "$(git -C "$STORE" status --porcelain)" ] || fail "the store did not recover on the next event"
+    git -C "$STORE" ls-files | grep -q "$LATE_PATH" || fail "the bytes of the recovered report were never committed"
+fi
+
+# a project name is not a path. One that would leave the artifacts root is
+# refused a directory there instead of being followed out of the store.
+machine D
+mkdir -p "$ROOT/D/ws/app"
+cd "$ROOT/D/ws"
+SELF init > /dev/null
+cd "$ROOT/D/ws/app"
+git init -q
+SELF project add --name "../../escape" --desc "a name that is not a path segment" --no-connect > /dev/null || fail "the proof could not register the hostile name it tests"
+WESC="$(SELF work add "a hostile project name stores nothing outside the root" | tail -1)"
+SELF work start "$WESC" > /dev/null
+ESCAPE="$(SELF report "$WESC" "escape the artifacts root" --artifact "$ROOT/second.html" 2>&1 || true)"
+echo "$ESCAPE" | grep -q "single path segment" || fail "a project name that leaves the artifacts root was accepted"
+[ "$(find "$ROOT/D" -type f -name "*-second.html" | wc -l | tr -d ' ')" -eq 0 ] || fail "a hostile project name wrote artifact bytes outside the artifacts root"
+machine A
+cd "$ROOT/A/ws/demo"
+
 # the App Rail shell: every page carries the rail, the app bar, and a query
 # bar that states the fold it was rendered from
 for PAGE in "$VIEW_A/demo.html" "$VIEW_A/workspace.html" "$VIEW_A/demo/$WID.html"

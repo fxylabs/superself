@@ -32,7 +32,11 @@ export function makeEvent(
 
 // The branch is stamped here, not by each verb: every event is made from one
 // checkout, and that is the only place holding it.
-export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string): void
+//
+// `onRecorded` fires the moment the event is durable, before any derived work:
+// a caller holding bytes for this event learns there that they now belong to
+// the store, whatever the rest of this function does.
+export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, onRecorded?: () => void): void
 {
     const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
     if (branch !== null)
@@ -41,6 +45,10 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string):
     }
     const dir = ensureDir(projectStateDir(ctx.storeDir, event.project));
     appendFileSync(join(dir, "log.jsonl"), JSON.stringify(event) + "\n");
+    // The appended line is the state change. Everything below it is derived
+    // from the log and is redone by the next fold, so a failure there costs a
+    // refold — never the event, and never what the event names.
+    onRecorded?.();
     foldProject(ctx.storeDir, event.project);
     commitAll(ctx.storeDir, `${event.type} ${event.project}: ${truncate(summary, 60)}`);
     console.log(styled
