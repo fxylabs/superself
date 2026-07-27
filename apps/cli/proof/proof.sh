@@ -213,6 +213,12 @@ SELF artifact list --work "$WID" | grep -q "second.html" || fail "the first memb
 [ "$(SELF artifact list --work "$WID" | grep -c "launch.html")" -eq 2 ] || fail "the second member of the set was not recorded"
 git -C "$STORE" ls-files | grep -q "second.html" || fail "a set member was not committed with its event"
 [ -z "$(git -C "$STORE" status --porcelain)" ] || fail "a multi-artifact report left the store dirty"
+# and every member of it carries the digest of its own bytes, so the set rolls
+# back as one while each file in it is verified on its own
+SETLINE="$(grep '"type":"report.added"' "$STORE/projects/demo/log.jsonl" | tail -1)"
+[ "$(echo "$SETLINE" | grep -o '"digest":"' | wc -l | tr -d ' ')" -eq 2 ] \
+    || fail "a multi-artifact report did not record a digest for every member"
+SELF status | grep -q "artifact .*second.html" && fail "a stored set member was reported as unhealthy"
 
 # the same filename twice is two artifacts, never one overwriting the other
 SELF report "$WID" "the same name twice" --artifact "$ROOT/launch.html" --artifact "$ROOT/launch.html"
@@ -265,6 +271,9 @@ echo "$MIDCOPY" | grep -q "could not be copied into the store" || fail "a member
 [ -d "$STORE/artifacts" ] || fail "rollback removed the shared artifacts root"
 [ -d "$STORE/artifacts/demo" ] || fail "rollback removed a project directory it did not create"
 [ "$(count_artifacts "*-launch.html")" -eq 4 ] || fail "rollback removed artifacts stored by earlier reports"
+# a rolled-back set wrote no event, so health has nothing half-written to name
+SELF status | grep -qE "is missing from this store|cannot be read in this store" \
+    && fail "a rolled-back set left an artifact health cannot account for"
 node "$CLI_DIR/proof/rollback-ownership.mjs" "$ROOT/rollback-store" || fail "rollback removed paths it did not create"
 
 # the same failure on a project's first set: the directory this command made
