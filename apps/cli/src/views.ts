@@ -1,3 +1,4 @@
+import { ChangeSet, openChangeSets } from "./integration.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
@@ -31,6 +32,7 @@ export function printContext(ctx: CliContext): void
     pushList(lines, "Objectives", objectiveLines(model));
     pushList(lines, "Decisions", model.decisions.filter((d) => d.status === "confirmed").map((d) => `- ${d.text}${d.why === undefined ? "" : ` — ${d.why}`}`));
     pushList(lines, "Conventions", model.conventions.map((c) => `- ${c.text}`));
+    pushList(lines, "Integration train", trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model));
     pushList(lines, "Waiting on you", waitingLines(model));
     pushList(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- ${w.id} ${w.outcome}`));
@@ -53,6 +55,35 @@ function objectiveLines(model: ProjectModel): string[]
                 .filter((flag) => flag !== "").join(", ");
             lines.push(`  - ${milestone.id} ${milestone.outcome} — ${milestone.state}: ${milestone.reason}` +
                 `${flags === "" ? "" : ` [${flags}]`}`);
+        }
+    }
+    return lines;
+}
+
+// What an agent must read before it touches a repository: whose turn it is in
+// the lane, and the exact prerequisite standing between each item and merge.
+function trainLines(model: ProjectModel): string[]
+{
+    const lines: string[] = [];
+    for (const repository of model.integration.repositories)
+    {
+        const open = repository.train
+            .map((id) => model.integration.changeSets.find((item) => item.id === id))
+            .filter((item): item is ChangeSet => item !== undefined && item.closed === undefined && item.merge === undefined);
+        if (open.length === 0)
+        {
+            continue;
+        }
+        const lease = repository.lease;
+        lines.push(`- ${repository.name} — ${lease !== undefined && lease.live
+            ? `lease held by ${lease.holder} at fence ${lease.fence}` : "no live integration lease"}` +
+            `${repository.integrationBranch === undefined
+                ? "" : `, merges into ${repository.integrationBranch}; only promotion into main takes a human approval`}`);
+        for (const changeSet of open)
+        {
+            lines.push(`  - ${changeSet.order + 1}. ${changeSet.id}${changeSet.pr === undefined ? "" : ` #${changeSet.pr}`} — ` +
+                `${changeSet.phase}: ${changeSet.reason}`);
+            lines.push(`    next: ${changeSet.next}`);
         }
     }
     return lines;
@@ -122,6 +153,7 @@ export function printStatus(ctx: CliContext): void
     console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
     console.log(`work: ${countLine(model.works)}`);
     console.log(`objectives: ${objectiveCountLine(model)}`);
+    console.log(`integration: ${integrationCountLine(model)}`);
     console.log(`waiting on you: ${waitingCount(model)}`);
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
 }
@@ -145,6 +177,23 @@ export function waitingCount(model: ProjectModel): number
         + openProposals(model.goals).length;
 }
 
+// One line for the whole lane: how many change sets are open, which one may
+// move next, and whether anything is stopped on policy rather than on work.
+function integrationCountLine(model: ProjectModel): string
+{
+    const all = model.integration.changeSets;
+    if (all.length === 0)
+    {
+        return "no change sets registered";
+    }
+    const open = openChangeSets(model.integration);
+    const merged = all.filter((item) => item.phase === "merged").length;
+    const ready = open.filter((item) => item.phase === "merge_ready").map((item) => item.id);
+    const blocked = open.filter((item) => item.phase === "blocked_policy").map((item) => item.id);
+    return `${open.length} open, ${merged} merged, ${ready.length === 0 ? "none merge_ready" : `merge_ready: ${ready.join(", ")}`}` +
+        `${blocked.length === 0 ? "" : `, blocked_policy: ${blocked.join(", ")}`}`;
+}
+
 function printStyledStatus(model: ProjectModel): void
 {
     console.log(`${bold(model.slug)} — ${model.goal ?? dim("(goal not set)")}`);
@@ -152,6 +201,10 @@ function printStyledStatus(model: ProjectModel): void
     if (openObjectives(model.goals).length > 0)
     {
         console.log(dim(objectiveCountLine(model)));
+    }
+    if (model.integration.changeSets.length > 0)
+    {
+        console.log(dim(integrationCountLine(model)));
     }
     const waiting = waitingCount(model);
     if (waiting > 0)

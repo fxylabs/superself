@@ -241,23 +241,44 @@ export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord
     {
         for (const event of readEvents(storeDir, slug))
         {
-            if (event.type !== "report.added" || !Array.isArray(event.payload.artifacts))
-            {
-                continue;
-            }
-            for (const meta of event.payload.artifacts as ArtifactMeta[])
+            for (const meta of declaredArtifacts(event))
             {
                 records.push({
                     ...meta,
                     project: slug,
                     work: event.refs?.work,
                     ts: event.ts,
-                    summary: String(event.payload.text ?? "")
+                    summary: summaryOf(event)
                 });
             }
         }
     }
     return records;
+}
+
+// Bytes reach the store through a report or through a review receipt, and the
+// registry is derived from whichever event named them: a review record that
+// only one surface could find would be a record nobody can audit.
+function declaredArtifacts(event: { type: string; payload: Record<string, unknown> }): ArtifactMeta[]
+{
+    if (event.type === "report.added" && Array.isArray(event.payload.artifacts))
+    {
+        return event.payload.artifacts as ArtifactMeta[];
+    }
+    if (event.type === "review.received" && event.payload.artifact !== undefined)
+    {
+        return [event.payload.artifact as ArtifactMeta];
+    }
+    return [];
+}
+
+function summaryOf(event: { type: string; payload: Record<string, unknown> }): string
+{
+    if (event.type !== "review.received")
+    {
+        return String(event.payload.text ?? "");
+    }
+    return `${event.payload.scope} review ${event.payload.verdict} for ${event.payload.changeSet}`;
 }
 
 export function runArtifact(ctx: CliContext, rest: string[]): void

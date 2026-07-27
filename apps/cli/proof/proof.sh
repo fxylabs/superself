@@ -805,4 +805,8 @@ echo "$BADVERB2" | grep -q "usage: self milestone" || fail "an unknown milestone
 NOID="$(SELF objective show 2>&1 || true)"
 echo "$NOID" | grep -q "objective-id" || fail "a genuinely missing id stopped asking for an id"
 
+# the repository integration controller replays a real three-branch train, so
+# it builds its own git repository under a root of its own
+bash "$CLI_DIR/proof/integration.sh"
+
 echo "proof OK"
