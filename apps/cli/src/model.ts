@@ -1,4 +1,5 @@
 import { DEFAULT_ZONE } from "./dates.js";
+import { applyIntegration, deriveIntegration, emptyIntegration, IntegrationState, isIntegrationEvent } from "./integration.js";
 import { readEvents } from "./logfile.js";
 import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
 import { readRegistry, readStoreConfig } from "./paths.js";
@@ -74,6 +75,9 @@ export interface ProjectModel
     decisions: DecisionState[];
     conventions: { id: string; ts: string; text: string }[];
     works: WorkState[];
+    // The repository integration lane. Parallel work is recorded above; the
+    // order it reaches main in is recorded here.
+    integration: IntegrationState;
     openQuestions: string[];
     health: string[];
 }
@@ -89,6 +93,7 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         decisions: [],
         conventions: [],
         works: [],
+        integration: emptyIntegration(),
         openQuestions: [],
         health: []
     };
@@ -102,6 +107,11 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
 
 function applyEvent(model: ProjectModel, event: SelfEvent): void
 {
+    if (isIntegrationEvent(event.type))
+    {
+        applyIntegration(model.integration, event);
+        return;
+    }
     if (event.type === "goal.set")
     {
         model.goal = String(event.payload.text);
@@ -315,6 +325,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
 function deriveSignals(model: ProjectModel, now: Date): void
 {
     model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
+    model.health.push(...deriveIntegration(model.integration, now));
     for (const objective of model.goals.objectives.filter((item) => item.status === "proposed"))
     {
         model.openQuestions.push(`objective ${objective.id} is proposed and not confirmed: ${objective.outcome}`);

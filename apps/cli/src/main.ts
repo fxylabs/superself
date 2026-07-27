@@ -31,6 +31,8 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { loadVerdicts } from "./reachability.js";
+import { cmdReview } from "./reviews.js";
+import { cmdIntegration } from "./train.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
@@ -80,6 +82,22 @@ const USAGE = `usage: self <command>
               --capacity c --evidence-plan e --confidence low|medium|high --expires d
   work accept|decline <proposal-id>          act on a goal-gap proposal
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
+  integration [status]                       compact status of every repository's integration train
+  integration register --repo r --base b --head h [--pr n] [--work id] [--domain name@ver]
+              [--depends cs] [--supersedes cs] [--check name] [--rank n] [--diff-digest d]
+  integration show|list|plan [--json]        machine-readable train, receipts, and blockers
+  integration declare <id> [--depends cs] [--consolidates cs --why w] [--domain d] [--check c]
+  integration head <id> --head h             record an author's new head; a changed digest owes a review
+  integration lease acquire|release|show --repo r [--holder h] [--fence N]
+  integration attempt start <id> --fence N --action rebase|resolve|merge
+  integration attempt finish <attempt> --outcome completed|conflict|failed [--head h]
+  integration observe ci|main --repo r --head h [--check c] [--conclusion x] [--at iso]
+  integration approve <id> --head h          a maintainer's merge approval, bound to that exact head
+  integration merge <id> --fence N --merge-commit m --main-before a --main-after b
+  integration reconcile [--repo r]           converge leases and in-flight attempts, idempotently
+  review request <id> --scope change|integration_delta|release
+  review ingest --file <envelope.json>       the only way a review receipt comes into being
+  review list [<id>] | contract              receipts on record, or the runner's result contract
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact or open it with the OS default app
@@ -115,6 +133,8 @@ async function main(argv: string[]): Promise<void>
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
+        case "integration": cmdIntegration(requireProject(process.cwd()), rest); break;
+        case "review": cmdReview(requireProject(process.cwd()), rest); break;
         case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;

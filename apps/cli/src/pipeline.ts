@@ -7,6 +7,16 @@ import { CliContext, ensureDir, projectStateDir } from "./paths.js";
 import { bold, dim, green, styled } from "./style.js";
 import { EventRefs, SelfEvent } from "./types.js";
 
+// A machine surface owns its stdout. The human confirmation line below is
+// written for a person watching a terminal; a caller that asked for JSON gets
+// the JSON and nothing else to parse around.
+let machineMode = false;
+
+export function setMachineMode(on: boolean): void
+{
+    machineMode = on;
+}
+
 export function makeEvent(
     project: string,
     type: string,
@@ -61,7 +71,7 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     onRecorded?.();
     foldProject(ctx.storeDir, project);
     commitAll(ctx.storeDir, `${events.map((event) => event.type).join(" ")} ${project}: ${truncate(summary, 60)}`);
-    for (const event of events)
+    for (const event of machineMode ? [] : events)
     {
         console.log(styled
             ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`

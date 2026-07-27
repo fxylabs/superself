@@ -91,7 +91,7 @@ function stateFiles(dir: string): string[]
             files.push(name);
         }
     }
-    for (const sub of ["work", "objective"])
+    for (const sub of ["work", "objective", "integration"])
     {
         if (existsSync(join(dir, sub)))
         {
