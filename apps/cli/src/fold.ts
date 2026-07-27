@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
+import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
 import { evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
@@ -25,14 +26,14 @@ export function foldProject(storeDir: string, slug: string): void
         const rel = join("work", `${work.id}.md`);
         if (work.status === "done")
         {
-            rmSync(join(dir, rel), { force: true });
-            delete hashes[rel];
+            drop(dir, hashes, rel);
         }
         else
         {
-            writeGenerated(dir, hashes, rel, renderWork(work, verdicts));
+            writeGenerated(dir, hashes, rel, renderWork(work, model, verdicts));
         }
     }
+    foldObjectives(dir, hashes, model);
     writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
     const chromeMoved = writeViews(storeDir, model, readStoreConfig(storeDir), verdicts);
     if (projectDir !== null && existsSync(projectDir))
@@ -70,6 +71,37 @@ function refoldOthers(storeDir: string, slug: string): void
     }
 }
 
+// An objective keeps a file of its own while it is live, exactly as an open
+// work unit does; closing it removes the file without touching the log that
+// still holds its whole lineage.
+function foldObjectives(dir: string, hashes: Record<string, string>, model: ProjectModel): void
+{
+    if (model.goals.objectives.length === 0)
+    {
+        return;
+    }
+    ensureDir(join(dir, "objective"));
+    const open = new Set(openObjectives(model.goals).map((objective) => objective.id));
+    for (const objective of model.goals.objectives)
+    {
+        const rel = join("objective", `${objective.id}.md`);
+        if (open.has(objective.id))
+        {
+            writeGenerated(dir, hashes, rel, GENERATED_NOTE + "\n\n" + renderObjectiveBody(objective));
+        }
+        else
+        {
+            drop(dir, hashes, rel);
+        }
+    }
+}
+
+function drop(dir: string, hashes: Record<string, string>, rel: string): void
+{
+    rmSync(join(dir, rel), { force: true });
+    delete hashes[rel];
+}
+
 function readHashes(dir: string): Record<string, string>
 {
     const file = join(dir, ".hashes.json");
@@ -101,6 +133,8 @@ function renderState(model: ProjectModel): string
         lines.push(model.description, "");
     }
     lines.push("## Goal", "", model.goal ?? "_not set_", "");
+    section(lines, "Objectives", objectiveLines(model));
+    section(lines, "Proposed work", proposalSummaryLines(model));
     section(lines, "Decisions", decisionLines(model.decisions.filter((d) => d.status === "confirmed")));
     section(lines, "Proposed decisions", proposalLines(model.decisions));
     section(lines, "Conventions", model.conventions.map((c) => `- ${c.text} _(${c.id})_`));
@@ -119,6 +153,34 @@ function section(lines: string[], title: string, items: string[]): void
         return;
     }
     lines.push(`## ${title}`, "", ...items, "");
+}
+
+// The long-term goal above stays exactly where it is: an objective is a
+// time-boxed target beside it, never a replacement for it.
+function objectiveLines(model: ProjectModel): string[]
+{
+    const lines: string[] = [];
+    for (const objective of openObjectives(model.goals))
+    {
+        const box = [objective.horizon, objective.target === undefined ? "" : `target ${objective.target}`]
+            .filter((part) => part !== undefined && part !== "").join(", ");
+        const proposed = objective.status === "proposed" ? " _(proposed)_" : "";
+        lines.push(`- **${objective.id}** ${objective.outcome}${box === "" ? "" : ` (${box})`} — ` +
+            `${objective.state}: ${objective.reason}${proposed}`);
+        for (const milestone of objective.milestones)
+        {
+            lines.push(`  - **${milestone.id}** ${milestone.outcome}` +
+                `${milestone.target === undefined ? "" : ` (target ${milestone.target})`} — ${milestone.state}: ${milestone.reason}`);
+        }
+    }
+    return lines;
+}
+
+function proposalSummaryLines(model: ProjectModel): string[]
+{
+    return openProposals(model.goals).map((proposal) =>
+        `- ${proposal.outcome} → ${proposal.milestone ?? proposal.objective} — ${proposal.confidence} confidence, ` +
+        `${proposal.capacity}, expires ${proposal.expires} _(\`self work accept ${proposal.id.slice(0, 8)}\`)_`);
 }
 
 function decisionLines(decisions: DecisionState[]): string[]
@@ -151,14 +213,124 @@ function blockedLine(work: WorkState): string
     return `- **${work.id}** ${work.outcome} — waiting on ${work.blockedOn}${why}`;
 }
 
-function renderWork(work: WorkState, verdicts: Record<string, Verdict>): string
+export function renderObjectiveBody(objective: ObjectiveState): string
 {
-    return GENERATED_NOTE + "\n\n" + renderWorkBody(work, verdicts);
+    const lines: string[] = [`# ${objective.id} — ${objective.outcome}`, "", `- Status: ${objective.status}`,
+        `- Target state: ${objective.state} — ${objective.reason}`, `- Revision: ${objective.revision}`];
+    if (objective.horizon !== undefined || objective.target !== undefined)
+    {
+        lines.push(`- Timebox: ${objective.horizon ?? "unset"}${objective.target === undefined ? "" : `, target ${objective.target}`}`);
+    }
+    if (objective.priority !== undefined)
+    {
+        lines.push(`- Priority: ${objective.priority}`);
+    }
+    lines.push(`- Progress: ${objective.met} of ${objective.total} exit criteria covered`);
+    if (objective.supersedes.length > 0)
+    {
+        lines.push(`- Supersedes: ${objective.supersedes.join(", ")}`);
+    }
+    if (objective.supersededBy !== undefined)
+    {
+        lines.push(`- Superseded by: ${objective.supersededBy}`);
+    }
+    lines.push("");
+    bullets(lines, "Success criteria", objective.success);
+    bullets(lines, "Stop criteria", objective.stop);
+    bullets(lines, "Revision history", objective.history.map((entry) => `revision ${entry.revision} on ${day(entry.ts)} — ${entry.why}`));
+    for (const milestone of objective.milestones)
+    {
+        lines.push(`## Milestone ${milestone.id}`, "", renderMilestoneBody(milestone, objective).split("\n").slice(2).join("\n"));
+    }
+    return lines.join("\n").replace(/\n+$/, "\n");
 }
 
-export function renderWorkBody(work: WorkState, verdicts: Record<string, Verdict> = {}): string
+export function renderMilestoneBody(milestone: MilestoneState, objective: ObjectiveState): string
+{
+    const lines: string[] = [`# ${milestone.id} — ${milestone.outcome}`, "",
+        `- Objective: ${objective.id} ${objective.outcome}`,
+        `- State: ${milestone.state} — ${milestone.reason}`,
+        `- Revision: ${milestone.revision} (objective revision ${objective.revision})`];
+    if (milestone.target !== undefined)
+    {
+        lines.push(`- Target: ${milestone.target}`);
+    }
+    if (milestone.after.length > 0)
+    {
+        lines.push(`- After: ${milestone.after.join(", ")}`);
+    }
+    lines.push(`- Critical path: ${milestone.criticalPath ? "yes" : "no"}`);
+    lines.push(`- Work: ${milestone.works.length === 0 ? "none linked" : milestone.works.join(", ")}`);
+    if (milestone.evidence.length > 0)
+    {
+        lines.push(`- Evidence: ${milestone.evidence.join(", ")}`);
+    }
+    if (milestone.reached !== undefined)
+    {
+        lines.push(`- Reached: ${reachedLine(milestone.reached)}`);
+    }
+    if (milestone.reaffirmed !== undefined)
+    {
+        lines.push(`- Rechecked: ${reachedLine(milestone.reaffirmed)}`);
+    }
+    lines.push("");
+    bullets(lines, "Exit criteria", exitLines(milestone));
+    bullets(lines, "Coverage", milestone.coverage.map(coverageLine));
+    return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+function exitLines(milestone: MilestoneState): string[]
+{
+    return milestone.exit.map((criterion) =>
+    {
+        const state = criterion.dropped === true ? "dropped"
+            : milestone.met.includes(criterion.id) ? "covered" : "open";
+        return `${criterion.id} — ${criterion.text} _(${state})_`;
+    });
+}
+
+function reachedLine(reached: Reached): string
+{
+    return `${day(reached.ts)} against objective revision ${reached.objectiveRevision}` +
+        `/milestone revision ${reached.milestoneRevision}, criteria ${reached.criteria.join(", ")}` +
+        `${reached.evidence.length === 0 ? "" : `, evidence ${reached.evidence.join(", ")}`}`;
+}
+
+function coverageLine(coverage: Coverage): string
+{
+    const from = [coverage.work, ...coverage.commits].filter((part) => part !== undefined).join(" ");
+    return `${coverage.criterion} on ${day(coverage.ts)} — ${coverage.why}` +
+        `${from === "" ? "" : ` [${from}]`} _(${coverage.recheck === true ? "rechecked at " : ""}` +
+        `revision ${coverage.objectiveRevision}/${coverage.milestoneRevision})_`;
+}
+
+function contributionLines(work: WorkState, model: ProjectModel): string[]
+{
+    return contributionsOf(model.goals, work).map((item) =>
+        `${item.id} ${item.outcome} (${item.state}${item.criticalPath ? ", critical path" : ""})`);
+}
+
+function bullets(lines: string[], title: string, items: string[]): void
+{
+    if (items.length > 0)
+    {
+        lines.push(`## ${title}`, "", ...items.map((item) => `- ${item}`), "");
+    }
+}
+
+function renderWork(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict>): string
+{
+    return GENERATED_NOTE + "\n\n" + renderWorkBody(work, model, verdicts);
+}
+
+export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}): string
 {
     const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
+    const contributes = contributionLines(work, model);
+    if (contributes.length > 0)
+    {
+        lines.push(`- Contributes to: ${contributes.join("; ")}`);
+    }
     if (work.status === "blocked")
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);

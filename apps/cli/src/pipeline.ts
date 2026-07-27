@@ -38,22 +38,35 @@ export function makeEvent(
 // the store, whatever the rest of this function does.
 export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, onRecorded?: () => void): void
 {
+    recordEvents(ctx, [event], summary, onRecorded);
+}
+
+// Events that are one state change are appended in one write, so a reader can
+// never find half of it: a work unit created by an accepted proposal without
+// the link and the acceptance that explain it would be a unit nothing points
+// at, and a re-run of `work accept` would create a second one.
+export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: string, onRecorded?: () => void): void
+{
     const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
     if (branch !== null)
     {
-        event.refs = { ...event.refs, branch };
+        events.forEach((event) => { event.refs = { ...event.refs, branch }; });
     }
-    const dir = ensureDir(projectStateDir(ctx.storeDir, event.project));
-    appendFileSync(join(dir, "log.jsonl"), JSON.stringify(event) + "\n");
-    // The appended line is the state change. Everything below it is derived
+    const project = events[0].project;
+    const dir = ensureDir(projectStateDir(ctx.storeDir, project));
+    appendFileSync(join(dir, "log.jsonl"), events.map((event) => JSON.stringify(event) + "\n").join(""));
+    // The appended lines are the state change. Everything below them is derived
     // from the log and is redone by the next fold, so a failure there costs a
-    // refold — never the event, and never what the event names.
+    // refold — never the events, and never what they name.
     onRecorded?.();
-    foldProject(ctx.storeDir, event.project);
-    commitAll(ctx.storeDir, `${event.type} ${event.project}: ${truncate(summary, 60)}`);
-    console.log(styled
-        ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`
-        : `${event.type} recorded [${event.id}]`);
+    foldProject(ctx.storeDir, project);
+    commitAll(ctx.storeDir, `${events.map((event) => event.type).join(" ")} ${project}: ${truncate(summary, 60)}`);
+    for (const event of events)
+    {
+        console.log(styled
+            ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`
+            : `${event.type} recorded [${event.id}]`);
+    }
 }
 
 function truncate(text: string, max: number): string
