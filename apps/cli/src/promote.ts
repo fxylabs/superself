@@ -5,6 +5,7 @@ import {
     Promotion,
     Repository,
     canonicalBranch,
+    isMainAlias,
     mergeTargetOf,
     promotionApproval,
     short,
@@ -54,12 +55,14 @@ export function cmdTarget(ctx: ProjectContext, rest: string[]): void
     {
         throw new CliError(`--branch "${values.branch}" names no branch`);
     }
-    if (branch === "main")
+    if (isMainAlias(branch))
     {
         throw new CliError("the integration target is the branch before main — promotion into main is its own gated lane, " +
             "and a repository with no target merges straight into main under the human gate");
     }
-    recordEvent(ctx, makeEvent(ctx.project, "repo.target_set", { repository: repository.name, branch }),
+    // The event carries the spelling as given; the fold canonicalizes exactly
+    // once, so the command must not strip a prefix the fold would strip again.
+    recordEvent(ctx, makeEvent(ctx.project, "repo.target_set", { repository: repository.name, branch: values.branch }),
         `${repository.name} merges into ${branch}`);
 }
 

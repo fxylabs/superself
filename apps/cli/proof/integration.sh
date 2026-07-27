@@ -244,9 +244,12 @@ SELF integration show "$CS43" --json | field blockers | grep -q "approval_missin
     && fail "an integration-target merge still demands a per-merge human approval"
 
 # main under any equivalent spelling is not an integration target: every alias
-# of the same local head is refused, and a refusal records no target event
+# of the same local head is refused, and a refusal records no target event.
+# Case variants are aliases too — on a case-insensitive filesystem "MAIN"
+# checks out the very same branch as "main"
 TSETS="$(grep -c '"type":"repo.target_set"' "$ROOT/ws/.superself/projects/superself/log.jsonl")"
-for alias in "main" "refs/heads/main" "heads/main" " main " $'main\t' $'refs/heads/main\n'
+for alias in "main" "refs/heads/main" "heads/main" " main " $'main\t' $'refs/heads/main\n' \
+    "MAIN" "Main" "refs/heads/MAIN" "heads/Main" " MAIN " $'Main\t'
 do
     ALIASED="$(SELF integration target --repo superself --branch "$alias" 2>&1 || true)"
     echo "$ALIASED" | grep -q "gated lane" || fail "main spelled '$alias' was accepted as an integration target"
@@ -265,6 +268,26 @@ JSON
     || fail "a forged main alias in the log resolved the autonomous lane onto main"
 [ "$(SELF integration target --repo superself --json | field promotion)" = "false" ] \
     || fail "a forged main alias flipped the derived lane"
+
+# a forged case variant of main is the same non-event: the fold reads the one
+# predicate the command reads, so no casing sets a target the CLI would refuse
+cat >> "$ROOT/ws/.superself/projects/superself/log.jsonl" <<JSON
+{"id":"00000000000000000000000002","ts":"2026-01-01T00:00:01.000Z","type":"repo.target_set","origin":{"actor":"agent"},"project":"superself","payload":{"repository":"superself","branch":"heads/MAIN"}}
+JSON
+[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] \
+    || fail "a forged case variant of main in the log resolved the autonomous lane onto main"
+[ "$(SELF integration target --repo superself --json | field promotion)" = "false" ] \
+    || fail "a forged case variant of main flipped the derived lane"
+
+# canonicalization strips exactly one prefix and keeps the branch's own case:
+# git reads "refs/heads/heads/Next-Lane" as the branch "heads/Next-Lane", and
+# folding it all the way to "next-lane" would name a branch nobody has
+SELF integration target --repo superself --branch refs/heads/heads/Next-Lane > /dev/null
+[ "$(SELF integration target --repo superself --json | field branch)" = "heads/Next-Lane" ] \
+    || fail "a double-prefixed branch was not stored as git names it"
+SELF integration target --repo superself --branch next > /dev/null
+[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] \
+    || fail "restoring the next target did not stick"
 
 # ── architecture overlap is a policy stop, not a rebase ─────────────
 [ "$(phase_of "$CS52")" = "blocked_policy" ] || fail "an unconsolidated architecture overlap did not block #52"
