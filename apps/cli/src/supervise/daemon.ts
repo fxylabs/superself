@@ -5,7 +5,7 @@ import { CliContext } from "../paths.js";
 import { bold, dim, green, styled, yellow } from "../style.js";
 import { CliError } from "../types.js";
 import { AttemptRecord, foldAttempts, heldLeases } from "./attempt.js";
-import { daemonFile, daemonLogFile, readLocalJson, writeLocalJson } from "./local.js";
+import { daemonFile, daemonLogFile, readLocalJson, writeLocalJsonDurable } from "./local.js";
 import { alive, tick } from "./supervisor.js";
 
 const DEFAULT_INTERVAL = 30;
@@ -44,7 +44,7 @@ export function daemonStart(ctx: CliContext, intervalSec: number): void
         stdio: ["ignore", log, log]
     });
     child.unref();
-    writeLocalJson(daemonFile(ctx.storeDir), { pid: child.pid, startedAt: new Date().toISOString(), intervalSec });
+    writeLocalJsonDurable(daemonFile(ctx.storeDir), { pid: child.pid, startedAt: new Date().toISOString(), intervalSec });
     if (stale !== null)
     {
         console.log(`recovered from a stopped supervisor (was pid ${stale.pid}) — running attempts are reconciled on the next pass`);
@@ -134,7 +134,7 @@ export function daemonStatus(ctx: CliContext): void
     const leases = heldLeases(attempts);
     console.log(leases.size === 0
         ? "leases: none held"
-        : `leases: ${[...leases].map(([key, id]) => `${key} → ${id}`).join(", ")}`);
+        : `leases: ${[...leases].map(([key, hold]) => `${key} → ${hold.attempt} (fence ${hold.fence})`).join(", ")}`);
 }
 
 function attemptLine(attempt: AttemptRecord): string

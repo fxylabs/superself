@@ -8,16 +8,20 @@ import { bold, dim, green, styled } from "./style.js";
 import { assertSanitized, redactPayload } from "./supervise/sanitize.js";
 import { EventRefs, SelfEvent } from "./types.js";
 
+// The id may be supplied rather than minted: a settlement fixes every id it
+// will use before it writes anything, so a replay after a crash lands on the
+// same event instead of appending a second one.
 export function makeEvent(
     project: string,
     type: string,
     payload: Record<string, unknown>,
     refs?: EventRefs,
-    humanConfirmed = false
+    humanConfirmed = false,
+    id?: string
 ): SelfEvent
 {
     const event: SelfEvent = {
-        id: ulid(),
+        id: id ?? ulid(),
         ts: new Date().toISOString(),
         type,
         origin: { actor: "agent", session: process.env.SUPERSELF_SESSION, confirmed: humanConfirmed },

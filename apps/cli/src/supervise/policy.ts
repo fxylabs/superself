@@ -1,19 +1,11 @@
 import { readEvents } from "../logfile.js";
 import { CliError } from "../types.js";
+import { ALLOWED_ACTIONS, FORBIDDEN_ACTIONS } from "./capability.js";
 
-// Actions no overnight policy can grant. They are constants rather than
-// settings because the boundary they guard is human approval itself: a
-// policy that could widen them would be a policy that approves on the
-// human's behalf.
-export const FORBIDDEN_ACTIONS = [
-    "publish",
-    "outreach",
-    "payment",
-    "purchase",
-    "provision",
-    "destructive",
-    "policy-change"
-];
+// The capability table lives with the launcher that enforces it. A policy can
+// narrow what runs unattended; it can never widen what the launcher grants,
+// because the boundary being guarded is human approval itself.
+export { ALLOWED_ACTIONS, FORBIDDEN_ACTIONS, forbiddenAction } from "./capability.js";
 
 export interface OvernightPolicy
 {
@@ -43,11 +35,6 @@ export function validTime(value: string, flag: string): string
         throw new CliError(`${flag} expects a 24-hour time like 22:00, not "${value}"`);
     }
     return value;
-}
-
-export function forbiddenAction(actions: string[]): string | null
-{
-    return actions.find((action) => FORBIDDEN_ACTIONS.includes(action.toLowerCase())) ?? null;
 }
 
 // The policy is asserted state, so it folds out of the synced log like every
@@ -168,6 +155,7 @@ export function describePolicy(policy: OvernightPolicy): string[]
         `auto-dispatch ${policy.autoDispatch ? "on" : "off"}`,
         `hard model    ${policy.requireHardModel ?? "not required"}`,
         `fresh review  ${policy.requireFreshReview ? "required before any work is done" : "not required"}`,
+        `may request   ${ALLOWED_ACTIONS.join(", ")}`,
         `never allowed ${FORBIDDEN_ACTIONS.join(", ")}`
     ];
 }

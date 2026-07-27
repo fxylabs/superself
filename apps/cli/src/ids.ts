@@ -44,6 +44,11 @@ export function attemptId(): string
     return "t-" + shortId();
 }
 
+export function requirementId(): string
+{
+    return "r-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";

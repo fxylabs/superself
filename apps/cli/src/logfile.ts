@@ -16,6 +16,14 @@ export function readEvents(storeDir: string, slug: string): SelfEvent[]
         .map((line) => JSON.parse(line));
 }
 
+// Whether an id is already in the log. A settlement asks this before every
+// effect, which is what makes replaying an interrupted one converge on one
+// committed outcome rather than a duplicate.
+export function eventExists(storeDir: string, slug: string, id: string): boolean
+{
+    return readEvents(storeDir, slug).some((event) => event.id === id);
+}
+
 export function findEventByPrefix(storeDir: string, slug: string, prefix: string): SelfEvent
 {
     const matches = readEvents(storeDir, slug).filter((event) => event.id.startsWith(prefix));

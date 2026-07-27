@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { CliError } from "../types.js";
 
 // A synced event may carry what happened, never what the run saw. Keys are
@@ -43,6 +45,29 @@ export function redact(text: string): string
         out = out.replace(pattern, "[redacted]");
     }
     return out;
+}
+
+// Where a file sits on one machine says nothing another clone can use, and
+// says plenty about the person holding it. Report prose and refusal reasons
+// travel, so the directories they were written from are folded back to
+// placeholders before they leave.
+export function scrubPaths(ctx: { workspaceDir?: string; storeDir?: string; projectDir?: string }, text: string): string
+{
+    const roots: [string, string][] = [
+        [ctx.projectDir ?? "", "<project>"],
+        [ctx.storeDir ?? "", "<store>"],
+        [ctx.workspaceDir ?? "", "<workspace>"],
+        [ctx.workspaceDir === undefined ? "" : dirname(ctx.workspaceDir), "<workspace-parent>"],
+        [homedir(), "~"]
+    ];
+    let out = text;
+    for (const [root, label] of roots.filter(([root]) => root !== "" && root !== "/"))
+    {
+        out = out.split(root).join(label);
+    }
+    // Anything still rooted at / with two or more segments is another
+    // machine-local path the store has no business carrying.
+    return out.replace(/(^|[\s"'(\[=])(\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)/g, (_all, lead: string) => `${lead}<path>`);
 }
 
 export function assertSanitized(payload: Record<string, unknown>): void

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { attemptId } from "../ids.js";
@@ -7,36 +7,39 @@ import { CliContext, requireProject, requireWorkspace } from "../paths.js";
 import { CliError } from "../types.js";
 import {
     AttemptRecord,
+    circuits,
     findAttempt,
     foldAttempts,
     newAttempt,
     patchAttempt,
     registerAttempt,
-    circuits
+    requireFence
 } from "./attempt.js";
+import { ALLOWED_ACTIONS, FORBIDDEN_ACTIONS, decideCapabilities } from "./capability.js";
 import { daemonRun, daemonStart, daemonStatus, daemonStop, parseInterval } from "./daemon.js";
 import { buildDigest, printDigest } from "./digest.js";
-import { appendJournal, spoolFile } from "./local.js";
+import { ENVELOPE_FILE } from "./envelope.js";
+import { withStoreLock } from "./lock.js";
+import { appendJournal, runFile, writeLocalFileDurable } from "./local.js";
 import {
     DEFAULT_CIRCUIT_THRESHOLD,
-    FORBIDDEN_ACTIONS,
     OvernightPolicy,
     describePolicy,
-    forbiddenAction,
     loadPolicy,
     policyVersion,
     validTime
 } from "./policy.js";
-import { dispatchRefusal, launch, record, tick } from "./supervisor.js";
+import { dispatchRefusal, launch, record, terminate, tick } from "./supervisor.js";
 
 const ATTEMPT_USAGE = `usage: self attempt register --work <id> [--runtime r] [--kind k] [--model m]
                               [--risk internal|external] [--action a] [--output path]
-                              [--command "…"] [--session s] [--lease key] [--after work-id]
-                              [--completes] [--no-report] [--needs-approval]
+                              [--requirement r-id] [--command "…"] [--session s] [--lease key]
+                              [--after work-id] [--completes] [--no-report] [--needs-approval]
                               [--budget-usd n] [--heartbeat sec] [--retries n]
        self attempt list | show <id> | run <id> | cancel <id> | approve <id>
-       self attempt started <id> --pid <n> | heartbeat <id>
-       self attempt exited <id> [--code n] [--provider-status capacity] [--retry-at ts]
+       self attempt started <id> --pid <n> [--fence n] | heartbeat <id> [--fence n]
+       self attempt exited <id> [--code n] [--fence n] [--provider-status capacity] [--retry-at ts]
+       self attempt complete [--fence n] [--resolved-model m] [--requirement r-id] …
        self attempt propose <id> --action <kind>`;
 
 export function runAttempt(rest: string[]): void
@@ -45,6 +48,11 @@ export function runAttempt(rest: string[]): void
     if (verb === "register")
     {
         registerCommand(rest.slice(1));
+        return;
+    }
+    if (verb === "complete")
+    {
+        completeCommand(rest.slice(1));
         return;
     }
     if (verb === "list")
@@ -68,7 +76,15 @@ export function runAttempt(rest: string[]): void
         throw new CliError(ATTEMPT_USAGE);
     }
     const ctx = requireWorkspace(process.cwd());
-    handler(ctx, requireAttempt(ctx, rest[1]), rest.slice(2));
+    if (verb === "show")
+    {
+        handler(ctx, requireAttempt(ctx, rest[1]), rest.slice(2));
+        return;
+    }
+    // Every mutation re-reads the journal under the lock, so the record it
+    // acts on is the durable one and not a snapshot another process has since
+    // moved past.
+    withStoreLock(ctx.storeDir, () => handler(ctx, requireAttempt(ctx, rest[1]), rest.slice(2)));
 }
 
 function requireAttempt(ctx: CliContext, id: string | undefined): AttemptRecord
@@ -85,6 +101,20 @@ function requireAttempt(ctx: CliContext, id: string | undefined): AttemptRecord
     return attempt;
 }
 
+function presentedFence(value: string | undefined): number | null
+{
+    if (value === undefined)
+    {
+        return null;
+    }
+    const fence = Number.parseInt(value, 10);
+    if (Number.isNaN(fence))
+    {
+        throw new CliError("--fence expects the number the launch put in SUPERSELF_FENCE");
+    }
+    return fence;
+}
+
 /* ── registration ──────────────────────────────────────────────────── */
 
 const REGISTER_OPTIONS = {
@@ -95,6 +125,7 @@ const REGISTER_OPTIONS = {
     risk: { type: "string" },
     action: { type: "string", multiple: true },
     output: { type: "string", multiple: true },
+    requirement: { type: "string", multiple: true },
     command: { type: "string" },
     session: { type: "string" },
     lease: { type: "string" },
@@ -115,10 +146,11 @@ function registerCommand(args: string[]): void
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, values.work);
     const id = attemptId();
-    const attempt = newAttempt(id, ctx.project, work, new Date().toISOString());
+    const attempt = newAttempt(id, ctx.project, work.id, new Date().toISOString());
     attempt.runtime = values.runtime ?? "unknown";
     attempt.kind = values.kind ?? "implementation";
     attempt.model = values.model ?? null;
+    attempt.requestedModel = values.model ?? null;
     attempt.riskClass = requireRisk(values.risk);
     attempt.actions = values.action ?? [];
     attempt.declared = (values.output ?? []).map((path) => resolve(path));
@@ -133,11 +165,51 @@ function registerCommand(args: string[]): void
     attempt.heartbeatSec = optionalNumber(values.heartbeat, "--heartbeat") ?? 900;
     attempt.maxRetries = optionalNumber(values.retries, "--retries") ?? 0;
     attempt.state = attempt.needsApproval ? "waiting-approval" : "registered";
-    refuseForbidden(attempt.actions);
+    // The revision the run is being launched against. If the unit moves while
+    // it works, settlement compares the two and asks for a revision rather
+    // than closing a unit against a specification nobody built to.
+    attempt.workRevision = work.revision;
+    attempt.designRevision = work.designRevision;
+    attempt.requirements = assignedRequirements(work, values.requirement, attempt.completes);
+    attempt.capabilities = grantCapabilities(attempt);
     requireFreshReviewSession(ctx, attempt);
-    registerAttempt(ctx.storeDir, attempt);
-    record(ctx, ctx.project, "attempt.registered", registeredPayload(attempt), { work }, `${work} attempt ${id} registered`);
+    withStoreLock(ctx.storeDir, () =>
+    {
+        registerAttempt(ctx.storeDir, attempt);
+        record(ctx, ctx.project, "attempt.registered", registeredPayload(attempt), { work: work.id }, `${work.id} attempt ${id} registered`);
+    });
     console.log(id);
+}
+
+// The launcher decides, at registration and again at launch. A refusal here
+// is not a warning the caller can ignore: an attempt that asked for something
+// the profile does not grant never becomes a registered attempt at all.
+function grantCapabilities(attempt: AttemptRecord): string[]
+{
+    const decision = decideCapabilities(attempt.riskClass, attempt.actions);
+    if (decision.reason !== null)
+    {
+        throw new CliError(decision.reason);
+    }
+    return decision.granted;
+}
+
+function assignedRequirements(
+    work: { id: string; requirements: { id: string }[] },
+    named: string[] | undefined,
+    completes: boolean
+): string[]
+{
+    if (named === undefined)
+    {
+        return completes ? work.requirements.map((item) => item.id) : [];
+    }
+    const unknown = named.filter((id) => !work.requirements.some((item) => item.id === id));
+    if (unknown.length > 0)
+    {
+        throw new CliError(`${work.id} has no requirement "${unknown[0]}" — run \`self work show ${work.id}\` to list them`);
+    }
+    return named;
 }
 
 function registeredPayload(attempt: AttemptRecord): Record<string, unknown>
@@ -150,6 +222,10 @@ function registeredPayload(attempt: AttemptRecord): Record<string, unknown>
         model: attempt.model,
         riskClass: attempt.riskClass,
         actions: attempt.actions,
+        capabilities: attempt.capabilities,
+        requirements: attempt.requirements,
+        workRevision: attempt.workRevision,
+        designRevision: attempt.designRevision,
         declared: attempt.declared.map((path) => basename(path)),
         dependsOn: attempt.dependsOn,
         completes: attempt.completes,
@@ -157,15 +233,6 @@ function registeredPayload(attempt: AttemptRecord): Record<string, unknown>
         heartbeatSec: attempt.heartbeatSec,
         budgetUsd: attempt.budgetUsd
     };
-}
-
-function refuseForbidden(actions: string[]): void
-{
-    const forbidden = forbiddenAction(actions);
-    if (forbidden !== null)
-    {
-        throw new CliError(`"${forbidden}" needs human approval and no overnight policy can grant it — never allowed: ${FORBIDDEN_ACTIONS.join(", ")}`);
-    }
 }
 
 // A review that runs in the session that wrote the code is not a review. The
@@ -211,7 +278,7 @@ function optionalNumber(value: string | undefined, flag: string): number | null
     return parsed;
 }
 
-function requireOpenWork(ctx: CliContext & { project: string }, id: string | undefined): string
+function requireOpenWork(ctx: CliContext & { project: string }, id: string | undefined)
 {
     if (id === undefined)
     {
@@ -226,7 +293,95 @@ function requireOpenWork(ctx: CliContext & { project: string }, id: string | und
     {
         throw new CliError(`${id} is already done`);
     }
-    return id;
+    return work;
+}
+
+/* ── the completion envelope ───────────────────────────────────────── */
+
+const COMPLETE_OPTIONS = {
+    attempt: { type: "string" },
+    work: { type: "string" },
+    fence: { type: "string" },
+    spool: { type: "string" },
+    "requested-model": { type: "string" },
+    "resolved-model": { type: "string" },
+    "model-resolution": { type: "string" },
+    "work-revision": { type: "string" },
+    "design-revision": { type: "string" },
+    requirement: { type: "string", multiple: true },
+    action: { type: "string", multiple: true },
+    output: { type: "string", multiple: true },
+    validation: { type: "string", multiple: true }
+} as const;
+
+// Written by the run itself, into the spool of the launch that started it.
+// None of it is believed: the supervisor checks the identity, the fence, the
+// model provenance, the claimed capabilities and the requirement coverage
+// against what it already knows before any of it counts as a result.
+function completeCommand(args: string[]): void
+{
+    const { values } = parseArgs({ args, options: COMPLETE_OPTIONS });
+    const spool = values.spool ?? process.env.SUPERSELF_SPOOL;
+    if (spool === undefined)
+    {
+        throw new CliError("self attempt complete runs inside a supervised launch — SUPERSELF_SPOOL is not set, so pass --spool <dir>");
+    }
+    const resolution = values["model-resolution"] ?? (values["resolved-model"] === undefined ? "unknown" : "exact");
+    if (resolution !== "exact" && resolution !== "unknown" && resolution !== "refused")
+    {
+        throw new CliError("--model-resolution expects exact, unknown, or refused");
+    }
+    const envelope = {
+        attempt: values.attempt ?? process.env.SUPERSELF_ATTEMPT ?? "",
+        work: values.work ?? process.env.SUPERSELF_WORK ?? "",
+        fence: Number.parseInt(values.fence ?? process.env.SUPERSELF_FENCE ?? "-1", 10),
+        completionId: randomUUID(),
+        workRevision: Number.parseInt(values["work-revision"] ?? process.env.SUPERSELF_WORK_REVISION ?? "", 10),
+        designRevision: numberOrNull(values["design-revision"] ?? process.env.SUPERSELF_DESIGN_REVISION),
+        requestedModel: emptyToNull(values["requested-model"] ?? process.env.SUPERSELF_MODEL),
+        resolvedModel: values["resolved-model"] ?? null,
+        modelResolution: resolution,
+        requirements: values.requirement ?? splitEnv(process.env.SUPERSELF_REQUIREMENTS),
+        actions: values.action ?? splitEnv(process.env.SUPERSELF_CAPABILITIES),
+        outputs: values.output ?? [],
+        validations: (values.validation ?? []).map(parseValidation)
+    };
+    if (Number.isNaN(envelope.workRevision))
+    {
+        (envelope as { workRevision: number | null }).workRevision = null;
+    }
+    writeLocalFileDurable(`${spool}/${ENVELOPE_FILE}`, JSON.stringify(envelope, null, 2) + "\n");
+    console.log(`${envelope.attempt} completion recorded (${envelope.completionId})`);
+}
+
+function emptyToNull(value: string | undefined): string | null
+{
+    return value === undefined || value.trim() === "" ? null : value;
+}
+
+function numberOrNull(value: string | undefined): number | null
+{
+    if (value === undefined || value.trim() === "")
+    {
+        return null;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function splitEnv(value: string | undefined): string[]
+{
+    return value === undefined || value.trim() === "" ? [] : value.split(",").filter((item) => item.trim() !== "");
+}
+
+function parseValidation(entry: string): { name: string; status: string }
+{
+    const at = entry.indexOf("=");
+    if (at === -1)
+    {
+        throw new CliError(`--validation expects name=status, not "${entry}"`);
+    }
+    return { name: entry.slice(0, at), status: entry.slice(at + 1) };
 }
 
 /* ── attempt verbs ─────────────────────────────────────────────────── */
@@ -250,16 +405,23 @@ function showAttempt(ctx: CliContext, attempt: AttemptRecord): void
 {
     const lines = [
         `${attempt.id}  ${attempt.state}${attempt.verdict === null ? "" : ` (${attempt.verdict})`}`,
-        `work        ${attempt.project} ${attempt.work}`,
+        `work        ${attempt.project} ${attempt.work} revision ${attempt.workRevision}${attempt.designRevision === null ? "" : `, design ${attempt.designRevision}`}`,
         `runtime     ${attempt.kind}/${attempt.runtime}${attempt.model === null ? "" : ` on ${attempt.model}`}`,
-        `risk        ${attempt.riskClass}${attempt.actions.length === 0 ? "" : ` — actions: ${attempt.actions.join(", ")}`}`,
+        `model       requested ${attempt.requestedModel ?? "none"}, resolved ${attempt.resolvedModel ?? attempt.modelResolution ?? "not reported"}`,
+        `risk        ${attempt.riskClass}${attempt.capabilities.length === 0 ? " — no capabilities granted" : ` — granted: ${attempt.capabilities.join(", ")}`}`,
+        `covers      ${attempt.requirements.length === 0 ? "no named requirement" : attempt.requirements.join(", ")}`,
         `declared    ${attempt.declared.length === 0 ? "none" : attempt.declared.map((path) => basename(path)).join(", ")}`,
         `contract    ${attempt.requireReport ? "report required" : "no report required"}, ${attempt.completes ? "completes the work" : "does not complete the work"}`,
+        `fence       ${attempt.fence}${attempt.owner === null ? "" : ` held by ${attempt.owner}`}`,
         `heartbeat   every ${attempt.heartbeatSec}s, last ${attempt.lastBeat ?? "never"}`,
         `tries       ${attempt.tries}, retries allowed ${attempt.maxRetries}`,
         `cost        ${attempt.costUsd === null ? "unknown" : `$${attempt.costUsd}`}, tokens ${attempt.usage === null ? "unknown" : attempt.usage}`,
         `exit        ${attempt.exitSource ?? "not observed"}${attempt.exitCode === null ? "" : ` code ${attempt.exitCode}`}`
     ];
+    if (attempt.envelope !== null)
+    {
+        lines.push(`completion  ${attempt.envelope.completionId}`);
+    }
     for (const hash of Object.entries(attempt.hashes))
     {
         lines.push(`output      ${hash[0]} ${hash[1]}`);
@@ -287,9 +449,7 @@ function runNow(ctx: CliContext, attempt: AttemptRecord): void
     {
         throw new CliError(`${attempt.id} already settled as ${attempt.verdict} — register a new attempt instead of re-running a judged one`);
     }
-    const attempts = foldAttempts(ctx.storeDir);
-    const policy = loadPolicy(ctx.storeDir, attempt.project);
-    const refusal = dispatchRefusal(ctx, attempts, attempt, policy, new Date());
+    const refusal = dispatchRefusal(ctx, foldAttempts(ctx.storeDir), attempt, loadPolicy(ctx.storeDir, attempt.project), new Date());
     if (refusal !== null)
     {
         throw new CliError(`${attempt.id} cannot start — ${refusal}`);
@@ -300,11 +460,12 @@ function runNow(ctx: CliContext, attempt: AttemptRecord): void
 
 function markStarted(ctx: CliContext, attempt: AttemptRecord, args: string[]): void
 {
-    const { values } = parseArgs({ args, options: { pid: { type: "string" } } });
+    const { values } = parseArgs({ args, options: { pid: { type: "string" }, fence: { type: "string" } } });
     if (values.pid === undefined)
     {
         throw new CliError("self attempt started <id> --pid <n>");
     }
+    requireFence(attempt, presentedFence(values.fence));
     const now = new Date().toISOString();
     patchAttempt(ctx.storeDir, attempt, "start", {
         state: "running",
@@ -318,34 +479,46 @@ function markStarted(ctx: CliContext, attempt: AttemptRecord, args: string[]): v
         { work: attempt.work }, `${attempt.work} attempt ${attempt.id} started`);
 }
 
-function beat(ctx: CliContext, attempt: AttemptRecord): void
+// A heartbeat from a superseded launch is not this run's heartbeat. Refusing
+// it is what stops a stale worker from holding an attempt alive that the
+// supervisor has already moved on from.
+function beat(ctx: CliContext, attempt: AttemptRecord, args: string[]): void
 {
+    const { values } = parseArgs({ args, options: { fence: { type: "string" } } });
+    requireFence(attempt, presentedFence(values.fence));
+    if (attempt.state === "settled")
+    {
+        throw new CliError(`${attempt.id} already settled as ${attempt.verdict} — a settled attempt takes no heartbeat`);
+    }
     const now = new Date().toISOString();
     patchAttempt(ctx.storeDir, attempt, "beat", { lastBeat: now }, now);
     console.log(`${attempt.id} heartbeat ${now}`);
 }
 
-// A durable exit notice: written to the spool so the supervisor finds it
-// whenever it next looks, and ignored once the attempt has settled.
+// A durable exit notice: written to the spool of the current launch so the
+// supervisor finds it whenever it next looks, and ignored once the attempt
+// has settled.
 function markExited(ctx: CliContext, attempt: AttemptRecord, args: string[]): void
 {
     const { values } = parseArgs({
         args,
         options: {
             code: { type: "string" },
+            fence: { type: "string" },
             "provider-status": { type: "string" },
             "retry-at": { type: "string" }
         }
     });
+    requireFence(attempt, presentedFence(values.fence));
     if (attempt.state === "settled")
     {
         console.log(`${attempt.id} already settled as ${attempt.verdict} — exit notice ignored`);
         return;
     }
-    writeFileSync(spoolFile(ctx.storeDir, attempt.id, "exit"), String(values.code ?? "0"));
+    writeLocalFileDurable(runFile(ctx.storeDir, attempt.id, attempt.fence, "exit"), String(values.code ?? "0"));
     if (values["provider-status"] !== undefined)
     {
-        writeFileSync(spoolFile(ctx.storeDir, attempt.id, "provider.json"), JSON.stringify({
+        writeLocalFileDurable(runFile(ctx.storeDir, attempt.id, attempt.fence, "provider.json"), JSON.stringify({
             status: values["provider-status"],
             retryAt: values["retry-at"] ?? null
         }) + "\n");
@@ -366,19 +539,15 @@ function approve(ctx: CliContext, attempt: AttemptRecord): void
         { work: attempt.work }, `${attempt.work} attempt ${attempt.id} approved`);
 }
 
+// Cancellation terminates the process and keeps the spool. The request is
+// journalled either way: a process that outlives the signal still meets a
+// supervisor that will not settle it as anything but cancelled.
 function cancel(ctx: CliContext, attempt: AttemptRecord): void
 {
     const now = new Date().toISOString();
-    if (attempt.pid !== null && attempt.state === "running")
+    if (attempt.state === "running")
     {
-        try
-        {
-            process.kill(attempt.pid, "SIGTERM");
-        }
-        catch
-        {
-            // The process is already gone; the request is what must persist.
-        }
+        terminate(attempt);
     }
     patchAttempt(ctx.storeDir, attempt, "cancel", { cancelRequested: true }, now);
     record(ctx, attempt.project, "attempt.cancelled",
@@ -386,8 +555,9 @@ function cancel(ctx: CliContext, attempt: AttemptRecord): void
         { work: attempt.work }, `${attempt.work} attempt ${attempt.id} cancelled`);
 }
 
-// An agent may ask for anything mid-run. The forbidden list is checked here
-// too, because a proposal that arrives after launch is still a proposal.
+// An agent may ask for anything mid-run. The launcher's profile is checked
+// here too, because a proposal that arrives after launch is still a proposal
+// and still cannot widen what the launch was given.
 function proposeAction(ctx: CliContext, attempt: AttemptRecord, args: string[]): void
 {
     const { values } = parseArgs({ args, options: { action: { type: "string" } } });
@@ -405,12 +575,16 @@ function proposeAction(ctx: CliContext, attempt: AttemptRecord, args: string[]):
             { work: attempt.work }, `${attempt.work} refused ${action}`);
         throw new CliError(`"${action}" is never allowed without human approval — the proposal is on record and the attempt keeps running`);
     }
+    // Even an allowed action arrives unapproved: the proposal parks the
+    // attempt rather than granting the capability, and approval is what mints
+    // it into the profile at the next launch.
     patchAttempt(ctx.storeDir, attempt, "propose", {
         actions: [...attempt.actions, action],
         needsApproval: true,
         approved: false
     }, now);
-    console.log(`${attempt.id} proposed "${action}" — waiting on human approval`);
+    const known = ALLOWED_ACTIONS.includes(action) ? "" : " — the launcher grants no such capability, so approval alone will not start it";
+    console.log(`${attempt.id} proposed "${action}" — waiting on human approval${known}`);
 }
 
 /* ── daemon ────────────────────────────────────────────────────────── */
@@ -437,6 +611,7 @@ function printTick(ctx: CliContext): void
 {
     const summary = tick(ctx, new Date());
     const groups: [string, string[]][] = [
+        ["recovered", summary.recovered],
         ["reconciled", summary.reconciled],
         ["settled", summary.settled],
         ["dispatched", summary.dispatched],
@@ -475,7 +650,8 @@ function resetCircuit(ctx: CliContext, key: string | undefined): void
     {
         throw new CliError("self daemon reset-circuit <project/runtime>");
     }
-    appendJournal(ctx.storeDir, { ts: new Date().toISOString(), attempt: "-", kind: "circuit.reset", patch: { key } });
+    withStoreLock(ctx.storeDir, () =>
+        appendJournal(ctx.storeDir, { ts: new Date().toISOString(), attempt: "-", kind: "circuit.reset", patch: { key } }));
     console.log(`circuit ${key} closed`);
 }
 

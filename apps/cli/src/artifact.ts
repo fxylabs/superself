@@ -2,7 +2,7 @@ import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmdirSync, 
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
-import { CliContext, readRegistry } from "./paths.js";
+import { CliContext, ensureDir, readRegistry } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
 
@@ -232,6 +232,20 @@ function capture(action: () => void): Error | null
     {
         return error instanceof Error ? error : new Error(String(error));
     }
+}
+
+// Ingestion at a caller-chosen id, from bytes the caller has already read and
+// hashed. Both halves matter: the fixed id makes a replayed settlement
+// overwrite its own copy instead of making a second one, and copying from the
+// staged bytes rather than the original path means the artifact is provably
+// the same content the hash was taken over, however the source has changed
+// since.
+export function ingestStagedArtifact(storeDir: string, slug: string, id: string, name: string, staged: string): ArtifactMeta
+{
+    const relative = `artifacts/${slug}/${id}-${name}`;
+    ensureDir(join(storeDir, "artifacts", slug));
+    copyFileSync(staged, join(storeDir, relative));
+    return { id, name, path: relative };
 }
 
 export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]

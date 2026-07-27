@@ -808,16 +808,45 @@ echo "$NOID" | grep -q "objective-id" || fail "a genuinely missing id stopped as
 cd "$ROOT/A/ws/demo"
 LOCAL="$ROOT/A/ws/.superself/local"
 
+# each launch writes into its own fence-named directory, so a wrapper from a
+# superseded launch can never be mistaken for the run that is current
+rundir()
+{
+    LAST=""
+    HIGH=-1
+    for CANDIDATE in "$LOCAL"/spool/"$1"/run-*
+    do
+        if [ -d "$CANDIDATE" ]
+        then
+            N="${CANDIDATE##*/run-}"
+            if [ "$N" -gt "$HIGH" ]
+            then
+                HIGH="$N"
+                LAST="$CANDIDATE"
+            fi
+        fi
+    done
+    printf %s "$LAST"
+}
+
 # the supervisor waits for the wrapper's exit notice, never for a poll
 settled()
 {
     for _ in $(seq 1 100)
     do
-        [ -f "$LOCAL/spool/$1/exit" ] && return 0
+        DIR="$(rundir "$1")"
+        if [ -n "$DIR" ] && [ -f "$DIR/exit" ]
+        then
+            return 0
+        fi
         sleep 0.1
     done
     fail "attempt $1 never wrote an exit notice"
 }
+
+# a run states what it did in a completion envelope correlated to its launch.
+# nothing else — not an exit code, not prose — can stand in for it.
+COMPLETE="node '$CLI_DIR/bin/self.mjs' attempt complete"
 
 SELF overnight show | grep -q "no overnight policy" || fail "an unset overnight policy did not say so"
 SELF overnight set --from 00:00 --to 00:00 --wake 07:30 --auto-dispatch --hard-model opus \
@@ -832,11 +861,11 @@ SELF work start "$W1"
 OUT1="$ROOT/out1.txt"
 T1="$(SELF attempt register --work "$W1" --runtime proof --model opus --completes \
     --output "$OUT1" --heartbeat 120 \
-    --command 'printf built > '"$OUT1"'; printf "wrote the page\n" > "$SUPERSELF_SPOOL/report.md"' | tail -1)"
+    --command 'printf built > '"$OUT1"'; printf "wrote the page\n" > "$SUPERSELF_SPOOL/report.md"; '"$COMPLETE"' --resolved-model opus --validation build=passed' | tail -1)"
 echo "$T1" | grep -q "^t-" || fail "attempt register did not print an attempt id"
 SELF daemon tick | grep -q "dispatched: $T1" || fail "the supervisor did not dispatch an eligible attempt"
 settled "$T1"
-printf '{"costUsd":0.42,"usage":1234}' > "$LOCAL/spool/$T1/usage.json"
+printf '{"costUsd":0.42,"usage":1234}' > "$(rundir "$T1")/usage.json"
 SELF daemon tick > /dev/null
 SELF attempt show "$T1" | grep -q "passed" || fail "a run with its declared output did not pass validation"
 SELF attempt show "$T1" | grep -q "^exit        confirmed" || fail "a wrapper-written exit was not recorded as confirmed"
@@ -857,7 +886,7 @@ echo "$SAME" | grep -q "fresh session" || fail "a review was allowed in the impl
 OUT1R="$ROOT/out1-review.txt"
 T1R="$(SELF attempt register --work "$W1" --kind review --runtime proof --model opus --completes \
     --session reviewer --output "$OUT1R" --no-report \
-    --command 'printf reviewed > '"$OUT1R" | tail -1)"
+    --command 'printf reviewed > '"$OUT1R"'; '"$COMPLETE"' --resolved-model opus' | tail -1)"
 SELF daemon tick > /dev/null
 settled "$T1R"
 SELF daemon tick > /dev/null
@@ -868,7 +897,7 @@ W2="$(SELF work add "prose alone must not close work" | tail -1)"
 SELF work start "$W2"
 OUT2="$ROOT/out2.txt"
 T2="$(SELF attempt register --work "$W2" --runtime validator --model opus --completes --output "$OUT2" \
-    --command 'printf "all done, shipped it\n" > "$SUPERSELF_SPOOL/report.md"' | tail -1)"
+    --command 'printf "all done, shipped it\n" > "$SUPERSELF_SPOOL/report.md"; '"$COMPLETE"' --resolved-model opus' | tail -1)"
 SELF daemon tick > /dev/null
 settled "$T2"
 SELF daemon tick > /dev/null
@@ -878,7 +907,7 @@ SELF work | grep -q "$W2" || fail "an unvalidated attempt marked work done"
 # an implementation on the wrong model never passes, whatever it produced
 OUT2B="$ROOT/out2b.txt"
 T2B="$(SELF attempt register --work "$W2" --runtime validator --model haiku --completes --output "$OUT2B" --no-report \
-    --command 'printf built > '"$OUT2B" | tail -1)"
+    --command 'printf built > '"$OUT2B"'; '"$COMPLETE"' --resolved-model haiku' | tail -1)"
 SELF daemon tick > /dev/null
 settled "$T2B"
 SELF daemon tick > /dev/null
@@ -894,7 +923,7 @@ settled "$T3"
 SELF daemon tick > /dev/null
 SELF attempt show "$T3" | grep -q "exited with code 3" || fail "a non-zero exit was not recorded as a failure"
 SELF daemon status | grep -q "leases: none held" || fail "a failed attempt kept its lease"
-grep -q "broke" "$LOCAL/spool/$T3/stderr" || fail "the failed run's spool was not preserved"
+grep -q "broke" "$(rundir "$T3")/stderr" || fail "the failed run's spool was not preserved"
 SELF attempt show "$T3" | grep -q "cost        unknown" || fail "missing provider data was not shown as unknown"
 
 # a pid that disappears is not a confirmed exit, and neither is a dead heartbeat
@@ -917,7 +946,7 @@ W4="$(SELF work add "capacity waits for the reset" | tail -1)"
 SELF work start "$W4"
 OUT6="$ROOT/out6.txt"
 T6="$(SELF attempt register --work "$W4" --runtime capacity --no-report --output "$OUT6" \
-    --command 'printf built > '"$OUT6" | tail -1)"
+    --command 'printf built > '"$OUT6"'; '"$COMPLETE" | tail -1)"
 FUTURE="$(node -e 'process.stdout.write(new Date(Date.now()+3600000).toISOString())')"
 SELF attempt exited "$T6" --code 1 --provider-status capacity --retry-at "$FUTURE" > /dev/null
 SELF daemon tick > /dev/null
@@ -942,7 +971,7 @@ do
     SELF daemon tick > /dev/null
 done
 SELF daemon circuits | grep -q "demo/flaky  open" || fail "three failures did not open the circuit"
-TF4="$(SELF attempt register --work "$W5" --runtime flaky --no-report --command 'exit 0' | tail -1)"
+TF4="$(SELF attempt register --work "$W5" --runtime flaky --no-report --command "$COMPLETE" | tail -1)"
 SELF daemon tick | grep -q "circuit for demo/flaky is open" || fail "an open circuit did not stop the fan-out"
 SELF daemon reset-circuit demo/flaky > /dev/null
 SELF daemon tick | grep -q "dispatched: $TF4" || fail "a reset circuit did not let work through"
@@ -955,9 +984,9 @@ W7="$(SELF work add "the unit that waits for it" | tail -1)"
 SELF work start "$W6"
 OUT7="$ROOT/out7.txt"
 T7="$(SELF attempt register --work "$W7" --runtime deps --no-report --after "$W6" --output "$OUT7" \
-    --command 'printf built > '"$OUT7" | tail -1)"
+    --command 'printf built > '"$OUT7"'; '"$COMPLETE" | tail -1)"
 SELF daemon tick | grep -q "waiting on $W6" || fail "an attempt ran before its dependency was done"
-T8="$(SELF attempt register --work "$W7" --runtime deps --no-report --needs-approval --command 'printf x' | tail -1)"
+T8="$(SELF attempt register --work "$W7" --runtime deps --no-report --needs-approval --command "$COMPLETE" | tail -1)"
 SELF work done "$W6"
 SELF daemon tick | grep -q "dispatched: $T7" || fail "a met dependency did not wake the work waiting on it"
 SELF daemon tick | grep -q "$T8 — waiting on human approval" || fail "unapproved work dispatched once its dependency was met"
@@ -1007,7 +1036,7 @@ W8="$(SELF work add "private detail stays on this machine" | tail -1)"
 SELF work start "$W8"
 OUT8="$ROOT/out8.txt"
 T11="$(SELF attempt register --work "$W8" --runtime privacy --output "$OUT8" \
-    --command 'printf built > '"$OUT8"'; printf "used '"$SECRET"' to build\n" > "$SUPERSELF_SPOOL/report.md"' | tail -1)"
+    --command 'printf built > '"$OUT8"'; printf "used '"$SECRET"' to build, wrote '"$OUT8"'\n" > "$SUPERSELF_SPOOL/report.md"; '"$COMPLETE" | tail -1)"
 SELF daemon tick > /dev/null
 settled "$T11"
 SELF daemon tick > /dev/null
@@ -1032,7 +1061,7 @@ W9="$(SELF work add "selfd settles a run with no turn open" | tail -1)"
 SELF work start "$W9"
 OUT9="$ROOT/out9.txt"
 T12="$(SELF attempt register --work "$W9" --runtime nightly --no-report --output "$OUT9" \
-    --command 'sleep 1; printf built > '"$OUT9" | tail -1)"
+    --command 'sleep 1; printf built > '"$OUT9"'; '"$COMPLETE" | tail -1)"
 SELF daemon start --interval 1 > /dev/null
 OBSERVED=no
 for _ in $(seq 1 60)
@@ -1060,5 +1089,257 @@ SELF overnight off > /dev/null
 SELF overnight show | grep -q "no overnight policy" || fail "a revoked overnight policy still applied"
 T13="$(SELF attempt register --work "$W9" --runtime nightly --no-report --command 'printf x' | tail -1)"
 SELF daemon tick | grep -q "no overnight policy is in force" || fail "an attempt dispatched with no policy in force"
+
+# ── settlement is a claim that has to hold up ───────────────────────
+JOURNAL="$LOCAL/attempts.jsonl"
+SELF overnight set --from 00:00 --to 00:00 --wake 07:30 --auto-dispatch \
+    --max-concurrent 12 --retries 0 --no-fresh-review > /dev/null
+
+# a zero exit with its declared output present is still not a result
+WA="$(SELF work add "an exit code is a claim, not a result" | tail -1)"
+SELF work start "$WA"
+OUTA="$ROOT/outa.txt"
+TA="$(SELF attempt register --work "$WA" --runtime bare --no-report --output "$OUTA" \
+    --command 'printf built > '"$OUTA" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TA"
+SELF daemon tick > /dev/null
+SELF attempt show "$TA" | grep -q "no readable completion envelope" || fail "a zero exit with its output passed with no completion envelope"
+SELF attempt show "$TA" | grep -q "(failed)" || fail "an attempt that stated nothing about itself was not failed"
+
+# an envelope that names another launch is refused, not judged
+WB="$(SELF work add "a completion envelope is correlated or it is nothing" | tail -1)"
+SELF work start "$WB"
+OUTB="$ROOT/outb.txt"
+TB="$(SELF attempt register --work "$WB" --runtime forged --no-report --output "$OUTB" \
+    --command 'printf built > '"$OUTB"'; '"$COMPLETE"' --attempt t-someoneelse' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TB"
+SELF daemon tick > /dev/null
+SELF attempt show "$TB" | grep -q "names attempt" || fail "an envelope naming another attempt was accepted"
+SELF attempt show "$TB" | grep -q "(refused)" || fail "a forged completion identity was judged instead of refused"
+
+# an envelope written by a superseded launch cannot settle the current one
+OUTC="$ROOT/outc.txt"
+TC="$(SELF attempt register --work "$WB" --runtime superseded --no-report --output "$OUTC" \
+    --command 'printf built > '"$OUTC"'; '"$COMPLETE"' --fence 99' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TC"
+SELF daemon tick > /dev/null
+SELF attempt show "$TC" | grep -q "written by a superseded process" || fail "an envelope from a stale fence settled the current launch"
+
+# a model resolution has to name the model that answered
+OUTD="$ROOT/outd.txt"
+TD="$(SELF attempt register --work "$WB" --runtime provenance --no-report --output "$OUTD" \
+    --command 'printf built > '"$OUTD"'; '"$COMPLETE"' --model-resolution exact' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TD"
+SELF daemon tick > /dev/null
+SELF attempt show "$TD" | grep -q "without naming the model that answered" || fail "an exact model claim passed without the resolved model"
+
+# a hard-model requirement is not met by an unknown resolution
+SELF overnight set --from 00:00 --to 00:00 --wake 07:30 --auto-dispatch \
+    --max-concurrent 12 --retries 0 --no-fresh-review --hard-model opus > /dev/null
+OUTE="$ROOT/oute.txt"
+TE="$(SELF attempt register --work "$WB" --runtime hardmodel --model opus --completes --no-report --output "$OUTE" \
+    --command 'printf built > '"$OUTE"'; '"$COMPLETE"' --model-resolution unknown' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TE"
+SELF daemon tick > /dev/null
+SELF attempt show "$TE" | grep -q "rather than naming it" || fail "an unknown model resolution satisfied a hard-model requirement"
+SELF overnight set --from 00:00 --to 00:00 --wake 07:30 --auto-dispatch \
+    --max-concurrent 12 --retries 0 --no-fresh-review > /dev/null
+
+# ── requirement coverage against the current revision ───────────────
+WG="$(SELF work add "coverage is measured against the revision in force" | tail -1)"
+SELF work start "$WG"
+SELF work require "$WG" "the page renders" > /dev/null
+OUTG="$ROOT/outg.txt"
+TG="$(SELF attempt register --work "$WG" --runtime cover --completes --no-report --output "$OUTG" \
+    --command 'printf built > '"$OUTG"'; '"$COMPLETE" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TG"
+SELF daemon tick > /dev/null
+SELF attempt show "$TG" | grep -q "(passed)" || fail "an attempt covering every criterion did not pass"
+SELF work | grep -q "$WG" && fail "a passing attempt that covered its criteria did not complete the work"
+
+# a criterion added while the run worked is a criterion nobody has met
+WH="$(SELF work add "a specification that moves is not a run that failed" | tail -1)"
+SELF work start "$WH"
+SELF work require "$WH" "the first criterion" > /dev/null
+OUTH="$ROOT/outh.txt"
+TH="$(SELF attempt register --work "$WH" --runtime revision --completes --no-report --output "$OUTH" \
+    --command 'printf built > '"$OUTH"'; '"$COMPLETE" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TH"
+SELF work require "$WH" "a criterion added while the attempt ran" > /dev/null
+SELF daemon tick > /dev/null
+SELF attempt show "$TH" | grep -q "revision_required" || fail "a stale revision was judged as a plain failure"
+SELF attempt show "$TH" | grep -q "is not covered" || fail "the uncovered criterion was not named"
+SELF work | grep -q "$WH" || fail "work was completed against a revision nobody built to"
+SELF digest --hours 24 | grep -q "^## Needs a revision" || fail "the digest did not group work needing a revision"
+
+# a run cannot claim a criterion the unit does not have
+WI="$(SELF work add "coverage of something that was never asked for" | tail -1)"
+SELF work start "$WI"
+OUTI="$ROOT/outi.txt"
+TI="$(SELF attempt register --work "$WI" --runtime invented --completes --no-report --output "$OUTI" \
+    --command 'printf built > '"$OUTI"'; '"$COMPLETE"' --requirement r-invented' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TI"
+SELF daemon tick > /dev/null
+SELF attempt show "$TI" | grep -q "not a requirement of" || fail "a run claimed coverage of a criterion that does not exist"
+SELF work | grep -q "$WI" || fail "an invented coverage claim completed the work"
+
+# an approved design revision has to be the one that was built against
+WJ="$(SELF work add "a run states which approved design it built against" | tail -1)"
+SELF work start "$WJ"
+OUTJ="$ROOT/outj.txt"
+TJ="$(SELF attempt register --work "$WJ" --runtime design --completes --no-report --output "$OUTJ" \
+    --command 'printf built > '"$OUTJ"'; '"$COMPLETE" | tail -1)"
+SELF work design "$WJ" > /dev/null
+SELF daemon tick > /dev/null
+settled "$TJ"
+SELF daemon tick > /dev/null
+SELF attempt show "$TJ" | grep -q "approved design" || fail "a run that predates the approved design closed the work"
+
+# ── a torn final journal line ───────────────────────────────────────
+printf '{"ts":"2026-01-01T00:00:00.000Z","attempt":"t-torn","kind":"reg' >> "$JOURNAL"
+SELF attempt list | grep -q "$TA" || fail "a torn final journal line made the supervisor unreadable"
+SELF daemon tick | grep -q "quarantined" || fail "the torn journal line was not quarantined"
+grep -q "t-torn" "$LOCAL/attempts.quarantine.jsonl" || fail "the torn line was not kept as evidence"
+SELF attempt list | grep -q "$TA" || fail "repairing the journal lost the entries before the torn line"
+SELF attempt show "$TG" | grep -q "(passed)" || fail "repairing the journal changed a settled verdict"
+
+# ── fencing: a superseded process cannot touch the current launch ───
+WK="$(SELF work add "a stale worker holds a token that no longer matches" | tail -1)"
+SELF work start "$WK"
+TK="$(SELF attempt register --work "$WK" --runtime fenced --no-report --heartbeat 3600 --command 'sleep 30' | tail -1)"
+SELF attempt run "$TK" > /dev/null
+STALEBEAT="$(SELF attempt heartbeat "$TK" --fence 0 2>&1 || true)"
+echo "$STALEBEAT" | grep -q "no longer owns" || fail "a heartbeat from a superseded fence was accepted"
+STALEEXIT="$(SELF attempt exited "$TK" --fence 0 2>&1 || true)"
+echo "$STALEEXIT" | grep -q "no longer owns" || fail "a superseded process settled the current launch"
+SELF attempt heartbeat "$TK" --fence 1 > /dev/null || fail "the current fence was refused its own heartbeat"
+SELF daemon status | grep -q "fence 1" || fail "the lease did not carry the fence that minted it"
+SELF attempt cancel "$TK" > /dev/null
+SELF daemon tick > /dev/null
+SELF attempt show "$TK" | grep -q "cancelled" || fail "a cancelled attempt did not settle as cancelled"
+
+# ── a crash either side of spawn leaves nothing running untracked ───
+WL="$(SELF work add "a launch is durable before the process exists" | tail -1)"
+SELF work start "$WL"
+TL="$(SELF attempt register --work "$WL" --runtime orphan --no-report --heartbeat 3600 --command 'sleep 30' | tail -1)"
+node -e 'const fs=require("fs");fs.appendFileSync(process.argv[1],JSON.stringify({ts:new Date().toISOString(),attempt:process.argv[2],kind:"launch.intent",patch:{state:"running",fence:1,pid:null,startedAt:new Date().toISOString(),lastBeat:new Date().toISOString(),tries:1}})+"\n");' "$JOURNAL" "$TL"
+SELF daemon tick | grep -q "never spawned" || fail "a launch journalled before a crash was not returned to the queue"
+
+TM="$(SELF attempt register --work "$WL" --runtime adopt --no-report --heartbeat 3600 --command 'sleep 30' | tail -1)"
+sleep 60 &
+ORPHAN=$!
+mkdir -p "$LOCAL/spool/$TM/run-1"
+printf %s "$ORPHAN" > "$LOCAL/spool/$TM/run-1/pid"
+node -e 'const fs=require("fs");fs.appendFileSync(process.argv[1],JSON.stringify({ts:new Date().toISOString(),attempt:process.argv[2],kind:"launch.intent",patch:{state:"running",fence:1,pid:null,startedAt:new Date().toISOString(),lastBeat:new Date().toISOString(),tries:1}})+"\n");' "$JOURNAL" "$TM"
+SELF daemon tick | grep -q "adopted" || fail "a process spawned before the crash was left running untracked"
+SELF attempt show "$TM" | grep -q "running" || fail "the adopted process was not tracked as running"
+kill "$ORPHAN" 2>/dev/null || true
+wait "$ORPHAN" 2>/dev/null || true
+SELF daemon tick > /dev/null
+SELF attempt show "$TM" | grep -q "vanished" || fail "the adopted process was not reconciled once it died"
+
+# ── two ticks racing settle exactly one outcome ─────────────────────
+WN="$(SELF work add "two supervisors must not both settle one attempt" | tail -1)"
+SELF work start "$WN"
+OUTN="$ROOT/outn.txt"
+TN="$(SELF attempt register --work "$WN" --runtime raced --no-report --output "$OUTN" \
+    --command 'printf built > '"$OUTN"'; '"$COMPLETE" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TN"
+SELF daemon tick > /dev/null 2>&1 &
+RACE1=$!
+SELF daemon tick > /dev/null 2>&1 &
+RACE2=$!
+wait "$RACE1" || fail "a concurrent tick failed outright"
+wait "$RACE2" || fail "a concurrent tick failed outright"
+[ "$(SELF artifact list --work "$WN" | wc -l | tr -d ' ')" = "1" ] || fail "two concurrent ticks attached the artifact twice"
+REPORTS="$(grep -c "\"work\":\"$WN\"" "$LOG_A" || true)"
+SELF attempt show "$TN" | grep -q "(passed)" || fail "a raced settlement lost its verdict"
+
+# an interrupted settlement replays onto the same ids, never a second set
+node -e 'const fs=require("fs");const f=process.argv[1];const id=process.argv[2];
+const kept=fs.readFileSync(f,"utf8").split("\n").filter((l)=>l.trim()!=="").filter((l)=>{const e=JSON.parse(l);return !(e.attempt===id&&e.kind==="settle.commit");});
+fs.writeFileSync(f,kept.join("\n")+"\n");' "$JOURNAL" "$TN"
+SELF daemon tick | grep -q "resumed the settlement" || fail "an interrupted settlement was not replayed after the crash"
+[ "$(SELF artifact list --work "$WN" | wc -l | tr -d ' ')" = "1" ] || fail "replaying a settlement ingested the artifact twice"
+AFTER="$(grep -c "\"work\":\"$WN\"" "$LOG_A" || true)"
+[ "$REPORTS" = "$AFTER" ] || fail "replaying a settlement wrote a second report for the same attempt"
+SELF attempt show "$TN" | grep -q "(passed)" || fail "the replayed settlement did not converge on the same verdict"
+
+# ── the scheduler's place in the journal is durable ─────────────────
+[ -f "$LOCAL/cursors.json" ] || fail "the scheduler kept no durable cursor"
+grep -q "scheduler" "$LOCAL/cursors.json" || fail "the scheduler subscription was not persisted"
+BEFORE_WAKE="$(grep -c "work.unblocked" "$LOG_A" || true)"
+rm -f "$LOCAL/cursors.json"
+SELF daemon tick > /dev/null
+AFTER_WAKE="$(grep -c "work.unblocked" "$LOG_A" || true)"
+[ "$BEFORE_WAKE" = "$AFTER_WAKE" ] || fail "replaying the journal from a lost cursor woke work a second time"
+grep -q "scheduler" "$LOCAL/cursors.json" || fail "the scheduler did not re-establish its subscription"
+
+# ── the launcher owns the capability profile ────────────────────────
+UNKNOWN="$(SELF attempt register --work "$WN" --runtime hostile --action http-post --command 'true' 2>&1 || true)"
+echo "$UNKNOWN" | grep -q "not a capability the launcher grants" || fail "an unrecognised action was granted by default"
+CRED="$(SELF attempt register --work "$WN" --runtime hostile --action credential-forward --command 'true' 2>&1 || true)"
+echo "$CRED" | grep -q "never allowed" || fail "credential forwarding was accepted at registration"
+NET="$(SELF attempt register --work "$WN" --runtime hostile --action network --command 'true' 2>&1 || true)"
+echo "$NET" | grep -q "never allowed" || fail "an unapproved network capability was accepted at registration"
+EXT="$(SELF attempt register --work "$WN" --runtime hostile --risk external --action build --command 'true' 2>&1 || true)"
+echo "$EXT" | grep -q "waits for a person" || fail "external-risk work was given a capability profile"
+
+# a lying completion envelope cannot widen what the launch was given
+WO="$(SELF work add "prose and envelopes do not grant capabilities" | tail -1)"
+SELF work start "$WO"
+OUTO="$ROOT/outo.txt"
+TO="$(SELF attempt register --work "$WO" --runtime hostile --no-report --output "$OUTO" \
+    --command 'printf built > '"$OUTO"'; '"$COMPLETE"' --action publish' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TO"
+SELF daemon tick > /dev/null
+SELF attempt show "$TO" | grep -q "which the launcher never granted" || fail "a completion envelope widened its own capabilities"
+SELF attempt show "$TO" | grep -q "(refused)" || fail "a lying completion envelope was judged instead of refused"
+SELF artifact list --work "$WO" | grep -q "outo.txt" && fail "a refused attempt attached its output anyway"
+
+# the launched process gets the variables a build needs, not the machine's
+export PROOF_FAKE_TOKEN="sk-mustnotreachtherun0123456789"
+WP="$(SELF work add "a run does not inherit this machine's credentials" | tail -1)"
+SELF work start "$WP"
+OUTP="$ROOT/outp.txt"
+TP="$(SELF attempt register --work "$WP" --runtime envcheck --no-report --output "$OUTP" \
+    --command 'printf "[${PROOF_FAKE_TOKEN:-absent}]" > '"$OUTP"'; '"$COMPLETE" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TP"
+grep -q "absent" "$OUTP" || fail "the launched command inherited the machine's environment"
+unset PROOF_FAKE_TOKEN
+SELF daemon tick > /dev/null
+
+# ── declared outputs that share a basename ──────────────────────────
+mkdir -p "$ROOT/da" "$ROOT/db"
+WQ="$(SELF work add "two outputs may share a name and neither may be lost" | tail -1)"
+SELF work start "$WQ"
+TQ="$(SELF attempt register --work "$WQ" --runtime collide --no-report \
+    --output "$ROOT/da/same.txt" --output "$ROOT/db/same.txt" \
+    --command 'printf first > '"$ROOT"'/da/same.txt; printf second > '"$ROOT"'/db/same.txt; '"$COMPLETE" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$TQ"
+SELF daemon tick > /dev/null
+SELF attempt show "$TQ" | grep -q "da/same.txt" || fail "colliding output basenames were not disambiguated"
+SELF attempt show "$TQ" | grep -q "db/same.txt" || fail "one of two colliding outputs was dropped"
+[ "$(SELF artifact list --work "$WQ" | wc -l | tr -d ' ')" = "2" ] || fail "a colliding output was not attached"
+
+# the artifact is the bytes that were hashed, not whatever the path holds later
+printf tampered > "$ROOT/da/same.txt"
+grep -rq "tampered" "$ROOT/A/ws/.superself/artifacts/demo/" && fail "an artifact was ingested from its path after validation instead of from the bytes that were hashed"
+SELF daemon tick > /dev/null
+
+# unknown cost is never a cost of zero
+SELF digest --hours 24 | grep -q "cost unknown for" || fail "attempts whose provider reported nothing were folded into the total as zero"
 
 echo "proof OK"

@@ -3,7 +3,7 @@ import { CliContext } from "../paths.js";
 import { bold, dim, styled } from "../style.js";
 import { AttemptRecord, foldAttempts } from "./attempt.js";
 import { loadPolicy } from "./policy.js";
-import { redact } from "./sanitize.js";
+import { redact, scrubPaths } from "./sanitize.js";
 
 export interface DigestGroup
 {
@@ -23,10 +23,14 @@ export interface Digest
 // output, no path, no handle.
 export function buildDigest(ctx: CliContext, since: Date, now: Date): Digest
 {
-    const recent = foldAttempts(ctx.storeDir).filter((attempt) => touchedSince(attempt, since));
+    const recent = foldAttempts(ctx.storeDir)
+        .filter((attempt) => touchedSince(attempt, since))
+        .map((attempt) => ({ ...attempt, reasons: attempt.reasons.map((reason) => scrubPaths(ctx, reason)) }));
     const groups: DigestGroup[] = [
         group("Completed", recent.filter((a) => a.verdict === "passed")),
         group("Failed", recent.filter((a) => a.verdict === "failed")),
+        group("Needs a revision", recent.filter((a) => a.verdict === "revision_required")),
+        group("Refused", recent.filter((a) => a.verdict === "refused")),
         group("Stale", recent.filter((a) => a.verdict === "stale")),
         group("Retried", recent.filter((a) => a.tries > 1 && a.verdict !== "passed")),
         group("Waiting on approval", recent.filter((a) => a.needsApproval && !a.approved)),
@@ -61,15 +65,22 @@ function line(attempt: AttemptRecord): string
 
 // Unknown is a real answer. A provider that reported nothing must not be
 // rendered as zero, or a night of spending reads as free.
+// Unknown is a real answer, and it is never folded into the total. A provider
+// that reported nothing contributes no number and is counted separately, so a
+// night whose spending nobody can see reads as unknown rather than as free.
 function usageLine(attempts: AttemptRecord[]): string
 {
     const costs = attempts.map((a) => a.costUsd).filter((cost): cost is number => cost !== null);
     const usages = attempts.map((a) => a.usage).filter((usage): usage is number => usage !== null);
     const cost = costs.length === 0 ? "unknown" : `$${costs.reduce((sum, value) => sum + value, 0).toFixed(2)}`;
     const tokens = usages.length === 0 ? "unknown" : String(usages.reduce((sum, value) => sum + value, 0));
-    const missing = attempts.length - costs.length;
-    const note = missing > 0 && costs.length > 0 ? ` (${missing} attempt${missing === 1 ? "" : "s"} unknown)` : "";
-    return `- cost ${cost}, tokens ${tokens}${note}`;
+    const unpriced = attempts.length - costs.length;
+    const uncounted = attempts.length - usages.length;
+    const notes = [
+        unpriced === 0 ? "" : `cost unknown for ${unpriced} attempt${unpriced === 1 ? "" : "s"}`,
+        uncounted === 0 ? "" : `tokens unknown for ${uncounted}`
+    ].filter((note) => note !== "");
+    return `- cost ${cost}, tokens ${tokens}${notes.length === 0 ? "" : ` (${notes.join(", ")})`}`;
 }
 
 function nextActions(ctx: CliContext, attempts: AttemptRecord[], now: Date): string[]
@@ -86,6 +97,14 @@ function nextActions(ctx: CliContext, attempts: AttemptRecord[], now: Date): str
     for (const attempt of attempts.filter((a) => a.verdict === "failed"))
     {
         actions.push(`decide what to do about ${attempt.work} — ${attempt.id} failed validation`);
+    }
+    for (const attempt of attempts.filter((a) => a.verdict === "revision_required"))
+    {
+        actions.push(`re-scope ${attempt.work} — ${attempt.id} did not cover its current revision`);
+    }
+    for (const attempt of attempts.filter((a) => a.verdict === "refused"))
+    {
+        actions.push(`inspect ${attempt.id} — its completion claimed something the launch never granted`);
     }
     const policy = loadPolicy(ctx.storeDir, ctx.project ?? "");
     if (policy !== null && ctx.project !== undefined)

@@ -8,7 +8,7 @@ import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
-import { workId } from "./ids.js";
+import { requirementId, workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, WorkState } from "./model.js";
@@ -80,12 +80,15 @@ const USAGE = `usage: self <command>
   work propose "<outcome>" --milestone m --value v --success s --stop s --risk r
               --capacity c --evidence-plan e --confidence low|medium|high --expires d
   work accept|decline <proposal-id>          act on a goal-gap proposal
+  work require <id> "<criterion>" [--drop r]  add or retire an acceptance criterion (bumps the revision)
+  work design <id>                           approve the current design revision of a work unit
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
   attempt register --work <id> [--command c] [--output p] [--completes] …
                                              register a run before the process exists
   attempt list | show <id> | run <id>        inspect or dispatch a registered attempt
   attempt started <id> --pid n | heartbeat <id> | exited <id> [--code n]
                                              report what an externally launched run is doing
+  attempt complete [--resolved-model m] …    write the completion envelope from inside a supervised run
   attempt approve|cancel <id>                approve an attempt or take one back
   attempt propose <id> --action <kind>       ask mid-run for an action the launch did not declare
   daemon start [--interval s] | stop | status | tick | circuits
@@ -534,12 +537,61 @@ function cmdWork(rest: string[]): void
         cmdProposalDecision(ctx, rest.slice(1), rest[0] === "accept");
         return;
     }
+    if (rest[0] === "require")
+    {
+        cmdRequire(ctx, rest.slice(1));
+        return;
+    }
+    if (rest[0] === "design")
+    {
+        cmdDesign(ctx, rest.slice(1));
+        return;
+    }
     const type = TRANSITIONS[rest[0]];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline`);
+        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|show|require|design|start|block|unblock|done|link|unlink|propose|accept|decline`);
     }
     transitionWork(ctx, type, rest.slice(1));
+}
+
+// Acceptance criteria are what a passing attempt is measured against, so they
+// are recorded as their own events: adding one is a revision of the unit, and
+// an attempt registered before it cannot silently claim to have covered it.
+function cmdRequire(ctx: ProjectContext, args: string[]): void
+{
+    const { values, positionals } = parseArgs({
+        args,
+        options: { drop: { type: "string" } },
+        allowPositionals: true
+    });
+    const work = requireOpenWork(ctx, positionals[0]);
+    if (values.drop !== undefined)
+    {
+        const model = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === work.id);
+        if (!(model?.requirements ?? []).some((item) => item.id === values.drop))
+        {
+            throw new CliError(`${work.id} has no requirement "${values.drop}" — run \`self work show ${work.id}\` to list them`);
+        }
+        recordEvent(ctx, makeEvent(ctx.project, "work.requirement.dropped", { work: work.id, requirement: values.drop }),
+            `${work.id} dropped ${values.drop}`);
+        return;
+    }
+    const text = requireText(positionals[1], 'work require <work-id> "<acceptance criterion>" [--drop <requirement-id>]');
+    const id = requirementId();
+    recordEvent(ctx, makeEvent(ctx.project, "work.requirement.added", { work: work.id, requirement: id, text }),
+        `${work.id} requires ${text}`);
+    console.log(id);
+}
+
+function cmdDesign(ctx: ProjectContext, args: string[]): void
+{
+    const work = requireOpenWork(ctx, args[0]);
+    const model = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === work.id);
+    const next = (model?.designRevision ?? 0) + 1;
+    recordEvent(ctx, makeEvent(ctx.project, "work.design.approved", { work: work.id, designRevision: next }, undefined, true),
+        `${work.id} design revision ${next} approved`);
+    console.log(String(next));
 }
 
 function transitionWork(ctx: ProjectContext, type: string, args: string[]): void

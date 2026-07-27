@@ -364,6 +364,15 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
         lines.push(`- Artifacts: ${work.artifacts.map((a) => `${a.id} ${a.name}`).join(", ")}`);
     }
     lines.push("");
+    if (work.requirements.length > 0)
+    {
+        lines.push(`## Acceptance criteria (revision ${work.revision})`, "");
+        for (const requirement of work.requirements)
+        {
+            lines.push(`- **${requirement.id}** ${requirement.text}`);
+        }
+        lines.push("");
+    }
     if (work.attempts.length > 0)
     {
         lines.push("## Attempts", "");

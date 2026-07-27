@@ -1,32 +1,36 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename } from "node:path";
-import { ingestArtifacts } from "../artifact.js";
+import { existsSync } from "node:fs";
 import { buildModel } from "../model.js";
-import { CliContext, readRegistry, resolveProjectPath } from "../paths.js";
+import { CliContext, resolveProjectPath } from "../paths.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { EventRefs } from "../types.js";
 import {
     AttemptRecord,
-    AttemptVerdict,
-    circuitOpen,
     circuitKey,
+    circuitOpen,
     foldAttempts,
     heldLeases,
     patchAttempt
 } from "./attempt.js";
-import { readSpool, spoolDir, spoolFile } from "./local.js";
+import { decideCapabilities, forbiddenAction, sanitizedEnv } from "./capability.js";
+import { advanceCursor, ensureSubscription, pendingSignals } from "./cursor.js";
+import { generation, withStoreLock } from "./lock.js";
+import { readRun, repairJournal, runDir, runFile, writeLocalFileDurable } from "./local.js";
 import {
     DEFAULT_CIRCUIT_THRESHOLD,
     OvernightPolicy,
-    forbiddenAction,
     loadPolicy,
     policyRefusal
 } from "./policy.js";
-import { redact } from "./sanitize.js";
+import {
+    beginSettlement,
+    currentWork,
+    runSettlement,
+    usageOf,
+    validate
+} from "./settle.js";
 
-const REPORT_CAP = 4000;
+const SCHEDULER = "scheduler";
 
 export interface TickSummary
 {
@@ -34,27 +38,56 @@ export interface TickSummary
     settled: string[];
     dispatched: string[];
     skipped: string[];
+    recovered: string[];
 }
 
+// Everything a tick does happens under the workspace's journal lock. Two
+// daemons, or a daemon and a `self daemon tick` typed by hand, serialise here
+// rather than both validating, reporting, releasing and dispatching the same
+// attempt.
 export function tick(ctx: CliContext, now: Date): TickSummary
 {
-    const summary: TickSummary = { reconciled: [], settled: [], dispatched: [], skipped: [] };
+    return withStoreLock(ctx.storeDir, () => lockedTick(ctx, now));
+}
+
+function lockedTick(ctx: CliContext, now: Date): TickSummary
+{
+    const summary: TickSummary = { reconciled: [], settled: [], dispatched: [], skipped: [], recovered: [] };
+    const torn = repairJournal(ctx.storeDir);
+    if (torn.length > 0)
+    {
+        summary.recovered.push(`quarantined ${torn.length} torn journal line(s) from an interrupted write`);
+    }
+    ensureSubscription(ctx.storeDir, SCHEDULER, now.toISOString());
     const attempts = foldAttempts(ctx.storeDir);
     for (const attempt of attempts)
     {
-        if (reconcile(ctx.storeDir, attempt, now))
+        const note = recoverLaunch(ctx, attempt, now);
+        if (note !== null)
+        {
+            summary.recovered.push(note);
+        }
+    }
+    // An interrupted settlement is finished before anything new is judged, so
+    // a crashed transaction can never be overtaken by a second one.
+    for (const attempt of attempts.filter((item) => item.settlement !== null && !item.settlementCommitted))
+    {
+        runSettlement(ctx, attempt, { record }, now.toISOString());
+        summary.recovered.push(`resumed the settlement of ${attempt.id} (${attempt.verdict})`);
+    }
+    for (const attempt of attempts)
+    {
+        if (reconcile(ctx, attempt, now))
         {
             summary.reconciled.push(`${attempt.id} ${attempt.exitSource}`);
         }
     }
-    for (const attempt of attempts)
+    for (const attempt of attempts.filter((item) => item.state === "exited"))
     {
-        if (attempt.state === "exited")
-        {
-            settle(ctx, attempt, now);
-            summary.settled.push(`${attempt.id} ${attempt.verdict}`);
-        }
+        settle(ctx, attempt, now);
+        summary.settled.push(`${attempt.id} ${attempt.verdict}`);
     }
+    consumeSignals(ctx, attempts, now);
     for (const attempt of attempts)
     {
         const refusal = considerDispatch(ctx, attempts, attempt, now);
@@ -69,6 +102,48 @@ export function tick(ctx: CliContext, now: Date): TickSummary
         }
     }
     return summary;
+}
+
+// The scheduler's place in the journal is durable, so a restart resumes where
+// the previous generation stopped instead of relying on what a dead process
+// happened to remember. Replaying a signal is harmless: the wake it produces
+// is gated on work state that has already moved.
+function consumeSignals(ctx: CliContext, attempts: AttemptRecord[], now: Date): void
+{
+    const signals = pendingSignals(ctx.storeDir, SCHEDULER);
+    if (signals.length === 0)
+    {
+        return;
+    }
+    for (const signal of signals)
+    {
+        const attempt = attempts.find((item) => item.id === signal.attempt);
+        if (attempt !== undefined && signal.kind === "settle.commit")
+        {
+            wakeDependents(ctx, attempts, attempt, now);
+        }
+    }
+    advanceCursor(ctx.storeDir, SCHEDULER, signals[signals.length - 1].seq ?? -1, now.toISOString());
+}
+
+// A dependency finishing is what makes the next unit ready. Recording the
+// wake keeps the reason visible instead of a unit that silently changed state
+// overnight, and only approved, ready work is woken.
+function wakeDependents(ctx: CliContext, attempts: AttemptRecord[], finished: AttemptRecord, now: Date): void
+{
+    if (finished.verdict !== "passed")
+    {
+        return;
+    }
+    const works = buildModel(ctx.storeDir, finished.project, now).works;
+    for (const waiting of attempts.filter((item) => item.dependsOn.includes(finished.work)))
+    {
+        const work = works.find((item) => item.id === waiting.work);
+        if (work?.status === "blocked" && work.blockedOn === "dependency")
+        {
+            record(ctx, waiting.project, "work.unblocked", { work: waiting.work }, undefined, `${waiting.work} dependency met`);
+        }
+    }
 }
 
 /* ── observation ───────────────────────────────────────────────────── */
@@ -93,16 +168,17 @@ interface ExitNotice
     retryAt: string | null;
 }
 
-// The wrapper writes the exit notice by rename, so a half-written file never
-// reads as a confirmed exit.
-function readExitNotice(storeDir: string, attempt: AttemptRecord): ExitNotice | null
+// The wrapper writes the exit notice by rename into the directory of the
+// launch that produced it, so neither a half-written file nor a wrapper from
+// a superseded launch can read as this run's confirmed exit.
+function readExitNotice(ctx: CliContext, attempt: AttemptRecord): ExitNotice | null
 {
-    const raw = readSpool(storeDir, attempt.id, "exit");
+    const raw = readRun(ctx.storeDir, attempt.id, attempt.fence, "exit");
     if (raw === null || raw.trim() === "")
     {
         return null;
     }
-    const provider = readSpool(storeDir, attempt.id, "provider.json");
+    const provider = readRun(ctx.storeDir, attempt.id, attempt.fence, "provider.json");
     const parsed = provider === null ? {} : safeJson(provider);
     return {
         code: Number.parseInt(raw.trim(), 10),
@@ -115,7 +191,7 @@ function safeJson(text: string): Record<string, unknown>
 {
     try
     {
-        return JSON.parse(text);
+        return JSON.parse(text) as Record<string, unknown>;
     }
     catch
     {
@@ -129,148 +205,108 @@ function beatDeadline(attempt: AttemptRecord): number
     return new Date(base).getTime() + attempt.heartbeatSec * 1000;
 }
 
+// The launch intent is journalled and fsynced before the process exists, so
+// the two crash points either side of spawn are both recoverable: with no
+// pid written by the wrapper nothing was ever started and the attempt goes
+// back to the queue, and with one the process is adopted rather than left to
+// run untracked.
+function recoverLaunch(ctx: CliContext, attempt: AttemptRecord, now: Date): string | null
+{
+    if (attempt.state !== "running" || attempt.pid !== null)
+    {
+        return null;
+    }
+    const written = readRun(ctx.storeDir, attempt.id, attempt.fence, "pid");
+    const pid = written === null ? Number.NaN : Number.parseInt(written.trim(), 10);
+    if (Number.isFinite(pid))
+    {
+        patchAttempt(ctx.storeDir, attempt, "adopt", { pid, owner: generation() }, now.toISOString());
+        return `adopted ${attempt.id} (pid recorded by its own wrapper after a crash mid-launch)`;
+    }
+    if (existsSync(runFile(ctx.storeDir, attempt.id, attempt.fence, "exit")))
+    {
+        return null;
+    }
+    patchAttempt(ctx.storeDir, attempt, "launch.abandoned", {
+        state: "registered",
+        startedAt: null,
+        tries: Math.max(0, attempt.tries - 1),
+        owner: null
+    }, now.toISOString());
+    return `${attempt.id} was journalled but never spawned — returned to the queue`;
+}
+
 // Exit detection needs no orchestrator: a confirmed notice, a pid that is
 // gone, and a heartbeat that ran out are three different findings, and only
 // the first says anything about what the run produced.
-function reconcile(storeDir: string, attempt: AttemptRecord, now: Date): boolean
+function reconcile(ctx: CliContext, attempt: AttemptRecord, now: Date): boolean
 {
     if (attempt.state !== "running")
     {
         return false;
     }
-    const notice = readExitNotice(storeDir, attempt);
+    const notice = readExitNotice(ctx, attempt);
     if (notice !== null)
     {
-        patchAttempt(storeDir, attempt, "exit", {
+        patchAttempt(ctx.storeDir, attempt, "exit", {
             state: "exited",
             exitAt: now.toISOString(),
             exitSource: "confirmed",
             exitCode: notice.code,
             providerStatus: notice.providerStatus,
             retryAt: notice.retryAt
-        }, now.toISOString());
+        }, now.toISOString(), attempt.fence);
         return true;
     }
     if (attempt.pid !== null && !alive(attempt.pid))
     {
-        patchAttempt(storeDir, attempt, "exit", {
+        patchAttempt(ctx.storeDir, attempt, "exit", {
             state: "exited",
             exitAt: now.toISOString(),
             exitSource: "vanished"
-        }, now.toISOString());
+        }, now.toISOString(), attempt.fence);
         return true;
     }
     if (now.getTime() > beatDeadline(attempt))
     {
-        patchAttempt(storeDir, attempt, "exit", {
+        // A lease lost to a dead heartbeat must not leave the process running
+        // with it: containment comes before the verdict.
+        terminate(attempt);
+        patchAttempt(ctx.storeDir, attempt, "exit", {
             state: "exited",
             exitAt: now.toISOString(),
             exitSource: "stale"
-        }, now.toISOString());
+        }, now.toISOString(), attempt.fence);
         return true;
     }
     return false;
 }
 
+// A worker whose lease or launch has been superseded is stopped rather than
+// left to keep writing. Its spool stays: the evidence outlives the process.
+export function terminate(attempt: AttemptRecord): void
+{
+    if (attempt.pid === null)
+    {
+        return;
+    }
+    try
+    {
+        process.kill(attempt.pid, "SIGTERM");
+    }
+    catch
+    {
+        // Already gone. The state change is what has to persist.
+    }
+}
+
 /* ── settlement ────────────────────────────────────────────────────── */
-
-interface Validation
-{
-    verdict: AttemptVerdict;
-    reasons: string[];
-    hashes: Record<string, string>;
-}
-
-function classify(attempt: AttemptRecord): AttemptVerdict | null
-{
-    if (attempt.cancelRequested)
-    {
-        return "cancelled";
-    }
-    if (attempt.exitSource !== "confirmed")
-    {
-        return "stale";
-    }
-    if (attempt.providerStatus === "capacity")
-    {
-        return "capacity";
-    }
-    return null;
-}
-
-// Exit code zero is a claim, not a result. Nothing is called a success until
-// the declared outputs exist and the validation contract passes.
-function validate(storeDir: string, attempt: AttemptRecord, policy: OvernightPolicy | null): Validation
-{
-    const early = classify(attempt);
-    if (early !== null)
-    {
-        return { verdict: early, reasons: [reasonFor(early, attempt)], hashes: {} };
-    }
-    const reasons: string[] = [];
-    if (attempt.exitCode !== 0)
-    {
-        reasons.push(`the process exited with code ${attempt.exitCode}`);
-    }
-    const hashes: Record<string, string> = {};
-    for (const path of attempt.declared)
-    {
-        if (!existsSync(path) || statSync(path).size === 0)
-        {
-            reasons.push(`declared output "${basename(path)}" is missing or empty`);
-            continue;
-        }
-        hashes[basename(path)] = sha256(readFileSync(path));
-    }
-    if (attempt.declared.length === 0 && attempt.completes)
-    {
-        reasons.push("an attempt that completes work must declare at least one output");
-    }
-    if (attempt.requireReport && (readSpool(storeDir, attempt.id, "report.md") ?? "").trim() === "")
-    {
-        reasons.push("the run left no report in its spool");
-    }
-    if (attempt.completes && policy?.requireHardModel != null && attempt.model !== policy.requireHardModel)
-    {
-        reasons.push(`implementation must run on ${policy.requireHardModel}, not ${attempt.model ?? "an unnamed model"}`);
-    }
-    return { verdict: reasons.length === 0 ? "passed" : "failed", reasons, hashes };
-}
-
-function reasonFor(verdict: AttemptVerdict, attempt: AttemptRecord): string
-{
-    if (verdict === "cancelled")
-    {
-        return "cancelled by the user";
-    }
-    if (verdict === "capacity")
-    {
-        return `provider reported no capacity${attempt.retryAt === null ? "" : `, retry after ${attempt.retryAt}`}`;
-    }
-    return attempt.exitSource === "stale"
-        ? `no heartbeat for ${attempt.heartbeatSec}s — the run is stale, not finished`
-        : "the process disappeared without writing an exit notice";
-}
-
-function sha256(bytes: Buffer): string
-{
-    return createHash("sha256").update(bytes).digest("hex");
-}
-
-function usageOf(storeDir: string, attempt: AttemptRecord): { costUsd: number | null; usage: number | null }
-{
-    const raw = readSpool(storeDir, attempt.id, "usage.json");
-    const parsed = raw === null ? {} : safeJson(raw);
-    return {
-        costUsd: typeof parsed.costUsd === "number" ? parsed.costUsd : null,
-        usage: typeof parsed.usage === "number" ? parsed.usage : null
-    };
-}
 
 export function settle(ctx: CliContext, attempt: AttemptRecord, now: Date): void
 {
     const policy = loadPolicy(ctx.storeDir, attempt.project);
-    const result = validate(ctx.storeDir, attempt, policy);
+    const work = currentWork(ctx, attempt, now);
+    const result = validate(ctx, attempt, work, policy);
     const cost = usageOf(ctx.storeDir, attempt);
     const ts = now.toISOString();
     if (result.verdict === "capacity")
@@ -284,91 +320,28 @@ export function settle(ctx: CliContext, attempt: AttemptRecord, now: Date): void
             exitSource: null,
             pid: null,
             ...cost
-        }, ts);
+        }, ts, attempt.fence);
         syncEvent(ctx, attempt, "attempt.waiting", { text: `${attempt.id} waiting on provider capacity until ${retryAt}`, attempt: attempt.id, retryAt });
         return;
     }
-    patchAttempt(ctx.storeDir, attempt, "settle", {
-        state: "settled",
-        settledAt: ts,
-        verdict: result.verdict,
-        reasons: result.reasons,
-        hashes: result.hashes,
-        pid: null,
-        ...cost
-    }, ts);
-    attachReport(ctx, attempt, result, now);
-    syncEvent(ctx, attempt, "attempt.settled", {
-        text: `${attempt.work} attempt ${attempt.id} ${result.verdict}${result.reasons.length === 0 ? "" : ` — ${result.reasons[0]}`}`,
-        attempt: attempt.id,
-        verdict: result.verdict,
-        reasons: result.reasons,
-        hashes: result.hashes,
-        report: attempt.reportEventId,
-        costUsd: cost.costUsd,
-        usage: cost.usage
-    });
+    // What the run said about itself is recorded before the settlement opens,
+    // so the envelope the plan was judged against is on record even if the
+    // transaction is interrupted before it commits.
+    patchAttempt(ctx.storeDir, attempt, "envelope", {
+        envelope: result.envelope,
+        requestedModel: result.envelope?.requestedModel ?? attempt.requestedModel,
+        resolvedModel: result.envelope?.resolvedModel ?? null,
+        modelResolution: result.envelope?.modelResolution ?? null
+    }, ts, attempt.fence);
+    beginSettlement(ctx, attempt, result, cost, policy, ts);
+    runSettlement(ctx, attempt, { record }, ts);
     if (result.verdict === "failed" || result.verdict === "stale")
     {
         scheduleRetry(ctx, attempt, result, now);
     }
 }
 
-// One report per attempt, whatever the supervisor is told twice. The event id
-// is written back into the journal, so a duplicate exit notice finds the work
-// already reported and stops there.
-function attachReport(ctx: CliContext, attempt: AttemptRecord, result: Validation, now: Date): void
-{
-    if (attempt.reportEventId !== null)
-    {
-        return;
-    }
-    const prose = redact((readSpool(ctx.storeDir, attempt.id, "report.md") ?? "").trim()).slice(0, REPORT_CAP);
-    const hashLine = Object.entries(result.hashes).map(([name, hash]) => `${name} ${hash.slice(0, 12)}`).join(", ");
-    const lines = [
-        `attempt ${attempt.id} (${attempt.runtime}${attempt.model === null ? "" : `/${attempt.model}`}) — ${result.verdict}`,
-        ...result.reasons.map((reason) => `- ${reason}`),
-        hashLine === "" ? "" : `outputs: ${hashLine}`,
-        prose === "" ? "" : "",
-        prose
-    ].filter((line) => line !== "");
-    const payload: Record<string, unknown> = { text: lines.join("\n") };
-    const refs: EventRefs = { work: attempt.work };
-    if (result.verdict === "passed" && attempt.declared.length > 0)
-    {
-        const metas = ingestArtifacts(ctx.storeDir, attempt.project, attempt.declared);
-        payload.artifacts = metas;
-        refs.artifacts = metas.map((meta) => meta.id);
-    }
-    const event = record(ctx, attempt.project, "report.added", payload, refs, `${attempt.work} attempt ${attempt.id} ${result.verdict}`);
-    patchAttempt(ctx.storeDir, attempt, "reported", { reportEventId: event }, now.toISOString());
-    completeWork(ctx, attempt, result, now);
-}
-
-// Physical completion is not semantic completion. Work is only done when the
-// attempt that declared it would passed validation and every review the
-// policy requires has already passed in its own session.
-function completeWork(ctx: CliContext, attempt: AttemptRecord, result: Validation, now: Date): void
-{
-    if (!attempt.completes || result.verdict !== "passed")
-    {
-        return;
-    }
-    const policy = loadPolicy(ctx.storeDir, attempt.project);
-    if (policy?.requireFreshReview === true && attempt.kind !== "review")
-    {
-        patchAttempt(ctx.storeDir, attempt, "await-review", {
-            reasons: [...attempt.reasons, "a fresh review session must pass before this work is done"]
-        }, now.toISOString());
-        record(ctx, attempt.project, "attempt.awaiting-review",
-            { text: `${attempt.work} passed ${attempt.id} and is waiting on a fresh review session`, attempt: attempt.id },
-            { work: attempt.work }, `${attempt.work} awaiting fresh review`);
-        return;
-    }
-    record(ctx, attempt.project, "work.done", { work: attempt.work }, undefined, `${attempt.work} completed by ${attempt.id}`);
-}
-
-function scheduleRetry(ctx: CliContext, attempt: AttemptRecord, result: Validation, now: Date): void
+function scheduleRetry(ctx: CliContext, attempt: AttemptRecord, result: { verdict: string }, now: Date): void
 {
     const deterministic = result.verdict === "failed" && attempt.exitSource === "confirmed" && attempt.exitCode === 0;
     if (deterministic || attempt.tries > attempt.maxRetries)
@@ -382,7 +355,11 @@ function scheduleRetry(ctx: CliContext, attempt: AttemptRecord, result: Validati
         exitCode: null,
         exitAt: null,
         settledAt: null,
-        reportEventId: null
+        reportEventId: null,
+        settlement: null,
+        settlementSteps: [],
+        settlementCommitted: false,
+        envelope: null
     }, now.toISOString());
 }
 
@@ -406,8 +383,8 @@ export function considerDispatch(ctx: CliContext, attempts: AttemptRecord[], att
     return refusal === null ? null : refusal.reason;
 }
 
-// The gates that hold whether or not a policy exists: approval, forbidden
-// actions, dependencies, leases, capacity resets, and the breaker.
+// The gates that hold whether or not a policy exists: capability, approval,
+// dependencies, leases, capacity resets, the breaker, and the budget.
 export function dispatchRefusal(
     ctx: CliContext,
     attempts: AttemptRecord[],
@@ -416,6 +393,8 @@ export function dispatchRefusal(
     now: Date
 ): string | null
 {
+    // A forbidden action is refused before anything else, because no later
+    // gate — not approval, not the policy — could ever let it through.
     const forbidden = forbiddenAction(attempt.actions);
     if (forbidden !== null)
     {
@@ -429,6 +408,14 @@ export function dispatchRefusal(
     {
         return "waiting on human approval";
     }
+    // Re-decided here, not trusted from registration: an attempt whose actions
+    // were widened mid-run meets the launcher's profile again, and approval
+    // alone cannot conjure a capability the launcher does not grant.
+    const decision = decideCapabilities(attempt.riskClass, attempt.actions);
+    if (decision.reason !== null)
+    {
+        return decision.reason;
+    }
     if (attempt.retryAt !== null && now.toISOString() < attempt.retryAt)
     {
         return `waiting on provider capacity until ${attempt.retryAt}`;
@@ -439,9 +426,9 @@ export function dispatchRefusal(
         return `waiting on ${pending}`;
     }
     const held = heldLeases(attempts).get(attempt.lease ?? "");
-    if (attempt.lease !== null && held !== undefined && held !== attempt.id)
+    if (attempt.lease !== null && held !== undefined && held.attempt !== attempt.id)
     {
-        return `lease "${attempt.lease}" is held by ${held}`;
+        return `lease "${attempt.lease}" is held by ${held.attempt} at fence ${held.fence}`;
     }
     const threshold = policy?.circuitThreshold ?? DEFAULT_CIRCUIT_THRESHOLD;
     if (circuitOpen(ctx.storeDir, circuitKey(attempt), threshold))
@@ -456,16 +443,32 @@ export function dispatchRefusal(
     return budgetRefusal(attempts, attempt, policy);
 }
 
+// A cost the provider never reported is not a cost of zero. Summing unknowns
+// as zero would let a whole night of spending read as free and never trip the
+// budget, so an attempt that declared a reservation is charged for it and one
+// that declared nothing makes the budget unprovable.
 function budgetRefusal(attempts: AttemptRecord[], attempt: AttemptRecord, policy: OvernightPolicy | null): string | null
 {
     if (policy?.budgetUsd == null)
     {
         return null;
     }
-    const spent = attempts
-        .filter((item) => item.project === attempt.project && item.costUsd !== null)
+    const settled = attempts.filter((item) => item.project === attempt.project && item.settledAt !== null);
+    const spent = settled
+        .filter((item) => item.costUsd !== null)
         .reduce((total, item) => total + (item.costUsd ?? 0), 0);
-    return spent >= policy.budgetUsd ? `the overnight budget of $${policy.budgetUsd} is spent` : null;
+    const unknown = settled.filter((item) => item.costUsd === null);
+    // An attempt whose provider said nothing is charged what its launch
+    // reserved, and one that reserved nothing is counted rather than added:
+    // either way it never contributes a zero that makes spending look free.
+    const reserved = unknown.reduce((total, item) => total + (item.budgetUsd ?? 0), 0);
+    const unpriced = unknown.filter((item) => item.budgetUsd === null).length;
+    if (spent + reserved < policy.budgetUsd)
+    {
+        return null;
+    }
+    const note = unpriced === 0 ? "" : `, and ${unpriced} attempt(s) reported no cost at all`;
+    return `the overnight budget of $${policy.budgetUsd} is spent (known $${spent.toFixed(2)}, reserved $${reserved.toFixed(2)}${note})`;
 }
 
 function unmetDependency(ctx: CliContext, attempt: AttemptRecord): string | null
@@ -483,64 +486,76 @@ function unmetDependency(ctx: CliContext, attempt: AttemptRecord): string | null
 // finish correctly even if the supervisor dies the moment after it starts.
 export function launch(ctx: CliContext, attempt: AttemptRecord, now: Date): void
 {
-    clearExitNotice(ctx.storeDir, attempt);
-    const out = quote(spoolFile(ctx.storeDir, attempt.id, "stdout"));
-    const err = quote(spoolFile(ctx.storeDir, attempt.id, "stderr"));
-    const exit = quote(spoolFile(ctx.storeDir, attempt.id, "exit"));
-    const tmp = quote(spoolFile(ctx.storeDir, attempt.id, "exit.part"));
-    const script = `( ${attempt.command} ) > ${out} 2> ${err}; printf %s "$?" > ${tmp}; mv ${tmp} ${exit}`;
-    const cwd = resolveProjectPath(ctx.storeDir, attempt.project) ?? ctx.workspaceDir;
-    // The run needs to know where to leave its report and usage numbers; the
-    // spool is the only channel that never syncs.
-    const env = {
-        ...process.env,
-        SUPERSELF_ATTEMPT: attempt.id,
-        SUPERSELF_SPOOL: spoolDir(ctx.storeDir, attempt.id)
-    };
-    const child = spawn("/bin/sh", ["-c", script], { cwd, detached: true, stdio: "ignore", env });
-    child.unref();
+    const decision = decideCapabilities(attempt.riskClass, attempt.actions);
+    if (decision.reason !== null)
+    {
+        throw new Error(decision.reason);
+    }
     const ts = now.toISOString();
-    patchAttempt(ctx.storeDir, attempt, "start", {
+    const fence = attempt.fence + 1;
+    // Journalled and fsynced before the process exists. Everything the
+    // recovery path needs to find an orphan is durable at this point.
+    patchAttempt(ctx.storeDir, attempt, "launch.intent", {
         state: "running",
-        pid: child.pid ?? null,
+        fence,
+        owner: generation(),
+        capabilities: decision.granted,
+        pid: null,
         startedAt: ts,
         lastBeat: ts,
         tries: attempt.tries + 1,
         retryAt: null
     }, ts);
-    wakeWork(ctx, attempt, ts);
+    const dir = runDir(ctx.storeDir, attempt.id, fence);
+    writeLocalFileDurable(runFile(ctx.storeDir, attempt.id, fence, "fence"), String(fence) + "\n");
+    const child = spawn("/bin/sh", ["-c", wrapper(ctx, attempt, fence)], {
+        cwd: resolveProjectPath(ctx.storeDir, attempt.project) ?? ctx.workspaceDir,
+        detached: true,
+        stdio: "ignore",
+        // A launched command gets the variables a local build needs and
+        // nothing else: an inherited environment would hand every run this
+        // machine's provider keys and cloud credentials.
+        env: sanitizedEnv({
+            SUPERSELF_ATTEMPT: attempt.id,
+            SUPERSELF_WORK: attempt.work,
+            SUPERSELF_FENCE: String(fence),
+            SUPERSELF_SPOOL: dir,
+            SUPERSELF_MODEL: attempt.requestedModel ?? "",
+            SUPERSELF_REQUIREMENTS: attempt.requirements.join(","),
+            SUPERSELF_WORK_REVISION: String(attempt.workRevision),
+            SUPERSELF_DESIGN_REVISION: attempt.designRevision === null ? "" : String(attempt.designRevision),
+            SUPERSELF_CAPABILITIES: decision.granted.join(",")
+        })
+    });
+    child.unref();
+    patchAttempt(ctx.storeDir, attempt, "launch.pid", { pid: child.pid ?? null }, new Date().toISOString(), fence);
+    startWork(ctx, attempt, ts);
     syncEvent(ctx, attempt, "attempt.started", {
         text: `${attempt.work} attempt ${attempt.id} started on ${attempt.runtime}`,
-        attempt: attempt.id
+        attempt: attempt.id,
+        fence
     });
 }
 
-// A relaunch must not inherit the previous run's exit notice, or the next
-// reconcile would settle a process that has not started yet.
-function clearExitNotice(storeDir: string, attempt: AttemptRecord): void
+// The wrapper records its own pid before it runs anything, which is what lets
+// a supervisor that died between spawn and its own bookkeeping still find the
+// process it started.
+function wrapper(ctx: CliContext, attempt: AttemptRecord, fence: number): string
 {
-    spoolDir(storeDir, attempt.id);
-    for (const name of ["exit", "exit.part", "provider.json"])
-    {
-        rmSync(spoolFile(storeDir, attempt.id, name), { force: true });
-    }
+    const at = (name: string): string => quote(runFile(ctx.storeDir, attempt.id, fence, name));
+    return [
+        `printf %s "$$" > ${at("pid.part")}`,
+        `mv ${at("pid.part")} ${at("pid")}`,
+        `( ${attempt.command} ) > ${at("stdout")} 2> ${at("stderr")}`,
+        `printf %s "$?" > ${at("exit.part")}`,
+        `mv ${at("exit.part")} ${at("exit")}`
+    ].join("; ");
 }
 
-// A dependency finishing is what makes the next unit ready; recording the
-// wake keeps the reason visible in the log instead of a unit that silently
-// changed state overnight.
-function wakeWork(ctx: CliContext, attempt: AttemptRecord, ts: string): void
+function startWork(ctx: CliContext, attempt: AttemptRecord, ts: string): void
 {
     const work = buildModel(ctx.storeDir, attempt.project, new Date(ts)).works.find((item) => item.id === attempt.work);
-    if (work === undefined)
-    {
-        return;
-    }
-    if (work.status === "blocked" && work.blockedOn === "dependency")
-    {
-        record(ctx, attempt.project, "work.unblocked", { work: attempt.work }, undefined, `${attempt.work} dependency met`);
-    }
-    if (work.status === "next")
+    if (work?.status === "next")
     {
         record(ctx, attempt.project, "work.started", { work: attempt.work }, undefined, `${attempt.work} ${work.outcome}`);
     }
@@ -559,18 +574,14 @@ export function record(
     type: string,
     payload: Record<string, unknown>,
     refs: EventRefs | undefined,
-    summary: string
+    summary: string,
+    id?: string
 ): string
 {
     const projectDir = resolveProjectPath(ctx.storeDir, slug) ?? undefined;
-    const event = makeEvent(slug, type, payload, refs);
+    const event = makeEvent(slug, type, payload, refs, false, id);
     recordEvent({ ...ctx, project: slug, projectDir }, event, summary);
     return event.id;
-}
-
-export function registeredProjects(ctx: CliContext): string[]
-{
-    return readRegistry(ctx.storeDir).map((entry) => entry.slug);
 }
 
 function quote(path: string): string

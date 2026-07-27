@@ -53,6 +53,18 @@ export interface AttemptSummary
     needsApproval: boolean;
 }
 
+// An acceptance criterion a passing attempt has to have covered. Ids are
+// stable across edits so an attempt registered yesterday can still say which
+// criteria it set out to satisfy.
+export interface Requirement
+{
+    id: string;
+    text: string;
+    // The work revision that introduced this criterion, so an attempt that
+    // predates it can be told apart from one that ignored it.
+    since: number;
+}
+
 export interface WorkState
 {
     id: string;
@@ -62,6 +74,12 @@ export interface WorkState
     status: "next" | "active" | "blocked" | "done";
     blockedOn?: string;
     blockedWhy?: string;
+    // Bumped whenever what the unit asks for changes. An attempt carries the
+    // revision it was registered against; a mismatch at settlement means the
+    // specification moved under the run and its coverage cannot be trusted.
+    revision: number;
+    requirements: Requirement[];
+    designRevision: number | null;
     reports: ReportEntry[];
     evidence: string[];
     artifacts: ArtifactMeta[];
@@ -255,6 +273,9 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             ts: event.ts,
             lastEventTs: event.ts,
             status: "next",
+            revision: 1,
+            requirements: [],
+            designRevision: null,
             reports: [],
             evidence: [],
             artifacts: [],
@@ -275,6 +296,10 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     if (event.type === "work.linked" || event.type === "work.unlinked")
     {
         applyLink(work, event);
+        return;
+    }
+    if (applyRequirement(work, event))
+    {
         return;
     }
     if (event.type === "work.started" || event.type === "work.unblocked")
@@ -312,6 +337,35 @@ function applyLink(work: WorkState, event: SelfEvent): void
             ? [...new Set([...work[field], id])]
             : work[field].filter((item) => item !== id);
     }
+}
+
+// Changing what a unit asks for is a revision, and the revision is what an
+// attempt's coverage claim is checked against. Approving a design is recorded
+// the same way so a run cannot claim to implement a design nobody approved.
+function applyRequirement(work: WorkState, event: SelfEvent): boolean
+{
+    if (event.type === "work.requirement.added")
+    {
+        work.revision += 1;
+        work.requirements.push({
+            id: String(event.payload.requirement),
+            text: String(event.payload.text),
+            since: work.revision
+        });
+        return true;
+    }
+    if (event.type === "work.requirement.dropped")
+    {
+        work.revision += 1;
+        work.requirements = work.requirements.filter((item) => item.id !== String(event.payload.requirement));
+        return true;
+    }
+    if (event.type === "work.design.approved")
+    {
+        work.designRevision = Number(event.payload.designRevision);
+        return true;
+    }
+    return false;
 }
 
 const ATTEMPT_PHASES: Record<string, AttemptSummary["phase"]> = {

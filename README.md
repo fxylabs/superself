@@ -95,7 +95,16 @@ sits next to git:
   declared outputs, attaches exactly one report per attempt, releases leases,
   parks provider-capacity waits until their reset, opens a circuit after
   repeated failures, and wakes only approved work whose dependencies are done.
-  Nothing is called a success because it exited zero or said so in prose;
+  Nothing is called a success because it exited zero or said so in prose: a run
+  passes only when the completion envelope it wrote — `self attempt complete` —
+  matches the launch that produced it, names the model that actually answered,
+  and covers the acceptance criteria the work unit carries at its current
+  revision. A criterion added while the agent worked moves the attempt to
+  `revision_required` rather than closing the unit;
+- `self work require` states an acceptance criterion and bumps the unit's
+  revision; `self work design` approves a design revision. Both are what a
+  completion claim is measured against, so "done" means something a later
+  reader can check rather than something a run asserted about itself;
 - `self overnight set` states, versions, and revokes what may run unattended —
   window and wake time, allowed projects, risk classes and work kinds,
   concurrency, budget, retries, whether dependencies may auto-dispatch, and
