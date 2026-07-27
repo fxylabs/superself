@@ -59,7 +59,8 @@ const USAGE = `usage: self <command>
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
-  artifact search <query> | open <id>        find an artifact or open it with the OS default app
+  artifact search <query> | open <id> [--project slug]
+                                             find an artifact or open it with the OS default app
   convention add "<text>" | drop <event-id>  record or retire a convention
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
@@ -523,8 +524,8 @@ function cmdReport(rest: string[]): void
         payload.artifacts = staged.artifacts;
         refs.artifacts = staged.artifacts.map((meta) => meta.id);
     }
-    commitStaged(staged, () =>
-        recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`));
+    commitStaged(staged, (recorded) =>
+        recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`, recorded));
 }
 
 // A decision may look back at finished work, so this accepts any unit the
