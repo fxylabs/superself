@@ -637,4 +637,58 @@ grep -q "$M3" "$ROOT/B/ws/.superself/projects/demo/state.md" || fail "objectives
 diff "$LOG_A" "$LOG_B" > /dev/null || fail "objective events diverged after sync"
 machine A
 
+# the at-risk window is a boundary, not a mood: inside it with an open
+# criterion is at risk, one day outside it is not
+cd "$ROOT/A/ws/demo"
+EDGE="$(day +3)"
+OUTSIDE="$(day +4)"
+ORISK="$(SELF objective add "close the quarter clean" --horizon quarter --target "$EDGE" | tail -1)"
+MEDGE="$(SELF milestone add "the sign-off lands" --objective "$ORISK" --target "$EDGE" --exit "finance signs off" | tail -1)"
+MOUT="$(SELF milestone add "the archive ships" --objective "$ORISK" --target "$OUTSIDE" --exit "the archive uploads" | tail -1)"
+SELF milestone | grep "$MEDGE" | grep -q "at-risk" || fail "an open criterion inside the window did not read at-risk"
+SELF milestone | grep "$MOUT" | grep -q "at-risk" && fail "a target a day outside the window read at-risk"
+SELF status | grep -q "$MEDGE is at risk" || fail "an at-risk target raised no health signal"
+SELF objective show "$ORISK" | grep -q "Target state: at-risk" || fail "an objective with an at-risk milestone did not carry it"
+
+# every checkpoint landed, so a date that has since passed missed nothing, and
+# coverage cited without a work unit is progress rather than an empty objective
+SELF milestone met "$MEDGE" --criterion c1 --why "the signed statement is filed"
+SELF milestone reach "$MEDGE"
+SELF milestone met "$MOUT" --criterion c1 --why "the archive is uploaded"
+SELF milestone reach "$MOUT"
+SELF objective revise "$ORISK" --why "the board pulled the date in" --target "$PAST"
+SELF objective show "$ORISK" | grep -q "Target state: missed" && fail "an objective whose milestones all landed read missed"
+SELF objective show "$ORISK" | grep -q "Target state: unstarted" && fail "verified coverage with no linked work read as nothing started"
+SELF objective show "$ORISK" | grep -q "Target state: on-track" || fail "an objective holding only reached milestones lost its derived state"
+
+# a reach is a judgment against a revision, so widening the ask makes it stale
+SELF status | grep -q "$MEDGE was reached against" || fail "a reach judged against an older revision stayed silent"
+SELF milestone revise "$MEDGE" --why "the audit added a step" --exit "the auditor countersigns"
+SELF milestone show "$MEDGE" | grep -q "open" || fail "a criterion added after the reach was not left open"
+
+# a superseded milestone hands its order to its successor and waits on nothing
+MOLD="$(SELF milestone add "draft the migration" --objective "$O2" --exit "a draft exists" | tail -1)"
+MNEXT="$(SELF milestone add "run the migration" --objective "$O2" --after "$MOLD" --exit "the migration runs" | tail -1)"
+SELF milestone | grep "$MOLD" | grep -q "critical path" || fail "a milestone another one waits on is not on the critical path"
+MREDO="$(SELF milestone add "run the migration in two passes" --objective "$O2" --supersedes "$MNEXT" --exit "both passes run" | tail -1)"
+SELF milestone | grep "$MNEXT" | grep -q "superseded by $MREDO" || fail "a superseded milestone lost its lineage"
+SELF milestone | grep "$MOLD" | grep -q "critical path" && fail "a superseded milestone still claimed the critical path"
+
+# a target date falls due in the workspace zone, never in the one the machine
+# happens to render in: Etc/GMT+12 and Pacific/Kiritimati are 26 hours apart,
+# so a day that is still current in the west is already spent in the east
+cd "$ROOT/A/ws" && SELF timezone Etc/GMT+12 > /dev/null
+cd "$ROOT/A/ws/demo"
+WEST="$(TZ=Etc/GMT+12 date +%F)"
+MZONE="$(SELF milestone add "the day boundary holds" --objective "$O2" --target "$WEST" --exit "the boundary is judged once" | tail -1)"
+SELF milestone | grep "$MZONE" | grep -q "missed" && fail "a target still due in the workspace zone read as missed"
+cd "$ROOT/A/ws" && SELF timezone Pacific/Kiritimati > /dev/null
+cd "$ROOT/A/ws/demo"
+SELF milestone | grep "$MZONE" | grep -q "missed" || fail "the same target did not fall past in a workspace zone a day ahead"
+EAST_RUN="$(TZ=Pacific/Kiritimati node "$CLI_DIR/bin/self.mjs" milestone)"
+WEST_RUN="$(TZ=Etc/GMT+12 node "$CLI_DIR/bin/self.mjs" milestone)"
+[ "$EAST_RUN" = "$WEST_RUN" ] || fail "the rendering machine's zone changed a target-date judgment"
+cd "$ROOT/A/ws" && SELF timezone UTC > /dev/null
+SELF timezone | grep -q "^UTC$" || fail "the workspace zone did not return to what it was set to"
+
 echo "proof OK"
