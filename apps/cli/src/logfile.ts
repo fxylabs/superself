@@ -34,7 +34,7 @@ export function eventSummary(event: SelfEvent): string
 {
     const payload = event.payload;
     const parts = [payload.work, payload.objective, payload.milestone, payload.proposal, payload.criterion,
-        payload.text ?? payload.outcome ?? payload.why ?? payload.as]
+        payload.attempt, payload.text ?? payload.outcome ?? payload.why ?? payload.as ?? payload.detail]
         .filter((value) => value !== undefined)
         .map((value) => String(value));
     return parts.join(" ");

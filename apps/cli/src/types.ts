@@ -12,6 +12,9 @@ export interface EventRefs
     work?: string;
     commits?: string[];
     artifacts?: string[];
+    // The runner attempt this event came out of. What makes a report
+    // idempotent: an attempt that ran twice finds its own report already here.
+    attempt?: string;
     // The branch the command ran on. History ("this happened here"), never a
     // live pointer: branches get renamed, deleted, and reused.
     branch?: string;

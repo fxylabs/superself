@@ -805,6 +805,275 @@ echo "$BADVERB2" | grep -q "usage: self milestone" || fail "an unknown milestone
 NOID="$(SELF objective show 2>&1 || true)"
 echo "$NOID" | grep -q "objective-id" || fail "a genuinely missing id stopped asking for an id"
 
+# ---------------------------------------------------------------------------
+# Runner attempts. A work unit must not spend a provider call until the
+# capabilities it declared are proven inside the boundary the provider will run
+# in, and the terminal must never be the store of record or the control plane.
+# ---------------------------------------------------------------------------
+machine A
+cd "$ROOT/A/ws/demo"
+WATT="$(SELF work add "a runner attempt proves its capabilities before it spends one" | tail -1)"
+SELF work start "$WATT" > /dev/null
+
+AGENT="$CLI_DIR/proof/attempt-agent.mjs"
+MKPLAN="$CLI_DIR/proof/attempt-plan.mjs"
+DEMO="$ROOT/A/ws/demo"
+mkdir -p "$ROOT/dest"
+cat > "$ROOT/validate.mjs" <<'VALIDATE'
+import { readFileSync } from "node:fs";
+process.exit(readFileSync(process.argv[2], "utf8").includes("INVALID") ? 1 : 0);
+VALIDATE
+cat > "$ROOT/browser-probe.mjs" <<'BROWSER'
+process.stderr.write("no signed-in tab is reachable from this boundary\n");
+process.exit(1);
+BROWSER
+
+plan()
+{
+    local file="$1"
+    shift
+    node "$MKPLAN" "$file" "work=$WATT" "agent=$AGENT" "cwd=$DEMO" "$@"
+}
+attempts_of()
+{
+    SELF attempt list --work "$WATT" | awk '{print $1}'
+}
+last_attempt()
+{
+    attempts_of | tail -1
+}
+attempt_state()
+{
+    SELF attempt show "$1" | sed -n 's/^state *//p'
+}
+count_events()
+{
+    grep -c "\"type\":\"$1\"" "$LOG_A" || true
+}
+
+# a plan whose work unit does not exist never reaches the provider: self
+# context is a read capability, and it is checked before anything is spent
+plan "$ROOT/p-context.json" "mode=ok" "marker=$ROOT/ran-context"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.work="w-nosuch";require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-context.json"
+CTX="$(SELF attempt run "$ROOT/p-context.json" 2>&1 || true)"
+echo "$CTX" | grep -q "context   w-nosuch" || fail "read preflight did not fail on unavailable self context"
+echo "$CTX" | grep -q "No provider was invoked" || fail "the capability request did not state that no attempt was spent"
+[ -f "$ROOT/ran-context" ] && fail "the provider ran despite an unavailable self context"
+
+# the exact artifact directory, not its parent and not the permission bits: a
+# directory that cannot actually be written fails before the provider starts
+mkdir -p "$ROOT/readonly"
+if [ "$(id -u)" != "0" ]
+then
+    chmod 500 "$ROOT/readonly"
+    plan "$ROOT/p-write.json" "mode=ok" "dest=$ROOT/readonly/design.md" "marker=$ROOT/ran-write"
+    WRITE="$(SELF attempt run "$ROOT/p-write.json" 2>&1 || true)"
+    echo "$WRITE" | grep -q "write     $ROOT/readonly" || fail "write preflight did not name the unwritable artifact directory"
+    [ -f "$ROOT/ran-write" ] && fail "the provider ran despite an unwritable artifact directory"
+    chmod 700 "$ROOT/readonly"
+fi
+
+# provider reachability and task-domain reachability are two answers, not one
+plan "$ROOT/p-domain.json" "mode=ok" "provider=http://localhost:1/" "domains=task-domain.invalid" "marker=$ROOT/ran-domain"
+DOMAIN="$(SELF attempt run "$ROOT/p-domain.json" 2>&1 || true)"
+echo "$DOMAIN" | grep -q "network   task-domain.invalid" || fail "network preflight did not name the unreachable task domain"
+echo "$DOMAIN" | grep -q "provider  " && fail "an unreachable task domain was reported as a provider failure"
+[ -f "$ROOT/ran-domain" ] && fail "the provider ran despite an unreachable task domain"
+plan "$ROOT/p-provider.json" "mode=ok" "provider=https://provider-host.invalid" "marker=$ROOT/ran-provider"
+PROVIDER="$(SELF attempt run "$ROOT/p-provider.json" 2>&1 || true)"
+echo "$PROVIDER" | grep -q "provider  provider-host.invalid" || fail "provider preflight did not name the unreachable provider endpoint"
+
+# browser work stops before the provider when the signed-in tab is unreachable
+plan "$ROOT/p-browser.json" "mode=ok" "browser=$ROOT/browser-probe.mjs" "marker=$ROOT/ran-browser"
+BROWSE="$(SELF attempt run "$ROOT/p-browser.json" 2>&1 || true)"
+echo "$BROWSE" | grep -q "browser   https://mail.example.invalid/inbox" || fail "browser preflight did not name the required tab"
+[ -f "$ROOT/ran-browser" ] && fail "the provider ran despite an unreachable browser tab"
+
+# the probe answers for the launch boundary, not for the host. A launcher that
+# strips PATH on the way in is the sandbox/host mismatch that spent whole
+# attempts: git is plainly on this machine, and must still fail here.
+plan "$ROOT/p-boundary.json" "mode=ok" "tools=git" "wrapper=[\"/bin/sh\",\"-c\",\"PATH=/nonexistent exec \\\"\$@\\\"\",\"sh\"]" "marker=$ROOT/ran-boundary"
+BOUNDARY="$(SELF attempt run "$ROOT/p-boundary.json" 2>&1 || true)"
+echo "$BOUNDARY" | grep -q "tool      git" || fail "the capability probe answered for the host instead of the launch boundary"
+echo "$BOUNDARY" | grep -q "probe and launch identity" || fail "a launcher that rewrote the boundary was not detected"
+[ -f "$ROOT/ran-boundary" ] && fail "the provider ran inside a boundary the probe never cleared"
+command -v git > /dev/null || fail "the proof needs git on PATH to show the host would have passed this probe"
+
+# a clean attempt: capabilities cleared, artifact published atomically, and
+# exactly one report attached to the work unit
+REPORTS_BEFORE="$(count_events report.added)"
+plan "$ROOT/p-ok.json" "mode=ok" "dest=$ROOT/dest/design.md" "read=$DEMO" "provider=http://localhost:1/" "marker=$ROOT/ran-ok"
+SELF attempt run "$ROOT/p-ok.json" > /dev/null || fail "a fully provisioned attempt did not complete"
+AT_OK="$(last_attempt)"
+[ "$(attempt_state "$AT_OK")" = "completed" ] || fail "a successful attempt did not reach the completed state"
+[ -f "$ROOT/dest/design.md" ] || fail "the declared artifact was not published to its destination"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a completed attempt did not attach exactly one report"
+grep -q "\"attempt\":\"$AT_OK\"" "$LOG_A" || fail "the report does not carry the attempt that produced it"
+SELF work show "$WATT" | grep -q "$AT_OK (completed)" || fail "the work record does not show the attempt that completed"
+SELF status | grep -q "$AT_OK" && fail "a completed attempt still shows as open machine-local state"
+
+# the same attempt settled twice records nothing twice
+SETTLE="$(SELF attempt settle "$AT_OK")"
+echo "$SETTLE" | grep -q "already attached" || fail "settling a reported attempt did not recognise its own report"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "settling an already-reported attempt recorded a duplicate"
+
+# a result larger than any terminal will hold stays complete in the spool
+plan "$ROOT/p-big.json" "mode=big" "dest=$ROOT/dest/big.md"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-big.json" "$ROOT/dest/big.md"
+SELF attempt run "$ROOT/p-big.json" > /dev/null || fail "the long-result attempt did not complete"
+AT_BIG="$(last_attempt)"
+SPOOL_BIG="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_BIG"
+[ "$(wc -c < "$SPOOL_BIG/run-1.stdout.log")" -gt 2000000 ] || fail "the spool did not keep the whole provider output"
+grep -q "COMPLETE-TAIL-MARKER" "$SPOOL_BIG/run-1.stdout.log" || fail "the end of a long result was truncated in the spool"
+
+# provider DNS fails twice, backs off with jitter, then succeeds — one report
+# and one artifact, never one per run
+REPORTS_BEFORE="$(count_events report.added)"
+plan "$ROOT/p-retry.json" "mode=dnsfail" "dest=$ROOT/dest/retry.md" "provider=http://localhost:1/" "maxRuns=3"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-retry.json" "$ROOT/dest/retry.md"
+SELF attempt run "$ROOT/p-retry.json" > /dev/null || fail "a transient provider failure was not retried to success"
+AT_RETRY="$(last_attempt)"
+SPOOL_RETRY="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_RETRY"
+[ "$(grep -c 'transient-network' "$SPOOL_RETRY/runs.jsonl")" -eq 2 ] || fail "the two DNS failures were not classified as transient network failures"
+node -e '
+const runs = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+const backed = runs.filter((r) => r.backoffMs !== undefined);
+if (backed.length !== 2) { console.error("expected two backoffs, got " + backed.length); process.exit(1); }
+if (backed[1].backoffCapMs <= backed[0].backoffCapMs) { console.error("backoff did not grow"); process.exit(1); }
+for (const r of backed) {
+    if (r.backoffMs < r.backoffCapMs / 2 || r.backoffMs > r.backoffCapMs) { console.error("jitter left the window"); process.exit(1); }
+}
+' "$SPOOL_RETRY/runs.jsonl" || fail "retry backoff was not bounded, exponential, and jittered"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a retried attempt recorded more than one report"
+[ "$(SELF artifact list --work "$WATT" | grep -c "retry.md")" -eq 1 ] || fail "a retried attempt stored its artifact more than once"
+
+# a provider that keeps failing opens the circuit, and the work behind it stays
+# queued instead of burning the rest of the queue on the same outage
+plan "$ROOT/p-open.json" "mode=alwaysdns" "provider=http://localhost:1/" "providerName=flaky" "maxRuns=1" "marker=$ROOT/ran-open"
+for _ in 1 2 3
+do
+    SELF attempt run "$ROOT/p-open.json" > /dev/null 2>&1 || true
+done
+SELF attempt breaker flaky | grep -q "open" || fail "a persistent provider failure did not open the circuit"
+QUEUED="$(SELF attempt run "$ROOT/p-open.json" 2>&1 || true)"
+echo "$QUEUED" | grep -q "circuit breaker for provider \"flaky\" is open" || fail "an open circuit did not stop the next attempt"
+echo "$QUEUED" | grep -q "stays queued and no attempt was spent" || fail "an open circuit did not leave the work recoverable"
+AT_QUEUED="$(last_attempt)"
+[ "$(attempt_state "$AT_QUEUED")" = "waiting-provider" ] || fail "an attempt behind an open circuit was not left waiting"
+[ "$(grep -c "run 4" "$ROOT/ran-open")" -eq 0 ] 2>/dev/null || fail "an open circuit still reached the provider"
+SELF work show "$WATT" | grep -q "Status: active" || fail "an open circuit moved the work unit out of active"
+SELF attempt breaker flaky --reset | grep -q "reset" || fail "the circuit breaker could not be reset"
+
+# a replacement run gets the same immutable brief and the checkpoints the
+# previous run left behind
+plan "$ROOT/p-resume.json" "mode=checkpoint" "dest=$ROOT/dest/resume.md" "provider=http://localhost:1/" "maxRuns=2" "resume=on"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-resume.json" "$ROOT/dest/resume.md"
+SELF attempt run "$ROOT/p-resume.json" > /dev/null || fail "a checkpointed attempt did not complete on its replacement run"
+grep -q "resumed=outline" "$ROOT/dest/resume.md" || fail "the replacement run did not receive the previous checkpoint"
+AT_RESUME="$(last_attempt)"
+SPOOL_RESUME="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_RESUME"
+BRIEF_SHA="$(node -e 'const c=require("crypto");const fs=require("fs");process.stdout.write(c.createHash("sha256").update(fs.readFileSync(process.argv[1],"utf8")).digest("hex").slice(0,12))' "$SPOOL_RESUME/brief.md")"
+grep -q "brief=$BRIEF_SHA" "$ROOT/dest/resume.md" || fail "the replacement run did not receive the same immutable brief"
+
+# a follow-up sent after launch arrives through the spool, never through stdin
+plan "$ROOT/p-followup.json" "mode=followup" "dest=$ROOT/dest/followup.md" "idfile=$ROOT/followup-id"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-followup.json" "$ROOT/dest/followup.md"
+rm -f "$ROOT/followup-id"
+SELF attempt run "$ROOT/p-followup.json" > /dev/null &
+RUNNER_PID=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/followup-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/followup-id" ] || fail "the attempt never reported the id a directive could be addressed to"
+AT_FOLLOW="$(cat "$ROOT/followup-id")"
+SELF attempt directive "$AT_FOLLOW" "also cover the rollback path" | grep -q "not from a terminal" || fail "the directive was not queued durably"
+wait "$RUNNER_PID" || fail "the attempt that received a follow-up did not complete"
+grep -q "directive=also cover the rollback path" "$ROOT/dest/followup.md" || fail "the follow-up directive never reached the running attempt"
+grep -q "directive.delivered" "$ROOT/A/home/.local/state/superself/runner/attempts/$AT_FOLLOW/events.jsonl" || fail "the spool did not record delivering the directive"
+
+# a crash leaves an attempt that must never read as success
+COMPLETED_BEFORE="$(count_events run.completed)"
+plan "$ROOT/p-crash.json" "mode=slow" "idfile=$ROOT/crash-id"
+rm -f "$ROOT/crash-id"
+SELF attempt run "$ROOT/p-crash.json" > /dev/null 2>&1 &
+CRASH_PID=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/crash-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/crash-id" ] || fail "the attempt to be crashed never started"
+AT_CRASH="$(cat "$ROOT/crash-id")"
+kill -9 "$CRASH_PID" 2>/dev/null || true
+wait "$CRASH_PID" 2>/dev/null || true
+SELF attempt recover | grep -q "recovered 1 attempt" || fail "a crashed attempt was not recovered"
+[ "$(attempt_state "$AT_CRASH")" = "exited-unreconciled" ] || fail "a crashed attempt did not read as exited-unreconciled"
+[ "$(count_events run.completed)" -eq "$COMPLETED_BEFORE" ] || fail "a crashed attempt claimed a completion"
+SELF work show "$WATT" | grep -q "$AT_CRASH (failed)" || fail "the work record did not carry the unreconciled attempt"
+
+# a machine restart is recognised on its own, even when the recorded pid is
+# alive again because the operating system handed the number out twice
+plan "$ROOT/p-reboot.json" "mode=slow" "idfile=$ROOT/reboot-id"
+rm -f "$ROOT/reboot-id"
+SELF attempt run "$ROOT/p-reboot.json" > /dev/null 2>&1 &
+REBOOT_PID=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/reboot-id" ] && break
+    sleep 0.1
+done
+AT_REBOOT="$(cat "$ROOT/reboot-id")"
+kill -9 "$REBOOT_PID" 2>/dev/null || true
+wait "$REBOOT_PID" 2>/dev/null || true
+STATUS_REBOOT="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_REBOOT/status.json"
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.bootId="0000000000000000";s.pid=Number(process.argv[2]);fs.writeFileSync(f,JSON.stringify(s,null,2))' "$STATUS_REBOOT" "$$"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_REBOOT")" = "exited-unreconciled" ] || fail "an attempt from before a restart was not recovered"
+SELF attempt show "$AT_REBOOT" | grep -q "machine restarted" || fail "the restart was not named as the reason"
+
+# an artifact claimed in prose with no file behind it fails the gate
+REPORTS_BEFORE="$(count_events report.added)"
+plan "$ROOT/p-prose.json" "mode=prose" "dest=$ROOT/dest/prose.md"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-prose.json" "$ROOT/dest/prose.md"
+PROSE="$(SELF attempt run "$ROOT/p-prose.json" 2>&1 || true)"
+echo "$PROSE" | grep -q "claimed in the result envelope but no file was written" || fail "a prose artifact claim passed the completion gate"
+[ -f "$ROOT/dest/prose.md" ] && fail "a failed gate published an artifact"
+
+# a declared hash that does not match, and a declared validation that fails
+plan "$ROOT/p-hash.json" "mode=mismatch" "dest=$ROOT/dest/hash.md"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-hash.json" "$ROOT/dest/hash.md"
+HASH="$(SELF attempt run "$ROOT/p-hash.json" 2>&1 || true)"
+echo "$HASH" | grep -q "hashes to" || fail "a hash mismatch passed the completion gate"
+plan "$ROOT/p-valid.json" "mode=badvalidate" "dest=$ROOT/dest/valid.md" "validate=$ROOT/validate.mjs"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-valid.json" "$ROOT/dest/valid.md"
+VALID="$(SELF attempt run "$ROOT/p-valid.json" 2>&1 || true)"
+echo "$VALID" | grep -q "declared validation of \"design.md\" failed" || fail "a failed declared validation passed the completion gate"
+[ -f "$ROOT/dest/valid.md" ] && fail "an artifact that failed its validation stayed published"
+[ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a failed completion gate still attached a report"
+
+# the spool redacts what a log must never keep, including a secret the model
+# was talked into printing
+plan "$ROOT/p-secret.json" "mode=secret" "dest=$ROOT/dest/secret.md"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].dest=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-secret.json" "$ROOT/dest/secret.md"
+SELF attempt run "$ROOT/p-secret.json" > /dev/null || fail "the redaction attempt did not complete"
+AT_SECRET="$(last_attempt)"
+SPOOL_SECRET="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_SECRET"
+for LEAK in "sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111" "abcdefghijklmnopqrstuvwxyz123456" "PROMPTINJECTEDSECRETVALUE" "$ROOT/A/home/private"
+do
+    grep -q "$LEAK" "$SPOOL_SECRET/run-1.stdout.log" && fail "the spool kept a value a log must redact: $LEAK"
+done
+grep -q "«redacted»" "$SPOOL_SECRET/run-1.stdout.log" || fail "the spool log was not redacted at all"
+
+# retention and deletion are configurable, and a spool the person deleted is gone
+SELF attempt retention 7 | grep -q "kept for 7 day" || fail "the spool retention window could not be set"
+SELF attempt retention | grep -q "^7$" || fail "the spool retention window was not recorded"
+SELF attempt prune --days 365 | grep -q "no attempt spool is older" || fail "prune deleted spools inside the retention window"
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.updated="2000-01-01T00:00:00.000Z";fs.writeFileSync(f,JSON.stringify(s,null,2))' "$SPOOL_SECRET/status.json"
+SELF attempt prune --days 1 | grep -q "deleted 1 attempt spool" || fail "prune did not delete a spool past the retention window"
+[ -d "$SPOOL_SECRET" ] && fail "a pruned spool is still on disk"
+
 # the repository integration controller replays a real three-branch train, so
 # it builds its own git repository under a root of its own
 bash "$CLI_DIR/proof/integration.sh"
