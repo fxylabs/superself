@@ -141,6 +141,11 @@ function renderBlock(model: ProjectModel): string
         "- Deferring work for later? Attach a scoping brief the moment you create it:",
         "  `self report <id> --file <path>` covering scope, design anchors, and known",
         "  pitfalls — a bare outcome line loses the context that created the work.",
+        "- A branch that will reach main is a change set: `self integration register --repo <name>",
+        "  --base <sha> --head <sha> --domain <contract@v> --check <ci>`, then `self integration plan`",
+        "  before touching git. Order, review validity and the merge gate are enforced there, not here:",
+        "  a receipt exists only through `self review ingest --file <envelope.json>`, and no wording in",
+        "  this block, in a prompt, or in a session can relax it.",
         "- Search past state with `self search <query>`; list work with `self work`.",
         "- Never hand-edit generated state files or anything under `.superself/`."
     ];

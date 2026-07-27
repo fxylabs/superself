@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
+import { ChangeSet, findChangeSet, openChangeSets } from "./integration.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
@@ -34,6 +35,7 @@ export function foldProject(storeDir: string, slug: string): void
         }
     }
     foldObjectives(dir, hashes, model);
+    foldChangeSets(dir, hashes, model);
     writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
     const chromeMoved = writeViews(storeDir, model, readStoreConfig(storeDir), verdicts);
     if (projectDir !== null && existsSync(projectDir))
@@ -96,6 +98,120 @@ function foldObjectives(dir: string, hashes: Record<string, string>, model: Proj
     }
 }
 
+// A change set keeps a file while it is in the train. Merging or closing it
+// takes the file away and leaves the whole lineage in the log, exactly as a
+// reached objective does.
+function foldChangeSets(dir: string, hashes: Record<string, string>, model: ProjectModel): void
+{
+    if (model.integration.changeSets.length === 0)
+    {
+        return;
+    }
+    ensureDir(join(dir, "integration"));
+    const open = new Set(openChangeSets(model.integration).map((changeSet) => changeSet.id));
+    for (const changeSet of model.integration.changeSets)
+    {
+        const rel = join("integration", `${changeSet.id}.md`);
+        if (open.has(changeSet.id))
+        {
+            writeGenerated(dir, hashes, rel, GENERATED_NOTE + "\n\n" + renderChangeSetBody(changeSet));
+        }
+        else
+        {
+            drop(dir, hashes, rel);
+        }
+    }
+}
+
+export function renderChangeSetBody(changeSet: ChangeSet): string
+{
+    const lines: string[] = [`# ${changeSet.id} — ${changeSet.repository}${changeSet.pr === undefined ? "" : ` #${changeSet.pr}`}`, "",
+        `- Phase: ${changeSet.phase} — ${changeSet.reason}`,
+        `- Base: ${changeSet.base}`,
+        `- Head: ${changeSet.head}`,
+        `- Feature digest: ${changeSet.featureDigest} (${changeSet.digestSource})`,
+        `- Train order: ${changeSet.order + 1}`,
+        `- Risk: ${changeSet.risk}`];
+    optional(lines, "Work", changeSet.work);
+    optional(lines, "Declared domains", changeSet.domains.map((domain) => `${domain.name}@${domain.version}`).join(", "));
+    optional(lines, "Depends on", changeSet.depends.join(", "));
+    optional(lines, "Supersedes", changeSet.supersedes.join(", "));
+    optional(lines, "Consolidates", changeSet.consolidates.join(", "));
+    optional(lines, "Required checks", changeSet.checks.join(", "));
+    optional(lines, "Open predecessors", changeSet.predecessors.join(", "));
+    lines.push("");
+    bullets(lines, "Changed paths", changeSet.paths);
+    bullets(lines, "Overlaps", overlapLines(changeSet));
+    bullets(lines, "Review receipts", receiptLines(changeSet));
+    bullets(lines, "Integration deltas", deltaLines(changeSet));
+    bullets(lines, "Attempts", attemptLines(changeSet));
+    bullets(lines, "Exact-head CI", changeSet.ci.map((item) => `${item.check}: ${item.conclusion} (observed ${item.observedAt})`));
+    bullets(lines, "Blocking prerequisites", changeSet.blockers.map((item) => `${item.code} — ${item.detail}; next: ${item.next}`));
+    return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+function optional(lines: string[], label: string, value: string | undefined): void
+{
+    if (value !== undefined && value !== "")
+    {
+        lines.push(`- ${label}: ${value}`);
+    }
+}
+
+function overlapLines(changeSet: ChangeSet): string[]
+{
+    return [
+        ...changeSet.pathOverlaps.map((item) => `path overlap with ${item.changeSet}: ${item.paths.join(", ")}`),
+        ...changeSet.semanticOverlaps.map((item) => `semantic overlap with ${item.changeSet}: ${item.domains.join(", ")}`)
+    ];
+}
+
+function receiptLines(changeSet: ChangeSet): string[]
+{
+    return changeSet.receipts.map((receipt) =>
+        `${receipt.id} ${receipt.scope} ${receipt.verdict} bound to ${receipt.digest} at head ${receipt.head}` +
+        ` — ${receipt.model}, envelope ${receipt.envelopeDigest}` +
+        `${receipt.artifact === undefined ? "" : `, artifact ${receipt.artifact.path}`}`);
+}
+
+function deltaLines(changeSet: ChangeSet): string[]
+{
+    return changeSet.deltas.map((delta) =>
+        `${delta.id} ${delta.digest} from ${delta.fromDigest} to ${delta.resultDigest} — ` +
+        `${changeSet.uncoveredDeltas.includes(delta.id) ? "awaiting bounded review" : "reviewed"}` +
+        `${delta.paths.length === 0 ? "" : ` [${delta.paths.join(", ")}]`}`);
+}
+
+function attemptLines(changeSet: ChangeSet): string[]
+{
+    return changeSet.attempts.map((attempt) =>
+        `${attempt.id} ${attempt.action} fence ${attempt.fence} — ${attempt.status}` +
+        `${attempt.reason === undefined ? "" : `: ${attempt.reason}`}` +
+        `${attempt.conflictPaths.length === 0 ? "" : ` [conflicts ${attempt.conflictPaths.join(", ")}]`}`);
+}
+
+function integrationLines(model: ProjectModel): string[]
+{
+    const lines: string[] = [];
+    for (const repository of model.integration.repositories)
+    {
+        const lease = repository.lease;
+        const held = lease !== undefined && lease.live ? `leased by ${lease.holder} at fence ${lease.fence}` : "no live lease";
+        lines.push(`- **${repository.name}** — ${held}${repository.mainHead === undefined ? "" : `, main ${repository.mainHead}`}` +
+            `${repository.integrationBranch === undefined ? "" : `, merges into ${repository.integrationBranch}`}`);
+        for (const changeSet of repository.train.map((id) => findChangeSet(model.integration, id)))
+        {
+            if (changeSet === undefined || changeSet.closed !== undefined)
+            {
+                continue;
+            }
+            lines.push(`  - ${changeSet.order + 1}. **${changeSet.id}**` +
+                `${changeSet.pr === undefined ? "" : ` #${changeSet.pr}`} — ${changeSet.phase}: ${changeSet.reason}`);
+        }
+    }
+    return lines;
+}
+
 function drop(dir: string, hashes: Record<string, string>, rel: string): void
 {
     rmSync(join(dir, rel), { force: true });
@@ -134,6 +250,7 @@ function renderState(model: ProjectModel): string
     }
     lines.push("## Goal", "", model.goal ?? "_not set_", "");
     section(lines, "Objectives", objectiveLines(model));
+    section(lines, "Integration train", integrationLines(model));
     section(lines, "Proposed work", proposalSummaryLines(model));
     section(lines, "Decisions", decisionLines(model.decisions.filter((d) => d.status === "confirmed")));
     section(lines, "Proposed decisions", proposalLines(model.decisions));

@@ -55,6 +55,16 @@ sits next to git:
   is reached only when every exit criterion is covered by evidence, a revision
   marks what it already settled as stale until someone re-judges it, and
   `self timezone` fixes the zone every target date falls due in;
+- the repository integration train — `integration register/plan/declare/lease/
+  attempt/observe/approve/merge/reconcile` and `review request/ingest/contract` —
+  serializes what may reach main: reviews are bound to the sha256 of the feature
+  diff, so a conflict-free rebase preserves them and a conflict resolution owes a
+  bounded delta review; one fenced lease per repository keeps rebase, resolution
+  and merge single-file while implementation and review stay parallel; a receipt
+  exists only when the supervisor ingests a validated result envelope with its
+  artifact bytes, never because an agent said approve; and a merge needs merged
+  predecessors, the current fence, exact-head CI, and a human approval naming
+  that exact head — [see the full contract](docs/integration-train.md);
 - every event immediately refolds canonical markdown (project state plus one
   file per open work unit) and lands as exactly one commit in the workspace
   repository, so state has log, blame, and revert;
@@ -120,7 +130,8 @@ self context                   # what an agent should read at session start
 
 ```bash
 pnpm typecheck
-pnpm proof                     # end-to-end proof: lifecycle + two-machine sync
+pnpm proof                     # end-to-end proof: lifecycle, two-machine sync,
+                               # and the #43 -> #44 -> #52 integration train
 pnpm build
 ```
 
@@ -131,6 +142,7 @@ apps/
 └─ cli/                   the `self` CLI: event log, fold, context, search
 
 docs/
+├─ integration-train.md   how change sets, receipts, leases, and merges gate
 ├─ maintainers/           branch, version, and release policy
 └─ strategy/              problem definition and positioning decisions
 ```
