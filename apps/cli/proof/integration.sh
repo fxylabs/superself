@@ -237,10 +237,34 @@ SELF integration show "$CS43" --json | field blockers | grep -q "approval_missin
 # human gate. Configuring the target is exactly what removes the per-merge
 # approval — nothing on this lane reaches main.
 git branch next "$MAIN0"
-SELF integration target --repo superself --branch next > /dev/null
-[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] || fail "the configured target did not stick"
+# the branch is stored under one canonical spelling, whatever alias set it
+SELF integration target --repo superself --branch refs/heads/next > /dev/null
+[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] || fail "the configured target did not stick canonically"
 SELF integration show "$CS43" --json | field blockers | grep -q "approval_missing" \
     && fail "an integration-target merge still demands a per-merge human approval"
+
+# main under any equivalent spelling is not an integration target: every alias
+# of the same local head is refused, and a refusal records no target event
+TSETS="$(grep -c '"type":"repo.target_set"' "$ROOT/ws/.superself/projects/superself/log.jsonl")"
+for alias in "main" "refs/heads/main" "heads/main" " main " $'main\t' $'refs/heads/main\n'
+do
+    ALIASED="$(SELF integration target --repo superself --branch "$alias" 2>&1 || true)"
+    echo "$ALIASED" | grep -q "gated lane" || fail "main spelled '$alias' was accepted as an integration target"
+done
+[ "$(grep -c '"type":"repo.target_set"' "$ROOT/ws/.superself/projects/superself/log.jsonl")" = "$TSETS" ] \
+    || fail "a refused main alias still recorded a target event"
+[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] \
+    || fail "a refused main alias moved the configured target"
+
+# an alias of main forged straight into the log is an event the CLI could never
+# record — the fold sets no target from it, and the lane keeps its human gate
+cat >> "$ROOT/ws/.superself/projects/superself/log.jsonl" <<JSON
+{"id":"00000000000000000000000001","ts":"2026-01-01T00:00:00.000Z","type":"repo.target_set","origin":{"actor":"agent"},"project":"superself","payload":{"repository":"superself","branch":"refs/heads/main"}}
+JSON
+[ "$(SELF integration target --repo superself --json | field branch)" = "next" ] \
+    || fail "a forged main alias in the log resolved the autonomous lane onto main"
+[ "$(SELF integration target --repo superself --json | field promotion)" = "false" ] \
+    || fail "a forged main alias flipped the derived lane"
 
 # ── architecture overlap is a policy stop, not a rebase ─────────────
 [ "$(phase_of "$CS52")" = "blocked_policy" ] || fail "an unconsolidated architecture overlap did not block #52"
@@ -662,14 +686,25 @@ GHOSTPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before
 UNRELPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$H52" --json || true)"
 [ "$(echo "$UNRELPM" | field code)" = "merge_unrelated" ] || fail "a promotion whose main-after does not contain the candidate was recorded"
 
+# a main-after that contains the candidate but carries other bytes — a conflict
+# resolution, or any edit on the way in — is a tree nobody reviewed
+git checkout -q --detach "$MERGE44"
+echo "// a resolution nobody reviewed" >> main.ts
+git commit -qam "conflict resolution on the way into main"
+TAMPERED="$(git rev-parse HEAD)"
+TREEPM="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$TAMPERED" --json || true)"
+[ "$(echo "$TREEPM" | field code)" = "promotion_tree_mismatch" ] || fail "a promotion landing bytes off the reviewed candidate tree was recorded"
+
+# what does land is a merge commit whose tree is byte-identical to the candidate
 git checkout -q main
-git merge -q --ff-only "$MERGE44"
-[ "$(git rev-parse HEAD)" = "$MERGE44" ] || fail "the fixture promotion is not a fast-forward"
-SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$MERGE44" --json > "$ROOT/pm.json"
+git merge -q --no-ff -m "promote next into main" "$MERGE44"
+PROMMERGE="$(git rev-parse HEAD)"
+[ "$(git rev-parse "$PROMMERGE^{tree}")" = "$(git rev-parse "$MERGE44^{tree}")" ] || fail "the fixture promotion tree is not the candidate tree"
+SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$PROMMERGE" --merge-commit "$PROMMERGE" --json > "$ROOT/pm.json"
 [ "$(field candidate < "$ROOT/pm.json")" = "$MERGE44" ] || fail "the promotion receipt does not pin the candidate"
-[ "$(SELF integration promote show "$PM" --json | field recorded.mainAfter)" = "$MERGE44" ] || fail "the promotion did not settle as recorded"
-[ "$(SELF integration status --json | field 0.mainHead)" = "$MERGE44" ] || fail "a recorded promotion did not advance the projected main"
-DOUBLE="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$MERGE44" --json || true)"
+[ "$(SELF integration promote show "$PM" --json | field recorded.mainAfter)" = "$PROMMERGE" ] || fail "the promotion did not settle as recorded"
+[ "$(SELF integration status --json | field 0.mainHead)" = "$PROMMERGE" ] || fail "a recorded promotion did not advance the projected main"
+DOUBLE="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$PROMMERGE" --json || true)"
 [ "$(echo "$DOUBLE" | field code)" = "promotion_closed" ] || fail "a recorded promotion was recorded twice"
 
 # ── a restart derives the same state from the same log ──────────────

@@ -4,6 +4,7 @@ import {
     IntegrationState,
     Promotion,
     Repository,
+    canonicalBranch,
     mergeTargetOf,
     promotionApproval,
     short,
@@ -13,7 +14,7 @@ import { promotionId } from "./ids.js";
 import { commitProofRefusal, commitShapeRefusal, fenceRefusalOf, Refusal, refuse, strip } from "./lane.js";
 import { ProjectContext } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
-import { featureDigest } from "./repo.js";
+import { featureDigest, treeOf } from "./repo.js";
 import { dim, styled } from "./style.js";
 import {
     bindDigest,
@@ -48,13 +49,18 @@ export function cmdTarget(ctx: ProjectContext, rest: string[]): void
         showTarget(repository, values.json);
         return;
     }
-    if (values.branch === "main")
+    const branch = canonicalBranch(values.branch);
+    if (branch === "")
+    {
+        throw new CliError(`--branch "${values.branch}" names no branch`);
+    }
+    if (branch === "main")
     {
         throw new CliError("the integration target is the branch before main — promotion into main is its own gated lane, " +
             "and a repository with no target merges straight into main under the human gate");
     }
-    recordEvent(ctx, makeEvent(ctx.project, "repo.target_set", { repository: repository.name, branch: values.branch }),
-        `${repository.name} merges into ${values.branch}`);
+    recordEvent(ctx, makeEvent(ctx.project, "repo.target_set", { repository: repository.name, branch }),
+        `${repository.name} merges into ${branch}`);
 }
 
 function showTarget(repository: Repository, json: boolean | undefined): void
@@ -250,7 +256,33 @@ function promotionRefusal(ctx: ProjectContext, promotion: Promotion, repository:
     return commitShapeRefusal({ "--main-before": mainBefore, "--main-after": mainAfter, "--merge-commit": mergeCommit })
         ?? baseRefusal(promotion, mainBefore)
         ?? releaseDriftRefusal(ctx, promotion)
-        ?? commitProofRefusal(ctx, promotion.candidate, mergeCommit, mainAfter, "main after the promotion");
+        ?? commitProofRefusal(ctx, promotion.candidate, mergeCommit, mainAfter, "main after the promotion")
+        ?? treeRefusal(ctx, promotion, mainAfter);
+}
+
+// What lands on main is the reviewed candidate's bytes, exactly. A fast-forward
+// carries them by construction; a merge commit is allowed only when its tree is
+// byte-identical to the candidate's — a conflict resolution, or any other edit
+// on the way in, is a tree nobody reviewed, and a reachable checkout refuses it.
+function treeRefusal(ctx: ProjectContext, promotion: Promotion, mainAfter: string): Refusal | null
+{
+    const repoDir = repoDirOf(ctx, undefined, false);
+    if (repoDir === null)
+    {
+        return null;
+    }
+    const candidateTree = treeOf(repoDir, promotion.candidate);
+    const afterTree = treeOf(repoDir, mainAfter);
+    if (candidateTree === null || afterTree === null || candidateTree === afterTree)
+    {
+        return null;
+    }
+    return {
+        code: "promotion_tree_mismatch",
+        detail: `main after the promotion holds tree ${short(afterTree)} and candidate ${short(promotion.candidate)} ` +
+            `holds tree ${short(candidateTree)} — what landed is not the reviewed bytes`,
+        next: "promote with a fast-forward or a merge commit whose tree is byte-identical to the candidate"
+    };
 }
 
 // The release review read the delta base...candidate. A main that is no
