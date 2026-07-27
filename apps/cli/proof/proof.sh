@@ -179,6 +179,65 @@ grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/workspace.html" || fail "work
 grep -q 'aria-label="waiting on you"' "$VIEW_A/demo.html" || fail "project view missing the attention panel"
 grep -q 'aria-label="waiting on you"' "$VIEW_A/workspace.html" || fail "workspace view missing the attention panel"
 
+# a report is atomic across the artifacts it declares: the whole set is checked
+# before a byte is copied, so a rejected member can never half-write a report
+STORE="$ROOT/A/ws/.superself"
+snapshot()
+{
+    (cd "$STORE" && find . -path ./.git -prune -o -print | sort)
+    git -C "$STORE" rev-parse HEAD
+    git -C "$STORE" status --porcelain
+    wc -l < "$STORE/projects/demo/log.jsonl"
+}
+echo "<h1>second page</h1>" > "$ROOT/second.html"
+BEFORE="$(snapshot)"
+HALF="$(SELF report "$WID" "half a set" --artifact "$ROOT/second.html" --artifact "$ROOT/missing.bin" 2>&1 || true)"
+echo "$HALF" | grep -q "does not exist" || fail "a missing member did not reject the whole set"
+find "$STORE/artifacts" -name "*second.html" | grep -q . && fail "a rejected set left orphan artifact bytes"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a rejected set changed the log, the tree, or the store commit"
+
+# a complete set records exactly one report event carrying every artifact
+REPORTS_BEFORE="$(grep -c '"type":"report.added"' "$STORE/projects/demo/log.jsonl")"
+SELF report "$WID" "two pages at once" --artifact "$ROOT/second.html" --artifact "$ROOT/launch.html"
+REPORTS_AFTER="$(grep -c '"type":"report.added"' "$STORE/projects/demo/log.jsonl")"
+[ "$REPORTS_AFTER" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a multi-artifact report did not record exactly one event"
+SELF artifact list --work "$WID" | grep -q "second.html" || fail "the first member of the set was not recorded"
+[ "$(SELF artifact list --work "$WID" | grep -c "launch.html")" -eq 2 ] || fail "the second member of the set was not recorded"
+git -C "$STORE" ls-files | grep -q "second.html" || fail "a set member was not committed with its event"
+[ -z "$(git -C "$STORE" status --porcelain)" ] || fail "a multi-artifact report left the store dirty"
+
+# the same filename twice is two artifacts, never one overwriting the other
+SELF report "$WID" "the same name twice" --artifact "$ROOT/launch.html" --artifact "$ROOT/launch.html"
+[ "$(SELF artifact list --work "$WID" | grep -c "launch.html")" -eq 4 ] || fail "duplicate names did not each get a record"
+[ "$(find "$STORE/artifacts/demo" -name "*-launch.html" | wc -l | tr -d ' ')" -eq 4 ] || fail "duplicate names shared one stored file"
+
+# an unreadable member is rejected before its set is copied, not while copying
+if [ "$(id -u)" != "0" ]
+then
+    echo locked > "$ROOT/locked.bin"
+    chmod 000 "$ROOT/locked.bin"
+    BEFORE="$(snapshot)"
+    LOCKED="$(SELF report "$WID" "unreadable member" --artifact "$ROOT/second.html" --artifact "$ROOT/locked.bin" 2>&1 || true)"
+    echo "$LOCKED" | grep -q "cannot be read" || fail "an unreadable artifact was not rejected"
+    [ "$(snapshot)" = "$BEFORE" ] || fail "an unreadable member left the store changed"
+    chmod 644 "$ROOT/locked.bin"
+fi
+
+# a directory named alongside a valid file rejects the set and copies nothing
+BEFORE="$(snapshot)"
+DIRSET="$(SELF report "$WID" "a directory member" --artifact "$ROOT/second.html" --artifact "$ROOT/A" 2>&1 || true)"
+echo "$DIRSET" | grep -q "is a directory" || fail "a directory artifact was not rejected"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a rejected directory member left the store changed"
+
+# a project's first set takes the directory it created back out with it
+cd "$ROOT/outside/app"
+WOUT="$(SELF work add "a rejected first set leaves no directory" | tail -1)"
+SELF work start "$WOUT"
+FIRST="$(SELF report "$WOUT" "first set fails" --artifact "$ROOT/second.html" --artifact "$ROOT/missing.bin" 2>&1 || true)"
+echo "$FIRST" | grep -q "does not exist" || fail "a project's first artifact set was not rejected"
+[ -d "$STORE/artifacts/outside" ] && fail "a rejected first set left an empty artifact directory behind"
+cd "$ROOT/A/ws/demo"
+
 # the App Rail shell: every page carries the rail, the app bar, and a query
 # bar that states the fold it was rendered from
 for PAGE in "$VIEW_A/demo.html" "$VIEW_A/workspace.html" "$VIEW_A/demo/$WID.html"
