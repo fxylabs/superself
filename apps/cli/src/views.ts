@@ -1,3 +1,4 @@
+import { AttemptStatus, listSpools } from "./attempt/spool.js";
 import { ChangeSet, openChangeSets } from "./integration.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
@@ -148,6 +149,7 @@ export function printStatus(ctx: CliContext): void
     if (styled)
     {
         printStyledStatus(model);
+        printAttempts(ctx.project);
         return;
     }
     console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
@@ -156,6 +158,22 @@ export function printStatus(ctx: CliContext): void
     console.log(`integration: ${integrationCountLine(model)}`);
     console.log(`waiting on you: ${waitingCount(model)}`);
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
+    printAttempts(ctx.project);
+}
+
+// Attempt state is machine-local: it says what this machine is running right
+// now, which is not something the synced store can answer. Only unfinished
+// attempts are listed — a completed one has already become a report.
+function printAttempts(project: string): void
+{
+    const open = listSpools()
+        .map((spool) => spool.status())
+        .filter((status): status is AttemptStatus => status !== null && status.project === project && status.state !== "completed");
+    for (const status of open)
+    {
+        const failure = status.failure === undefined ? "" : ` (${status.failure})`;
+        console.log(`attempt ${status.attempt} ${status.work}: ${status.state}${failure}`);
+    }
 }
 
 // A flat active count can look busy without saying whether the project is

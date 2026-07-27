@@ -3,6 +3,7 @@ import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
+import { runAttemptCommand } from "./attempt/commands.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
@@ -101,6 +102,14 @@ const USAGE = `usage: self <command>
   review request <id> --scope change|integration_delta|release
   review ingest --file <envelope.json>       the only way a review receipt comes into being
   review list [<id>] | contract              receipts on record, or the runner's result contract
+  attempt run <plan.json>                    preflight a work attempt's capabilities, then run and spool it
+  attempt list [--work id] [--json]          list this machine's attempts and the state each reached
+  attempt show <attempt-id>                  print one attempt's durable record and capability receipt
+  attempt directive <id> "<text>" | cancel <id>
+                                             deliver a follow-up or a cancellation through the spool
+  attempt recover                            reconcile attempts a crash or restart left running
+  attempt prune [--days N] | retention [<days>] | breaker <provider> [--reset]
+                                             manage spool retention and the provider circuit breaker
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact or open it with the OS default app
@@ -139,6 +148,7 @@ async function main(argv: string[]): Promise<void>
         case "integration": cmdIntegration(requireProject(process.cwd()), rest); break;
         case "review": cmdReview(requireProject(process.cwd()), rest); break;
         case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
+        case "attempt": await runAttemptCommand(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
