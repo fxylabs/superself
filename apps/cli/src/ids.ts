@@ -39,6 +39,26 @@ export function milestoneId(): string
     return "m-" + shortId();
 }
 
+export function changeSetId(): string
+{
+    return "cs-" + shortId();
+}
+
+export function attemptId(): string
+{
+    return "ia-" + shortId();
+}
+
+export function receiptId(): string
+{
+    return "rr-" + shortId();
+}
+
+export function mergeId(): string
+{
+    return "mr-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";
