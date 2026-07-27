@@ -33,7 +33,8 @@ export function findEventByPrefix(storeDir: string, slug: string, prefix: string
 export function eventSummary(event: SelfEvent): string
 {
     const payload = event.payload;
-    const parts = [payload.work, payload.text ?? payload.outcome]
+    const parts = [payload.work, payload.objective, payload.milestone, payload.proposal, payload.criterion,
+        payload.text ?? payload.outcome ?? payload.why ?? payload.as]
         .filter((value) => value !== undefined)
         .map((value) => String(value));
     return parts.join(" ");

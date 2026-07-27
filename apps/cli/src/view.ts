@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { DecisionState, ProjectModel, WorkState } from "./model.js";
+import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig } from "./paths.js";
 import { Verdict } from "./reachability.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
@@ -92,6 +93,19 @@ interface ProjectSummary
     recentDecisions?: SummaryDecision[];
     waiting?: WaitingRow[];
     foldId?: string;
+    objectives?: SummaryObjective[];
+}
+
+interface SummaryObjective
+{
+    id: string;
+    outcome: string;
+    state: string;
+    reason: string;
+    met: number;
+    total: number;
+    milestones: number;
+    reached: number;
 }
 
 interface WaitingRow
@@ -167,6 +181,10 @@ export function writeViews(storeDir: string, model: ProjectModel, config: StoreC
     for (const work of model.works)
     {
         writeFileSync(join(workDir, `${work.id}.html`), renderWorkPage(model, work, verdicts, rail(1, model.slug)));
+    }
+    for (const objective of openObjectives(model.goals))
+    {
+        writeFileSync(join(workDir, `${objective.id}.html`), renderObjectivePage(model, objective, rail(1, model.slug)));
     }
     writeFileSync(join(workDir, "decisions.html"), renderDecisionsPage(model, rail(1, model.slug)));
     writeFileSync(join(workDir, "events.html"), renderEventsPage(model, feed, rail(1, model.slug)));
@@ -253,7 +271,17 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
         recentDecisions: decisionOrder(model.decisions).slice(0, SUMMARY_DECISIONS)
             .map((d) => ({ ts: d.ts, text: d.text })),
         waiting: waitingRows(model),
-        foldId: shortId(feed[0]?.id ?? "")
+        foldId: shortId(feed[0]?.id ?? ""),
+        objectives: openObjectives(model.goals).map((objective) => ({
+            id: objective.id,
+            outcome: objective.outcome,
+            state: objective.state,
+            reason: objective.reason,
+            met: objective.met,
+            total: objective.total,
+            milestones: objective.milestones.length,
+            reached: objective.milestones.filter((milestone) => milestone.state === "reached").length
+        }))
     };
 }
 
@@ -291,6 +319,12 @@ function waitingRows(model: ProjectModel): WaitingRow[]
             ref: shortId(d.id),
             action: "confirm"
         })),
+        ...openProposals(model.goals).map((proposal) => ({
+            kind: "work",
+            text: firstLine(`${proposal.outcome} — ${proposalBrief(proposal)}`, 240),
+            ref: shortId(proposal.id),
+            action: "accept"
+        })),
         ...model.openQuestions.filter((q) => !generated.has(q))
             .map((q) => ({ kind: "question", text: firstLine(q), ref: "", action: "" }))
     ];
@@ -324,14 +358,19 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
     // Decisions carry a sentence of text and a reason, so they read in the
     // main column; the 300px record column reflowed them into a ragged
     // ribbon. Artifacts are a name and two ids and stay one glance away.
+    const objectives = openObjectives(model.goals);
+    const proposals = proposalRows(model);
     const main = [
         `<p class="c2-goal">${esc(model.goal ?? "goal not set")}</p>`,
         waitingPanel(waiting, model.slug, ""),
+        objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "",
+            objectives.map((objective) => objectiveBlock(model.slug, objective)).join("\n")),
         panel("IN PROGRESS", active.length, "",
-            active.length === 0 ? empty("no active work") : table(active.map((w) => workRow(model.slug, w, verdicts)))),
+            active.length === 0 ? empty("no active work") : table(active.map((w) => workRow(model, w, verdicts)))),
         panel("NEXT", next.length, "",
             next.length === 0 ? empty("queue is empty") : capped(
                 next.map((w) => nextRow(model.slug, w)), CAP_NEXT, "next work")),
+        proposals.length === 0 ? "" : panel("PROPOSED WORK", proposals.length, "", table(proposals)),
         panel("DECISIONS", 0, `${model.slug}/decisions.html`,
             decisions.length === 0 ? empty("no decisions yet")
                 : table(decisions.slice(0, CAP_DECISIONS).map(decisionCells)),
@@ -339,7 +378,7 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
         eventPanel(events.slice(0, CAP_EVENTS), events.length, `${model.slug}/events.html`),
         foldPanel("CONVENTIONS", model.conventions.map((c) => `<div class="dr-dec"><time>${day(c.ts)}</time><p>${esc(c.text)}</p></div>`)),
         foldPanel("DONE", done.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}</p></div>`))
-    ].join("\n");
+    ].filter((part) => part !== "").join("\n");
     // With decisions moved into the main column the record column carries
     // artifacts alone, so a project that has none gets the width back instead
     // of a 300px column saying so.
@@ -381,16 +420,156 @@ function warnClass(row: WaitingRow): string
     return row.warn === true ? " warn" : "";
 }
 
-function workRow(slug: string, work: WorkState, verdicts: Record<string, Verdict>): string
+function workRow(model: ProjectModel, work: WorkState, verdicts: Record<string, Verdict>): string
 {
     const latest = work.reports[work.reports.length - 1];
+    const toward = contributionsOf(model.goals, work);
     const sub = [
+        toward.length === 0 ? "" : `toward ${toward.map((item) => item.id).join(" · ")}`,
         latest === undefined ? "" : `latest: ${firstLine(latest.text)}`,
         work.evidence.length === 0 ? "" : `evidence ${work.evidence.map((c) => `${c} ${verdicts[c] ?? "unchecked"}`).join(" · ")}`
     ].filter((part) => part !== "").join(" · ");
-    return `<tr><td class="n">${workLink(slug, work)}</td>` +
+    const critical = toward.some((item) => item.criticalPath) && work.status === "blocked"
+        ? `<span class="pill p-blocked">critical path</span>` : "";
+    return `<tr><td class="n">${workLink(model.slug, work)}</td>` +
         `<td>${esc(work.outcome)}${sub === "" ? "" : `<span class="hf-sub">${esc(sub)}</span>`}</td>` +
-        `<td class="r"><span class="pill p-${work.status}">${work.status}</span></td></tr>`;
+        `<td class="r">${critical}<span class="pill p-${work.status}">${work.status}</span></td></tr>`;
+}
+
+/* ── objectives ────────────────────────────────────────────────────── */
+
+// The objective, the reason it reads the way it does, and every milestone
+// under it — a milestone with nothing pointed at it, a blocked one on the
+// critical path, and verified progress each carry their own mark.
+function objectiveBlock(slug: string, objective: ObjectiveState): string
+{
+    const box = [objective.horizon, objective.target === undefined ? "" : `target ${objective.target}`]
+        .filter((part) => part !== undefined && part !== "").join(" · ");
+    const head = `<div class="ob-head"><a class="n" href="${esc(slug)}/${esc(objective.id)}.html">${esc(objective.id)}</a>` +
+        `<b>${esc(objective.outcome)}</b><span class="pill s-${objective.state}">${esc(objective.state)}</span></div>` +
+        `<p class="ob-why">${esc(objective.reason)}${box === "" ? "" : ` — ${esc(box)}`}</p>` +
+        progressBar(objective.met, objective.total);
+    const milestones = objective.milestones.filter((milestone) => milestone.state !== "closed");
+    const rows = milestones.length === 0 ? empty("no milestones yet")
+        : table(milestones.map((milestone) => milestoneRow(slug, milestone)));
+    return `<section class="ob">${head}${rows}</section>`;
+}
+
+function milestoneRow(slug: string, milestone: MilestoneState): string
+{
+    const marks = [
+        milestone.criticalPath ? `<i class="ob-mark">critical path</i>` : "",
+        milestone.works.length === 0 ? `<i class="ob-mark warn">no work linked</i>` : "",
+        milestone.blockedWorks.length === 0 ? "" : `<i class="ob-mark warn">blocked ${esc(milestone.blockedWorks.join(" "))}</i>`,
+        milestone.evidence.length === 0 ? "" : `<i class="ob-mark ok">${milestone.evidence.length} evidence</i>`,
+        milestone.stale.length === 0 ? "" : `<i class="ob-mark warn">${milestone.stale.length} stale coverage</i>`
+    ].filter((mark) => mark !== "").join("");
+    const works = milestone.works.map((id) => `<a href="${esc(slug)}/${esc(id)}.html">${esc(id)}</a>`).join(" ");
+    return `<tr><td class="n">${esc(milestone.id)}</td>` +
+        `<td>${esc(milestone.outcome)}<span class="hf-sub">${esc(milestone.reason)}</span>` +
+        `<span class="ob-marks">${marks}${works === "" ? "" : `<i class="ob-mark">${works}</i>`}</span></td>` +
+        `<td class="r"><span class="pill s-${milestone.state}">${esc(milestone.state)}</span>` +
+        `<span class="hf-sub">${milestone.met.length}/${milestone.met.length + milestone.open.length}</span></td></tr>`;
+}
+
+// Derived from covered exit criteria alone — nothing here can be asserted.
+function progressBar(met: number, total: number): string
+{
+    const percent = total === 0 ? 0 : Math.round((met / total) * 100);
+    return `<div class="ob-bar" role="img" aria-label="${met} of ${total} exit criteria covered">` +
+        `<span style="width:${percent}%"></span></div>` +
+        `<p class="ob-num">${met} of ${total} exit criteria covered</p>`;
+}
+
+function renderObjectivePage(model: ProjectModel, objective: ObjectiveState, rail: Rail): string
+{
+    const chips = [
+        objective.horizon === undefined ? "" : `<span class="wd-chip">${esc(objective.horizon)}</span>`,
+        objective.target === undefined ? "" : `<span class="wd-chip">target ${esc(objective.target)}</span>`,
+        `<span class="wd-chip">revision ${objective.revision}</span>`,
+        objective.priority === undefined ? "" : `<span class="wd-chip">priority ${objective.priority}</span>`,
+        ...objective.supersedes.map((id) => `<span class="wd-chip">supersedes ${esc(id)}</span>`)
+    ].filter((chip) => chip !== "").join("");
+    const main = [
+        `<div class="wd-head"><span class="n">${esc(objective.id)}</span>` +
+            `<span class="pill s-${objective.state}">${esc(objective.state)}</span></div>`,
+        `<h1 class="wd-title">${esc(objective.outcome)}</h1>`,
+        `<p class="ob-why">${esc(objective.reason)}</p>`,
+        chips === "" ? "" : `<div class="wd-meta">${chips}</div>`,
+        progressBar(objective.met, objective.total),
+        ...objective.milestones.map((milestone) => milestonePanel(model.slug, milestone))
+    ].filter((part) => part !== "").join("\n");
+    const record = [
+        criteriaPanel("SUCCESS CRITERIA", objective.success),
+        criteriaPanel("STOP CRITERIA", objective.stop),
+        objective.history.length === 0 ? "" : panel("REVISIONS", objective.history.length, "",
+            objective.history.map((entry) =>
+                `<div class="dr-dec"><time>${day(entry.ts)}</time><p>revision ${entry.revision} — ${esc(entry.why)}</p></div>`).join("\n"))
+    ].filter((part) => part !== "").join("\n");
+    return page({
+        title: `${objective.id} — ${model.slug}`,
+        crumb: `${esc(rail.workspace)} / <a href="../${esc(model.slug)}.html">${esc(model.slug)}</a> / <b>${esc(objective.id)}</b>`,
+        query: `objective | id == "${objective.id}" | revision ${objective.revision}`,
+        rail,
+        main,
+        record: record === "" ? undefined : record,
+        back: `../${model.slug}.html`
+    });
+}
+
+function criteriaPanel(label: string, items: string[]): string
+{
+    return items.length === 0 ? "" : panel(label, items.length, "",
+        items.map((text) => `<div class="dr-dec"><p>${esc(text)}</p></div>`).join("\n"));
+}
+
+function milestonePanel(slug: string, milestone: MilestoneState): string
+{
+    const exit = milestone.exit.map((criterion) =>
+    {
+        const state = criterion.dropped === true ? "dropped"
+            : milestone.met.includes(criterion.id) ? "covered" : "open";
+        return `<tr><td class="n">${esc(criterion.id)}</td><td>${esc(criterion.text)}</td>` +
+            `<td class="r"><span class="pill c-${state}">${state}</span></td></tr>`;
+    });
+    const coverage = milestone.coverage.map((item) =>
+    {
+        const stale = milestone.stale.includes(item) ? `<i class="ob-mark warn">stale</i>` : "";
+        const from = [item.work, ...item.commits].filter((part) => part !== undefined).join(" ");
+        return `<div class="dr-dec"><time>${day(item.ts)}</time><p>${esc(item.criterion)} — ${esc(item.why)}` +
+            `${from === "" ? "" : ` <span class="n">${esc(from)}</span>`}${stale}</p></div>`;
+    });
+    const works = milestone.works.length === 0 ? empty("no work linked yet")
+        : table(milestone.works.map((id) =>
+            `<tr><td class="n"><a href="${esc(id)}.html">${esc(id)}</a></td>` +
+            `<td>${milestone.blockedWorks.includes(id) ? "blocked" : "contributing"}</td></tr>`));
+    return panel(`MILESTONE ${milestone.id}`, milestone.met.length, "",
+        `<p class="ob-why"><b>${esc(milestone.outcome)}</b> — <span class="pill s-${milestone.state}">${esc(milestone.state)}</span> ` +
+        `${esc(milestone.reason)}</p>` + table(exit) + works +
+        (coverage.length === 0 ? "" : `<details class="c2-fold"><summary>coverage · ${coverage.length}</summary>${coverage.join("\n")}</details>`));
+}
+
+function proposalRows(model: ProjectModel): string[]
+{
+    return openProposals(model.goals).map((proposal) =>
+        `<tr><td class="n">${esc(shortId(proposal.id))}</td>` +
+        `<td>${esc(proposal.outcome)}<span class="hf-sub">${esc(proposalBrief(proposal))}</span></td>` +
+        `<td class="act">${esc(proposal.confidence)}</td></tr>`);
+}
+
+function proposalBrief(proposal: WorkProposal): string
+{
+    return [
+        `toward ${proposal.milestone ?? proposal.objective}`,
+        `value: ${proposal.value}`,
+        `success: ${proposal.success.join("; ")}`,
+        `stop: ${proposal.stop.join("; ")}`,
+        `depends: ${proposal.depends.length === 0 ? "nothing" : proposal.depends.join(", ")}`,
+        `risk: ${proposal.risk}`,
+        `capacity: ${proposal.capacity}`,
+        `evidence plan: ${proposal.evidencePlan}`,
+        `expires ${proposal.expires}`
+    ].join(" · ");
 }
 
 function nextRow(slug: string, work: WorkState): string
@@ -402,9 +581,11 @@ function nextRow(slug: string, work: WorkState): string
 
 function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<string, Verdict>, rail: Rail): string
 {
+    const toward = contributionsOf(model.goals, work);
     const chips = [
         `<span class="wd-chip">created ${day(work.ts)}</span>`,
         work.next === undefined ? "" : `<span class="wd-chip">next: ${esc(work.next)}</span>`,
+        ...toward.map((item) => `<span class="wd-chip">toward ${esc(item.id)}${item.criticalPath ? " · critical path" : ""}</span>`),
         ...work.branches.map((b) => `<span class="wd-chip">branch ${esc(b)}</span>`)
     ].filter((chip) => chip !== "").join("");
     const blocked = work.status === "blocked"
@@ -426,6 +607,12 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
     const artifacts = workArtifactRows(work);
     const linked = decisionOrder(model.decisions).filter((d) => d.work === work.id);
     const record = [
+        toward.length === 0 ? "" : panel("CONTRIBUTES TO", toward.length, "",
+            toward.map((item) =>
+                `<div class="dr-dec"><p>${item.kind === "objective"
+                    ? `<a href="${esc(item.id)}.html">${esc(item.id)}</a>` : esc(item.id)} ${esc(item.outcome)}` +
+                `<i class="ob-mark s-${item.state}">${esc(item.state)}</i>` +
+                `${item.criticalPath ? `<i class="ob-mark warn">critical path</i>` : ""}</p></div>`).join("\n")),
         panel("EVIDENCE", work.evidence.length, "",
             work.evidence.length === 0 ? empty("no evidence yet")
                 : work.evidence.map((hash) => evidenceRow(hash, verdicts[hash])).join("\n")),
@@ -527,9 +714,15 @@ function renderWorkspacePage(summaries: ProjectSummary[], rail: Rail): string
             ({ meta: { id: a.id, name: a.name, path: a.path }, workId: a.workId, ts: a.ts, project: s.slug })))
         .sort((a, b) => b.ts.localeCompare(a.ts))
         .slice(0, CAP_WORKSPACE_ARTIFACTS);
+    const objectives = summaries.flatMap((s) => (s.objectives ?? []).map((o) => ({ ...o, slug: s.slug })));
     const main = [
         `<p class="c2-goal">Workspace — ${count(summaries.length, "project")}, ${count(waiting.length, "item")} waiting on you</p>`,
         panel("WAITING ON YOU", waiting.length, "", waitingBody, "", true),
+        objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "", table(objectives.map((o) =>
+            `<tr><td class="n"><a href="${esc(o.slug)}/${esc(o.id)}.html">${esc(o.id)}</a></td>` +
+            `<td>${esc(o.outcome)}<span class="hf-sub">${esc(o.reason)}</span></td>` +
+            `<td class="r"><span class="pill s-${o.state}">${esc(o.state)}</span>` +
+            `<span class="hf-sub">${o.reached}/${o.milestones} milestones · ${o.met}/${o.total} criteria</span></td></tr>`))),
         panel("PROJECTS", summaries.length, "",
             summaries.length === 0 ? empty("no projects registered") : table(summaries.map(projectRow))),
         panel("DECISIONS", 0, "",
@@ -541,7 +734,7 @@ function renderWorkspacePage(summaries: ProjectSummary[], rail: Rail): string
             : `<section class="c2-panel c2-feed" aria-label="events">` +
                 `<div class="c2-panel-head"><h2>EVENTS</h2><span class="c2-live">live</span></div>` +
                 events.map((e) => eventRow(e, e.slug)).join("\n") + `</section>`
-    ].join("\n");
+    ].filter((part) => part !== "").join("\n");
     const record = artifacts.length === 0 ? undefined
         : panel("ARTIFACTS", artifacts.length, "", artifacts.map((r) => artifactRow(r, "..")).join("\n"));
     return page({
@@ -666,12 +859,32 @@ function buildLabels(events: SelfEvent[]): Map<string, string>
         {
             labels.set(event.id, String(event.payload.text));
         }
-        if (event.type === "work.created")
+        if (event.type === "work.created" || event.type === "work.proposed")
         {
-            labels.set(String(event.payload.work), String(event.payload.outcome));
+            labels.set(String(event.payload.work ?? event.id), String(event.payload.outcome));
+        }
+        for (const key of ["objective", "milestone"])
+        {
+            if (event.type === `${key}.created`)
+            {
+                labels.set(String(event.payload[key]), String(event.payload.outcome));
+            }
         }
     }
     return labels;
+}
+
+// An outcome event names an id the log defined earlier; the feed reads that
+// name back rather than printing a bare id.
+function outcomeText(event: SelfEvent, labels: Map<string, string>): string | undefined
+{
+    const id = event.payload.milestone ?? event.payload.objective ?? event.payload.proposal;
+    if (typeof id !== "string" || event.type.endsWith(".created") || event.type === "work.proposed")
+    {
+        return undefined;
+    }
+    const label = labels.get(id);
+    return label === undefined ? undefined : `${id} ${label}`;
 }
 
 function toFeed(events: SelfEvent[], labels: Map<string, string>): SummaryEvent[]
@@ -687,7 +900,8 @@ function eventText(event: SelfEvent, labels: Map<string, string>): string
     {
         return labels.get(confirms) ?? "proposal confirmed";
     }
-    const base = eventSummary(event);
+    const named = outcomeText(event, labels);
+    const base = named === undefined ? eventSummary(event) : `${named} ${eventSummary(event)}`.trim();
     const work = typeof event.payload.work === "string" ? event.payload.work : event.refs?.work;
     if (work === undefined)
     {
@@ -1037,11 +1251,37 @@ td.act a { text-decoration: none; }
 td.r { text-align: right; width: 78px; }
 .hf-sub { display: block; font-size: 11px; color: var(--sv-faint); margin-top: 3px; }
 
-.pill { font: 9.5px var(--sv-mono); padding: 2px 8px; border-radius: 4px; border: 1px solid; }
+.pill { font: 9.5px var(--sv-mono); padding: 2px 8px; border-radius: 4px; border: 1px solid;
+        display: inline-block; margin-left: 4px; }
 .p-active { color: var(--sv-accent); border-color: var(--sv-accent-line); }
 .p-done { color: var(--sv-ok); border-color: var(--sv-ok-line); }
 .p-blocked { color: var(--sv-warn); border-color: var(--sv-warn-line); }
 .p-next { color: var(--sv-faint); border-color: var(--sv-border-panel); }
+/* target states: reached is final, missed and at-risk ask for a decision */
+.s-reached { color: var(--sv-ok); border-color: var(--sv-ok-line); }
+.s-missed, .s-at-risk, .s-blocked { color: var(--sv-warn); border-color: var(--sv-warn-line); }
+.s-on-track { color: var(--sv-accent); border-color: var(--sv-accent-line); }
+.s-unstarted, .s-closed { color: var(--sv-faint); border-color: var(--sv-border-panel); }
+.c-covered { color: var(--sv-ok); border-color: var(--sv-ok-line); }
+.c-open { color: var(--sv-faint); border-color: var(--sv-border-panel); }
+.c-dropped { color: var(--sv-faint); border-color: var(--sv-border-panel); opacity: .6; }
+
+.ob { border-bottom: 1px solid var(--sv-rule); padding-bottom: 12px; margin-bottom: 12px; }
+.ob:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.ob-head { display: flex; align-items: center; gap: 10px; }
+.ob-head .n { font: 11px var(--sv-mono); color: var(--sv-faint); text-decoration: none; }
+.ob-head .n:hover { color: var(--sv-accent); }
+.ob-head b { font-size: 13.5px; font-weight: 600; color: var(--sv-text); }
+.ob-why { margin: 4px 0 8px; font-size: 12px; color: var(--sv-muted); }
+.ob-bar { height: 4px; border-radius: 2px; background: var(--sv-surface-raised); overflow: hidden; }
+.ob-bar span { display: block; height: 100%; background: var(--sv-accent); }
+.ob-num { margin: 5px 0 10px; font: 10.5px var(--sv-mono); color: var(--sv-faint); }
+.ob-marks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.ob-mark { font: 9.5px var(--sv-mono); font-style: normal; color: var(--sv-muted);
+           border: 1px solid var(--sv-border); border-radius: 4px; padding: 1px 6px; }
+.ob-mark.warn { color: var(--sv-warn); border-color: var(--sv-warn-line); }
+.ob-mark.ok { color: var(--sv-ok); border-color: var(--sv-ok-line); }
+.ob-mark a { color: var(--sv-muted); text-decoration: none; }
 
 .c2-live { font: 9px var(--sv-mono); color: var(--sv-ok); border: 1px solid var(--sv-ok-line);
            border-radius: 4px; padding: 1px 6px; letter-spacing: .1em; }
@@ -1050,7 +1290,7 @@ td.r { text-align: right; width: 78px; }
 .c2-ev:last-child { border-bottom: 0; }
 .c2-ev time { color: var(--sv-faint); white-space: nowrap; flex: none; }
 /* fixed columns: a longer type word must not shift the text column of its row */
-.c2-ev code { width: 4.2rem; flex: none; white-space: nowrap; }
+.c2-ev code { width: 5.6rem; flex: none; white-space: nowrap; }
 .c2-ev span { flex: 1; min-width: 0; font: 12.5px var(--sv-sans); color: var(--sv-body); }
 .c2-ev em { font-style: normal; color: var(--sv-faint); white-space: nowrap; flex: none;
             width: 5.2rem; text-align: right; }
@@ -1059,6 +1299,7 @@ td.r { text-align: right; width: 78px; }
 .c2-ev .e-report { color: var(--sv-ok); }
 .c2-ev .e-decide { color: var(--sv-accent); }
 .c2-ev .e-work, .c2-ev .e-goal, .c2-ev .e-convention { color: var(--sv-muted); }
+.c2-ev .e-objective, .c2-ev .e-milestone { color: var(--sv-accent); }
 
 .dr-side { position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column;
            gap: 16px; padding: 20px 18px; background: var(--sv-bg-side);

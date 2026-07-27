@@ -496,4 +496,145 @@ grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinke
 BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
 echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
+# target dates are judged in the workspace zone, never the rendering locale
+cd "$ROOT/A/ws"
+SELF timezone | grep -q "^UTC$" || fail "the default target-date zone was not UTC"
+SELF timezone Asia/Seoul > /dev/null
+SELF timezone | grep -q "^Asia/Seoul$" || fail "timezone did not record the zone it was given"
+BADZONE="$(SELF timezone Mars/Olympus 2>&1 || true)"
+echo "$BADZONE" | grep -q "not an IANA time zone" || fail "an unknown time zone was accepted"
+SELF timezone UTC > /dev/null
+
+day()
+{
+    date -u -d "$1 days" +%F 2>/dev/null || date -u -v"$1"d +%F
+}
+FUTURE="$(day +30)"
+SOON="$(day +2)"
+PAST="$(day -2)"
+
+# the long-term goal and a time-boxed objective coexist
+cd "$ROOT/A/ws/demo"
+OID="$(SELF objective add "ship the payment flow this month" --horizon month --target "$FUTURE" \
+    --success "checkout converts" --stop "chargebacks rise" | tail -1)"
+grep -q "prove two-machine sync" "$STATE_A" || fail "an objective overwrote the long-term goal"
+grep -q "$OID" "$STATE_A" || fail "the objective never reached folded state"
+SELF context | grep -q "ship the payment flow this month" || fail "context does not carry the objective"
+
+# a milestone needs explicit exit criteria; work links to it without becoming it
+NOEXIT="$(SELF milestone add "no criteria" --objective "$OID" 2>&1 || true)"
+echo "$NOEXIT" | grep -q "need explicit exit criteria" || fail "a milestone was accepted with no exit criteria"
+M1="$(SELF milestone add "checkout accepts a card" --objective "$OID" --target "$FUTURE" \
+    --exit "a live charge settles" --exit "the failure path is covered" | tail -1)"
+M2="$(SELF milestone add "refunds settle" --objective "$OID" --target "$FUTURE" --after "$M1" \
+    --exit "a refund reaches the customer" | tail -1)"
+WPAY="$(SELF work add "wire the payment provider" | tail -1)"
+SELF work start "$WPAY"
+SELF work link "$WPAY" --milestone "$M1"
+SELF work link "$WPAY" --milestone "$M2"
+SELF work show "$WPAY" | grep -q "Contributes to: $M1" || fail "work detail does not name the milestone it serves"
+SELF milestone | grep -q "$M1" || fail "milestone list is empty"
+SELF milestone | grep "$M2" | grep -q "critical path" && fail "a milestone nothing waits on was called critical path"
+SELF milestone | grep "$M1" | grep -q "critical path" || fail "a milestone another one waits on is not on the critical path"
+
+# one report, two milestones: evidence is shared by reference, never copied
+echo pay > pay.txt && git add . && git commit -qm "payment provider wired"
+PAYC="$(git rev-parse --short=12 HEAD)"
+SELF report "$WPAY" "provider wired and charging"
+OBJ_MD="$ROOT/A/ws/.superself/projects/demo/objective/$OID.md"
+[ "$(grep -c "$PAYC" "$OBJ_MD")" -ge 2 ] || fail "two milestones did not share the same evidence commit"
+[ "$(grep -c '"type":"report.added".*provider wired' "$LOG_A")" -eq 1 ] || fail "shared evidence duplicated the report"
+
+# finishing work does not reach a milestone whose exit criteria are not covered
+SELF work done "$WPAY"
+NOTREACHED="$(SELF milestone reach "$M1" 2>&1 || true)"
+echo "$NOTREACHED" | grep -q "uncovered exit criteria" || fail "a milestone was reached with open exit criteria"
+grep -q "$M1.*reached" "$STATE_A" && fail "work reaching done reached its milestone"
+
+# coverage cites evidence, and reaching records the revisions it was judged against
+SELF milestone met "$M1" --criterion c1 --why "the settled charge in $PAYC" --evidence "$PAYC"
+SELF milestone met "$M1" --criterion c2 --why "the declined-card path is exercised"
+BADCRIT="$(SELF milestone met "$M1" --criterion c9 --why "nope" 2>&1 || true)"
+echo "$BADCRIT" | grep -q "not a live exit criterion" || fail "coverage was accepted for a criterion that does not exist"
+SELF milestone reach "$M1"
+grep -q "Reached:.*against objective revision 1/milestone revision 1" "$OBJ_MD" || fail "reaching did not record the revisions it satisfied"
+grep -q "criteria c1, c2" "$OBJ_MD" || fail "reaching did not record the criteria it covered"
+grep -q "evidence.*$PAYC" "$OBJ_MD" || fail "reaching did not record its evidence"
+
+# revising the objective makes coverage judged against the old revision stale
+SELF objective revise "$OID" --why "the board moved the target" --target "$SOON"
+SELF status | grep -q "recheck it" || fail "a revision left stale coverage invisible"
+grep -q "stale coverage" "$VIEW_A/demo.html" || fail "the project view hides stale coverage"
+
+# a target-date boundary is deterministic and closes nothing on its own
+MLATE="$(SELF milestone add "invoices export" --objective "$OID" --target "$PAST" --exit "an export downloads" | tail -1)"
+WLATE="$(SELF work add "build the export" | tail -1)"
+SELF work start "$WLATE"
+SELF work link "$WLATE" --milestone "$MLATE"
+SELF milestone | grep "$MLATE" | grep -q "missed" || fail "a passed target date did not read as missed"
+SELF work | grep "$WLATE" | grep -q "active" || fail "a missed target silently closed its work unit"
+SELF status | grep -q "$MLATE missed its target" || fail "a missed target raised no health signal"
+
+# a blocked unit on the critical path is distinguishable from an unstarted one
+SELF work block "$WLATE" --on external --why "the ledger API is down"
+SELF milestone | grep "$MLATE" | grep -q "no work linked" && fail "a milestone with work linked claimed none"
+SELF milestone | grep "$M2" | grep -q "no work linked" && fail "a milestone with a linked unit claimed none"
+grep -q "blocked $WLATE" "$VIEW_A/demo.html" || fail "the project view hides a blocked milestone's unit"
+
+# progress is derived, never asserted
+BADPROG="$(SELF milestone met "$M2" --criterion c1 --why x --progress 60 2>&1 || true)"
+echo "$BADPROG" | grep -q "progress is derived" || fail "a manual progress percentage was accepted"
+
+# superseding an objective preserves lineage instead of two current states
+O2="$(SELF objective add "ship payments and payouts this quarter" --horizon quarter --target "$FUTURE" --supersedes "$OID" | tail -1)"
+grep -q "Supersedes: $OID" "$ROOT/A/ws/.superself/projects/demo/objective/$O2.md" || fail "a superseding objective lost its lineage"
+[ -f "$OBJ_MD" ] && fail "a superseded objective stayed current"
+SELF search "$OID" --type objective | grep -q "$OID" || fail "the superseded objective vanished from the log"
+
+# a goal-gap proposal must carry its whole brief, and cannot be filed twice
+M3="$(SELF milestone add "payouts land" --objective "$O2" --exit "a payout clears" | tail -1)"
+SELF milestone | grep "$M3" | grep -q "no work linked" || fail "a milestone nothing was dispatched at claimed work"
+grep -q "no work linked" "$VIEW_A/demo/$O2.html" || fail "the objective page hides a milestone with no work"
+THIN="$(SELF work propose "wire payouts" --milestone "$M3" --value "closes the payout gap" 2>&1 || true)"
+echo "$THIN" | grep -q "work propose needs --risk" || fail "an incomplete proposal was recorded"
+SELF work propose "wire payouts" --milestone "$M3" --value "closes the payout gap" \
+    --success "a payout clears in staging" --stop "the provider rejects our account" \
+    --depends "$M3" --risk "provider onboarding may take weeks" --capacity "3 days" \
+    --evidence-plan "a settled payout id in the report" --confidence medium --expires "$FUTURE"
+PID="$(SELF log -n 1 | sed -E 's/.*\[([^]]+)\].*/\1/' | cut -c1-8)"
+DUPE="$(SELF work propose "Wire payouts!" --milestone "$M3" --value v --success s --stop t \
+    --risk r --capacity c --evidence-plan e --confidence low --expires "$FUTURE" 2>&1 || true)"
+echo "$DUPE" | grep -q "already proposes this outcome" || fail "a duplicate proposal was recorded"
+SELF context | grep -q "evidence plan: a settled payout id" || fail "the proposal brief is missing from context"
+WNEW="$(SELF work accept "$PID" | tail -1)"
+SELF work show "$WNEW" | grep -q "Contributes to: $M3" || fail "accepting a proposal did not link the work it created"
+GONE="$(SELF work accept "$PID" 2>&1 || true)"
+echo "$GONE" | grep -q "already accepted" || fail "an accepted proposal was accepted twice"
+
+# the viewer carries the outcome layer, and every page still renders
+grep -q "OBJECTIVES" "$VIEW_A/demo.html" || fail "the project view has no objectives panel"
+grep -q "exit criteria covered" "$VIEW_A/demo.html" || fail "the project view shows no derived progress"
+grep -q "OBJECTIVES" "$VIEW_A/workspace.html" || fail "the workspace view has no objectives roll-up"
+grep -q "toward $M3" "$VIEW_A/demo/$WNEW.html" || fail "work detail does not name what it contributes to"
+grep -q "CONTRIBUTES TO" "$VIEW_A/demo/$WNEW.html" || fail "work detail has no contribution panel"
+grep -q "MILESTONE $M3" "$VIEW_A/demo/$O2.html" || fail "the objective page is missing its milestone"
+
+# a workspace that never adopted objectives folds exactly as before
+grep -q "## Objectives" "$ROOT/A/ws/.superself/projects/outside/state.md" && fail "a project with no objectives grew an objectives section"
+grep -q "OBJECTIVES" "$VIEW_A/outside.html" && fail "a project with no objectives grew an objectives panel"
+SELF search "prove out-of-tree" --project outside | grep -q "out-of-tree" || fail "an untouched project stopped folding"
+
+# the outcome layer survives replay, sync, and a machine that never saw it
+cd "$ROOT/A/ws/demo"
+BEFORE="$(cat "$ROOT/A/ws/.superself/projects/demo/objective/$O2.md")"
+SELF fold > /dev/null
+[ "$BEFORE" = "$(cat "$ROOT/A/ws/.superself/projects/demo/objective/$O2.md")" ] || fail "a replay of the same log folded a different objective"
+SELF search "$M1" --type milestone | grep -q "milestone.reached" || fail "a replay lost the reached milestone"
+cd "$ROOT/A/ws" && SELF sync
+machine B
+cd "$ROOT/B/ws" && SELF sync
+grep -q "$M3" "$ROOT/B/ws/.superself/projects/demo/state.md" || fail "objectives did not survive sync to another machine"
+diff "$LOG_A" "$LOG_B" > /dev/null || fail "objective events diverged after sync"
+machine A
+
 echo "proof OK"

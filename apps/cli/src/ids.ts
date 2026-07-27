@@ -29,6 +29,16 @@ export function artifactId(): string
     return "a-" + shortId();
 }
 
+export function objectiveId(): string
+{
+    return "o-" + shortId();
+}
+
+export function milestoneId(): string
+{
+    return "m-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";

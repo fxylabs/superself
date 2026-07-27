@@ -1,5 +1,6 @@
 import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { loadVerdicts, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
@@ -27,6 +28,7 @@ export function printContext(ctx: CliContext): void
         lines.push(model.description, "");
     }
     lines.push(`Goal: ${model.goal ?? "(not set)"}`, "");
+    pushList(lines, "Objectives", objectiveLines(model));
     pushList(lines, "Decisions", model.decisions.filter((d) => d.status === "confirmed").map((d) => `- ${d.text}${d.why === undefined ? "" : ` — ${d.why}`}`));
     pushList(lines, "Conventions", model.conventions.map((c) => `- ${c.text}`));
     pushList(lines, "Work in progress", inProgressLines(model));
@@ -36,6 +38,26 @@ export function printContext(ctx: CliContext): void
     console.log(lines.join("\n").replace(/\n+$/, ""));
 }
 
+// The outcome layer, in the order an agent needs it: the target, why it reads
+// the way it does, and which milestone still has nothing pointed at it.
+function objectiveLines(model: ProjectModel): string[]
+{
+    const lines: string[] = [];
+    for (const objective of openObjectives(model.goals))
+    {
+        const box = objective.target === undefined ? "" : ` (${objective.horizon ?? "target"} ${objective.target})`;
+        lines.push(`- ${objective.id} ${objective.outcome}${box} — ${objective.state}: ${objective.reason}`);
+        for (const milestone of objective.milestones.filter((m) => m.state !== "closed"))
+        {
+            const flags = [milestone.criticalPath ? "critical path" : "", milestone.works.length === 0 ? "no work linked" : ""]
+                .filter((flag) => flag !== "").join(", ");
+            lines.push(`  - ${milestone.id} ${milestone.outcome} — ${milestone.state}: ${milestone.reason}` +
+                `${flags === "" ? "" : ` [${flags}]`}`);
+        }
+    }
+    return lines;
+}
+
 function inProgressLines(model: ProjectModel): string[]
 {
     const active = model.works.filter((w) => w.status === "active").map((work) =>
@@ -43,7 +65,8 @@ function inProgressLines(model: ProjectModel): string[]
         const latest = work.reports[work.reports.length - 1];
         const report = latest === undefined ? "" : ` — ${latest.text}`;
         const next = work.next === undefined ? "" : ` (next: ${work.next})`;
-        return `- ${work.id} ${work.outcome}${report}${next}`;
+        const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
+        return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
     });
     const blocked = model.works
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
@@ -57,7 +80,21 @@ function waitingLines(model: ProjectModel): string[]
     const proposals = model.decisions
         .filter((d) => d.status === "proposed" && !d.expired)
         .map((d) => `- proposal: ${d.text} (confirm with \`self decide confirm ${d.id}\`)`);
-    return [...questions, ...proposals];
+    return [...questions, ...proposals, ...workProposalLines(model)];
+}
+
+// A proposal is only actionable if the reader can weigh it, so the whole brief
+// travels with it rather than an outcome line pointing at a page.
+function workProposalLines(model: ProjectModel): string[]
+{
+    return openProposals(model.goals).flatMap((proposal) => [
+        `- work proposal ${proposal.id.slice(0, 8)}: ${proposal.outcome}`,
+        `  toward ${proposal.milestone ?? proposal.objective} · value: ${proposal.value}`,
+        `  success: ${proposal.success.join("; ")} · stop: ${proposal.stop.join("; ")}`,
+        `  depends: ${proposal.depends.length === 0 ? "nothing" : proposal.depends.join(", ")} · risk: ${proposal.risk}`,
+        `  capacity: ${proposal.capacity} · evidence plan: ${proposal.evidencePlan}`,
+        `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work accept ${proposal.id.slice(0, 8)}\``
+    ]);
 }
 
 function pushList(lines: string[], title: string, items: string[]): void
@@ -84,15 +121,39 @@ export function printStatus(ctx: CliContext): void
     }
     console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
     console.log(`work: ${countLine(model.works)}`);
-    console.log(`waiting on you: ${model.openQuestions.length + model.decisions.filter((d) => d.status === "proposed" && !d.expired).length}`);
+    console.log(`objectives: ${objectiveCountLine(model)}`);
+    console.log(`waiting on you: ${waitingCount(model)}`);
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
+}
+
+// A flat active count can look busy without saying whether the project is
+// moving, so the objective roll-up sits beside it.
+function objectiveCountLine(model: ProjectModel): string
+{
+    const objectives = openObjectives(model.goals);
+    const milestones = objectives.flatMap((objective) => objective.milestones);
+    const met = objectives.reduce((sum, objective) => sum + objective.met, 0);
+    const total = objectives.reduce((sum, objective) => sum + objective.total, 0);
+    return `${objectives.length} open, ${milestones.filter((m) => m.state === "reached").length} of ` +
+        `${milestones.length} milestones reached, ${met} of ${total} exit criteria covered`;
+}
+
+export function waitingCount(model: ProjectModel): number
+{
+    return model.openQuestions.length
+        + model.decisions.filter((d) => d.status === "proposed" && !d.expired).length
+        + openProposals(model.goals).length;
 }
 
 function printStyledStatus(model: ProjectModel): void
 {
     console.log(`${bold(model.slug)} — ${model.goal ?? dim("(goal not set)")}`);
     console.log(countGlyphs(model.works));
-    const waiting = model.openQuestions.length + model.decisions.filter((d) => d.status === "proposed" && !d.expired).length;
+    if (openObjectives(model.goals).length > 0)
+    {
+        console.log(dim(objectiveCountLine(model)));
+    }
+    const waiting = waitingCount(model);
     if (waiting > 0)
     {
         console.log(yellow(`⚠ waiting on you: ${waiting}`));
@@ -169,7 +230,8 @@ export function printWorkList(ctx: CliContext & { project: string }): void
     }
     for (const work of open)
     {
-        console.log(styled ? workLines(work) : plainWorkLine(work));
+        const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
+        console.log(styled ? workLines(work, toward) : plainWorkLine(work, toward));
     }
     const done = model.works.length - open.length;
     if (done > 0)
@@ -178,18 +240,22 @@ export function printWorkList(ctx: CliContext & { project: string }): void
     }
 }
 
-function plainWorkLine(work: WorkState): string
+function plainWorkLine(work: WorkState, toward: string): string
 {
     const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
     const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
-    return `${work.id}  ${work.status}${blocked}  ${work.outcome}${reports}`;
+    return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}${reports}`;
 }
 
-function workLines(work: WorkState): string
+function workLines(work: WorkState, toward: string): string
 {
     const glyph = work.status === "active" ? blue("●") : work.status === "blocked" ? red("■") : "○";
     const indent = " ".repeat(work.id.length + 4);
     const lines = [`${glyph} ${dim(work.id)}  ${work.outcome}`];
+    if (toward !== "")
+    {
+        lines.push(indent + dim(`toward ${toward}`));
+    }
     if (work.status === "blocked")
     {
         lines.push(indent + red(`blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`));
@@ -226,7 +292,7 @@ function eventStyle(type: string): (text: string) => string
     {
         return red;
     }
-    if (type === "work.done")
+    if (type === "work.done" || type === "milestone.reached" || type === "objective.closed")
     {
         return green;
     }
@@ -234,7 +300,7 @@ function eventStyle(type: string): (text: string) => string
     {
         return blue;
     }
-    if (type.startsWith("decision.") || type === "goal.set")
+    if (type.startsWith("decision.") || type.startsWith("objective.") || type.startsWith("milestone.") || type === "goal.set")
     {
         return yellow;
     }
