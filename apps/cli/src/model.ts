@@ -1,5 +1,5 @@
 import { DEFAULT_ZONE } from "./dates.js";
-import { looksLikeRevision } from "./gitutil.js";
+import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
 import { readRegistry, readStoreConfig } from "./paths.js";
@@ -307,12 +307,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     noteBranch(work, event);
-    const offered = event.refs?.commits ?? [];
-    // Reports written before evidence was classified put anything the caller
-    // passed into refs.commits. Splitting on read folds those stores correctly
-    // without rewriting a single historical event.
-    const commits = offered.filter(looksLikeRevision);
-    const notes = [...offered.filter((value) => !looksLikeRevision(value)), ...stringList(event.payload.notes)];
+    const { commits, notes } = splitEvidence(event);
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
     work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, notes, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
@@ -324,6 +319,28 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     }
 }
 
+// A report that recorded its evidence as typed was split when it was written,
+// by the repository that could answer whether each value resolved; the reader
+// takes that verdict as given. Anything older is split again here on shape
+// alone, so a store written before evidence carried its type folds correctly
+// without a single historical event being rewritten.
+function splitEvidence(event: SelfEvent): { commits: string[]; notes: string[] }
+{
+    const offered = stringList(event.refs?.commits);
+    const declared = stringList(event.payload.notes);
+    if (event.payload.evidenceTyped === true)
+    {
+        return { commits: offered, notes: declared };
+    }
+    return {
+        commits: offered.filter(looksLikeLegacyRevision),
+        notes: [...offered.filter((value) => !looksLikeLegacyRevision(value)), ...declared]
+    };
+}
+
+// Nothing read out of the log is trusted to be the type it is declared as:
+// events arrive from other machines, and a number where a string belongs would
+// reach a renderer that calls string methods on it.
 function stringList(value: unknown): string[]
 {
     return Array.isArray(value) ? value.map((item) => String(item)) : [];

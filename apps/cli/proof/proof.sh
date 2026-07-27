@@ -375,7 +375,9 @@ git checkout -q -b main 2>/dev/null || git checkout -q main
 git merge -q --ff-only feature 2>/dev/null || git merge -q feature
 WID2="$(SELF work add "classify evidence" | tail -1)"
 SELF work start "$WID2"
-SELF report "$WID2" "evidence in all states" --evidence "$MERGED" --evidence "$LIVE" --evidence "$DOOMED" --evidence "000000000000"
+# the vanished hash is declared: nothing in this repository resolves it, and
+# only a declaration can put a value git cannot confirm into the commit refs
+SELF report "$WID2" "evidence in all states" --evidence "$MERGED" --evidence "$LIVE" --evidence "$DOOMED" --evidence "commit:000000000000"
 WORK2="$ROOT/A/ws/.superself/projects/demo/work/$WID2.md"
 grep -q "$MERGED (settled)" "$WORK2" || fail "merged evidence not settled"
 grep -q "$LIVE (provisional)" "$WORK2" || fail "live-branch evidence not provisional"
@@ -824,6 +826,24 @@ SELF status | grep -q "golden fixture" && fail "a validation note was reported a
 SELF status | grep -q "000000000000 no longer resolves" || fail "a vanished commit reference stopped warning"
 grep -q ">note<" "$VIEW_A/demo/$WEV.html" || fail "work view did not mark descriptive evidence as a note"
 
+# shape cannot separate a date, a build number or a ticket id from an
+# abbreviated hash — all of them are hex. The repository decides instead: what
+# it resolves is a revision however it is written, and what it does not is a
+# note, whatever it looks like.
+echo boundary > boundary.txt && git add . && git commit -qm "evidence boundaries"
+BOUND="$(git rev-parse HEAD)"
+UPPER="$(printf '%s' "$BOUND" | tr 'a-f' 'A-F')"
+SHORT="$(git rev-parse --short=5 HEAD)"
+SELF report "$WEV" "the boundaries of the evidence gate" \
+    --evidence "20260727" --evidence "$UPPER" --evidence "$SHORT" --evidence "note:$LIVE"
+grep -q "Evidence notes:.*20260727" "$WORKEV" || fail "a date-shaped value was treated as a Git revision"
+SELF status | grep -q "20260727" && fail "a date-shaped value was reported as a missing Git commit"
+grep -qE "(Evidence: |, )$UPPER \(" "$WORKEV" || fail "an uppercase revision this repo resolves was demoted to a note"
+grep -qE "(Evidence: |, )$SHORT \(" "$WORKEV" || fail "a short revision this repo resolves was demoted to a note"
+grep -q "Evidence notes:.*$LIVE" "$WORKEV" || fail "note: did not keep a resolvable hash out of the commit refs"
+BADFORCE="$(SELF report "$WEV" "prose declared as a commit" --evidence "commit:validated by hand" 2>&1 || true)"
+echo "$BADFORCE" | grep -q "is not a Git object name" || fail "prose declared as a commit was not refused"
+
 # a store written before evidence was classified folds as it stands: the digest
 # sitting in refs.commits reads as a note, and the event itself is never touched
 LEGACY="{\"id\":\"01legacyeventaaaaaaaaaaaaa\",\"ts\":\"2026-01-01T00:00:00.000Z\",\"type\":\"report.added\",\"origin\":{\"actor\":\"agent\",\"confirmed\":false},\"project\":\"demo\",\"payload\":{\"text\":\"legacy report carrying a digest in commits\"},\"refs\":{\"work\":\"$WEV\",\"commits\":[\"$DIGEST\"]}}"
@@ -834,6 +854,24 @@ SELF fold > /dev/null
 grep -qF "$LEGACY" "$LOG_A" || fail "the fold rewrote a historical event"
 grep -q "Evidence notes:.*$DIGEST" "$WORKEV" || fail "a legacy digest in refs.commits did not fold into a note"
 SELF status | grep -q "$DIGEST" && fail "a stored verdict kept a legacy digest reading as rewritten history"
+
+# the same store, read on shape alone: a digit-only value in refs.commits is a
+# date at least as often as a hash and stays a note, while an uppercase name
+# git resolves is a revision
+LEGACYNUM="{\"id\":\"01legacynumbereventaaaaaaa\",\"ts\":\"2026-01-01T00:00:01.000Z\",\"type\":\"report.added\",\"origin\":{\"actor\":\"agent\",\"confirmed\":false},\"project\":\"demo\",\"payload\":{\"text\":\"legacy report carrying a build number in commits\"},\"refs\":{\"work\":\"$WEV\",\"commits\":[\"20250101\",\"$UPPER\"]}}"
+printf '%s\n' "$LEGACYNUM" >> "$LOG_A"
+SELF fold > /dev/null
+grep -q "Evidence notes:.*20250101" "$WORKEV" || fail "a legacy digit-only value was still handed to git"
+SELF status | grep -q "20250101" && fail "a legacy build number was reported as a missing Git commit"
+grep -qE "(Evidence: |, )$UPPER \(" "$WORKEV" || fail "a legacy uppercase revision git resolves was demoted to a note"
+
+# a report that recorded its evidence as typed is taken at its word, so the
+# reader never re-guesses a shape the repository has already answered
+TYPED="{\"id\":\"01typedrevisioneventaaaaaa\",\"ts\":\"2026-01-01T00:00:02.000Z\",\"type\":\"report.added\",\"origin\":{\"actor\":\"agent\",\"confirmed\":false},\"project\":\"demo\",\"payload\":{\"text\":\"typed report carrying a digit-only revision\",\"evidenceTyped\":true},\"refs\":{\"work\":\"$WEV\",\"commits\":[\"20261231\"]}}"
+printf '%s\n' "$TYPED" >> "$LOG_A"
+SELF fold > /dev/null
+grep -qE "(Evidence: |, )20261231 \(" "$WORKEV" || fail "a typed revision was re-guessed by its shape"
+SELF status | grep -q "20261231 no longer resolves" || fail "a typed revision that resolves to nothing stopped warning"
 
 # artifacts are verified against the store that holds their bytes: a matching
 # digest is healthy, and a changed or missing file names the artifact

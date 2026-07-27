@@ -7,7 +7,7 @@ import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
-import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, looksLikeRevision } from "./gitutil.js";
+import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -79,7 +79,9 @@ const USAGE = `usage: self <command>
   work propose "<outcome>" --milestone m --value v --success s --stop s --risk r
               --capacity c --evidence-plan e --confidence low|medium|high --expires d
   work accept|decline <proposal-id>          act on a goal-gap proposal
-  report <work-id> "<summary>" [--file path] [--evidence commit|note] [--artifact path] [--next n]
+  report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]
+                                             (--evidence: a revision this repo resolves, else a note;
+                                              force either with commit:<v> or note:<v>)
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact or open it with the OS default app
@@ -566,15 +568,17 @@ function cmdReport(rest: string[]): void
     const text = values.file === undefined
         ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
         : readReportFile(values.file);
-    const offered = values.evidence ?? headEvidence(ctx);
-    const commits = offered.filter(looksLikeRevision);
-    const notes = offered.filter((value) => !looksLikeRevision(value));
+    const { commits, notes } = classifyEvidence(ctx.projectDir, values.evidence ?? headEvidence(ctx));
     const refs: EventRefs = { work: work.id };
+    const payload: Record<string, unknown> = { text };
     if (commits.length > 0)
     {
         refs.commits = commits;
+        // Says the split already happened, against the repository that could
+        // answer it. A reader of this event must take these as revisions
+        // rather than guess at their shape a second time.
+        payload.evidenceTyped = true;
     }
-    const payload: Record<string, unknown> = { text };
     if (notes.length > 0)
     {
         payload.notes = notes;
