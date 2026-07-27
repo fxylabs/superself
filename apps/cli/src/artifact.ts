@@ -1,8 +1,8 @@
-import { copyFileSync, existsSync, statSync } from "node:fs";
+import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
-import { CliContext, ensureDir, readRegistry } from "./paths.js";
+import { CliContext, readRegistry } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
 
@@ -14,9 +14,54 @@ export interface ArtifactRecord extends ArtifactMeta
     summary: string;
 }
 
-// Copies the files into the store before the event is written, so the event
-// and the bytes it references land in the same store commit.
-export function ingestArtifacts(storeDir: string, slug: string, paths: string[]): ArtifactMeta[]
+// Bytes already in the store, waiting for the event that names them. Nothing
+// outside this module may keep them without writing that event.
+export interface StagedArtifacts
+{
+    artifacts: ArtifactMeta[];
+    discard: () => void;
+}
+
+interface PlannedArtifact extends ArtifactMeta
+{
+    source: string;
+}
+
+// Every declared artifact is checked before any byte is written, and the whole
+// set is removed again if one copy fails: a rejected report must leave the
+// store exactly as it found it.
+export function stageArtifacts(storeDir: string, slug: string, paths: string[] | undefined): StagedArtifacts
+{
+    if (paths === undefined || paths.length === 0)
+    {
+        return { artifacts: [], discard: () => {} };
+    }
+    const planned = planArtifacts(slug, paths);
+    const createdRoot = mkdirSync(join(storeDir, "artifacts", slug), { recursive: true });
+    const touched: string[] = [];
+    const discard = (): void => removeStaged(createdRoot, touched);
+    const failure = copyPlanned(storeDir, planned, touched);
+    if (failure !== null)
+    {
+        discard();
+        throw failure;
+    }
+    return { artifacts: planned.map(({ id, name, path }) => ({ id, name, path })), discard };
+}
+
+// The bytes and the event that names them land in the same store commit, so a
+// report that cannot be written takes its artifacts back out with it.
+export function commitStaged(staged: StagedArtifacts, writeEvent: () => void): void
+{
+    const failure = capture(writeEvent);
+    if (failure !== null)
+    {
+        staged.discard();
+        throw failure;
+    }
+}
+
+function planArtifacts(slug: string, paths: string[]): PlannedArtifact[]
 {
     return paths.map((path) =>
     {
@@ -29,15 +74,82 @@ export function ingestArtifacts(storeDir: string, slug: string, paths: string[])
         {
             throw new CliError(`artifact "${path}" is a directory — pass files individually`);
         }
+        if (!isReadable(source))
+        {
+            throw new CliError(`artifact "${path}" cannot be read`);
+        }
         const id = artifactId();
         const name = basename(source);
         // Forward slashes: the path is persisted in the event and rendered
         // into view hrefs, so it must not vary by platform.
-        const relative = `artifacts/${slug}/${id}-${name}`;
-        ensureDir(join(storeDir, "artifacts", slug));
-        copyFileSync(source, join(storeDir, relative));
-        return { id, name, path: relative };
+        return { id, name, path: `artifacts/${slug}/${id}-${name}`, source };
     });
+}
+
+// Hands the first failure back instead of throwing, so the caller can undo the
+// files it already touched before the error reaches the user. Each target is
+// recorded before its copy: an interrupted copy leaves a partial file that
+// rollback must still remove.
+function copyPlanned(storeDir: string, planned: PlannedArtifact[], touched: string[]): Error | null
+{
+    for (const item of planned)
+    {
+        const target = join(storeDir, item.path);
+        // An id already on disk would overwrite stored bytes the log still
+        // points at; artifacts are immutable after ingestion.
+        if (existsSync(target))
+        {
+            return new CliError(`artifact id ${item.id} is already stored — run the report again`);
+        }
+        touched.push(target);
+        const failure = capture(() => copyFileSync(item.source, target));
+        if (failure !== null)
+        {
+            return new CliError(`artifact "${item.name}" could not be copied into the store: ${failure.message}`);
+        }
+    }
+    return null;
+}
+
+function removeStaged(createdRoot: string | undefined, touched: string[]): void
+{
+    for (const file of touched)
+    {
+        rmSync(file, { force: true });
+    }
+    touched.length = 0;
+    // Only a directory this command created may go: an older one holds
+    // artifacts from earlier reports.
+    if (createdRoot !== undefined)
+    {
+        rmSync(createdRoot, { recursive: true, force: true });
+    }
+}
+
+function isReadable(source: string): boolean
+{
+    try
+    {
+        accessSync(source, constants.R_OK);
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+function capture(action: () => void): Error | null
+{
+    try
+    {
+        action();
+        return null;
+    }
+    catch (error)
+    {
+        return error instanceof Error ? error : new Error(String(error));
+    }
 }
 
 export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]

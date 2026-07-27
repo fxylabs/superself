@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
-import { ingestArtifacts, runArtifact } from "./artifact.js";
+import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
@@ -517,13 +517,14 @@ function cmdReport(rest: string[]): void
     {
         payload.next = values.next;
     }
-    if (values.artifact !== undefined && values.artifact.length > 0)
+    const staged = stageArtifacts(ctx.storeDir, ctx.project, values.artifact);
+    if (staged.artifacts.length > 0)
     {
-        const metas = ingestArtifacts(ctx.storeDir, ctx.project, values.artifact);
-        payload.artifacts = metas;
-        refs.artifacts = metas.map((meta) => meta.id);
+        payload.artifacts = staged.artifacts;
+        refs.artifacts = staged.artifacts.map((meta) => meta.id);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`);
+    commitStaged(staged, () =>
+        recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`));
 }
 
 // A decision may look back at finished work, so this accepts any unit the
