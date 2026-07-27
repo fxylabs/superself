@@ -141,9 +141,20 @@ function renderState(model: ProjectModel): string
     section(lines, "Work in progress", model.works.filter((w) => w.status === "active").map(workLine));
     section(lines, "Blocked", model.works.filter((w) => w.status === "blocked").map(blockedLine));
     section(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- **${w.id}** ${w.outcome}`));
+    section(lines, "Attempts in flight", attemptLines(model));
     section(lines, "Open questions", model.openQuestions.map((q) => `- ${q}`));
     section(lines, "Health", model.health.map((h) => `- ${h}`));
     return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+// A run that has not settled is the one thing a reader cannot see in the
+// commit history, so it belongs in canonical state while it is still true.
+function attemptLines(model: ProjectModel): string[]
+{
+    return model.works
+        .flatMap((work) => work.attempts.map((attempt) => ({ work, attempt })))
+        .filter((pair) => pair.attempt.phase === "running" || pair.attempt.phase === "waiting")
+        .map((pair) => `- **${pair.work.id}** ${pair.attempt.id} ${pair.attempt.kind}/${pair.attempt.runtime} — ${pair.attempt.phase}`);
 }
 
 function section(lines: string[], title: string, items: string[]): void
@@ -353,6 +364,17 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
         lines.push(`- Artifacts: ${work.artifacts.map((a) => `${a.id} ${a.name}`).join(", ")}`);
     }
     lines.push("");
+    if (work.attempts.length > 0)
+    {
+        lines.push("## Attempts", "");
+        for (const attempt of work.attempts)
+        {
+            const verdict = attempt.verdict === undefined ? attempt.phase : `${attempt.phase} — ${attempt.verdict}`;
+            const outputs = attempt.outputs.length === 0 ? "" : ` [${attempt.outputs.join(", ")}]`;
+            lines.push(`- ${attempt.id} ${attempt.kind}/${attempt.runtime} — ${verdict}${outputs}`);
+        }
+        lines.push("");
+    }
     if (work.reports.length > 0)
     {
         lines.push("## Reports (latest first)", "");

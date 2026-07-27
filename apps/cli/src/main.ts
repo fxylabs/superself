@@ -31,6 +31,7 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { loadVerdicts } from "./reachability.js";
+import { runAttempt, runDaemon, runDigest, runOvernight } from "./supervise/commands.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
@@ -80,6 +81,18 @@ const USAGE = `usage: self <command>
               --capacity c --evidence-plan e --confidence low|medium|high --expires d
   work accept|decline <proposal-id>          act on a goal-gap proposal
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
+  attempt register --work <id> [--command c] [--output p] [--completes] …
+                                             register a run before the process exists
+  attempt list | show <id> | run <id>        inspect or dispatch a registered attempt
+  attempt started <id> --pid n | heartbeat <id> | exited <id> [--code n]
+                                             report what an externally launched run is doing
+  attempt approve|cancel <id>                approve an attempt or take one back
+  attempt propose <id> --action <kind>       ask mid-run for an action the launch did not declare
+  daemon start [--interval s] | stop | status | tick | circuits
+                                             supervise attempts with no chat turn open
+  overnight set [--from 22:00] [--to 07:00] [--auto-dispatch] … | show | off
+                                             set, read, or revoke the unattended-run policy
+  digest [--hours n] [--since ts]            group what ran, failed, retried, and waits
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact or open it with the OS default app
@@ -115,6 +128,10 @@ async function main(argv: string[]): Promise<void>
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
+        case "attempt": runAttempt(rest); break;
+        case "daemon": await runDaemon(rest); break;
+        case "overnight": runOvernight(rest); break;
+        case "digest": runDigest(rest); break;
         case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;

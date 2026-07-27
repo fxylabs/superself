@@ -38,6 +38,21 @@ export interface ReportEntry
     branch?: string;
 }
 
+// The sanitized shadow of a machine-local attempt: enough for any clone to
+// say what ran and how it ended, with nothing a machine must keep to itself.
+export interface AttemptSummary
+{
+    id: string;
+    ts: string;
+    runtime: string;
+    kind: string;
+    phase: "registered" | "running" | "waiting" | "settled" | "cancelled" | "refused";
+    verdict?: string;
+    detail?: string;
+    outputs: string[];
+    needsApproval: boolean;
+}
+
 export interface WorkState
 {
     id: string;
@@ -54,6 +69,7 @@ export interface WorkState
     // asserted: one unit runs on several branches, and one branch carries
     // several units.
     branches: string[];
+    attempts: AttemptSummary[];
     next?: string;
     // The outcomes this unit contributes to. Stated by `self work link`, never
     // inferred: one unit may serve several objectives, and a milestone is
@@ -135,6 +151,11 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (event.type === "report.added")
     {
         applyReport(model, event);
+        return;
+    }
+    if (event.type.startsWith("attempt."))
+    {
+        applyAttempt(model, event);
         return;
     }
     if (event.type === "convention.added")
@@ -239,7 +260,8 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             artifacts: [],
             branches: branchOf(event),
             objectives: [],
-            milestones: []
+            milestones: [],
+            attempts: []
         });
         return;
     }
@@ -292,6 +314,66 @@ function applyLink(work: WorkState, event: SelfEvent): void
     }
 }
 
+const ATTEMPT_PHASES: Record<string, AttemptSummary["phase"]> = {
+    "attempt.registered": "registered",
+    "attempt.started": "running",
+    "attempt.waiting": "waiting",
+    "attempt.awaiting-review": "waiting",
+    "attempt.approved": "registered",
+    "attempt.settled": "settled",
+    "attempt.cancelled": "cancelled",
+    "attempt.refused": "refused"
+};
+
+// Attempt events are the physical half of the record: they say a process ran
+// and how it ended, and never that the work is done. Only work.done says
+// that, and only the supervisor's gates let it be written.
+function applyAttempt(model: ProjectModel, event: SelfEvent): void
+{
+    const work = model.works.find((item) => item.id === event.refs?.work);
+    const id = event.payload.attempt === undefined ? undefined : String(event.payload.attempt);
+    const phase = ATTEMPT_PHASES[event.type];
+    if (work === undefined || id === undefined || phase === undefined)
+    {
+        return;
+    }
+    work.lastEventTs = event.ts;
+    noteBranch(work, event);
+    const existing = work.attempts.find((attempt) => attempt.id === id);
+    const summary: AttemptSummary = existing ?? {
+        id,
+        ts: event.ts,
+        runtime: String(event.payload.runtime ?? "unknown"),
+        kind: String(event.payload.kind ?? "implementation"),
+        phase,
+        outputs: [],
+        needsApproval: false
+    };
+    summary.phase = phase;
+    if (event.type === "attempt.registered")
+    {
+        summary.needsApproval = event.payload.needsApproval === true;
+        summary.outputs = Array.isArray(event.payload.declared) ? event.payload.declared.map(String) : [];
+    }
+    if (event.type === "attempt.approved")
+    {
+        summary.needsApproval = false;
+    }
+    if (event.type === "attempt.settled")
+    {
+        summary.verdict = String(event.payload.verdict);
+        summary.outputs = Object.keys((event.payload.hashes ?? {}) as Record<string, string>);
+    }
+    if (typeof event.payload.text === "string" && phase !== "registered")
+    {
+        summary.detail = event.payload.text;
+    }
+    if (existing === undefined)
+    {
+        work.attempts.push(summary);
+    }
+}
+
 function applyReport(model: ProjectModel, event: SelfEvent): void
 {
     const work = model.works.find((item) => item.id === event.refs?.work);
@@ -336,6 +418,32 @@ function deriveSignals(model: ProjectModel, now: Date): void
         {
             const days = Math.floor(ageDays(work.lastEventTs, now));
             model.health.push(`${work.id} looks stalled — no events for ${days} days`);
+        }
+        deriveAttemptSignals(model, work);
+    }
+}
+
+// An attempt that ran while nobody was watching is only useful if what it is
+// now waiting for reaches the next session that opens.
+function deriveAttemptSignals(model: ProjectModel, work: WorkState): void
+{
+    for (const attempt of work.attempts)
+    {
+        if (attempt.needsApproval && attempt.phase !== "settled" && attempt.phase !== "cancelled")
+        {
+            model.openQuestions.push(`${work.id} attempt ${attempt.id} is waiting on your approval — \`self attempt approve ${attempt.id}\``);
+        }
+        if (attempt.phase === "waiting")
+        {
+            model.openQuestions.push(attempt.detail ?? `${work.id} attempt ${attempt.id} is waiting`);
+        }
+        if (attempt.phase === "refused")
+        {
+            model.openQuestions.push(attempt.detail ?? `${work.id} attempt ${attempt.id} proposed a refused action`);
+        }
+        if (attempt.verdict === "failed" || attempt.verdict === "stale")
+        {
+            model.health.push(attempt.detail ?? `${work.id} attempt ${attempt.id} ended ${attempt.verdict}`);
         }
     }
 }

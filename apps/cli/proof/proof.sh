@@ -804,5 +804,261 @@ BADVERB2="$(SELF milestone frobnicate 2>&1 || true)"
 echo "$BADVERB2" | grep -q "usage: self milestone" || fail "an unknown milestone verb was reported as a missing id"
 NOID="$(SELF objective show 2>&1 || true)"
 echo "$NOID" | grep -q "objective-id" || fail "a genuinely missing id stopped asking for an id"
+# ── supervision: attempts settle with no chat turn open ─────────────
+cd "$ROOT/A/ws/demo"
+LOCAL="$ROOT/A/ws/.superself/local"
+
+# the supervisor waits for the wrapper's exit notice, never for a poll
+settled()
+{
+    for _ in $(seq 1 100)
+    do
+        [ -f "$LOCAL/spool/$1/exit" ] && return 0
+        sleep 0.1
+    done
+    fail "attempt $1 never wrote an exit notice"
+}
+
+SELF overnight show | grep -q "no overnight policy" || fail "an unset overnight policy did not say so"
+SELF overnight set --from 00:00 --to 00:00 --wake 07:30 --auto-dispatch --hard-model opus \
+    --max-concurrent 4 --budget-usd 50 --retries 0 > /dev/null
+SELF overnight show | grep -q "auto-dispatch on" || fail "the overnight policy was not readable back"
+SELF overnight show | grep -q "never allowed publish" || fail "the policy did not name the actions it can never grant"
+
+# an approved run finishes while nothing is watching: exit is observed, the
+# declared output is hashed and attached, and the work is not thereby done
+W1="$(SELF work add "an unattended run produces a verified artifact" | tail -1)"
+SELF work start "$W1"
+OUT1="$ROOT/out1.txt"
+T1="$(SELF attempt register --work "$W1" --runtime proof --model opus --completes \
+    --output "$OUT1" --heartbeat 120 \
+    --command 'printf built > '"$OUT1"'; printf "wrote the page\n" > "$SUPERSELF_SPOOL/report.md"' | tail -1)"
+echo "$T1" | grep -q "^t-" || fail "attempt register did not print an attempt id"
+SELF daemon tick | grep -q "dispatched: $T1" || fail "the supervisor did not dispatch an eligible attempt"
+settled "$T1"
+printf '{"costUsd":0.42,"usage":1234}' > "$LOCAL/spool/$T1/usage.json"
+SELF daemon tick > /dev/null
+SELF attempt show "$T1" | grep -q "passed" || fail "a run with its declared output did not pass validation"
+SELF attempt show "$T1" | grep -q "^exit        confirmed" || fail "a wrapper-written exit was not recorded as confirmed"
+SELF artifact list --work "$W1" | grep -q "out1.txt" || fail "the declared output was not attached as an artifact"
+[ "$(SELF artifact list --work "$W1" | wc -l | tr -d ' ')" = "1" ] || fail "the artifact was attached more than once"
+
+# a duplicate exit notification changes nothing
+DUP="$(SELF attempt exited "$T1" 2>&1 || true)"
+echo "$DUP" | grep -q "already settled" || fail "a duplicate exit notice was not ignored"
+SELF daemon tick > /dev/null
+[ "$(SELF artifact list --work "$W1" | wc -l | tr -d ' ')" = "1" ] || fail "a duplicate exit notice attached the artifact twice"
+
+# passing is not being done: a fresh review session is still owed
+SELF work | grep -q "$W1" || fail "work was marked done without the review the policy requires"
+grep -q "attempt.awaiting-review" "$LOG_A" || fail "the fresh-review requirement was not recorded"
+SAME="$(SELF attempt register --work "$W1" --kind review --runtime proof --model opus 2>&1 || true)"
+echo "$SAME" | grep -q "fresh session" || fail "a review was allowed in the implementation's own session"
+OUT1R="$ROOT/out1-review.txt"
+T1R="$(SELF attempt register --work "$W1" --kind review --runtime proof --model opus --completes \
+    --session reviewer --output "$OUT1R" --no-report \
+    --command 'printf reviewed > '"$OUT1R" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$T1R"
+SELF daemon tick > /dev/null
+SELF work | grep -q "$W1" && fail "a passing fresh review did not complete the work"
+
+# completion prose with no artifact fails validation and completes nothing
+W2="$(SELF work add "prose alone must not close work" | tail -1)"
+SELF work start "$W2"
+OUT2="$ROOT/out2.txt"
+T2="$(SELF attempt register --work "$W2" --runtime validator --model opus --completes --output "$OUT2" \
+    --command 'printf "all done, shipped it\n" > "$SUPERSELF_SPOOL/report.md"' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$T2"
+SELF daemon tick > /dev/null
+SELF attempt show "$T2" | grep -q "declared output \"out2.txt\" is missing" || fail "completion prose passed without its artifact"
+SELF work | grep -q "$W2" || fail "an unvalidated attempt marked work done"
+
+# an implementation on the wrong model never passes, whatever it produced
+OUT2B="$ROOT/out2b.txt"
+T2B="$(SELF attempt register --work "$W2" --runtime validator --model haiku --completes --output "$OUT2B" --no-report \
+    --command 'printf built > '"$OUT2B" | tail -1)"
+SELF daemon tick > /dev/null
+settled "$T2B"
+SELF daemon tick > /dev/null
+SELF attempt show "$T2B" | grep -q "must run on opus" || fail "the hard-model requirement was not enforced overnight"
+
+# a failed process releases its lease and keeps its spool
+W3="$(SELF work add "a failed run releases what it held" | tail -1)"
+SELF work start "$W3"
+T3="$(SELF attempt register --work "$W3" --runtime leaser --lease gpu --no-report \
+    --command 'echo working; echo broke >&2; exit 3' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$T3"
+SELF daemon tick > /dev/null
+SELF attempt show "$T3" | grep -q "exited with code 3" || fail "a non-zero exit was not recorded as a failure"
+SELF daemon status | grep -q "leases: none held" || fail "a failed attempt kept its lease"
+grep -q "broke" "$LOCAL/spool/$T3/stderr" || fail "the failed run's spool was not preserved"
+SELF attempt show "$T3" | grep -q "cost        unknown" || fail "missing provider data was not shown as unknown"
+
+# a pid that disappears is not a confirmed exit, and neither is a dead heartbeat
+T4="$(SELF attempt register --work "$W3" --runtime watcher --no-report --heartbeat 120 --command 'sleep 30' | tail -1)"
+SELF attempt run "$T4" > /dev/null
+PID4="$(node -e 'const fs=require("fs");let pid="";for(const line of fs.readFileSync(process.argv[1],"utf8").trim().split("\n")){const e=JSON.parse(line);if(e.attempt===process.argv[2]&&e.patch.pid!==undefined&&e.patch.pid!==null)pid=String(e.patch.pid);}process.stdout.write(pid)' "$LOCAL/attempts.jsonl" "$T4")"
+kill -9 "$PID4" 2>/dev/null || true
+SELF daemon tick > /dev/null
+SELF attempt show "$T4" | grep -q "^exit        vanished" || fail "a vanished process was reported as a confirmed exit"
+SELF attempt show "$T4" | grep -q "(stale)" || fail "a vanished process was judged instead of left stale"
+T5="$(SELF attempt register --work "$W3" --runtime watcher --no-report --heartbeat 1 --command 'sleep 20' | tail -1)"
+SELF attempt run "$T5" > /dev/null
+sleep 2
+SELF daemon tick > /dev/null
+SELF attempt show "$T5" | grep -q "^exit        stale" || fail "a dead heartbeat was not distinguished from an exit"
+SELF attempt show "$T5" | grep -q "no heartbeat" || fail "the stale reason did not name the heartbeat"
+
+# a capacity refusal records retryAt and redispatches after the reset, never before
+W4="$(SELF work add "capacity waits for the reset" | tail -1)"
+SELF work start "$W4"
+OUT6="$ROOT/out6.txt"
+T6="$(SELF attempt register --work "$W4" --runtime capacity --no-report --output "$OUT6" \
+    --command 'printf built > '"$OUT6" | tail -1)"
+FUTURE="$(node -e 'process.stdout.write(new Date(Date.now()+3600000).toISOString())')"
+SELF attempt exited "$T6" --code 1 --provider-status capacity --retry-at "$FUTURE" > /dev/null
+SELF daemon tick > /dev/null
+SELF attempt show "$T6" | grep -q "waiting-capacity" || fail "a capacity response did not park the attempt"
+SELF daemon tick | grep -q "waiting on provider capacity" || fail "an attempt redispatched before its capacity reset"
+SELF digest --hours 24 | grep -q "^## Waiting on capacity" || fail "the digest did not group capacity waits"
+PAST="$(node -e 'process.stdout.write(new Date(Date.now()-1000).toISOString())')"
+SELF attempt exited "$T6" --code 1 --provider-status capacity --retry-at "$PAST" > /dev/null
+SELF daemon tick | grep -q "dispatched: $T6" || fail "an attempt did not redispatch after its capacity reset"
+settled "$T6"
+SELF daemon tick > /dev/null
+SELF attempt show "$T6" | grep -q "^tries       1" || fail "the capacity redispatch ran more than once"
+
+# three transient failures open the circuit and stop the fan-out
+W5="$(SELF work add "a failing runtime stops fanning out" | tail -1)"
+SELF work start "$W5"
+for n in 1 2 3
+do
+    TF="$(SELF attempt register --work "$W5" --runtime flaky --no-report --command 'exit 9' | tail -1)"
+    SELF daemon tick > /dev/null
+    settled "$TF"
+    SELF daemon tick > /dev/null
+done
+SELF daemon circuits | grep -q "demo/flaky  open" || fail "three failures did not open the circuit"
+TF4="$(SELF attempt register --work "$W5" --runtime flaky --no-report --command 'exit 0' | tail -1)"
+SELF daemon tick | grep -q "circuit for demo/flaky is open" || fail "an open circuit did not stop the fan-out"
+SELF daemon reset-circuit demo/flaky > /dev/null
+SELF daemon tick | grep -q "dispatched: $TF4" || fail "a reset circuit did not let work through"
+settled "$TF4"
+SELF daemon tick > /dev/null
+
+# a dependency wakes only work that is ready and approved
+W6="$(SELF work add "the dependency others wait on" | tail -1)"
+W7="$(SELF work add "the unit that waits for it" | tail -1)"
+SELF work start "$W6"
+OUT7="$ROOT/out7.txt"
+T7="$(SELF attempt register --work "$W7" --runtime deps --no-report --after "$W6" --output "$OUT7" \
+    --command 'printf built > '"$OUT7" | tail -1)"
+SELF daemon tick | grep -q "waiting on $W6" || fail "an attempt ran before its dependency was done"
+T8="$(SELF attempt register --work "$W7" --runtime deps --no-report --needs-approval --command 'printf x' | tail -1)"
+SELF work done "$W6"
+SELF daemon tick | grep -q "dispatched: $T7" || fail "a met dependency did not wake the work waiting on it"
+SELF daemon tick | grep -q "$T8 — waiting on human approval" || fail "unapproved work dispatched once its dependency was met"
+SELF context | grep -q "waiting on your approval" || fail "the next session was not told what is waiting for approval"
+SELF attempt approve "$T8" > /dev/null
+SELF daemon tick | grep -q "dispatched: $T8" || fail "an approved attempt did not dispatch"
+settled "$T7"
+settled "$T8"
+SELF daemon tick > /dev/null
+
+# actions that cross a human approval boundary are refused, at launch and mid-run
+BADACT="$(SELF attempt register --work "$W5" --runtime actions --action publish --command 'true' 2>&1 || true)"
+echo "$BADACT" | grep -q "never allowed" || fail "a forbidden action was accepted at registration"
+T9="$(SELF attempt register --work "$W5" --runtime actions --no-report --command 'sleep 20' | tail -1)"
+PROPOSE="$(SELF attempt propose "$T9" --action payment 2>&1 || true)"
+echo "$PROPOSE" | grep -q "never allowed" || fail "a forbidden action proposed mid-run was accepted"
+grep -q "attempt.refused" "$LOG_A" || fail "a refused proposal left no record"
+SELF attempt propose "$T9" --action "extra-search" > /dev/null
+SELF daemon tick | grep -q "$T9 — waiting on human approval" || fail "an undeclared action did not fall back to approval"
+
+# a cancellation survives the process and the restart
+T10="$(SELF attempt register --work "$W5" --runtime actions --no-report --command 'sleep 30' | tail -1)"
+SELF attempt run "$T10" > /dev/null
+SELF attempt cancel "$T10" > /dev/null
+SELF attempt show "$T10" | grep -q "running" || fail "cancel lost the attempt state before the supervisor saw it"
+SELF daemon tick > /dev/null
+SELF attempt show "$T10" | grep -q "cancelled" || fail "a cancellation did not settle the attempt"
+SELF attempt list | grep "$T10" | grep -q "cancelled" || fail "the cancellation did not survive into a fresh process"
+
+# external risk never runs unattended, whatever the policy asks for
+BADRISK="$(SELF overnight set --risk external 2>&1 || true)"
+echo "$BADRISK" | grep -q "waits for a person" || fail "an external-risk overnight policy was accepted"
+
+# the digest groups the night and says unknown where the provider said nothing
+DIGEST="$(SELF digest --hours 24)"
+echo "$DIGEST" | grep -q "^## Completed" || fail "the digest did not group completed attempts"
+echo "$DIGEST" | grep -q "^## Failed" || fail "the digest did not group failed attempts"
+echo "$DIGEST" | grep -q "^## Stale" || fail "the digest did not group stale attempts"
+echo "$DIGEST" | grep -q "^## Cancelled" || fail "the digest did not group cancelled attempts"
+echo "$DIGEST" | grep -q 'cost \$0.42' || fail "the digest did not total the cost the provider reported"
+echo "$DIGEST" | grep -q "unknown" || fail "the digest did not say unknown where the provider reported nothing"
+echo "$DIGEST" | grep -q "^## Next actions" || fail "the digest did not name what to do next"
+
+# nothing machine-local reaches the synced log, the store history, or the digest
+SECRET="sk-proofcredential0123456789"
+W8="$(SELF work add "private detail stays on this machine" | tail -1)"
+SELF work start "$W8"
+OUT8="$ROOT/out8.txt"
+T11="$(SELF attempt register --work "$W8" --runtime privacy --output "$OUT8" \
+    --command 'printf built > '"$OUT8"'; printf "used '"$SECRET"' to build\n" > "$SUPERSELF_SPOOL/report.md"' | tail -1)"
+SELF daemon tick > /dev/null
+settled "$T11"
+SELF daemon tick > /dev/null
+grep -q "$SECRET" "$LOG_A" && fail "a credential reached the synced log"
+grep -q "redacted" "$LOG_A" || fail "the credential-shaped value was not redacted into the report"
+grep -q "SUPERSELF_SPOOL" "$LOG_A" && fail "a launch command reached the synced log"
+grep -q '"pid"' "$LOG_A" && fail "a process id reached the synced log"
+grep -q "$ROOT/out8.txt" "$LOG_A" && fail "an absolute machine path reached the synced log"
+SELF digest --hours 24 | grep -q "$SECRET" && fail "a credential reached the digest"
+git -C "$ROOT/A/ws/.superself" ls-files | grep -q "^local/" && fail "machine-local supervisor state leaked into store history"
+grep -q "out8.txt" "$LOG_A" || fail "the artifact reference did not reach the synced log"
+
+# the supervised record reaches canonical state and the viewer
+STATE_A="$ROOT/A/ws/.superself/projects/demo/state.md"
+grep -q "$T11" "$ROOT/A/ws/.superself/projects/demo/work/$W8.md" || fail "the work record does not list its attempts"
+grep -q "$T11" "$VIEW_A/demo/$W8.html" || fail "the work page does not show its attempts"
+grep -q "ATTEMPTS" "$VIEW_A/demo/$W8.html" || fail "the work page has no attempts panel"
+
+# selfd detects an exit on its own interval, with no command run in between
+SELF daemon status | grep -q "not running" || fail "selfd reported itself running before it was started"
+W9="$(SELF work add "selfd settles a run with no turn open" | tail -1)"
+SELF work start "$W9"
+OUT9="$ROOT/out9.txt"
+T12="$(SELF attempt register --work "$W9" --runtime nightly --no-report --output "$OUT9" \
+    --command 'sleep 1; printf built > '"$OUT9" | tail -1)"
+SELF daemon start --interval 1 > /dev/null
+OBSERVED=no
+for _ in $(seq 1 60)
+do
+    if SELF attempt list | grep "$T12" | grep -q "settled passed"
+    then
+        OBSERVED=yes
+        break
+    fi
+    sleep 0.5
+done
+[ "$OBSERVED" = yes ] || fail "selfd did not settle an attempt within its configured interval"
+DPID="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).pid))' "$LOCAL/daemon.json")"
+kill -9 "$DPID" 2>/dev/null || true
+sleep 0.5
+SELF daemon status | grep -q "not running" || fail "a killed supervisor still reported itself running"
+SELF daemon start --interval 3600 | grep -q "recovered from a stopped supervisor" || fail "a restart did not report recovering the previous supervisor"
+SELF daemon stop | grep -q "stopped" || fail "the supervisor did not stop"
+SELF daemon status | grep -q "not running" || fail "a stopped supervisor still reported itself running"
+
+# the policy is versioned and revocable
+SELF overnight set --from 23:00 --to 06:00 > /dev/null
+SELF overnight show | grep -q "version       2" || fail "the overnight policy did not version"
+SELF overnight off > /dev/null
+SELF overnight show | grep -q "no overnight policy" || fail "a revoked overnight policy still applied"
+T13="$(SELF attempt register --work "$W9" --runtime nightly --no-report --command 'printf x' | tail -1)"
+SELF daemon tick | grep -q "no overnight policy is in force" || fail "an attempt dispatched with no policy in force"
 
 echo "proof OK"

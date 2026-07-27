@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { DecisionState, ProjectModel, WorkState } from "./model.js";
+import { AttemptSummary, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig } from "./paths.js";
 import { Verdict } from "./reachability.js";
@@ -623,6 +623,7 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
         panel("ARTIFACTS", artifacts.length, "",
             artifacts.length === 0 ? empty("no artifacts yet")
                 : artifacts.map((r) => artifactRow(r, "../..")).join("\n")),
+        work.attempts.length === 0 ? "" : panel("ATTEMPTS", work.attempts.length, "", work.attempts.map(attemptRow).join("\n")),
         linked.length === 0 ? "" : panel("DECISIONS FROM THIS WORK", linked.length, "", linked.map(decisionRow).join("\n"))
     ].filter((part) => part !== "").join("\n");
     return page({
@@ -635,6 +636,15 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
         back: `../${model.slug}.html`,
         doc: true
     });
+}
+
+// The live half of the record: what ran, and whether anything it produced
+// has been verified yet.
+function attemptRow(attempt: AttemptSummary): string
+{
+    const state = attempt.verdict ?? attempt.phase;
+    return `<div class="dr-evi"><span class="n">${esc(attempt.id)} ${esc(attempt.kind)}/${esc(attempt.runtime)}</span>` +
+        `<i class="v-${esc(state)}">${esc(state)}</i></div>`;
 }
 
 function evidenceRow(hash: string, verdict: Verdict | undefined): string
@@ -1302,8 +1312,8 @@ td.r { text-align: right; width: 78px; }
 .c2-feed:not(.c2-log) .c2-ev span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c2-ev .e-report { color: var(--sv-ok); }
 .c2-ev .e-decide { color: var(--sv-accent); }
-.c2-ev .e-work, .c2-ev .e-goal, .c2-ev .e-convention { color: var(--sv-muted); }
-.c2-ev .e-objective, .c2-ev .e-milestone { color: var(--sv-accent); }
+.c2-ev .e-attempt, .c2-ev .e-objective, .c2-ev .e-milestone { color: var(--sv-accent); }
+.c2-ev .e-work, .c2-ev .e-goal, .c2-ev .e-convention, .c2-ev .e-overnight { color: var(--sv-muted); }
 
 .dr-side { position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column;
            gap: 16px; padding: 20px 18px; background: var(--sv-bg-side);
@@ -1320,8 +1330,8 @@ td.r { text-align: right; width: 78px; }
 .dr-evi:last-child { border-bottom: 0; }
 .dr-evi .n { color: var(--sv-body); }
 .dr-evi i { margin-left: auto; font-style: normal; font-size: 9.5px; color: var(--sv-faint); }
-.dr-evi .v-settled { color: var(--sv-ok); }
-.dr-evi .v-abandoned, .dr-evi .v-unverifiable { color: var(--sv-warn); }
+.dr-evi .v-settled, .dr-evi .v-passed { color: var(--sv-ok); }
+.dr-evi .v-abandoned, .dr-evi .v-unverifiable, .dr-evi .v-failed, .dr-evi .v-stale { color: var(--sv-warn); }
 .dr-art { display: flex; align-items: center; gap: 10px; padding: 6px 0;
           border-bottom: 1px solid var(--sv-rule); text-decoration: none; }
 .dr-art:last-child { border-bottom: 0; }

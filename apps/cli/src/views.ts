@@ -32,6 +32,7 @@ export function printContext(ctx: CliContext): void
     pushList(lines, "Decisions", model.decisions.filter((d) => d.status === "confirmed").map((d) => `- ${d.text}${d.why === undefined ? "" : ` — ${d.why}`}`));
     pushList(lines, "Conventions", model.conventions.map((c) => `- ${c.text}`));
     pushList(lines, "Work in progress", inProgressLines(model));
+    pushList(lines, "Attempts", attemptLines(model));
     pushList(lines, "Waiting on you", waitingLines(model));
     pushList(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- ${w.id} ${w.outcome}`));
     pushList(lines, "Health", model.health.map((h) => `- ${h}`));
@@ -72,6 +73,20 @@ function inProgressLines(model: ProjectModel): string[]
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
         .map((w) => `- ${w.id} ${w.outcome} — blocked on ${w.blockedOn}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`);
     return [...active, ...blocked];
+}
+
+// What ran while nobody was in a session reaches the person through the next
+// session they open, rather than through a queue they have to visit.
+function attemptLines(model: ProjectModel): string[]
+{
+    return model.works
+        .filter((work) => work.status !== "done")
+        .flatMap((work) => work.attempts.map((attempt) =>
+        {
+            const verdict = attempt.verdict === undefined ? attempt.phase : `${attempt.phase} ${attempt.verdict}`;
+            const outputs = attempt.outputs.length === 0 ? "" : ` [${attempt.outputs.join(", ")}]`;
+            return `- ${work.id} ${attempt.id} ${attempt.kind}/${attempt.runtime} — ${verdict}${outputs}`;
+        }));
 }
 
 function waitingLines(model: ProjectModel): string[]

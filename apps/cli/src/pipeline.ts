@@ -5,6 +5,7 @@ import { commitAll, currentBranch } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { CliContext, ensureDir, projectStateDir } from "./paths.js";
 import { bold, dim, green, styled } from "./style.js";
+import { assertSanitized, redactPayload } from "./supervise/sanitize.js";
 import { EventRefs, SelfEvent } from "./types.js";
 
 export function makeEvent(
@@ -36,6 +37,11 @@ export function makeEvent(
 // `onRecorded` fires the moment the event is durable, before any derived work:
 // a caller holding bytes for this event learns there that they now belong to
 // the store, whatever the rest of this function does.
+//
+// The store syncs, so this is also the boundary where a machine's private
+// detail would leave it. Forbidden keys are refused outright and
+// credential-shaped values are redacted, before the event reaches the log
+// every clone reads.
 export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, onRecorded?: () => void): void
 {
     recordEvents(ctx, [event], summary, onRecorded);
@@ -47,6 +53,11 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, 
 // at, and a re-run of `work accept` would create a second one.
 export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: string, onRecorded?: () => void): void
 {
+    for (const event of events)
+    {
+        assertSanitized(event.payload);
+        event.payload = redactPayload(event.payload);
+    }
     const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
     if (branch !== null)
     {

@@ -39,6 +39,11 @@ export function milestoneId(): string
     return "m-" + shortId();
 }
 
+export function attemptId(): string
+{
+    return "t-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";

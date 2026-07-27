@@ -86,7 +86,27 @@ sits next to git:
   self-contained files that auto-refresh in the browser, so an open tab tracks
   state with no server; `self init` asks for the language the views render in
   (`self lang` changes it later) and `self theme` picks the accent, while the
-  recorded state keeps whatever language your workspace conventions choose.
+  recorded state keeps whatever language your workspace conventions choose;
+- `self attempt register` records a run before its process exists — the work it
+  belongs to, its runtime and model, the outputs it must produce, its heartbeat,
+  its budget, and its risk class — and `self daemon start` supervises those
+  attempts with no chat turn open: it observes exits and heartbeats, tells a
+  confirmed exit from a process that merely vanished, verifies and hashes the
+  declared outputs, attaches exactly one report per attempt, releases leases,
+  parks provider-capacity waits until their reset, opens a circuit after
+  repeated failures, and wakes only approved work whose dependencies are done.
+  Nothing is called a success because it exited zero or said so in prose;
+- `self overnight set` states, versions, and revokes what may run unattended —
+  window and wake time, allowed projects, risk classes and work kinds,
+  concurrency, budget, retries, whether dependencies may auto-dispatch, and
+  whether a hard model and a fresh review session are required. Publication,
+  outreach, payment, purchase, provisioning, destructive actions, and policy
+  changes are refused whatever the policy says, at registration and mid-run;
+- `self digest` groups what completed, failed, retried, and is waiting on
+  approval or capacity, with cost and tokens shown as unknown when the provider
+  reported none. Process handles, raw output, launch commands, and machine
+  paths stay in a git-excluded machine-local spool; the synced log carries only
+  sanitized lifecycle, verdicts, hashes, and artifact references.
 
 The CLI is the first application shell. A read-only viewer is a later, optional
 layer — never a required surface.
