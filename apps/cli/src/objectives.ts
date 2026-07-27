@@ -482,11 +482,14 @@ function milestoneReason(milestone: MilestoneState, total: number, today: string
 
 // A milestone is on the critical path when an unreached milestone waits on it,
 // directly or through the chain — that is what makes a blocked work unit on it
-// different from a blocked work unit anywhere else.
+// different from a blocked work unit anywhere else. A superseded milestone
+// waits on nothing: its successor carries the order it used to hold.
 function markCriticalPath(milestones: MilestoneState[]): void
 {
     const byId = new Map(milestones.map((milestone) => [milestone.id, milestone]));
-    const pending = milestones.filter((milestone) => milestone.reached === undefined).flatMap((m) => m.after);
+    const waiting = (milestone: MilestoneState): boolean =>
+        milestone.reached === undefined && milestone.supersededBy === undefined;
+    const pending = milestones.filter(waiting).flatMap((milestone) => milestone.after);
     const seen = new Set<string>();
     while (pending.length > 0)
     {
@@ -497,7 +500,7 @@ function markCriticalPath(milestones: MilestoneState[]): void
             continue;
         }
         seen.add(id);
-        milestone.criticalPath = milestone.reached === undefined;
+        milestone.criticalPath = waiting(milestone);
         pending.push(...milestone.after);
     }
 }
@@ -526,8 +529,11 @@ function objectiveState(objective: ObjectiveState, live: MilestoneState[], today
         return "closed";
     }
     const has = (state: TargetState): boolean => live.some((milestone) => milestone.state === state);
+    // Every checkpoint landed, so a date that has since passed missed nothing —
+    // the objective is waiting to be closed, not late.
+    const landed = live.length > 0 && live.every((milestone) => milestone.state === "reached");
     const late = objective.target !== undefined && daysBetween(today, objective.target) < 0;
-    if (late || has("missed"))
+    if (!landed && (late || has("missed")))
     {
         return "missed";
     }
@@ -540,7 +546,10 @@ function objectiveState(objective: ObjectiveState, live: MilestoneState[], today
     {
         return "at-risk";
     }
-    return objective.works.length === 0 ? "unstarted" : "on-track";
+    // Unstarted means nothing has happened yet. Coverage cited without a work
+    // unit, or a milestone already reached, is progress and must not read empty.
+    const moved = objective.works.length > 0 || objective.met > 0 || has("reached");
+    return moved ? "on-track" : "unstarted";
 }
 
 function objectiveReason(objective: ObjectiveState, live: MilestoneState[], today: string): string
@@ -576,6 +585,16 @@ function objectiveSignals(objective: ObjectiveState): string[]
         {
             signals.push(`${milestone.id} coverage of ${stale.criterion} was judged against ${objective.id} revision ` +
                 `${stale.objectiveRevision}/${stale.milestoneRevision}, now ${objective.revision}/${milestone.revision} — recheck it`);
+        }
+        // The reach itself is a judgment against a revision. A later revision
+        // can widen what the milestone asks for, so say the reach is stale
+        // rather than let a settled "reached" stand for criteria it never saw.
+        const reached = milestone.reached;
+        if (reached !== undefined && milestone.supersededBy === undefined
+            && (reached.objectiveRevision !== objective.revision || reached.milestoneRevision !== milestone.revision))
+        {
+            signals.push(`${milestone.id} was reached against ${objective.id} revision ` +
+                `${reached.objectiveRevision}/${reached.milestoneRevision}, now ${objective.revision}/${milestone.revision} — recheck it`);
         }
         if (milestone.state === "missed")
         {
