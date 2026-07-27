@@ -268,6 +268,15 @@ export interface Repository
     train: string[];
 }
 
+// One spelling per branch: git resolves "main", "refs/heads/main" and
+// "heads/main" to the same local head, so every name is reduced to its bare
+// form before it is compared or stored — an alias must never make the same
+// head read as two different branches.
+export function canonicalBranch(raw: string): string
+{
+    return raw.trim().replace(/^refs\/heads\//, "").replace(/^heads\//, "");
+}
+
 // Where this repository's change-set merges land. With a configured
 // integration branch the lane is autonomous; without one, every merge is
 // itself a promotion into main and takes the human gate with it.
@@ -334,7 +343,14 @@ export function applyIntegration(state: IntegrationState, event: SelfEvent): voi
     }
     if (event.type === "repo.target_set")
     {
-        repositoryOf(state, String(event.payload.repository)).integrationBranch = str(event.payload.branch);
+        // The autonomous lane must never resolve to main, whatever spelling an
+        // event carries: a hand-appended alias of main sets nothing, and the
+        // lane keeps the human gate it had.
+        const branch = canonicalBranch(str(event.payload.branch) ?? "");
+        if (branch !== "" && branch !== "main")
+        {
+            repositoryOf(state, String(event.payload.repository)).integrationBranch = branch;
+        }
         return;
     }
     if (event.type.startsWith("promotion."))

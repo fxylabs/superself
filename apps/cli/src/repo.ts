@@ -48,6 +48,14 @@ export function commitExists(repoDir: string, rev: string): boolean
     return resolveSha(repoDir, rev) !== null;
 }
 
+// The tree a commit holds, as one comparable id: two commits with the same
+// tree carry byte-identical content, whatever their histories say.
+export function treeOf(repoDir: string, rev: string): string | null
+{
+    const result = run(repoDir, ["rev-parse", "--verify", "--end-of-options", `${rev}^{tree}`]);
+    return result !== null && result.ok ? result.out.trim() : null;
+}
+
 // Whether `descendant` contains `ancestor` — what lets a merge receipt prove
 // the commits it names are really related, not merely well-formed.
 export function isAncestor(repoDir: string, ancestor: string, descendant: string): boolean
