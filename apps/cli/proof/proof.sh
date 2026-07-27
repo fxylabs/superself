@@ -844,11 +844,25 @@ last_attempt()
 }
 attempt_state()
 {
-    SELF attempt show "$1" | sed -n 's/^state *//p'
+    SELF attempt show "$1" | sed -n 's/^state *//p' | awk '{print $1}'
 }
 count_events()
 {
     grep -c "\"type\":\"$1\"" "$LOG_A" || true
+}
+spool_of()
+{
+    echo "$ROOT/A/home/.local/state/superself/runner/attempts/$1"
+}
+# Kills the runner process the attempt recorded, and the provider it started.
+# `SELF … &` backgrounds a shell function, so $! is the wrapping subshell: the
+# runner would survive it and keep heartbeating, and nothing would look crashed.
+crash_runner()
+{
+    local pid
+    pid="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).pid))' "$(spool_of "$1")/status.json")"
+    pkill -9 -P "$pid" 2>/dev/null || true
+    kill -9 "$pid" 2>/dev/null || true
 }
 
 # a plan whose work unit does not exist never reaches the provider: self
@@ -889,15 +903,35 @@ BROWSE="$(SELF attempt run "$ROOT/p-browser.json" 2>&1 || true)"
 echo "$BROWSE" | grep -q "browser   https://mail.example.invalid/inbox" || fail "browser preflight did not name the required tab"
 [ -f "$ROOT/ran-browser" ] && fail "the provider ran despite an unreachable browser tab"
 
-# the probe answers for the launch boundary, not for the host. A launcher that
-# strips PATH on the way in is the sandbox/host mismatch that spent whole
-# attempts: git is plainly on this machine, and must still fail here.
+# The mismatch that spent whole attempts: the capability was probed on the host
+# and the provider was then launched inside a sandbox that denied it. Both
+# sides are proven here from one capability and one launcher.
+#
+# First the host boundary, where the old probe lived: git is on this machine,
+# the probe clears it, and the provider runs.
+command -v git > /dev/null || fail "the proof needs git on PATH to state what the host probe would have cleared"
+plan "$ROOT/p-host.json" "mode=ok" "tools=git" "marker=$ROOT/ran-host"
+SELF attempt run "$ROOT/p-host.json" > /dev/null || fail "the host boundary did not clear a capability the host plainly has"
+[ -f "$ROOT/ran-host" ] || fail "a cleared preflight did not reach the provider"
+
+# Now the same capability behind a launcher that strips PATH on the way in.
+# The old host probe would have cleared this identically; the same-boundary
+# probe must not, and the provider must never start.
 plan "$ROOT/p-boundary.json" "mode=ok" "tools=git" "wrapper=[\"/bin/sh\",\"-c\",\"PATH=/nonexistent exec \\\"\$@\\\"\",\"sh\"]" "marker=$ROOT/ran-boundary"
 BOUNDARY="$(SELF attempt run "$ROOT/p-boundary.json" 2>&1 || true)"
 echo "$BOUNDARY" | grep -q "tool      git" || fail "the capability probe answered for the host instead of the launch boundary"
 echo "$BOUNDARY" | grep -q "probe and launch identity" || fail "a launcher that rewrote the boundary was not detected"
 [ -f "$ROOT/ran-boundary" ] && fail "the provider ran inside a boundary the probe never cleared"
-command -v git > /dev/null || fail "the proof needs git on PATH to show the host would have passed this probe"
+AT_DRIFT="$(last_attempt)"
+[ "$(attempt_state "$AT_DRIFT")" = "preflight-failed" ] || fail "a boundary the probe never cleared did not fail closed"
+SELF attempt show "$AT_DRIFT" | grep -q "^boundary   " || fail "the receipt did not record the boundary the probe ran in"
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+for (const field of ["attempt", "fence", "nodeId", "bootId", "adapter", "boundaryDigest", "policyDigest"]) {
+    if (r[field] === undefined || r[field] === null || r[field] === "") { console.error("receipt is missing " + field); process.exit(1); }
+}
+if (r.ok !== false) { console.error("a receipt with a failed check claimed to be ok"); process.exit(1); }
+' "$(spool_of "$AT_DRIFT")/preflight.json" || fail "the durable receipt does not bind the attempt to its boundary and policy"
 
 # a clean attempt: capabilities cleared, artifact published atomically, and
 # exactly one report attached to the work unit
@@ -1006,12 +1040,14 @@ do
 done
 [ -s "$ROOT/crash-id" ] || fail "the attempt to be crashed never started"
 AT_CRASH="$(cat "$ROOT/crash-id")"
-kill -9 "$CRASH_PID" 2>/dev/null || true
+# the runner itself, not the shell that launched it: killing the wrapper would
+# leave the runner alive and still writing the heartbeat recovery reads
+crash_runner "$AT_CRASH"
 wait "$CRASH_PID" 2>/dev/null || true
 SELF attempt recover | grep -q "recovered 1 attempt" || fail "a crashed attempt was not recovered"
 [ "$(attempt_state "$AT_CRASH")" = "exited-unreconciled" ] || fail "a crashed attempt did not read as exited-unreconciled"
 [ "$(count_events run.completed)" -eq "$COMPLETED_BEFORE" ] || fail "a crashed attempt claimed a completion"
-SELF work show "$WATT" | grep -q "$AT_CRASH (failed)" || fail "the work record did not carry the unreconciled attempt"
+SELF work show "$WATT" | grep -q "$AT_CRASH (failed" || fail "the work record did not carry the unreconciled attempt"
 
 # a machine restart is recognised on its own, even when the recorded pid is
 # alive again because the operating system handed the number out twice
@@ -1025,9 +1061,9 @@ do
     sleep 0.1
 done
 AT_REBOOT="$(cat "$ROOT/reboot-id")"
-kill -9 "$REBOOT_PID" 2>/dev/null || true
+crash_runner "$AT_REBOOT"
 wait "$REBOOT_PID" 2>/dev/null || true
-STATUS_REBOOT="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_REBOOT/status.json"
+STATUS_REBOOT="$(spool_of "$AT_REBOOT")/status.json"
 node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.bootId="0000000000000000";s.pid=Number(process.argv[2]);fs.writeFileSync(f,JSON.stringify(s,null,2))' "$STATUS_REBOOT" "$$"
 SELF attempt recover > /dev/null
 [ "$(attempt_state "$AT_REBOOT")" = "exited-unreconciled" ] || fail "an attempt from before a restart was not recovered"
@@ -1060,11 +1096,14 @@ node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f
 SELF attempt run "$ROOT/p-secret.json" > /dev/null || fail "the redaction attempt did not complete"
 AT_SECRET="$(last_attempt)"
 SPOOL_SECRET="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_SECRET"
-for LEAK in "sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111" "abcdefghijklmnopqrstuvwxyz123456" "PROMPTINJECTEDSECRETVALUE" "$ROOT/A/home/private"
+for LEAK in "sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111" "abcdefghijklmnopqrstuvwxyz123456" "PROMPTINJECTEDSECRETVALUE" "7fK2xQ9wLm4RtV8yBn3JcZ6pHd5sAe1UgW0oXi2NrTb4Qv" "$ROOT/A/home/private"
 do
     grep -q "$LEAK" "$SPOOL_SECRET/run-1.stdout.log" && fail "the spool kept a value a log must redact: $LEAK"
 done
 grep -q "«redacted»" "$SPOOL_SECRET/run-1.stdout.log" || fail "the spool log was not redacted at all"
+# and redaction stops where evidence begins: long output that is plainly not a
+# credential survives, or the spool would truncate the results it exists to keep
+grep -q "paragraph paragraph" "$SPOOL_SECRET/run-1.stdout.log" || fail "redaction destroyed long output that carried no credential"
 
 # retention and deletion are configurable, and a spool the person deleted is gone
 SELF attempt retention 7 | grep -q "kept for 7 day" || fail "the spool retention window could not be set"
