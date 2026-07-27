@@ -31,6 +31,10 @@
     "engines": {
         "node": ">=22.12.0"
     },
+    "os": [
+        "darwin",
+        "linux"
+    ],
     "scripts": {
         "build": "tsc",
         "prepublishOnly": "npm run proof",

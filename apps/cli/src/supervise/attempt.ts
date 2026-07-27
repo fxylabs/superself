@@ -128,6 +128,12 @@ export interface AttemptRecord
     // handle outlives every local process and is the only identity that
     // survives this machine going away.
     providerHandle: string | null;
+    // Whether that claim is still open, folded onto the attempt rather than
+    // left in the spool file alone. A provider job is a live owner exactly as
+    // a running process is, and what a lease and a concurrency slot are held
+    // for has to be answerable from the journal — durably, and without going
+    // to disk for a file a restart may not have reached yet.
+    providerClaimOpen: boolean;
     exitCode: number | null;
     // The pid that signed the exit notice, when the wrapper signed it. An exit
     // recorded by hand carries none, and then no process is excused from the
@@ -206,6 +212,7 @@ export function newAttempt(id: string, project: string, work: string, ts: string
         treeClosedAt: null,
         treeSignalledAt: null,
         providerHandle: null,
+        providerClaimOpen: false,
         exitCode: null,
         exitWriter: null,
         exitSource: null,
@@ -319,9 +326,20 @@ export interface LeaseHold
 // What a launch still occupies. An exit notice is not the moment to hand the
 // slot on: the notice says the launch finished, and the processes it started
 // can outlive it, so the hold lasts until the owned group is observed empty.
+//
+// The group is not the only owner an attempt can have. Work claimed at a
+// provider outlives every local process, and the attempt is held out of
+// settlement for it — so it has to be held out of releasing what it reserved
+// for it too. Otherwise the second attempt in the queue dispatches into a slot
+// the first one is still using, which is exactly the failure the process case
+// exists to prevent, only relocated.
 export function holdsResources(attempt: AttemptRecord): boolean
 {
-    return attempt.state === "running" || (attempt.state === "exited" && attempt.treeClosedAt === null);
+    if (attempt.state === "running")
+    {
+        return true;
+    }
+    return attempt.state === "exited" && (attempt.treeClosedAt === null || attempt.providerClaimOpen);
 }
 
 export function heldLeases(attempts: AttemptRecord[]): Map<string, LeaseHold>

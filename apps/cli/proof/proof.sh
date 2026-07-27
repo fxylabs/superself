@@ -1017,19 +1017,28 @@ SELF attempt show "$TD" | grep -q "(passed)" || fail "a descendant outside the l
 WH="$(SELF work add "a provider job is released before the attempt is judged" | tail -1)"
 SELF work start "$WH"
 OUTH="$ROOT/outh.txt"
-TH="$(SELF attempt register --work "$WH" --runtime provider --no-report --heartbeat 3600 --output "$OUTH" \
+TH="$(SELF attempt register --work "$WH" --runtime provider --lease provider-slot --no-report --heartbeat 3600 --output "$OUTH" \
     --command "printf built > '$OUTH'; $COMPLETE --resolved-model opus --provider-handle job-99" | tail -1)"
 SELF attempt run "$TH" > /dev/null
 SELF attempt handle "$TH" --open job-99 | grep -q "will not settle" || fail "a provider claim was not recorded"
 settled "$TH"
 SELF daemon tick | grep -q "$TH — the provider job it claimed is still open" || fail "an attempt settled while the provider job it claimed was open"
 SELF attempt list | grep "$TH" | grep -q "settled" && fail "a local exit settled an attempt that still owned provider work"
+# an open claim is a live owner exactly as a running process is, so what the
+# launch reserved stays reserved: an attempt held out of settlement that has
+# given up its lease is a slot two runs occupy at once
+SELF daemon status | grep -q "provider-slot" || fail "an attempt released its lease while the provider job it claimed was still open"
+TH2="$(SELF attempt register --work "$WH" --runtime provider --lease provider-slot --no-report --heartbeat 3600 --command 'sleep 30' | tail -1)"
+SELF daemon tick | grep -q "lease \"provider-slot\" is held by $TH" || fail "a second attempt dispatched into a lease an open provider claim was still holding"
+SELF attempt list | grep "$TH2" | grep -q "registered" || fail "an attempt refused on a held lease did not stay queued"
 BADCLOSE="$(SELF attempt handle "$TH" --close job-98 2>&1 || true)"
 echo "$BADCLOSE" | grep -q 'claimed provider job "job-99"' || fail "a release naming another job was accepted"
 SELF attempt handle "$TH" --close job-99 > /dev/null
-SELF daemon tick > /dev/null
+SELF daemon tick | grep -q "dispatched: $TH2" || fail "releasing the provider job did not release the lease it was holding"
 SELF attempt show "$TH" | grep -q "(passed)" || fail "a released provider job did not let the attempt settle"
 SELF attempt show "$TH" | grep -q "^provider    job-99" || fail "the provider job the attempt owned is not on its record"
+SELF attempt cancel "$TH2" > /dev/null
+converge "$TH2"
 
 # a run that reports provider work it never claimed is refused, not judged:
 # an owner the supervisor was never able to watch is not evidence of anything
@@ -1329,8 +1338,19 @@ SELF attempt show "$TK" | grep -q "cancelled" || fail "a cancelled attempt did n
 # ── a crash either side of spawn leaves nothing running untracked ───
 WL="$(SELF work add "a launch is durable before the process exists" | tail -1)"
 SELF work start "$WL"
+INTENT='const fs=require("fs");fs.appendFileSync(process.argv[1],JSON.stringify({ts:new Date().toISOString(),attempt:process.argv[2],kind:"launch.intent",patch:{state:"running",fence:1,pid:null,startedAt:process.argv[3],lastBeat:new Date().toISOString(),tries:1}})+"\n");'
+NOW="$(node -e 'process.stdout.write(new Date().toISOString())')"
+LONGAGO="$(node -e 'process.stdout.write(new Date(Date.now()-120000).toISOString())')"
+
+# a launch journalled a moment ago has not necessarily reached the wrapper's
+# first statement yet, so "no pid recorded" is not evidence that nothing
+# started: requeueing there would dispatch a second launch into a tree the
+# first one is still running
 TL="$(SELF attempt register --work "$WL" --runtime orphan --no-report --heartbeat 3600 --command 'sleep 30' | tail -1)"
-node -e 'const fs=require("fs");fs.appendFileSync(process.argv[1],JSON.stringify({ts:new Date().toISOString(),attempt:process.argv[2],kind:"launch.intent",patch:{state:"running",fence:1,pid:null,startedAt:new Date().toISOString(),lastBeat:new Date().toISOString(),tries:1}})+"\n");' "$JOURNAL" "$TL"
+node -e "$INTENT" "$JOURNAL" "$TL" "$NOW"
+SELF daemon tick | grep -q "$TL has not reported a pid yet" || fail "a launch inside its own spawn window was requeued before it could report a pid"
+SELF attempt list | grep "$TL" | grep -q "running" || fail "a launch still inside its spawn window did not keep what it held"
+node -e "$INTENT" "$JOURNAL" "$TL" "$LONGAGO"
 SELF daemon tick | grep -q "never spawned" || fail "a launch journalled before a crash was not returned to the queue"
 
 TM="$(SELF attempt register --work "$WL" --runtime adopt --no-report --heartbeat 3600 --command 'sleep 30' | tail -1)"
@@ -1338,13 +1358,76 @@ sleep 60 &
 ORPHAN=$!
 mkdir -p "$LOCAL/spool/$TM/run-1"
 printf %s "$ORPHAN" > "$LOCAL/spool/$TM/run-1/pid"
-node -e 'const fs=require("fs");fs.appendFileSync(process.argv[1],JSON.stringify({ts:new Date().toISOString(),attempt:process.argv[2],kind:"launch.intent",patch:{state:"running",fence:1,pid:null,startedAt:new Date().toISOString(),lastBeat:new Date().toISOString(),tries:1}})+"\n");' "$JOURNAL" "$TM"
+node -e "$INTENT" "$JOURNAL" "$TM" "$NOW"
 SELF daemon tick | grep -q "adopted" || fail "a process spawned before the crash was left running untracked"
 SELF attempt show "$TM" | grep -q "running" || fail "the adopted process was not tracked as running"
 kill "$ORPHAN" 2>/dev/null || true
 wait "$ORPHAN" 2>/dev/null || true
 SELF daemon tick > /dev/null
 SELF attempt show "$TM" | grep -q "vanished" || fail "the adopted process was not reconciled once it died"
+
+# a launch of this supervisor's is spawned detached, so its wrapper leads a
+# session and the group outlives it. Recovery must take that group from the
+# launch's own spool rather than ask a pid that is already gone whether it
+# still leads one — the descendants are exactly what the attempt has to
+# answer for, and they are all that is left by the time the crash is noticed
+cat > "$ROOT/outlive.sh" <<'OUTLIVE'
+trap "" TERM
+sleep 6
+OUTLIVE
+TP="$(SELF attempt register --work "$WL" --runtime session --no-report --heartbeat 3600 --command 'true' | tail -1)"
+PSPOOL="$LOCAL/spool/$TP/run-1"
+mkdir -p "$PSPOOL"
+PSTART="$(node -e 'process.stdout.write(new Date().toISOString())')"
+node -e 'const {spawn}=require("child_process");const d=process.argv[1];
+spawn("/bin/sh",["-c",`printf %s "$$" > ${d}/pid.part; mv ${d}/pid.part ${d}/pid; sh ${process.argv[2]} & exit 0`],
+    {detached:true,stdio:"ignore"}).unref();' "$PSPOOL" "$ROOT/outlive.sh"
+for _ in $(seq 1 50)
+do
+    [ -f "$PSPOOL/pid" ] && break
+    sleep 0.1
+done
+[ -f "$PSPOOL/pid" ] || fail "the detached wrapper never recorded its own pid"
+WRAPPED="$(cat "$PSPOOL/pid")"
+for _ in $(seq 1 50)
+do
+    kill -0 "$WRAPPED" 2>/dev/null || break
+    sleep 0.1
+done
+kill -0 "$WRAPPED" 2>/dev/null && fail "the wrapper did not exit ahead of the descendant it started"
+node -e "$INTENT" "$JOURNAL" "$TP" "$PSTART"
+# one pass adopts the group, reads the wrapper as gone, and still refuses to
+# judge the attempt: the containment it sends is aimed at the descendants
+RECOVER="$(SELF daemon tick)"
+echo "$RECOVER" | grep -q "adopted $TP" || fail "a session leader spawned before the crash was not adopted from its own spool"
+echo "$RECOVER" | grep -q "$TP — .*the launch started are still running" || fail "an attempt settled while a descendant of the group it owns was still running"
+SELF attempt list | grep "$TP" | grep -q "settled" && fail "a wrapper that had already exited settled an attempt whose descendants were alive"
+converge "$TP"
+SELF attempt show "$TP" | grep -q "empty since" || fail "the recovered attempt settled without observing the group it owns empty"
+
+# the window between spawn and the wrapper's very first write is the one no
+# pid file can cover. The spool of the launch is in the command line of the
+# process the supervisor started, so the group is recovered from the process
+# table instead of being requeued out from under itself
+TS="$(SELF attempt register --work "$WL" --runtime marked --no-report --heartbeat 3600 --command 'sleep 8' | tail -1)"
+SELF attempt run "$TS" > /dev/null
+PSTABLE="$(ps -A -ww -o command=)"
+echo "$PSTABLE" | grep -q "superself-launch:$TS:1" || fail "a real launch does not name itself in its own command line"
+SELF attempt cancel "$TS" > /dev/null
+converge "$TS"
+
+TQ="$(SELF attempt register --work "$WL" --runtime nopid --no-report --heartbeat 3600 --command 'true' | tail -1)"
+QSPOOL="$LOCAL/spool/$TQ/run-1"
+mkdir -p "$QSPOOL"
+QSTART="$(node -e 'process.stdout.write(new Date().toISOString())')"
+node -e 'const {spawn}=require("child_process");
+spawn("/bin/sh",["-c",`: ${process.argv[1]}; sleep 25; :`],{detached:true,stdio:"ignore"}).unref();' "superself-launch:$TQ:1"
+[ -f "$QSPOOL/pid" ] && fail "the no-pid window under test wrote a pid after all"
+node -e "$INTENT" "$JOURNAL" "$TQ" "$QSTART"
+SELF daemon tick | grep -q "adopted $TQ" || fail "a launch that had spawned but written no pid was not found in the process table"
+SELF attempt list | grep "$TQ" | grep -q "running" || fail "a spawned launch with no pid file was requeued while its own tree was alive"
+SELF attempt cancel "$TQ" > /dev/null
+converge "$TQ"
 
 # ── two ticks racing settle exactly one outcome ─────────────────────
 WN="$(SELF work add "two supervisors must not both settle one attempt" | tail -1)"

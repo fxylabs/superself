@@ -19,9 +19,8 @@ import { readClaim } from "./envelope.js";
 import { generation, withStoreLock } from "./lock.js";
 import { readRun, repairJournal, runDir, runFile, writeLocalFileDurable } from "./local.js";
 import {
-    OwnedTree,
+    groupByCommand,
     ownedTree,
-    processGroup,
     processRef,
     refAlive,
     refTerminate,
@@ -235,11 +234,19 @@ function beatDeadline(attempt: AttemptRecord): number
     return new Date(base).getTime() + attempt.heartbeatSec * 1000;
 }
 
+// How long a journalled launch is given to show that it spawned, before it is
+// treated as one that never happened. The wrapper's first statement writes its
+// pid, so this covers scheduling, not work.
+const LAUNCH_PROOF_MS = 30_000;
+
 // The launch intent is journalled and fsynced before the process exists, so
-// the two crash points either side of spawn are both recoverable: with no
-// pid written by the wrapper nothing was ever started and the attempt goes
-// back to the queue, and with one the process is adopted rather than left to
-// run untracked.
+// every crash point around spawn is recoverable. The wrapper's pid file
+// answers first; where the crash landed before the wrapper reached its own
+// first write, the process table is asked for the group whose command line
+// carries this launch's marker. Only when neither answers, and the launch has
+// had long enough to leave one of the two traces, is it returned to the queue
+// — because requeueing a launch whose tree is still alive dispatches a second
+// one into the lease the first is still holding.
 function recoverLaunch(ctx: CliContext, attempt: AttemptRecord, now: Date): string | null
 {
     if (attempt.state !== "running" || attempt.pid !== null)
@@ -250,17 +257,22 @@ function recoverLaunch(ctx: CliContext, attempt: AttemptRecord, now: Date): stri
     const pid = written === null ? Number.NaN : Number.parseInt(written.trim(), 10);
     if (Number.isFinite(pid))
     {
-        patchAttempt(ctx.storeDir, attempt, "adopt", {
-            pid,
-            wrapper: processRef(ctx.storeDir, pid),
-            tree: adoptedTree(ctx, attempt, pid),
-            owner: generation()
-        }, now.toISOString());
+        adopt(ctx, attempt, pid, now);
         return `adopted ${attempt.id} (pid recorded by its own wrapper after a crash mid-launch)`;
+    }
+    const spawned = groupByCommand(launchMark(attempt.id, attempt.fence));
+    if (spawned !== null)
+    {
+        adopt(ctx, attempt, spawned, now);
+        return `adopted ${attempt.id} (its group was still in the process table before any pid was written)`;
     }
     if (existsSync(runFile(ctx.storeDir, attempt.id, attempt.fence, "exit")))
     {
         return null;
+    }
+    if (withinProof(attempt, now))
+    {
+        return `${attempt.id} has not reported a pid yet — held rather than requeued while its spawn may still be live`;
     }
     patchAttempt(ctx.storeDir, attempt, "launch.abandoned", {
         state: "registered",
@@ -271,12 +283,29 @@ function recoverLaunch(ctx: CliContext, attempt: AttemptRecord, now: Date): stri
     return `${attempt.id} was journalled but never spawned — returned to the queue`;
 }
 
-// A wrapper is the leader of its own session, so its pid is also its group id.
-// A pid that leads no group was started by something else and its neighbours
-// in that group are not this launch's to watch, let alone to signal.
-function adoptedTree(ctx: CliContext, attempt: AttemptRecord, pid: number): OwnedTree | null
+// The pid came out of this launch's own fence spool, and this supervisor only
+// ever spawns detached, so the wrapper leads its own session and its pid is
+// the group id by construction. Asking the kernel to confirm that would lose
+// the group in exactly the case that matters — a wrapper that has already
+// exited, leaving behind the descendants it started. The launch instant rides
+// along instead, and it is what keeps a recycled group id from being mistaken
+// for this one's.
+function adopt(ctx: CliContext, attempt: AttemptRecord, pid: number, now: Date): void
 {
-    return processGroup(pid) === pid ? ownedTree(ctx.storeDir, attempt.id, attempt.fence, pid) : null;
+    patchAttempt(ctx.storeDir, attempt, "adopt", {
+        pid,
+        wrapper: processRef(ctx.storeDir, pid),
+        tree: ownedTree(ctx.storeDir, attempt.id, attempt.fence, pid, attempt.startedAt),
+        owner: generation()
+    }, now.toISOString());
+}
+
+// A spawn that has only just happened has not necessarily reached the
+// wrapper's first statement yet, and "no trace" during that window is not
+// evidence that nothing started.
+function withinProof(attempt: AttemptRecord, now: Date): boolean
+{
+    return attempt.startedAt !== null && now.getTime() - Date.parse(attempt.startedAt) < LAUNCH_PROOF_MS;
 }
 
 // Exit detection needs no orchestrator: a confirmed notice, a pid that is
@@ -356,6 +385,8 @@ const CONTAIN_GRACE_MS = 10_000;
 // anybody's word. Returns null when nothing owned by the launch is left.
 function physicalHold(ctx: CliContext, attempt: AttemptRecord, now: Date): string | null
 {
+    const claim = claimHold(ctx, attempt);
+    const ts = now.toISOString();
     if (attempt.treeClosedAt === null)
     {
         const running = stillRunning(ctx, attempt);
@@ -363,11 +394,19 @@ function physicalHold(ctx: CliContext, attempt: AttemptRecord, now: Date): strin
         {
             return contain(ctx, attempt, running, now);
         }
-        patchAttempt(ctx.storeDir, attempt, "tree.closed", {
-            treeClosedAt: now.toISOString()
-        }, now.toISOString(), attempt.fence);
+        // The empty group and what the claim says go into one entry. Two would
+        // leave a window in which the attempt has given up its process hold
+        // without yet having recorded the provider hold that replaces it, and
+        // a crash inside that window would free its lease.
+        patchAttempt(ctx.storeDir, attempt, "tree.closed", { treeClosedAt: ts, ...claim.patch }, ts, attempt.fence);
     }
-    return providerHold(ctx, attempt, now);
+    else if (Object.keys(claim.patch).length > 0)
+    {
+        patchAttempt(ctx.storeDir, attempt, "handle", claim.patch, ts, attempt.fence);
+    }
+    return claim.open
+        ? `the provider job it claimed is still open — release it with \`self attempt handle ${attempt.id} --close\``
+        : null;
 }
 
 // What of the launch is still running. The wrapper is left out once it has
@@ -414,17 +453,24 @@ function contain(ctx: CliContext, attempt: AttemptRecord, running: number, now: 
 
 // A provider job runs where this machine cannot watch it. The run says it owns
 // one by claiming it, and until something releases that claim the attempt has
-// a live owner no local observation can speak for.
-function providerHold(ctx: CliContext, attempt: AttemptRecord, now: Date): string | null
+// a live owner no local observation can speak for. What the spool says is
+// folded back onto the attempt, because a lease is granted from the journal
+// and an owner that only exists in a file is an owner the next dispatch cannot
+// see.
+function claimHold(ctx: CliContext, attempt: AttemptRecord): { open: boolean; patch: Partial<AttemptRecord> }
 {
     const claim = readClaim(ctx.storeDir, attempt);
+    const open = claim !== null && claim.state === "open";
+    const patch: Partial<AttemptRecord> = {};
     if (claim !== null && claim.handle !== attempt.providerHandle)
     {
-        patchAttempt(ctx.storeDir, attempt, "handle", { providerHandle: claim.handle }, now.toISOString(), attempt.fence);
+        patch.providerHandle = claim.handle;
     }
-    return claim === null || claim.state === "closed"
-        ? null
-        : `the provider job it claimed is still open — release it with \`self attempt handle ${attempt.id} --close\``;
+    if (open !== attempt.providerClaimOpen)
+    {
+        patch.providerClaimOpen = open;
+    }
+    return { open, patch };
 }
 
 /* ── settlement ────────────────────────────────────────────────────── */
@@ -497,7 +543,18 @@ function scheduleRetry(ctx: CliContext, attempt: AttemptRecord, result: { verdic
 // is dropped is a finished record and never a live process left untracked.
 function forgetLaunch(): Partial<AttemptRecord>
 {
-    return { pid: null, wrapper: null, tree: null, treeClosedAt: null, treeSignalledAt: null, exitWriter: null };
+    return {
+        pid: null,
+        wrapper: null,
+        tree: null,
+        treeClosedAt: null,
+        treeSignalledAt: null,
+        exitWriter: null,
+        // A new fence spools somewhere else, so whatever the previous launch
+        // claimed is not this one's claim and must not go on holding its
+        // lease. The claim was released before either path could be reached.
+        providerClaimOpen: false
+    };
 }
 
 /* ── dispatch ──────────────────────────────────────────────────────── */
@@ -643,6 +700,7 @@ export function launch(ctx: CliContext, attempt: AttemptRecord, now: Date): void
         treeClosedAt: null,
         treeSignalledAt: null,
         exitWriter: null,
+        providerClaimOpen: false,
         startedAt: ts,
         lastBeat: ts,
         tries: attempt.tries + 1,
@@ -676,7 +734,7 @@ export function launch(ctx: CliContext, attempt: AttemptRecord, now: Date): void
     patchAttempt(ctx.storeDir, attempt, "launch.pid", {
         pid: child.pid ?? null,
         wrapper: child.pid === undefined ? null : processRef(ctx.storeDir, child.pid),
-        tree: child.pid === undefined ? null : ownedTree(ctx.storeDir, attempt.id, fence, child.pid)
+        tree: child.pid === undefined ? null : ownedTree(ctx.storeDir, attempt.id, fence, child.pid, ts)
     }, new Date().toISOString(), fence);
     startWork(ctx, attempt, ts);
     syncEvent(ctx, attempt, "attempt.started", {
@@ -694,6 +752,12 @@ function wrapper(ctx: CliContext, attempt: AttemptRecord, fence: number): string
 {
     const at = (name: string): string => quote(runFile(ctx.storeDir, attempt.id, fence, name));
     return [
+        // Inert to the shell and the whole point of the string to the
+        // supervisor: the launch names itself in its own command line, so its
+        // group can be recognised in the process table before the statement
+        // below has had a chance to run. It leads, because a command line is
+        // long and what a process table will show of one is not guaranteed.
+        `: ${launchMark(attempt.id, fence)}`,
         `printf %s "$$" > ${at("pid.part")}`,
         `mv ${at("pid.part")} ${at("pid")}`,
         `( ${attempt.command} ) > ${at("stdout")} 2> ${at("stderr")}`,
@@ -702,6 +766,14 @@ function wrapper(ctx: CliContext, attempt: AttemptRecord, fence: number): string
         `printf '%s %s' "$?" "$$" > ${at("exit.part")}`,
         `mv ${at("exit.part")} ${at("exit")}`
     ].join("; ");
+}
+
+// A launch says which attempt and which generation it is. Recovery matches on
+// this rather than on the spool path, so it never turns on how a directory
+// happens to be spelled.
+function launchMark(attempt: string, fence: number): string
+{
+    return `superself-launch:${attempt}:${fence}`;
 }
 
 function startWork(ctx: CliContext, attempt: AttemptRecord, ts: string): void

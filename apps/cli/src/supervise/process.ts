@@ -35,6 +35,13 @@ export interface OwnedTree
     // earlier fence belongs to a previous run and is never this one's.
     attempt: string;
     fence: number;
+    // When the launch that owns this group happened. A group id is only
+    // reserved while the group has members, so a group that empties can have
+    // its number handed to somebody else — and the one thing that tells the
+    // two apart is that nothing this launch started can predate the launch.
+    // Null where the group was not minted by a launch of this supervisor's,
+    // and then no member can be qualified this way.
+    startedAt: string | null;
 }
 
 const LINUX_BOOT = "/proc/sys/kernel/random/boot_id";
@@ -136,9 +143,36 @@ export function processRef(storeDir: string, pid: number): ProcessRef
     return { pid, nodeId: nodeId(storeDir), bootId: bootId(storeDir), startedAt: processStartTime(pid) };
 }
 
-export function ownedTree(storeDir: string, attempt: string, fence: number, pgid: number): OwnedTree
+export function ownedTree(storeDir: string, attempt: string, fence: number, pgid: number, startedAt: string | null): OwnedTree
 {
-    return { pgid, nodeId: nodeId(storeDir), bootId: bootId(storeDir), attempt, fence };
+    return { pgid, nodeId: nodeId(storeDir), bootId: bootId(storeDir), attempt, fence, startedAt };
+}
+
+// The wrapper is spawned with a marker naming its own launch written into its
+// command line, so the group can be found in the process table by a string no
+// other launch on this machine carries. That is what closes the window between
+// spawn and the wrapper's very first write: the group is recovered from the
+// kernel rather than from a file that may not exist yet.
+export function groupByCommand(needle: string): number | null
+{
+    const table = run("ps", ["-A", "-ww", "-o", "pgid=,command="]);
+    if (table === null)
+    {
+        return null;
+    }
+    const groups = new Set<number>();
+    for (const line of table.split("\n"))
+    {
+        const fields = /^\s*(\d+)\s+(\S.*)$/.exec(line);
+        if (fields !== null && fields[2].includes(needle))
+        {
+            groups.add(Number.parseInt(fields[1], 10));
+        }
+    }
+    const found = [...groups].filter((pgid) => !foreign(pgid));
+    // Two groups carrying one launch's marker is not an ownership this machine
+    // can settle, and adopting the wrong one would mean signalling a stranger.
+    return found.length === 1 ? found[0] : null;
 }
 
 // A record from another machine, or from a boot that has ended, is answered
@@ -205,6 +239,26 @@ export function treeAlive(storeDir: string, tree: OwnedTree | null): boolean
     }
 }
 
+// ps reports whole seconds and a descendant can be stamped in the same second
+// the launch was journalled, so the comparison is given a little slack — in
+// the direction that keeps a real member rather than drops one.
+const START_SKEW_MS = 2_000;
+
+// Nothing a launch started can have started before the launch did. A process
+// carrying the group's number but older than the launch is therefore a
+// stranger who was handed the number after this group emptied, and counting it
+// would hold the attempt out of settlement forever and aim the containment
+// signal at somebody else.
+function startedWithLaunch(tree: OwnedTree, lstart: string): boolean
+{
+    if (tree.startedAt === null)
+    {
+        return true;
+    }
+    const started = Date.parse(lstart.trim());
+    return !Number.isFinite(started) || started >= Date.parse(tree.startedAt) - START_SKEW_MS;
+}
+
 // The pids still in the group, so a refusal to settle can say how much of the
 // run is still running rather than only that something is. Null when the
 // process table cannot be read at all, which is not the same answer as none.
@@ -214,15 +268,21 @@ export function treeMembers(storeDir: string, tree: OwnedTree | null): number[] 
     {
         return [];
     }
-    const table = run("ps", ["-A", "-o", "pid=,pgid="]);
+    const table = run("ps", ["-A", "-o", "pid=,pgid=,lstart="]);
     if (table === null)
     {
         return null;
     }
-    return table.split("\n")
-        .map((line) => line.trim().split(/\s+/).map((field) => Number.parseInt(field, 10)))
-        .filter((fields) => fields.length === 2 && Number.isFinite(fields[0]) && fields[1] === tree.pgid)
-        .map((fields) => fields[0]);
+    const members: number[] = [];
+    for (const line of table.split("\n"))
+    {
+        const fields = /^\s*(\d+)\s+(\d+)\s+(\S.*)$/.exec(line);
+        if (fields !== null && Number.parseInt(fields[2], 10) === tree.pgid && startedWithLaunch(tree, fields[3]))
+        {
+            members.push(Number.parseInt(fields[1], 10));
+        }
+    }
+    return members;
 }
 
 // Signalling is refused unless the reference still resolves to the same
@@ -247,9 +307,13 @@ export function refTerminate(storeDir: string, ref: ProcessRef | null, signal: N
 
 // The whole group, not the wrapper alone: a run that left a background process
 // behind is contained by signalling everything that inherited its session.
+// Nothing is signalled unless the group still holds a member that started with
+// this launch, so the same qualification that guards the liveness answer also
+// guards the signal — a group id handed on after this launch emptied it never
+// receives this launch's containment.
 export function treeTerminate(storeDir: string, tree: OwnedTree | null, signal: NodeJS.Signals): boolean
 {
-    if (!treeAlive(storeDir, tree) || tree === null)
+    if (tree === null || !treeHolds(storeDir, tree))
     {
         return false;
     }
@@ -262,4 +326,13 @@ export function treeTerminate(storeDir: string, tree: OwnedTree | null, signal: 
     {
         return false;
     }
+}
+
+// Whether the group still holds something this launch put there. Where the
+// process table cannot be read at all, the signal probe is the only answer
+// available and a group that answers it is held rather than assumed finished.
+function treeHolds(storeDir: string, tree: OwnedTree): boolean
+{
+    const members = treeMembers(storeDir, tree);
+    return members === null ? treeAlive(storeDir, tree) : members.length > 0;
 }

@@ -107,7 +107,9 @@ sits next to git:
   waited for, and an exit notice written by hand settles nothing while the
   processes it speaks for are still up. Work that runs at a provider outlives
   every local process, so a run claims it with `self attempt handle --open` and
-  the attempt is judged only once the same job is released;
+  the attempt keeps its lease and its slot until the same job is released.
+  Reading a process group is what the kernel is asked for here, so supervision
+  runs on macOS and Linux; the rest of the CLI is portable;
 - `self work require` states an acceptance criterion and bumps the unit's
   revision; `self work design` approves a design revision. Both are what a
   completion claim is measured against, so "done" means something a later

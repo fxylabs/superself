@@ -596,7 +596,10 @@ function claimHandle(ctx: CliContext, attempt: AttemptRecord, args: string[]): v
     const now = new Date().toISOString();
     writeLocalFileDurable(runFile(ctx.storeDir, attempt.id, attempt.fence, HANDLE_FILE),
         JSON.stringify({ handle: name, state, at: now }) + "\n");
-    patchAttempt(ctx.storeDir, attempt, "handle", { providerHandle: name }, now);
+    // Recorded on the attempt, not only in the spool: an open claim holds the
+    // lease and the concurrency slot, and a hold that only exists as a file is
+    // one the next dispatch cannot be refused by.
+    patchAttempt(ctx.storeDir, attempt, "handle", { providerHandle: name, providerClaimOpen: state === "open" }, now);
     console.log(state === "open"
         ? `${attempt.id} claims provider job "${name}" — it will not settle until the job is released`
         : `${attempt.id} released provider job "${name}"`);
