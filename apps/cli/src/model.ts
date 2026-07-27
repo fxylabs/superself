@@ -1,9 +1,15 @@
+import { DEFAULT_ZONE } from "./dates.js";
 import { readEvents } from "./logfile.js";
-import { readRegistry } from "./paths.js";
+import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
+import { readRegistry, readStoreConfig } from "./paths.js";
 import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
+
+// Work proposals carry no `work` id of their own, so they are routed before
+// the transition verbs that look one up.
+const PROPOSAL_EVENTS = ["work.proposed", "work.accepted", "work.declined"];
 
 export interface DecisionState
 {
@@ -49,13 +55,22 @@ export interface WorkState
     // several units.
     branches: string[];
     next?: string;
+    // The outcomes this unit contributes to. Stated by `self work link`, never
+    // inferred: one unit may serve several objectives, and a milestone is
+    // satisfied by evidence, not by a unit reaching done.
+    objectives: string[];
+    milestones: string[];
 }
 
 export interface ProjectModel
 {
     slug: string;
     description?: string;
+    // The long-term goal. Objectives are time-boxed and live beside it: setting
+    // one never overwrites the other.
     goal?: string;
+    zone: string;
+    goals: GoalState;
     decisions: DecisionState[];
     conventions: { id: string; ts: string; text: string }[];
     works: WorkState[];
@@ -69,6 +84,8 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     const model: ProjectModel = {
         slug,
         description: entry?.description,
+        zone: readStoreConfig(storeDir).timezone ?? DEFAULT_ZONE,
+        goals: emptyGoals(),
         decisions: [],
         conventions: [],
         works: [],
@@ -93,6 +110,21 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (event.type.startsWith("decision."))
     {
         applyDecision(model, event);
+        return;
+    }
+    if (event.type.startsWith("objective."))
+    {
+        applyObjective(model.goals, event);
+        return;
+    }
+    if (event.type.startsWith("milestone."))
+    {
+        applyMilestone(model.goals, event);
+        return;
+    }
+    if (PROPOSAL_EVENTS.includes(event.type))
+    {
+        applyProposal(model.goals, event);
         return;
     }
     if (event.type.startsWith("work."))
@@ -205,7 +237,9 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             reports: [],
             evidence: [],
             artifacts: [],
-            branches: branchOf(event)
+            branches: branchOf(event),
+            objectives: [],
+            milestones: []
         });
         return;
     }
@@ -216,6 +250,11 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     noteBranch(work, event);
+    if (event.type === "work.linked" || event.type === "work.unlinked")
+    {
+        applyLink(work, event);
+        return;
+    }
     if (event.type === "work.started" || event.type === "work.unblocked")
     {
         work.status = "active";
@@ -231,6 +270,25 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     if (event.type === "work.done")
     {
         work.status = "done";
+    }
+}
+
+// One unit may contribute to more than one outcome, and one outcome may be
+// supported by several units, so a link is added to a set rather than
+// replacing what is there.
+function applyLink(work: WorkState, event: SelfEvent): void
+{
+    const add = event.type === "work.linked";
+    for (const field of ["objectives", "milestones"] as const)
+    {
+        const id = event.payload[field.slice(0, -1)];
+        if (typeof id !== "string")
+        {
+            continue;
+        }
+        work[field] = add
+            ? [...new Set([...work[field], id])]
+            : work[field].filter((item) => item !== id);
     }
 }
 
@@ -256,6 +314,11 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
 
 function deriveSignals(model: ProjectModel, now: Date): void
 {
+    model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
+    for (const objective of model.goals.objectives.filter((item) => item.status === "proposed"))
+    {
+        model.openQuestions.push(`objective ${objective.id} is proposed and not confirmed: ${objective.outcome}`);
+    }
     for (const decision of model.decisions)
     {
         if (decision.status === "proposed" && ageDays(decision.ts, now) > PROPOSAL_EXPIRY_DAYS)

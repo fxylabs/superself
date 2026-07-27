@@ -16,6 +16,8 @@ export interface CliContext
     projectDir?: string;
 }
 
+export type ProjectContext = CliContext & { project: string; projectDir: string };
+
 export function isStore(dir: string): boolean
 {
     return existsSync(join(dir, "registry.jsonl"));
@@ -93,14 +95,14 @@ export function requireWorkspace(cwd: string): CliContext
     return ctx;
 }
 
-export function requireProject(cwd: string): CliContext & { project: string; projectDir: string }
+export function requireProject(cwd: string): ProjectContext
 {
     const ctx = requireWorkspace(cwd);
     if (ctx.project === undefined || ctx.projectDir === undefined)
     {
         throw new CliError(unregisteredMessage(ctx.storeDir, cwd));
     }
-    return ctx as CliContext & { project: string; projectDir: string };
+    return ctx as ProjectContext;
 }
 
 // A worktree of a registered project carries the committed discipline block
@@ -136,6 +138,9 @@ export interface StoreConfig
 {
     lang?: string;
     theme?: string;
+    // The zone every target date is judged in. Without it the same log would
+    // read on-track on one machine and missed on another.
+    timezone?: string;
 }
 
 export function readStoreConfig(storeDir: string): StoreConfig

@@ -4,7 +4,9 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
+import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
+import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
@@ -16,6 +18,7 @@ import {
     isStore,
     LINKS_FILE,
     MARKER_FILE,
+    ProjectContext,
     projectStateDir,
     readLinks,
     readRegistry,
@@ -36,27 +39,46 @@ import { openFile, validTheme, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
-type ProjectContext = CliContext & { project: string; projectDir: string };
-
 const USAGE = `usage: self <command>
 
   init [--lang <code>] [--agents]             initialize the current directory as a workspace
   workspace [<path>]                         show or set the workspace this machine uses
   lang [<code>]                              show or set the language of the HTML views
   theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
+  timezone [<zone>]                          show or set the zone every target date is judged in
   project add [path] [--name s] [--desc d] [--no-connect]
                                              register a project and render its agent block
   project link [slug] [path]                 link this checkout of a registered project on this machine
   remote add <url>                           connect the workspace store to a git remote
   sync                                       pull, refold, and push the workspace store
   clone <url> [dir]                          clone a workspace store onto a new machine
-  goal set "<text>"                          set the project goal
+  goal set "<text>"                          set the long-term project goal
+  objective                                  list objectives and their milestones
+  objective add "<outcome>" [--horizon week|month|quarter|year] [--target d]
+              [--success s] [--stop s] [--priority n] [--proposed] [--supersedes id]
+  objective show|confirm <id>                print an objective, or confirm a proposed one
+  objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]
+                                             an empty --target/--horizon/--priority withdraws that field
+  objective close <id> --as reached|dropped [--why w]
+  milestone                                  list milestones with state, reason, and linked work
+  milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]
+  milestone show <id>                        print a milestone, its exit criteria, and its coverage
+  milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]
+  milestone met <id> --criterion c1 --why w [--work id] [--evidence c]
+  milestone reach <id>                       record a milestone as reached once every criterion is covered
+  milestone recheck <id> [--criterion c1] --why w
+                                             re-judge coverage, or a reach, a revision left stale
   decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
   decide confirm <event-id>                  confirm a proposed decision
   work                                       list open work
   work add "<required outcome>"              create a work unit
   work show <id>                             print full work detail: brief, reports, evidence
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
+  work link|unlink <id> --objective o | --milestone m
+                                             state, or withdraw, what a work unit contributes to
+  work propose "<outcome>" --milestone m --value v --success s --stop s --risk r
+              --capacity c --evidence-plan e --confidence low|medium|high --expires d
+  work accept|decline <proposal-id>          act on a goal-gap proposal
   report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
   artifact list [--work id] [--project slug]  list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
@@ -82,11 +104,14 @@ async function main(argv: string[]): Promise<void>
         case "workspace": cmdWorkspace(rest); break;
         case "lang": cmdLang(rest); break;
         case "theme": cmdTheme(rest); break;
+        case "timezone": cmdTimezone(rest); break;
         case "project": cmdProject(rest); break;
         case "remote": cmdRemote(rest); break;
         case "sync": syncStore(requireWorkspace(process.cwd())); break;
         case "clone": cloneStore(requireText(rest[0], "clone <url> [dir]"), rest[1]); break;
         case "goal": cmdGoal(rest); break;
+        case "objective": cmdObjective(requireProject(process.cwd()), guarded(rest)); break;
+        case "milestone": cmdMilestone(requireProject(process.cwd()), guarded(rest)); break;
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
@@ -227,6 +252,25 @@ function cmdLang(rest: string[]): void
     const lang = validLang(rest[0]);
     writeConfig(ctx, { lang }, `lang set ${lang}`);
     console.log(`views now render in "${lang}"`);
+}
+
+function guarded(rest: string[]): string[]
+{
+    rejectManualProgress(rest);
+    return rest;
+}
+
+function cmdTimezone(rest: string[]): void
+{
+    const ctx = requireWorkspace(process.cwd());
+    if (rest[0] === undefined)
+    {
+        console.log(readStoreConfig(ctx.storeDir).timezone ?? DEFAULT_ZONE);
+        return;
+    }
+    const timezone = validZone(rest[0]);
+    writeConfig(ctx, { timezone }, `timezone set ${timezone}`);
+    console.log(`target dates are now judged in "${timezone}"`);
 }
 
 function cmdTheme(rest: string[]): void
@@ -455,13 +499,28 @@ function cmdWork(rest: string[]): void
         {
             throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
         }
-        console.log(markdownHeadings(renderWorkBody(work, loadVerdicts(ctx.storeDir, ctx.project)).trimEnd()));
+        console.log(markdownHeadings(renderWorkBody(work, model, loadVerdicts(ctx.storeDir, ctx.project)).trimEnd()));
+        return;
+    }
+    if (rest[0] === "link" || rest[0] === "unlink")
+    {
+        cmdWorkLink(ctx, rest.slice(1), rest[0] === "link");
+        return;
+    }
+    if (rest[0] === "propose")
+    {
+        cmdPropose(ctx, rest.slice(1));
+        return;
+    }
+    if (rest[0] === "accept" || rest[0] === "decline")
+    {
+        cmdProposalDecision(ctx, rest.slice(1), rest[0] === "accept");
         return;
     }
     const type = TRANSITIONS[rest[0]];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|start|block|unblock|done`);
+        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline`);
     }
     transitionWork(ctx, type, rest.slice(1));
 }

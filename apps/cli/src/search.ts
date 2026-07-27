@@ -91,12 +91,11 @@ function stateFiles(dir: string): string[]
             files.push(name);
         }
     }
-    const workDir = join(dir, "work");
-    if (existsSync(workDir))
+    for (const sub of ["work", "objective"])
     {
-        for (const name of readdirSync(workDir))
+        if (existsSync(join(dir, sub)))
         {
-            files.push(join("work", name));
+            files.push(...readdirSync(join(dir, sub)).map((name) => join(sub, name)));
         }
     }
     return files;
