@@ -271,10 +271,30 @@ export interface Repository
 // One spelling per branch: git resolves "main", "refs/heads/main" and
 // "heads/main" to the same local head, so every name is reduced to its bare
 // form before it is compared or stored — an alias must never make the same
-// head read as two different branches.
+// head read as two different branches. Exactly one prefix comes off: git
+// reads "refs/heads/heads/x" as the branch "heads/x", not "x", and stripping
+// twice would fold two distinct branches into one name.
 export function canonicalBranch(raw: string): string
 {
-    return raw.trim().replace(/^refs\/heads\//, "").replace(/^heads\//, "");
+    const name = raw.trim();
+    for (const prefix of ["refs/heads/", "heads/"])
+    {
+        if (name.startsWith(prefix))
+        {
+            return name.slice(prefix.length);
+        }
+    }
+    return name;
+}
+
+// Whether a canonical branch name is main. Case-insensitive: on a
+// case-insensitive filesystem "MAIN" checks out the same branch as "main",
+// so any casing of it would open an autonomous lane onto the gated branch.
+// The command and the fold both read this one predicate, so they cannot
+// diverge on what counts as main.
+export function isMainAlias(branch: string): boolean
+{
+    return branch.toLowerCase() === "main";
 }
 
 // Where this repository's change-set merges land. With a configured
@@ -347,7 +367,7 @@ export function applyIntegration(state: IntegrationState, event: SelfEvent): voi
         // event carries: a hand-appended alias of main sets nothing, and the
         // lane keeps the human gate it had.
         const branch = canonicalBranch(str(event.payload.branch) ?? "");
-        if (branch !== "" && branch !== "main")
+        if (branch !== "" && !isMainAlias(branch))
         {
             repositoryOf(state, String(event.payload.repository)).integrationBranch = branch;
         }
