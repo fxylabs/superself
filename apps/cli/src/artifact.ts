@@ -1,7 +1,9 @@
-import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmdirSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { accessSync, closeSync, constants, copyFileSync, existsSync, mkdirSync, openSync, readSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
+import { WorkState } from "./model.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
@@ -60,7 +62,7 @@ export function stageArtifacts(storeDir: string, slug: string, paths: string[] |
         discard();
         throw failure;
     }
-    return { artifacts: planned.map(({ id, name, path }) => ({ id, name, path })), discard };
+    return { artifacts: planned.map(({ id, name, path, digest }) => ({ id, name, path, digest })), discard };
 }
 
 // The line appended to the log is what makes a report true, and that is the
@@ -166,7 +168,13 @@ function copyPlanned(storeDir: string, planned: PlannedArtifact[], staging: Stag
         // Created exclusively: stored bytes the log already points at are never
         // overwritten, and unlike asking first and copying after, this leaves no
         // window between the two. Artifacts are immutable after ingestion.
-        const failure = capture(() => copyFileSync(item.source, target, constants.COPYFILE_EXCL));
+        // Digested from the stored copy rather than the source: what the log
+        // promises is the bytes this store now holds.
+        const failure = capture(() =>
+        {
+            copyFileSync(item.source, target, constants.COPYFILE_EXCL);
+            item.digest = digestOf(target);
+        });
         if (failure === null)
         {
             continue;
@@ -179,6 +187,66 @@ function copyPlanned(storeDir: string, planned: PlannedArtifact[], staging: Stag
             return new CliError(`artifact id ${item.id} is already stored — run the report again`);
         }
         return new CliError(`artifact "${item.name}" could not be copied into the store: ${failure.message}`);
+    }
+    return null;
+}
+
+// Hashed in chunks: an artifact is an arbitrary file, and reading a large one
+// whole just to digest it would cost far more memory than copying it did.
+function digestOf(file: string): string
+{
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(64 * 1024);
+    const fd = openSync(file, "r");
+    try
+    {
+        let read = readSync(fd, buffer, 0, buffer.length, null);
+        while (read > 0)
+        {
+            hash.update(buffer.subarray(0, read));
+            read = readSync(fd, buffer, 0, buffer.length, null);
+        }
+    }
+    finally
+    {
+        closeSync(fd);
+    }
+    return hash.digest("hex");
+}
+
+// Artifacts are verified against the store that owns their bytes, never
+// against git. Open work only: a fold runs on every event, and rehashing the
+// whole finished archive each time would make recording state cost more the
+// longer a project lives.
+export function artifactSignals(storeDir: string, works: WorkState[]): string[]
+{
+    const signals: string[] = [];
+    for (const work of works.filter((item) => item.status !== "done"))
+    {
+        for (const meta of work.artifacts)
+        {
+            const failure = artifactFailure(storeDir, meta);
+            if (failure !== null)
+            {
+                signals.push(`${work.id} artifact ${meta.id} ${meta.name} ${failure}`);
+            }
+        }
+    }
+    return signals;
+}
+
+// An artifact ingested before digests were recorded carries none, so absence
+// of a digest is silence, not a mismatch.
+function artifactFailure(storeDir: string, meta: ArtifactMeta): string | null
+{
+    const file = join(storeDir, meta.path);
+    if (!existsSync(file))
+    {
+        return "is missing from this store — run `self sync` to fetch it";
+    }
+    if (meta.digest !== undefined && digestOf(file) !== meta.digest)
+    {
+        return "no longer matches the digest recorded when it was attached";
     }
     return null;
 }

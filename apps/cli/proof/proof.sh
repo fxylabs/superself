@@ -805,4 +805,52 @@ echo "$BADVERB2" | grep -q "usage: self milestone" || fail "an unknown milestone
 NOID="$(SELF objective show 2>&1 || true)"
 echo "$NOID" | grep -q "objective-id" || fail "a genuinely missing id stopped asking for an id"
 
+# evidence is either a Git revision or a descriptive note. Only the revision
+# is handed to git, so a checksum never reads as rewritten history while a
+# commit reference that resolves to nothing still does
+cd "$ROOT/A/ws/demo"
+DIGEST="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+WEV="$(SELF work add "descriptive evidence stays out of git" | tail -1)"
+SELF work start "$WEV"
+SELF report "$WEV" "validated the export" --evidence "$MERGED" --evidence "$DIGEST" \
+    --evidence "sha256 checked against the golden fixture"
+WORKEV="$ROOT/A/ws/.superself/projects/demo/work/$WEV.md"
+grep -q "Evidence: $MERGED (settled)" "$WORKEV" || fail "a real commit stopped resolving as evidence"
+grep -q "Evidence notes:.*$DIGEST" "$WORKEV" || fail "a SHA-256 digest was not kept as a descriptive note"
+grep -q "Evidence notes:.*golden fixture" "$WORKEV" || fail "free-form evidence was not kept as a descriptive note"
+grep -q "\"commits\":\[\"$MERGED\"\]" "$LOG_A" || fail "descriptive evidence leaked into the commit refs"
+SELF status | grep -q "$DIGEST" && fail "a checksum was reported as a missing Git commit"
+SELF status | grep -q "golden fixture" && fail "a validation note was reported as a missing Git commit"
+SELF status | grep -q "000000000000 no longer resolves" || fail "a vanished commit reference stopped warning"
+grep -q ">note<" "$VIEW_A/demo/$WEV.html" || fail "work view did not mark descriptive evidence as a note"
+
+# a store written before evidence was classified folds as it stands: the digest
+# sitting in refs.commits reads as a note, and the event itself is never touched
+LEGACY="{\"id\":\"01legacyeventaaaaaaaaaaaaa\",\"ts\":\"2026-01-01T00:00:00.000Z\",\"type\":\"report.added\",\"origin\":{\"actor\":\"agent\",\"confirmed\":false},\"project\":\"demo\",\"payload\":{\"text\":\"legacy report carrying a digest in commits\"},\"refs\":{\"work\":\"$WEV\",\"commits\":[\"$DIGEST\"]}}"
+printf '%s\n' "$LEGACY" >> "$LOG_A"
+EVJSON="$ROOT/A/ws/.superself/projects/demo/evidence.json"
+node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));j[process.argv[2]]="unverifiable";fs.writeFileSync(process.argv[1],JSON.stringify(j,null,2)+"\n")' "$EVJSON" "$DIGEST"
+SELF fold > /dev/null
+grep -qF "$LEGACY" "$LOG_A" || fail "the fold rewrote a historical event"
+grep -q "Evidence notes:.*$DIGEST" "$WORKEV" || fail "a legacy digest in refs.commits did not fold into a note"
+SELF status | grep -q "$DIGEST" && fail "a stored verdict kept a legacy digest reading as rewritten history"
+
+# artifacts are verified against the store that holds their bytes: a matching
+# digest is healthy, and a changed or missing file names the artifact
+echo "v1 validated" > "$ROOT/report.txt"
+WART="$(SELF work add "artifact integrity is checked, not guessed" | tail -1)"
+SELF work start "$WART"
+SELF report "$WART" "attached the validated report" --artifact "$ROOT/report.txt"
+ARTID="$(SELF artifact list --work "$WART" | awk '{print $1}')"
+ARTFILE="$ROOT/A/ws/.superself/artifacts/demo/$ARTID-report.txt"
+grep -q "\"digest\":\"" "$LOG_A" || fail "artifact ingest did not record a digest"
+SELF status | grep -q "$ARTID" && fail "an artifact matching its digest raised a health signal"
+echo "tampered" > "$ARTFILE"
+SELF fold > /dev/null
+SELF status | grep -q "$ARTID .*no longer matches" || fail "a changed artifact raised no signal"
+rm "$ARTFILE"
+SELF fold > /dev/null
+SELF status | grep -q "$ARTID .*is missing from this store" || fail "a missing artifact raised no signal"
+SELF status | grep -q "$ARTID .*rewritten" && fail "an artifact problem was reported as rewritten Git history"
+
 echo "proof OK"

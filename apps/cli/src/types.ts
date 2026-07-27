@@ -10,6 +10,9 @@ export interface EventRefs
     confirms?: string;
     supersedes?: string[];
     work?: string;
+    // Git revisions in the project repo, and nothing else. Free-form evidence
+    // is recorded as `payload.notes`, because everything listed here is handed
+    // to git and judged by whether it still resolves.
     commits?: string[];
     artifacts?: string[];
     // The branch the command ran on. History ("this happened here"), never a
@@ -33,6 +36,10 @@ export interface ArtifactMeta
     id: string;
     name: string;
     path: string;
+    // sha256 of the bytes as they were ingested. Optional: artifacts attached
+    // before digests were recorded verify by existence alone, and folding an
+    // existing store must not invent a digest for them.
+    digest?: string;
 }
 
 export interface RegistryEntry

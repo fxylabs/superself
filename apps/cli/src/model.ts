@@ -1,4 +1,5 @@
 import { DEFAULT_ZONE } from "./dates.js";
+import { looksLikeRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
 import { readRegistry, readStoreConfig } from "./paths.js";
@@ -32,6 +33,9 @@ export interface ReportEntry
     ts: string;
     text: string;
     commits: string[];
+    // Evidence the report offered that is not a Git revision: a checksum, a
+    // validation summary, a reviewer's name. Kept and shown, never resolved.
+    notes: string[];
     artifacts: ArtifactMeta[];
     // The branch these commits were reported from — what lets the fold tell a
     // discarded branch from a squash-merged one.
@@ -49,6 +53,7 @@ export interface WorkState
     blockedWhy?: string;
     reports: ReportEntry[];
     evidence: string[];
+    notes: string[];
     artifacts: ArtifactMeta[];
     // Every branch this unit was worked on, oldest first. Derived, never
     // asserted: one unit runs on several branches, and one branch carries
@@ -236,6 +241,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             status: "next",
             reports: [],
             evidence: [],
+            notes: [],
             artifacts: [],
             branches: branchOf(event),
             objectives: [],
@@ -301,15 +307,26 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     noteBranch(work, event);
-    const commits = event.refs?.commits ?? [];
+    const offered = event.refs?.commits ?? [];
+    // Reports written before evidence was classified put anything the caller
+    // passed into refs.commits. Splitting on read folds those stores correctly
+    // without rewriting a single historical event.
+    const commits = offered.filter(looksLikeRevision);
+    const notes = [...offered.filter((value) => !looksLikeRevision(value)), ...stringList(event.payload.notes)];
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
+    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, notes, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
+    work.notes.push(...notes.filter((note) => !work.notes.includes(note)));
     work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
     {
         work.next = String(event.payload.next);
     }
+}
+
+function stringList(value: unknown): string[]
+{
+    return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
 function deriveSignals(model: ProjectModel, now: Date): void

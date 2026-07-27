@@ -40,7 +40,10 @@ fold` and never hand-edited.
 open work, recent reports — derived from state, not hand-maintained. `self
 connect` renders a managed block into `AGENTS.md` and `CLAUDE.md` so any
 agent tool loads the same instructions. Reports attach the current commit as
-evidence automatically.
+evidence automatically. `--evidence` also takes free-form evidence — a
+checksum, a validation summary — which is kept beside the commits as a note
+and never resolved against the repository. Attached artifacts are checked
+against the digest recorded when they were ingested.
 
 ## Across machines
 

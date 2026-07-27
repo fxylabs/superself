@@ -44,6 +44,18 @@ export function commitAll(storeDir: string, message: string): void
     git(storeDir, "commit", "-qm", message);
 }
 
+// The one gate deciding what may be handed to git as a revision. A Git object
+// name is lowercase hex: `self` records 12 characters and a person may paste
+// anything from an abbreviated hash to a full 40-character name. Everything
+// else — a prose validation note, a 64-character file digest — is descriptive
+// evidence, and resolving it would report a rewritten history that never was.
+const REVISION = /^[0-9a-f]{7,40}$/;
+
+export function looksLikeRevision(value: string): boolean
+{
+    return REVISION.test(value);
+}
+
 // 12 hex chars: short hashes recorded as evidence must stay unambiguous as
 // the project repo grows.
 export function headCommit(dir: string): string | null
