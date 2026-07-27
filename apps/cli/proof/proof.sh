@@ -357,4 +357,92 @@ grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinke
 BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
 echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
+# help is answered before any command runs, and an invocation the CLI cannot
+# carry out never reads as success — automation cannot tell a typo from a run
+cd "$ROOT/A/ws/demo"
+LOG_BEFORE="$(wc -l < "$LOG_A")"
+STORE_BEFORE="$(git -C "$ROOT/A/ws/.superself" rev-list --count HEAD)"
+SELF | grep -q "^usage: self <command>" || fail "self with no arguments did not print the verb list"
+SELF --help | grep -q "^usage: self <command>" || fail "self --help did not print the verb list"
+SELF -h | grep -q "^usage: self <command>" || fail "self -h did not print the verb list"
+SELF help | grep -q "^usage: self <command>" || fail "self help did not print the verb list"
+SELF | grep -q "^  help \[<command>\]" || fail "the supported help verb is missing from the verb list"
+
+# an unknown verb is named and exits non-zero, with --help on it or without
+for ARGV in "repot w-1 summary" "repot --help" "--bogus"
+do
+    if OUT="$(SELF $ARGV 2>&1)"
+    then
+        fail "self $ARGV exited zero on an invocation the CLI cannot carry out"
+    fi
+    echo "$OUT" | grep -qF 'run `self help`' || fail "self $ARGV did not point at the command list"
+    echo "$OUT" | grep -q "    at " && fail "self $ARGV printed a stack trace"
+done
+BADVERB="$(SELF repot w-1 summary 2>&1 || true)"
+echo "$BADVERB" | grep -q 'unknown command "repot"' || fail "an unknown verb was not named"
+BADROOT="$(SELF --bogus 2>&1 || true)"
+echo "$BADROOT" | grep -q "unknown option '--bogus'" || fail "a flag that reached no command was not named as a flag"
+BADHELP="$(SELF help repot 2>&1 || true)"
+echo "$BADHELP" | grep -q 'unknown command "repot"' || fail "self help accepted a command that does not exist"
+
+# the verbs are read back from the CLI's own list, so this sweep cannot drift
+# from what the CLI dispatches: the dispatch table is keyed by the same
+# registry the list and the scoped pages are rendered from
+VERBS="$(SELF | sed -n 's/^  \([a-z][a-z-]*\).*/\1/p' | sort -u)"
+[ "$(echo "$VERBS" | grep -c .)" -ge 23 ] || fail "the root list named too few verbs to be the real one"
+for CMD in $VERBS
+do
+    HELP="$(SELF "$CMD" --help 2>&1)" || fail "self $CMD --help exited non-zero"
+    echo "$HELP" | grep -q "^usage: self $CMD" || fail "self $CMD --help printed no scoped usage"
+    echo "$HELP" | grep -q "    at " && fail "self $CMD --help printed a stack trace"
+    SELF "$CMD" -h > /dev/null 2>&1 || fail "self $CMD -h exited non-zero"
+    SELF help "$CMD" | grep -q "^usage: self $CMD" || fail "self help $CMD printed no scoped usage"
+done
+[ "$(wc -l < "$LOG_A")" = "$LOG_BEFORE" ] || fail "help or a refused verb wrote an event"
+[ "$(git -C "$ROOT/A/ws/.superself" rev-list --count HEAD)" = "$STORE_BEFORE" ] || fail "help or a refused verb committed to the store"
+
+# a help token standing where a flag's value belongs is that flag's value, not
+# a question — the equals form records it, and the ambiguous space-separated
+# form is refused by name rather than silently becoming a request for help
+SELF decide "the equals form keeps the token" --why=-h
+grep -q "the equals form keeps the token" "$STATE_A" || fail "--why=-h was read as a request for help"
+grep -q '"why":"-h"' "$LOG_A" || fail "--why=-h did not record -h as the reason"
+WHELP="$(SELF work add "a help token as a block reason" | tail -1)"
+SELF work start "$WHELP"
+SELF work block "$WHELP" --on external --why=--help
+grep -q '"why":"--help"' "$LOG_A" || fail "--why=--help was read as a request for help"
+SELF work | grep -q "$WHELP" || fail "the blocked unit never moved"
+SELF report "$WHELP" "a report whose next step looks like a flag" --next=-h
+grep -q '"next":"-h"' "$LOG_A" || fail "--next=-h was read as a request for help"
+
+LOG_BEFORE="$(wc -l < "$LOG_A")"
+for ARGV in "decide ambiguous --why -h" "report $WHELP ambiguous --next --help" "log -n"
+do
+    if AMBIG="$(SELF $ARGV 2>&1)"
+    then
+        fail "self $ARGV exited zero without doing what was asked"
+    fi
+    echo "$AMBIG" | grep -q "^usage: self" && fail "self $ARGV was mistaken for a request for help"
+    echo "$AMBIG" | grep -q "    at " && fail "self $ARGV printed a stack trace"
+    echo "$AMBIG" | grep -qF -- "--help\` for the syntax" || fail "self $ARGV did not point at the scoped help"
+done
+[ "$(wc -l < "$LOG_A")" = "$LOG_BEFORE" ] || fail "a refused option value still wrote an event"
+
+# after `--`, an option-looking argument stays text the user meant literally
+SELF decide -- "--proposed is the text here, not the flag"
+grep -q -- "--proposed is the text here, not the flag" "$STATE_A" || fail "a literal decision after -- was read as a flag"
+SELF report "$WHELP" -- "--help is the summary here"
+grep -q -- "--help is the summary here" "$ROOT/A/ws/.superself/projects/demo/work/$WHELP.md" || fail "a literal summary after -- was read as a request for help"
+
+# help and refusal both answer on a machine with no workspace, and create none
+machine D
+cd "$ROOT"
+SELF report --help | grep -q "^usage: self report" || fail "report help demanded a workspace"
+SELF init --help | grep -q "^usage: self init" || fail "init help demanded a workspace"
+[ -d "$ROOT/.superself" ] && fail "self init --help initialized a workspace"
+NOWS="$(SELF repot 2>&1 || true)"
+echo "$NOWS" | grep -q 'unknown command "repot"' || fail "an unknown verb asked for a workspace instead of being named"
+machine A
+cd "$ROOT/A/ws/demo"
+
 echo "proof OK"

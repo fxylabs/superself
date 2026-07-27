@@ -6,6 +6,7 @@ import { ingestArtifacts, runArtifact } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
+import { CommandName, findCommand, helpRequest, OPTIONS } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -38,80 +39,69 @@ import { CliError, EventRefs } from "./types.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
 
-const USAGE = `usage: self <command>
-
-  init [--lang <code>] [--agents]             initialize the current directory as a workspace
-  workspace [<path>]                         show or set the workspace this machine uses
-  lang [<code>]                              show or set the language of the HTML views
-  theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
-  project add [path] [--name s] [--desc d] [--no-connect]
-                                             register a project and render its agent block
-  project link [slug] [path]                 link this checkout of a registered project on this machine
-  remote add <url>                           connect the workspace store to a git remote
-  sync                                       pull, refold, and push the workspace store
-  clone <url> [dir]                          clone a workspace store onto a new machine
-  goal set "<text>"                          set the project goal
-  decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
-  decide confirm <event-id>                  confirm a proposed decision
-  work                                       list open work
-  work add "<required outcome>"              create a work unit
-  work show <id>                             print full work detail: brief, reports, evidence
-  work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
-  report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
-  artifact list [--work id] [--project slug]  list artifacts from the derived registry
-  artifact search <query> | open <id>        find an artifact or open it with the OS default app
-  convention add "<text>" | drop <event-id>  record or retire a convention
-  connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
-                                             (--global: into this machine's agent instruction files)
-  view [slug]                                open the live workspace or project view in the browser
-  context                                    print derived context for agents
-  status                                     print a short state summary
-  setup                                      print the workspace, project, and store this directory resolves to
-  log [-n N]                                 print recent events
-  search <query> [--type t] [--project p]    grep state across the workspace
-  fold                                       re-derive canonical files from the log`;
+// One entry per command in the registry, and no entry without one: the key
+// type is the registry's own name union, so adding a verb to help.ts without
+// wiring it here — or wiring one that is documented nowhere — fails to compile.
+// `help` is answered before dispatch, so it needs no handler.
+const HANDLERS: Record<Exclude<CommandName, "help">, (rest: string[]) => void | Promise<void>> = {
+    init: cmdInit,
+    workspace: cmdWorkspace,
+    lang: cmdLang,
+    theme: cmdTheme,
+    project: cmdProject,
+    remote: cmdRemote,
+    sync: () => syncStore(requireWorkspace(process.cwd())),
+    clone: (rest) => cloneStore(requireText(rest[0], "clone <url> [dir]"), rest[1]),
+    goal: cmdGoal,
+    decide: cmdDecide,
+    work: cmdWork,
+    report: cmdReport,
+    artifact: (rest) => runArtifact(requireWorkspace(process.cwd()), rest),
+    convention: cmdConvention,
+    connect: cmdConnect,
+    view: cmdView,
+    context: () => printContext(requireWorkspace(process.cwd())),
+    status: () => printStatus(requireWorkspace(process.cwd())),
+    setup: () => printSetup(process.cwd()),
+    log: cmdLog,
+    search: cmdSearch,
+    fold: cmdFold
+};
 
 async function main(argv: string[]): Promise<void>
 {
-    const cmd = argv[0];
-    const rest = argv.slice(1);
-    switch (cmd)
+    const help = helpRequest(argv);
+    if (help !== null)
     {
-        case "init": await cmdInit(rest); break;
-        case "workspace": cmdWorkspace(rest); break;
-        case "lang": cmdLang(rest); break;
-        case "theme": cmdTheme(rest); break;
-        case "project": cmdProject(rest); break;
-        case "remote": cmdRemote(rest); break;
-        case "sync": syncStore(requireWorkspace(process.cwd())); break;
-        case "clone": cloneStore(requireText(rest[0], "clone <url> [dir]"), rest[1]); break;
-        case "goal": cmdGoal(rest); break;
-        case "decide": cmdDecide(rest); break;
-        case "work": cmdWork(rest); break;
-        case "report": cmdReport(rest); break;
-        case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
-        case "convention": cmdConvention(rest); break;
-        case "connect": cmdConnect(rest); break;
-        case "view": cmdView(rest); break;
-        case "context": printContext(requireWorkspace(process.cwd())); break;
-        case "status": printStatus(requireWorkspace(process.cwd())); break;
-        case "setup": printSetup(process.cwd()); break;
-        case "log": cmdLog(rest); break;
-        case "search": cmdSearch(rest); break;
-        case "fold": cmdFold(); break;
-        default: printUsage(); break;
+        printUsage(help);
+        return;
     }
+    const cmd = argv[0] ?? "";
+    const handler = HANDLERS[cmd as Exclude<CommandName, "help">];
+    // A verb the CLI does not have never reads as success: printing the list
+    // and exiting zero lets a script treat a typo as a command that ran.
+    if (handler === undefined)
+    {
+        throw new CliError(unknownVerb(cmd));
+    }
+    await handler(argv.slice(1));
+}
+
+function unknownVerb(cmd: string): string
+{
+    const what = cmd.startsWith("-") ? `unknown option '${cmd}'` : `unknown command "${cmd}"`;
+    return `${what} — run \`self help\` for the command list`;
 }
 
 // Dim the description column so the command column stands out; piped output is untouched.
-function printUsage(): void
+function printUsage(usage: string): void
 {
     if (!styled)
     {
-        console.log(USAGE);
+        console.log(usage);
         return;
     }
-    console.log(USAGE.split("\n").map((line) =>
+    console.log(usage.split("\n").map((line) =>
     {
         const match = line.match(/^(  \S.*?)(\s{2,})(\S.*)$/);
         if (match !== null)
@@ -124,7 +114,7 @@ function printUsage(): void
 
 async function cmdInit(rest: string[]): Promise<void>
 {
-    const { values } = parseArgs({ args: rest, options: { lang: { type: "string" }, agents: { type: "boolean" } } });
+    const { values } = parseArgs({ args: rest, options: OPTIONS.init });
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
@@ -271,11 +261,7 @@ function cmdProject(rest: string[]): void
 
 function projectAdd(args: string[]): void
 {
-    const { values, positionals } = parseArgs({
-        args,
-        options: { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseArgs({ args, options: OPTIONS.project, allowPositionals: true });
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(positionals[0] ?? process.cwd());
     const slug = values.name ?? basename(projectDir);
@@ -375,16 +361,7 @@ function cmdDecide(rest: string[]): void
         confirmDecision(ctx, rest[1]);
         return;
     }
-    const { values, positionals } = parseArgs({
-        args: rest,
-        options: {
-            proposed: { type: "boolean" },
-            why: { type: "string" },
-            supersedes: { type: "string", multiple: true },
-            work: { type: "string" }
-        },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseArgs({ args: rest, options: OPTIONS.decide, allowPositionals: true });
     const text = requireText(positionals[0], 'decide "<decision>" [--why w] [--proposed]');
     const payload: Record<string, unknown> = { text };
     if (values.why !== undefined)
@@ -467,11 +444,7 @@ function cmdWork(rest: string[]): void
 
 function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
 {
-    const { values, positionals } = parseArgs({
-        args,
-        options: { on: { type: "string" }, why: { type: "string" } },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseArgs({ args, options: OPTIONS.work, allowPositionals: true });
     const work = requireOpenWork(ctx, positionals[0]);
     const payload: Record<string, unknown> = { work: work.id };
     if (type === "work.blocked")
@@ -492,16 +465,7 @@ function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
 function cmdReport(rest: string[]): void
 {
     const ctx = requireProject(process.cwd());
-    const { values, positionals } = parseArgs({
-        args: rest,
-        options: {
-            evidence: { type: "string", multiple: true },
-            artifact: { type: "string", multiple: true },
-            next: { type: "string" },
-            file: { type: "string" }
-        },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseArgs({ args: rest, options: OPTIONS.report, allowPositionals: true });
     const work = requireOpenWork(ctx, positionals[0]);
     const text = values.file === undefined
         ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
@@ -599,7 +563,7 @@ function cmdConvention(rest: string[]): void
 function cmdLog(rest: string[]): void
 {
     const ctx = requireProject(process.cwd());
-    const { values } = parseArgs({ args: rest, options: { lines: { type: "string", short: "n" } } });
+    const { values } = parseArgs({ args: rest, options: OPTIONS.log });
     const limit = values.lines === undefined ? 20 : Number.parseInt(values.lines, 10);
     if (Number.isNaN(limit) || limit <= 0)
     {
@@ -610,11 +574,7 @@ function cmdLog(rest: string[]): void
 
 function cmdSearch(rest: string[]): void
 {
-    const { values, positionals } = parseArgs({
-        args: rest,
-        options: { type: { type: "string" }, project: { type: "string" } },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseArgs({ args: rest, options: OPTIONS.search, allowPositionals: true });
     const query = requireText(positionals[0], "search <query>");
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
 }
@@ -649,15 +609,32 @@ function requireText(value: string | undefined, usage: string): string
     return value;
 }
 
+// node's parser refuses a flag it does not know and a value that looks like
+// one — `--why -h` is ambiguous, and the equals form is how it is written. The
+// user asked a command something answerable, so it is answered like every
+// other refusal instead of as a crash.
+function parseFailure(error: unknown, cmd: string | undefined): string | null
+{
+    const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "";
+    if (!(error instanceof Error) || !code.startsWith("ERR_PARSE_ARGS"))
+    {
+        return null;
+    }
+    const command = findCommand(cmd);
+    const scope = command === undefined ? "" : `${command.name} `;
+    return `${error.message.replace(/\n/g, " ")} — run \`self ${scope}--help\` for the syntax`;
+}
+
 try
 {
     await main(process.argv.slice(2));
 }
 catch (error)
 {
-    if (error instanceof CliError)
+    const message = error instanceof CliError ? error.message : parseFailure(error, process.argv[2]);
+    if (message !== null)
     {
-        console.error(`${errRed("error:")} ${error.message}`);
+        console.error(`${errRed("error:")} ${message}`);
         process.exitCode = 1;
     }
     else

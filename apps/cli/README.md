@@ -61,7 +61,14 @@ live workspace or project page; `self theme` switches the accent
 
 Run `self` with no arguments for the full verb list: workspaces, projects,
 goals, decisions, work units, reports, artifacts, conventions, sync, views,
-search, and the fold.
+search, and the fold. `self help <command>` and `self <command> --help` both
+print one command's syntax and flags. Help reads no state and writes none, so
+it answers in any directory.
+
+A verb the CLI does not have is named and exits non-zero — a typo never reads
+as a command that ran. To pass text that starts with a dash, put it after
+`--`: `self decide -- "--proposed is the text here"`. To give a flag a value
+that starts with a dash, use the equals form: `self decide "…" --why=-h`.
 
 ## License
 
