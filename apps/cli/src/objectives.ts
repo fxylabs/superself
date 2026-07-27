@@ -30,6 +30,7 @@ export interface Coverage
     commits: string[];
     objectiveRevision: number;
     milestoneRevision: number;
+    recheck?: boolean;
 }
 
 export interface Reached
@@ -53,6 +54,7 @@ export interface MilestoneState
     after: string[];
     coverage: Coverage[];
     reached?: Reached;
+    reaffirmed?: Reached;
     supersededBy?: string;
     state: TargetState;
     reason: string;
@@ -210,9 +212,10 @@ function reviseObjective(objective: ObjectiveState, event: SelfEvent): void
     objective.revision += 1;
     objective.history.push({ ts: event.ts, revision: objective.revision, why: String(payload.why) });
     objective.outcome = str(payload.outcome) ?? objective.outcome;
-    objective.horizon = str(payload.horizon) ?? objective.horizon;
-    objective.target = str(payload.target) ?? objective.target;
-    objective.priority = payload.priority === undefined ? objective.priority : Number(payload.priority);
+    objective.horizon = revised(payload.horizon, objective.horizon);
+    objective.target = revised(payload.target, objective.target);
+    objective.priority = payload.priority === null ? undefined
+        : payload.priority === undefined ? objective.priority : Number(payload.priority);
     if (payload.success !== undefined)
     {
         objective.success = list(payload.success);
@@ -225,6 +228,10 @@ function reviseObjective(objective: ObjectiveState, event: SelfEvent): void
 
 // Lineage, not replacement: the superseded objective keeps its own record and
 // gains a pointer, so a duplicate never leaves two conflicting current states.
+//
+// An objective that was already closed as reached keeps that status. Its
+// outcome was verified and rolled up; a successor picking the work back up is
+// lineage, not a reason to unsay what landed.
 export function applySupersededObjectives(goals: GoalState): void
 {
     for (const objective of goals.objectives)
@@ -232,10 +239,14 @@ export function applySupersededObjectives(goals: GoalState): void
         for (const id of objective.supersedes)
         {
             const target = goals.objectives.find((item) => item.id === id);
-            if (target !== undefined && objective.status !== "proposed")
+            if (target === undefined || objective.status === "proposed")
+            {
+                continue;
+            }
+            target.supersededBy = objective.id;
+            if (target.status !== "reached")
             {
                 target.status = "superseded";
-                target.supersededBy = objective.id;
             }
         }
     }
@@ -269,16 +280,35 @@ export function applyMilestone(goals: GoalState, event: SelfEvent): void
         found.milestone.coverage.push(newCoverage(event));
         return;
     }
+    // A recheck is a fresh judgment against the revisions current when it was
+    // made. Coverage gains an entry rather than losing one, and a re-judged
+    // reach sits beside the reach it re-affirms — the day the milestone was
+    // first reached stays exactly where it was.
+    if (event.type === "milestone.rechecked")
+    {
+        if (event.payload.criterion === undefined)
+        {
+            found.milestone.reaffirmed = newReached(event);
+            return;
+        }
+        found.milestone.coverage.push(newCoverage(event));
+        return;
+    }
     if (event.type === "milestone.reached")
     {
-        found.milestone.reached = {
-            ts: event.ts,
-            objectiveRevision: Number(event.payload.objectiveRevision),
-            milestoneRevision: Number(event.payload.milestoneRevision),
-            criteria: list(event.payload.criteria),
-            evidence: list(event.payload.evidence)
-        };
+        found.milestone.reached = newReached(event);
     }
+}
+
+function newReached(event: SelfEvent): Reached
+{
+    return {
+        ts: event.ts,
+        objectiveRevision: Number(event.payload.objectiveRevision),
+        milestoneRevision: Number(event.payload.milestoneRevision),
+        criteria: list(event.payload.criteria),
+        evidence: list(event.payload.evidence)
+    };
 }
 
 function newMilestone(event: SelfEvent): MilestoneState
@@ -309,7 +339,7 @@ function reviseMilestone(milestone: MilestoneState, event: SelfEvent): void
 {
     milestone.revision += 1;
     milestone.outcome = str(event.payload.outcome) ?? milestone.outcome;
-    milestone.target = str(event.payload.target) ?? milestone.target;
+    milestone.target = revised(event.payload.target, milestone.target);
     for (const id of list(event.payload.dropExit))
     {
         const criterion = milestone.exit.find((item) => item.id === id);
@@ -330,7 +360,8 @@ function newCoverage(event: SelfEvent): Coverage
         work: event.refs?.work,
         commits: event.refs?.commits ?? [],
         objectiveRevision: Number(event.payload.objectiveRevision),
-        milestoneRevision: Number(event.payload.milestoneRevision)
+        milestoneRevision: Number(event.payload.milestoneRevision),
+        recheck: event.type === "milestone.rechecked" ? true : undefined
     };
 }
 
@@ -409,14 +440,28 @@ function deriveMilestone(milestone: MilestoneState, objective: ObjectiveState, w
     const covered = new Set(milestone.coverage.map((item) => item.criterion));
     milestone.met = live.filter((criterion) => covered.has(criterion.id)).map((criterion) => criterion.id);
     milestone.open = live.filter((criterion) => !covered.has(criterion.id)).map((criterion) => criterion.id);
-    milestone.stale = milestone.coverage.filter((item) =>
-        item.objectiveRevision !== objective.revision || item.milestoneRevision !== milestone.revision);
+    milestone.stale = staleCoverage(milestone, objective, new Set(live.map((criterion) => criterion.id)));
     const linked = works.filter((work) => work.milestones.includes(milestone.id));
     milestone.works = linked.map((work) => work.id);
     milestone.blockedWorks = linked.filter((work) => work.status === "blocked").map((work) => work.id);
     milestone.evidence = evidenceOf(milestone, linked);
     milestone.state = milestoneState(milestone, objective, today);
     milestone.reason = milestoneReason(milestone, live.length, today);
+}
+
+// A criterion may be judged more than once, and only the newest judgment is
+// the one standing: an earlier entry stays on record as lineage without
+// holding the milestone stale for ever. Coverage of a criterion the milestone
+// has since dropped is history too — there is nothing left to re-judge.
+function staleCoverage(milestone: MilestoneState, objective: ObjectiveState, live: Set<string>): Coverage[]
+{
+    const latest = new Map<string, Coverage>();
+    for (const item of milestone.coverage)
+    {
+        latest.set(item.criterion, item);
+    }
+    return [...latest.values()].filter((item) => live.has(item.criterion)
+        && (item.objectiveRevision !== objective.revision || item.milestoneRevision !== milestone.revision));
 }
 
 // Evidence rolls up by reference: two milestones covered by the same report
@@ -581,20 +626,30 @@ function objectiveSignals(objective: ObjectiveState): string[]
     const signals: string[] = [];
     for (const milestone of objective.milestones)
     {
+        // A superseded milestone asks nothing of anyone: its successor carries
+        // whatever is still owed, so neither its coverage nor its reach is
+        // work the reader can act on.
+        if (milestone.supersededBy !== undefined)
+        {
+            continue;
+        }
         for (const stale of milestone.stale)
         {
             signals.push(`${milestone.id} coverage of ${stale.criterion} was judged against ${objective.id} revision ` +
-                `${stale.objectiveRevision}/${stale.milestoneRevision}, now ${objective.revision}/${milestone.revision} — recheck it`);
+                `${stale.objectiveRevision}/${stale.milestoneRevision}, now ${objective.revision}/${milestone.revision} — ` +
+                `recheck it with \`self milestone recheck ${milestone.id} --criterion ${stale.criterion} --why "<what you re-judged>"\``);
         }
         // The reach itself is a judgment against a revision. A later revision
         // can widen what the milestone asks for, so say the reach is stale
         // rather than let a settled "reached" stand for criteria it never saw.
-        const reached = milestone.reached;
-        if (reached !== undefined && milestone.supersededBy === undefined
+        // A re-judgment recorded since is the reach that counts.
+        const reached = milestone.reaffirmed ?? milestone.reached;
+        if (reached !== undefined
             && (reached.objectiveRevision !== objective.revision || reached.milestoneRevision !== milestone.revision))
         {
             signals.push(`${milestone.id} was reached against ${objective.id} revision ` +
-                `${reached.objectiveRevision}/${reached.milestoneRevision}, now ${objective.revision}/${milestone.revision} — recheck it`);
+                `${reached.objectiveRevision}/${reached.milestoneRevision}, now ${objective.revision}/${milestone.revision} — ` +
+                `recheck it with \`self milestone recheck ${milestone.id} --why "<what you re-judged>"\``);
         }
         if (milestone.state === "missed")
         {
@@ -671,6 +726,14 @@ export function contributionsOf(goals: GoalState, work: { objectives: string[]; 
 function str(value: unknown): string | undefined
 {
     return value === undefined || value === null ? undefined : String(value);
+}
+
+// A revision distinguishes three things a payload can say about a field: an
+// absent key leaves it alone, a value replaces it, and an explicit null
+// withdraws it — which is how a target date or a horizon is taken back.
+function revised(value: unknown, current: string | undefined): string | undefined
+{
+    return value === null ? undefined : str(value) ?? current;
 }
 
 function list(value: unknown): string[]

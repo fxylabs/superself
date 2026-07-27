@@ -182,7 +182,11 @@ export function writeViews(storeDir: string, model: ProjectModel, config: StoreC
     {
         writeFileSync(join(workDir, `${work.id}.html`), renderWorkPage(model, work, verdicts, rail(1, model.slug)));
     }
-    for (const objective of openObjectives(model.goals))
+    // Every objective keeps a page, closed ones included, exactly as done work
+    // units do. A page that stopped being rewritten when its objective closed
+    // would keep asserting the last state it was open in, and the work pages
+    // that link to it would keep sending readers there.
+    for (const objective of model.goals.objectives)
     {
         writeFileSync(join(workDir, `${objective.id}.html`), renderObjectivePage(model, objective, rail(1, model.slug)));
     }

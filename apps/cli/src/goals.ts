@@ -12,7 +12,7 @@ import {
     WorkProposal
 } from "./objectives.js";
 import { ProjectContext } from "./paths.js";
-import { makeEvent, recordEvent } from "./pipeline.js";
+import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { dim, errYellow, markdownHeadings, styled } from "./style.js";
 import { CliError, EventRefs } from "./types.js";
 
@@ -20,7 +20,10 @@ const HORIZONS = ["day", "week", "month", "quarter", "year"];
 const CONFIDENCE = ["low", "medium", "high"];
 
 const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | revise <id> --why w | close <id> --as reached|dropped';
-const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | met <id> --criterion c1 --why w | reach <id>';
+const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> [--criterion c1] --why w';
+
+const OBJECTIVE_VERBS = ["list", "add", "show", "confirm", "revise", "close"];
+const MILESTONE_VERBS = ["list", "add", "show", "revise", "met", "reach", "recheck"];
 
 /* ── objectives ────────────────────────────────────────────────────── */
 
@@ -38,6 +41,13 @@ export function cmdObjective(ctx: ProjectContext, rest: string[]): void
     {
         objectiveAdd(ctx, model, args);
         return;
+    }
+    // An unknown verb is answered before the id is resolved: telling someone
+    // who mistyped a verb that they are missing an id sends them looking for
+    // the wrong thing, and hides the list of verbs they wanted.
+    if (!OBJECTIVE_VERBS.includes(verb))
+    {
+        throw new CliError(OBJECTIVE_USAGE);
     }
     const objective = requireObjective(model, rest[1]);
     if (verb === "show")
@@ -117,10 +127,16 @@ function objectiveRevise(ctx: ProjectContext, objective: ObjectiveState, args: s
         }
     });
     const why = requireText(values.why, 'objective revise <id> --why "<what changed and why>"');
-    const payload: Record<string, unknown> = { objective: objective.id, why, outcome: values.outcome, success: values.success, stop: values.stop };
-    payload.horizon = values.horizon === undefined ? undefined : validHorizon(values.horizon);
-    payload.target = values.target === undefined ? undefined : validDate(values.target);
-    payload.priority = values.priority === undefined ? undefined : validPriority(values.priority);
+    const payload: Record<string, unknown> = {
+        objective: objective.id,
+        why,
+        outcome: restated(values.outcome, "objective"),
+        success: values.success,
+        stop: values.stop
+    };
+    payload.horizon = withdrawable(values.horizon, validHorizon);
+    payload.target = withdrawable(values.target, validDate);
+    payload.priority = withdrawable(values.priority, validPriority);
     if (Object.keys(strip(payload)).length === 2)
     {
         throw new CliError("objective revise needs at least one of --outcome, --horizon, --target, --priority, --success, --stop");
@@ -161,6 +177,10 @@ export function cmdMilestone(ctx: ProjectContext, rest: string[]): void
         milestoneAdd(ctx, model, rest.slice(1));
         return;
     }
+    if (!MILESTONE_VERBS.includes(verb))
+    {
+        throw new CliError(MILESTONE_USAGE);
+    }
     const found = requireMilestone(model, rest[1]);
     if (verb === "show")
     {
@@ -180,6 +200,11 @@ export function cmdMilestone(ctx: ProjectContext, rest: string[]): void
     if (verb === "reach")
     {
         milestoneReach(ctx, found.milestone, found.objective);
+        return;
+    }
+    if (verb === "recheck")
+    {
+        milestoneRecheck(ctx, model, found.milestone, found.objective, args);
         return;
     }
     throw new CliError(MILESTONE_USAGE);
@@ -234,8 +259,8 @@ function milestoneRevise(ctx: ProjectContext, milestone: MilestoneState, args: s
     const payload: Record<string, unknown> = {
         milestone: milestone.id,
         why,
-        outcome: values.outcome,
-        target: values.target === undefined ? undefined : validDate(values.target),
+        outcome: restated(values.outcome, "milestone"),
+        target: withdrawable(values.target, validDate),
         addExit: nextCriteria(milestone, values.exit ?? []),
         dropExit: (values["drop-exit"] ?? []).map((id) => requireCriterion(milestone, id).id)
     };
@@ -266,6 +291,13 @@ function milestoneMet(ctx: ProjectContext, model: ProjectModel, milestone: Miles
     {
         throw new CliError(`${milestone.id} ${criterion.id} is already covered — revise the milestone if the criterion changed`);
     }
+    const payload = { milestone: milestone.id, criterion: criterion.id, why, objectiveRevision: objective.revision, milestoneRevision: milestone.revision };
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.covered", payload, coverageRefs(model, milestone, values), true),
+        `${milestone.id} ${criterion.id} ${why}`);
+}
+
+function coverageRefs(model: ProjectModel, milestone: MilestoneState, values: { work?: string; evidence?: string[] }): EventRefs
+{
     const refs: EventRefs = {};
     if (values.work !== undefined)
     {
@@ -276,8 +308,81 @@ function milestoneMet(ctx: ProjectContext, model: ProjectModel, milestone: Miles
     {
         refs.commits = commits;
     }
+    return refs;
+}
+
+// A revision moves what the milestone is judged against, which is what makes
+// settled coverage and a settled reach read stale. Clearing that is a
+// judgment someone makes deliberately, at the revision standing now — never a
+// side effect of another verb, and never an assertion that skips the gate the
+// first reach had to pass.
+function milestoneRecheck(
+    ctx: ProjectContext,
+    model: ProjectModel,
+    milestone: MilestoneState,
+    objective: ObjectiveState,
+    args: string[]
+): void
+{
+    const { values } = parseArgs({
+        args,
+        options: { criterion: { type: "string" }, why: { type: "string" }, work: { type: "string" }, evidence: { type: "string", multiple: true } }
+    });
+    const why = requireText(values.why, 'milestone recheck <id> [--criterion c1] --why "<what you re-judged>"');
+    if (values.criterion === undefined)
+    {
+        recheckReach(ctx, milestone, objective, why);
+        return;
+    }
+    recheckCoverage(ctx, model, milestone, objective, why, values);
+}
+
+function recheckCoverage(
+    ctx: ProjectContext,
+    model: ProjectModel,
+    milestone: MilestoneState,
+    objective: ObjectiveState,
+    why: string,
+    values: { criterion?: string; work?: string; evidence?: string[] }
+): void
+{
+    const criterion = requireCriterion(milestone, values.criterion as string);
+    if (!milestone.met.includes(criterion.id))
+    {
+        throw new CliError(`${milestone.id} ${criterion.id} has no coverage to recheck — ` +
+            `cover it with \`self milestone met ${milestone.id} --criterion ${criterion.id} --why "<how>"\``);
+    }
+    if (!milestone.stale.some((item) => item.criterion === criterion.id))
+    {
+        throw new CliError(currentAlready(`${milestone.id} ${criterion.id} coverage`, objective, milestone));
+    }
     const payload = { milestone: milestone.id, criterion: criterion.id, why, objectiveRevision: objective.revision, milestoneRevision: milestone.revision };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.covered", payload, refs, true), `${milestone.id} ${criterion.id} ${why}`);
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.rechecked", payload, coverageRefs(model, milestone, values), true),
+        `${milestone.id} ${criterion.id} ${why}`);
+}
+
+// Re-judging a reach passes the same gate the first one did: a revision that
+// widened the ask has to be covered before the reach can stand again, so a
+// recheck can never wave through criteria nobody looked at.
+function recheckReach(ctx: ProjectContext, milestone: MilestoneState, objective: ObjectiveState, why: string): void
+{
+    if (milestone.reached === undefined)
+    {
+        throw new CliError(`${milestone.id} was never reached — reach it with \`self milestone reach ${milestone.id}\``);
+    }
+    requireCovered(milestone);
+    const judged = milestone.reaffirmed ?? milestone.reached;
+    if (judged.objectiveRevision === objective.revision && judged.milestoneRevision === milestone.revision)
+    {
+        throw new CliError(currentAlready(milestone.id, objective, milestone));
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.rechecked", { ...reachPayload(milestone, objective), why }, undefined, true),
+        `${milestone.id} ${why}`);
+}
+
+function currentAlready(what: string, objective: ObjectiveState, milestone: MilestoneState): string
+{
+    return `${what} was already judged against the current revision ${objective.revision}/${milestone.revision} — nothing to recheck`;
 }
 
 // Work reaching done is not a milestone being reached: the exit criteria are
@@ -288,26 +393,37 @@ function milestoneReach(ctx: ProjectContext, milestone: MilestoneState, objectiv
     {
         throw new CliError(`${milestone.id} was already reached on ${milestone.reached.ts.slice(0, 10)}`);
     }
-    if (milestone.open.length > 0)
-    {
-        const open = milestone.exit.filter((criterion) => milestone.open.includes(criterion.id));
-        throw new CliError(`${milestone.id} has uncovered exit criteria — ` +
-            open.map((criterion) => `${criterion.id} ${criterion.text}`).join("; ") +
-            `\n  cover each with \`self milestone met ${milestone.id} --criterion <id> --why "<how>"\``);
-    }
+    requireCovered(milestone);
     const waiting = milestone.after.filter((id) => id !== milestone.id);
     if (waiting.length > 0)
     {
         console.error(`${errYellow("warning:")} ${milestone.id} depends on ${waiting.join(", ")} — check they are reached`);
     }
-    const payload = {
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.reached", reachPayload(milestone, objective), undefined, true),
+        `${milestone.id} ${milestone.outcome}`);
+}
+
+function requireCovered(milestone: MilestoneState): void
+{
+    if (milestone.open.length === 0)
+    {
+        return;
+    }
+    const open = milestone.exit.filter((criterion) => milestone.open.includes(criterion.id));
+    throw new CliError(`${milestone.id} has uncovered exit criteria — ` +
+        open.map((criterion) => `${criterion.id} ${criterion.text}`).join("; ") +
+        `\n  cover each with \`self milestone met ${milestone.id} --criterion <id> --why "<how>"\``);
+}
+
+function reachPayload(milestone: MilestoneState, objective: ObjectiveState): Record<string, unknown>
+{
+    return {
         milestone: milestone.id,
         objectiveRevision: objective.revision,
         milestoneRevision: milestone.revision,
         criteria: milestone.met,
         evidence: milestone.evidence
     };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.reached", payload, undefined, true), `${milestone.id} ${milestone.outcome}`);
 }
 
 /* ── work links ────────────────────────────────────────────────────── */
@@ -422,6 +538,13 @@ function proposalPayload(model: ProjectModel, outcome: string, values: Record<st
 function requireNovel(model: ProjectModel, outcome: string, payload: Record<string, unknown>): void
 {
     const key = normalize(outcome);
+    // An outcome made only of punctuation or emoji carries nothing to compare,
+    // and every such outcome would compare equal to every other. Two of them
+    // are not the same proposal, so the key that says nothing matches nothing.
+    if (key === "")
+    {
+        return;
+    }
     const target = (payload.milestone ?? payload.objective) as string;
     const clash = model.goals.proposals.find((proposal) =>
         proposal.status === "open" && !proposal.expired && normalize(proposal.outcome) === key
@@ -438,9 +561,15 @@ function requireNovel(model: ProjectModel, outcome: string, payload: Record<stri
     }
 }
 
+// Two outcomes are the same when they carry the same letters and numbers in
+// the same order, whatever spacing, case or punctuation they were typed with.
+// The classes are Unicode ones on purpose: a script-by-script allow list drops
+// every language nobody thought to add, and text that loses all its characters
+// stops comparing as itself and starts comparing as everything else. NFC is
+// applied first so the same word typed decomposed keys the same way.
 function normalize(text: string): string
 {
-    return text.toLowerCase().replace(/[^a-z0-9가-힣]+/g, " ").trim();
+    return text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 export function cmdProposalDecision(ctx: ProjectContext, args: string[], accept: boolean): void
@@ -454,12 +583,15 @@ export function cmdProposalDecision(ctx: ProjectContext, args: string[], accept:
         recordEvent(ctx, makeEvent(ctx.project, "work.declined", payload, undefined, true), `${proposal.outcome}`);
         return;
     }
+    // Creating the unit, pointing it at what it closes, and settling the
+    // proposal are one act, so they reach the log as one append.
     const id = workId();
-    const created = makeEvent(ctx.project, "work.created", { work: id, outcome: proposal.outcome }, undefined, true);
-    recordEvent(ctx, created, `${id} ${proposal.outcome}`);
     const link = strip({ work: id, objective: proposal.objective, milestone: proposal.milestone });
-    recordEvent(ctx, makeEvent(ctx.project, "work.linked", link, undefined, true), `${id} ${proposal.outcome}`);
-    recordEvent(ctx, makeEvent(ctx.project, "work.accepted", { proposal: proposal.id, work: id }, undefined, true), `${id} ${proposal.outcome}`);
+    recordEvents(ctx, [
+        makeEvent(ctx.project, "work.created", { work: id, outcome: proposal.outcome }, undefined, true),
+        makeEvent(ctx.project, "work.linked", link, undefined, true),
+        makeEvent(ctx.project, "work.accepted", { proposal: proposal.id, work: id }, undefined, true)
+    ], `${id} ${proposal.outcome}`);
     console.log(id);
 }
 
@@ -589,6 +721,30 @@ function requireProposal(model: ProjectModel, prefix: string | undefined): WorkP
         throw new CliError(`proposal ${matches[0].id.slice(0, 8)} is already ${matches[0].status}`);
     }
     return matches[0];
+}
+
+// An outcome is the one thing that cannot be withdrawn — a target with no
+// statement of what it is for is not a target anyone can judge.
+function restated(value: string | undefined, kind: string): string | undefined
+{
+    if (value !== undefined && value.trim() === "")
+    {
+        throw new CliError(`--outcome cannot be emptied — the ${kind} would have no stated outcome left to judge`);
+    }
+    return value;
+}
+
+// A timebox someone withdraws has to be able to leave: an empty value records
+// an explicit null, which the fold reads as "this field is gone" rather than
+// "this field was not mentioned". Without it a date the user took back keeps
+// deciding whether the target is missed.
+function withdrawable<T>(value: string | undefined, valid: (value: string) => T): T | null | undefined
+{
+    if (value === undefined)
+    {
+        return undefined;
+    }
+    return value.trim() === "" ? null : valid(value);
 }
 
 function validHorizon(value: string): string
