@@ -49,6 +49,12 @@ sits next to git:
   or outside the workspace directory, because the pointer decides the store;
 - typed event verbs — `goal set`, `decide`, `work add/start/block/unblock/done`,
   `report`, `convention add` — append to a per-project JSONL log;
+- the outcome layer above work — `objective add/revise/close`, `milestone
+  add/revise/met/reach/recheck`, `work link/unlink`, and `work
+  propose/accept/decline` — connects the goal to verified progress: a milestone
+  is reached only when every exit criterion is covered by evidence, a revision
+  marks what it already settled as stale until someone re-judges it, and
+  `self timezone` fixes the zone every target date falls due in;
 - every event immediately refolds canonical markdown (project state plus one
   file per open work unit) and lands as exactly one commit in the workspace
   repository, so state has log, blame, and revert;

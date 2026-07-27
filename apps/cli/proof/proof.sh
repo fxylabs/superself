@@ -566,6 +566,38 @@ SELF objective revise "$OID" --why "the board moved the target" --target "$SOON"
 SELF status | grep -q "recheck it" || fail "a revision left stale coverage invisible"
 grep -q "stale coverage" "$VIEW_A/demo.html" || fail "the project view hides stale coverage"
 
+# stale is a question, not a verdict: a deliberate re-judgment at the current
+# revision settles it, and nothing else does
+NOCOV="$(SELF milestone recheck "$M2" --criterion c1 --why "nothing was judged here" 2>&1 || true)"
+echo "$NOCOV" | grep -q "no coverage to recheck" || fail "a criterion nobody covered was rechecked"
+NOPROG="$(SELF milestone recheck "$M1" --criterion c1 --why x --progress 60 2>&1 || true)"
+echo "$NOPROG" | grep -q "progress is derived" || fail "a recheck accepted a manual progress percentage"
+SELF milestone recheck "$M1" --criterion c1 --why "the settled charge in $PAYC still covers it" --evidence "$PAYC"
+SELF status | grep -q "coverage of c1" && fail "coverage re-judged at the current revision still read stale"
+SELF status | grep -q "coverage of c2" || fail "coverage nobody re-judged stopped being reported"
+SELF milestone recheck "$M1" --criterion c2 --why "the declined-card path is unchanged"
+SELF milestone recheck "$M1" --why "the moved date changes nothing this reach was judged on"
+SELF status | grep -q "recheck it" && fail "a fully re-judged milestone still asked for a recheck"
+grep -q "stale coverage" "$VIEW_A/demo.html" && fail "the project view still shows coverage that was re-judged"
+[ "$(grep -c '^- c1 on' "$OBJ_MD")" -ge 2 ] || fail "a recheck replaced the coverage it re-judged instead of appending"
+grep -q "rechecked at revision" "$OBJ_MD" || fail "a re-judged coverage entry is indistinguishable from the first"
+grep -q "^- Rechecked:" "$OBJ_MD" || fail "a re-judged reach left no record of what it was judged against"
+grep -q "^- Reached:" "$OBJ_MD" || fail "a recheck erased the day the milestone was first reached"
+SETTLED="$(SELF milestone recheck "$M1" --why "again" 2>&1 || true)"
+echo "$SETTLED" | grep -q "nothing to recheck" || fail "a reach already judged at the current revision was re-judged again"
+
+# a revision that widens the ask is not waved through: the criterion it added
+# has to be covered before the reach stands again
+SELF milestone revise "$M1" --why "compliance added a step" --exit "the fraud check runs"
+OPENRECHECK="$(SELF milestone recheck "$M1" --why "it surely still holds" 2>&1 || true)"
+echo "$OPENRECHECK" | grep -q "uncovered exit criteria" || fail "a widened milestone re-affirmed a reach over an open criterion"
+SELF status | grep -q "was reached against" || fail "a widened milestone stopped reporting its stale reach"
+SELF milestone met "$M1" --criterion c3 --why "the fraud check is exercised"
+SELF milestone recheck "$M1" --criterion c1 --why "still covered after the added step"
+SELF milestone recheck "$M1" --criterion c2 --why "still covered after the added step"
+SELF milestone recheck "$M1" --why "every live criterion is covered at this revision"
+SELF status | grep -q "recheck it" && fail "a settled milestone kept asking for a recheck"
+
 # a target-date boundary is deterministic and closes nothing on its own
 MLATE="$(SELF milestone add "invoices export" --objective "$OID" --target "$PAST" --exit "an export downloads" | tail -1)"
 WLATE="$(SELF work add "build the export" | tail -1)"
@@ -606,7 +638,12 @@ DUPE="$(SELF work propose "Wire payouts!" --milestone "$M3" --value v --success 
     --risk r --capacity c --evidence-plan e --confidence low --expires "$FUTURE" 2>&1 || true)"
 echo "$DUPE" | grep -q "already proposes this outcome" || fail "a duplicate proposal was recorded"
 SELF context | grep -q "evidence plan: a settled payout id" || fail "the proposal brief is missing from context"
+# creating the unit, pointing it at what it closes, and settling the proposal
+# are one act, so they reach the log and the store history together
+COMMITS_BEFORE="$(git -C "$ROOT/A/ws/.superself" rev-list --count HEAD)"
 WNEW="$(SELF work accept "$PID" | tail -1)"
+[ "$(( $(git -C "$ROOT/A/ws/.superself" rev-list --count HEAD) - COMMITS_BEFORE ))" -eq 1 ] \
+    || fail "accepting a proposal was not recorded as one state change"
 SELF work show "$WNEW" | grep -q "Contributes to: $M3" || fail "accepting a proposal did not link the work it created"
 GONE="$(SELF work accept "$PID" 2>&1 || true)"
 echo "$GONE" | grep -q "already accepted" || fail "an accepted proposal was accepted twice"
@@ -690,5 +727,82 @@ WEST_RUN="$(TZ=Etc/GMT+12 node "$CLI_DIR/bin/self.mjs" milestone)"
 [ "$EAST_RUN" = "$WEST_RUN" ] || fail "the rendering machine's zone changed a target-date judgment"
 cd "$ROOT/A/ws" && SELF timezone UTC > /dev/null
 SELF timezone | grep -q "^UTC$" || fail "the workspace zone did not return to what it was set to"
+
+# two proposals are the same proposal when they say the same thing, whatever
+# script they say it in — the key that keeps letters and numbers keeps them all
+cd "$ROOT/A/ws/demo"
+OSCRIPT="$(SELF objective add "serve every script" | tail -1)"
+MSCRIPT="$(SELF milestone add "payments log" --objective "$OSCRIPT" --exit "a payment is logged" | tail -1)"
+propose()
+{
+    SELF work propose "$1" --milestone "$MSCRIPT" --value v --success s --stop t \
+        --risk r --capacity c --evidence-plan e --confidence low --expires "$FUTURE" > /dev/null
+}
+propose "Внедрить оплату картой" || fail "a Cyrillic proposal was refused"
+propose "Добавить логирование ошибок" || fail "two unrelated Cyrillic proposals collapsed into one"
+propose "決済ログを追加する" || fail "a Japanese proposal collided with a Cyrillic one"
+propose "إضافة سجل المدفوعات" || fail "an Arabic proposal collided with another script"
+propose "เพิ่มบันทึกการชำระเงิน" || fail "a Thai proposal collided with another script"
+propose "결제 로그를 추가한다" || fail "a Hangul proposal collided with another script"
+propose "add payment logging" || fail "a Latin proposal collided with another script"
+SCRIPTDUPE="$(SELF work propose "  ВНЕДРИТЬ, оплату  картой!  " --milestone "$MSCRIPT" --value v --success s \
+    --stop t --risk r --capacity c --evidence-plan e --confidence low --expires "$FUTURE" 2>&1 || true)"
+echo "$SCRIPTDUPE" | grep -q "already proposes this outcome" || fail "the same Cyrillic outcome was proposed twice"
+
+# a closed objective's page tells the truth about being closed rather than
+# freezing the last state it was open in, and the work that pointed at it
+# still reaches it
+OCLOSED="$(SELF objective add "the abandoned bet" | tail -1)"
+WCLOSED="$(SELF work add "chase the abandoned bet" | tail -1)"
+SELF work link "$WCLOSED" --objective "$OCLOSED"
+grep -q "pill s-on-track" "$VIEW_A/demo/$OCLOSED.html" || fail "an open objective's page does not carry its state"
+SELF objective close "$OCLOSED" --as dropped --why "the bet is off"
+grep -q "pill s-on-track" "$VIEW_A/demo/$OCLOSED.html" && fail "a closed objective's page still renders it on track"
+grep -q "pill s-closed" "$VIEW_A/demo/$OCLOSED.html" || fail "a closed objective's page does not say it is closed"
+grep -q "the bet is off" "$VIEW_A/demo/$OCLOSED.html" || fail "a closed objective's page does not say why it closed"
+grep -q "href=\"$OCLOSED.html\"" "$VIEW_A/demo/$WCLOSED.html" || fail "work detail dropped the objective it contributes to"
+[ -f "$ROOT/A/ws/.superself/projects/demo/objective/$OCLOSED.md" ] && fail "a closed objective stayed a current canonical file"
+
+# an outcome that was verified stays verified: a successor is lineage, not a
+# reason to unsay what landed
+OREACHED="$(SELF objective add "the landed bet" | tail -1)"
+SELF objective close "$OREACHED" --as reached --why "it landed"
+ONEXT="$(SELF objective add "the follow-up bet" --supersedes "$OREACHED" | tail -1)"
+SELF objective show "$OREACHED" | grep -q "Status: reached" || fail "superseding erased a reached objective's status"
+SELF objective show "$OREACHED" | grep -q "Target state: reached" || fail "superseding erased a reached objective's outcome"
+SELF objective show "$OREACHED" | grep -q "Superseded by: $ONEXT" || fail "a reached objective lost its successor pointer"
+
+# a superseded milestone asks nothing of anyone, including a recheck
+OSUP="$(SELF objective add "the migration" | tail -1)"
+MSUP="$(SELF milestone add "first pass" --objective "$OSUP" --exit "a pass runs" | tail -1)"
+SELF milestone met "$MSUP" --criterion c1 --why "the pass ran"
+SELF objective revise "$OSUP" --why "the scope widened" --target "$FUTURE"
+SELF status | grep -q "$MSUP coverage of c1" || fail "a live milestone's stale coverage stopped being reported"
+MSUP2="$(SELF milestone add "two passes" --objective "$OSUP" --supersedes "$MSUP" --exit "both passes run" | tail -1)"
+SELF status | grep -q "$MSUP coverage of c1" && fail "a superseded milestone still asked for a recheck"
+
+# a timebox someone withdraws stops deciding whether the target was missed
+OBOX="$(SELF objective add "the timeboxed bet" --horizon month --target "$PAST" --priority 2 | tail -1)"
+SELF objective show "$OBOX" | grep -q "Target state: missed" || fail "a passed target did not read as missed"
+SELF objective revise "$OBOX" --why "the date is withdrawn, not moved" --target ""
+SELF objective show "$OBOX" | grep -q "target $PAST" && fail "a withdrawn target is still on the objective"
+SELF objective show "$OBOX" | grep -q "Target state: missed" && fail "a withdrawn target still judged the objective late"
+SELF objective revise "$OBOX" --why "the priority is withdrawn" --priority ""
+SELF objective show "$OBOX" | grep -q "^- Priority:" && fail "a withdrawn priority survived the revision"
+MBOX="$(SELF milestone add "the timeboxed step" --objective "$OBOX" --target "$PAST" --exit "a step runs" | tail -1)"
+SELF milestone revise "$MBOX" --why "the date is withdrawn" --target ""
+SELF milestone show "$MBOX" | grep -q "^- Target:" && fail "a withdrawn milestone target survived the revision"
+BADDATE="$(SELF objective revise "$OBOX" --why "nonsense" --target "not-a-date" 2>&1 || true)"
+echo "$BADDATE" | grep -q "is not a date" || fail "withdrawing a date also let a malformed one through"
+NONAME="$(SELF objective revise "$OBOX" --why "erase it" --outcome "" 2>&1 || true)"
+echo "$NONAME" | grep -q "cannot be emptied" || fail "an objective was left with no stated outcome"
+
+# a mistyped verb is answered with the verbs, not with a demand for an id
+BADVERB="$(SELF objective frobnicate 2>&1 || true)"
+echo "$BADVERB" | grep -q "usage: self objective" || fail "an unknown objective verb was reported as a missing id"
+BADVERB2="$(SELF milestone frobnicate 2>&1 || true)"
+echo "$BADVERB2" | grep -q "usage: self milestone" || fail "an unknown milestone verb was reported as a missing id"
+NOID="$(SELF objective show 2>&1 || true)"
+echo "$NOID" | grep -q "objective-id" || fail "a genuinely missing id stopped asking for an id"
 
 echo "proof OK"

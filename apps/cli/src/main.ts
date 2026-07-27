@@ -58,6 +58,7 @@ const USAGE = `usage: self <command>
               [--success s] [--stop s] [--priority n] [--proposed] [--supersedes id]
   objective show|confirm <id>                print an objective, or confirm a proposed one
   objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]
+                                             an empty --target/--horizon/--priority withdraws that field
   objective close <id> --as reached|dropped [--why w]
   milestone                                  list milestones with state, reason, and linked work
   milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]
@@ -65,6 +66,8 @@ const USAGE = `usage: self <command>
   milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]
   milestone met <id> --criterion c1 --why w [--work id] [--evidence c]
   milestone reach <id>                       record a milestone as reached once every criterion is covered
+  milestone recheck <id> [--criterion c1] --why w
+                                             re-judge coverage, or a reach, a revision left stale
   decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
   decide confirm <event-id>                  confirm a proposed decision
   work                                       list open work

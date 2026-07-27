@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
-import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals } from "./objectives.js";
+import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
 import { evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
@@ -267,9 +267,11 @@ export function renderMilestoneBody(milestone: MilestoneState, objective: Object
     }
     if (milestone.reached !== undefined)
     {
-        lines.push(`- Reached: ${day(milestone.reached.ts)} against objective revision ${milestone.reached.objectiveRevision}` +
-            `/milestone revision ${milestone.reached.milestoneRevision}, criteria ${milestone.reached.criteria.join(", ")}` +
-            `${milestone.reached.evidence.length === 0 ? "" : `, evidence ${milestone.reached.evidence.join(", ")}`}`);
+        lines.push(`- Reached: ${reachedLine(milestone.reached)}`);
+    }
+    if (milestone.reaffirmed !== undefined)
+    {
+        lines.push(`- Rechecked: ${reachedLine(milestone.reaffirmed)}`);
     }
     lines.push("");
     bullets(lines, "Exit criteria", exitLines(milestone));
@@ -287,11 +289,19 @@ function exitLines(milestone: MilestoneState): string[]
     });
 }
 
+function reachedLine(reached: Reached): string
+{
+    return `${day(reached.ts)} against objective revision ${reached.objectiveRevision}` +
+        `/milestone revision ${reached.milestoneRevision}, criteria ${reached.criteria.join(", ")}` +
+        `${reached.evidence.length === 0 ? "" : `, evidence ${reached.evidence.join(", ")}`}`;
+}
+
 function coverageLine(coverage: Coverage): string
 {
     const from = [coverage.work, ...coverage.commits].filter((part) => part !== undefined).join(" ");
     return `${coverage.criterion} on ${day(coverage.ts)} — ${coverage.why}` +
-        `${from === "" ? "" : ` [${from}]`} _(revision ${coverage.objectiveRevision}/${coverage.milestoneRevision})_`;
+        `${from === "" ? "" : ` [${from}]`} _(${coverage.recheck === true ? "rechecked at " : ""}` +
+        `revision ${coverage.objectiveRevision}/${coverage.milestoneRevision})_`;
 }
 
 function contributionLines(work: WorkState, model: ProjectModel): string[]
