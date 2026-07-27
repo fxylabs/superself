@@ -10,12 +10,25 @@ import {
     circuitOpen,
     foldAttempts,
     heldLeases,
+    holdsResources,
     patchAttempt
 } from "./attempt.js";
 import { decideCapabilities, forbiddenAction, sanitizedEnv } from "./capability.js";
 import { advanceCursor, ensureSubscription, pendingSignals } from "./cursor.js";
+import { readClaim } from "./envelope.js";
 import { generation, withStoreLock } from "./lock.js";
 import { readRun, repairJournal, runDir, runFile, writeLocalFileDurable } from "./local.js";
+import {
+    OwnedTree,
+    ownedTree,
+    processGroup,
+    processRef,
+    refAlive,
+    refTerminate,
+    treeAlive,
+    treeMembers,
+    treeTerminate
+} from "./process.js";
 import {
     DEFAULT_CIRCUIT_THRESHOLD,
     OvernightPolicy,
@@ -82,8 +95,17 @@ function lockedTick(ctx: CliContext, now: Date): TickSummary
             summary.reconciled.push(`${attempt.id} ${attempt.exitSource}`);
         }
     }
+    // Nothing is judged until nothing it started is still running. A held
+    // attempt stays "exited", keeps its lease, and is looked at again next
+    // pass rather than being closed on the strength of an exit notice.
     for (const attempt of attempts.filter((item) => item.state === "exited"))
     {
+        const hold = physicalHold(ctx, attempt, now);
+        if (hold !== null)
+        {
+            summary.skipped.push(`${attempt.id} — ${hold}`);
+            continue;
+        }
         settle(ctx, attempt, now);
         summary.settled.push(`${attempt.id} ${attempt.verdict}`);
     }
@@ -164,6 +186,11 @@ export function alive(pid: number): boolean
 interface ExitNotice
 {
     code: number | null;
+    // The pid that wrote the notice. The wrapper signs its own, so the shell
+    // that is in the act of finishing can be told apart from the rest of the
+    // group. A notice recorded by hand or by an external caller is unsigned,
+    // and then no process is excused from being counted.
+    writtenBy: number | null;
     providerStatus: string | null;
     retryAt: string | null;
 }
@@ -180,8 +207,11 @@ function readExitNotice(ctx: CliContext, attempt: AttemptRecord): ExitNotice | n
     }
     const provider = readRun(ctx.storeDir, attempt.id, attempt.fence, "provider.json");
     const parsed = provider === null ? {} : safeJson(provider);
+    const fields = raw.trim().split(/\s+/);
+    const writer = fields.length < 2 ? Number.NaN : Number.parseInt(fields[1], 10);
     return {
-        code: Number.parseInt(raw.trim(), 10),
+        code: Number.parseInt(fields[0], 10),
+        writtenBy: Number.isFinite(writer) ? writer : null,
         providerStatus: typeof parsed.status === "string" ? parsed.status : null,
         retryAt: typeof parsed.retryAt === "string" ? parsed.retryAt : null
     };
@@ -220,7 +250,12 @@ function recoverLaunch(ctx: CliContext, attempt: AttemptRecord, now: Date): stri
     const pid = written === null ? Number.NaN : Number.parseInt(written.trim(), 10);
     if (Number.isFinite(pid))
     {
-        patchAttempt(ctx.storeDir, attempt, "adopt", { pid, owner: generation() }, now.toISOString());
+        patchAttempt(ctx.storeDir, attempt, "adopt", {
+            pid,
+            wrapper: processRef(ctx.storeDir, pid),
+            tree: adoptedTree(ctx, attempt, pid),
+            owner: generation()
+        }, now.toISOString());
         return `adopted ${attempt.id} (pid recorded by its own wrapper after a crash mid-launch)`;
     }
     if (existsSync(runFile(ctx.storeDir, attempt.id, attempt.fence, "exit")))
@@ -236,9 +271,19 @@ function recoverLaunch(ctx: CliContext, attempt: AttemptRecord, now: Date): stri
     return `${attempt.id} was journalled but never spawned — returned to the queue`;
 }
 
+// A wrapper is the leader of its own session, so its pid is also its group id.
+// A pid that leads no group was started by something else and its neighbours
+// in that group are not this launch's to watch, let alone to signal.
+function adoptedTree(ctx: CliContext, attempt: AttemptRecord, pid: number): OwnedTree | null
+{
+    return processGroup(pid) === pid ? ownedTree(ctx.storeDir, attempt.id, attempt.fence, pid) : null;
+}
+
 // Exit detection needs no orchestrator: a confirmed notice, a pid that is
 // gone, and a heartbeat that ran out are three different findings, and only
-// the first says anything about what the run produced.
+// the first says anything about what the run produced. None of the three ends
+// the attempt on its own — they end the launch, and what the launch started is
+// asked about separately.
 function reconcile(ctx: CliContext, attempt: AttemptRecord, now: Date): boolean
 {
     if (attempt.state !== "running")
@@ -253,12 +298,13 @@ function reconcile(ctx: CliContext, attempt: AttemptRecord, now: Date): boolean
             exitAt: now.toISOString(),
             exitSource: "confirmed",
             exitCode: notice.code,
+            exitWriter: notice.writtenBy,
             providerStatus: notice.providerStatus,
             retryAt: notice.retryAt
         }, now.toISOString(), attempt.fence);
         return true;
     }
-    if (attempt.pid !== null && !alive(attempt.pid))
+    if (attempt.wrapper !== null && !refAlive(ctx.storeDir, attempt.wrapper))
     {
         patchAttempt(ctx.storeDir, attempt, "exit", {
             state: "exited",
@@ -271,7 +317,7 @@ function reconcile(ctx: CliContext, attempt: AttemptRecord, now: Date): boolean
     {
         // A lease lost to a dead heartbeat must not leave the process running
         // with it: containment comes before the verdict.
-        terminate(attempt);
+        terminate(ctx.storeDir, attempt);
         patchAttempt(ctx.storeDir, attempt, "exit", {
             state: "exited",
             exitAt: now.toISOString(),
@@ -284,20 +330,101 @@ function reconcile(ctx: CliContext, attempt: AttemptRecord, now: Date): boolean
 
 // A worker whose lease or launch has been superseded is stopped rather than
 // left to keep writing. Its spool stays: the evidence outlives the process.
-export function terminate(attempt: AttemptRecord): void
+// The whole group goes, not the wrapper alone — and where the supervisor never
+// started the process it only has a reference, which is signalled only if it
+// still resolves to the same process, so a recycled pid is never mistaken for
+// the attempt and never receives its cancellation.
+export function terminate(storeDir: string, attempt: AttemptRecord, signal: NodeJS.Signals = "SIGTERM"): void
 {
-    if (attempt.pid === null)
+    if (!treeTerminate(storeDir, attempt.tree, signal))
     {
-        return;
+        refTerminate(storeDir, attempt.wrapper, signal);
     }
-    try
+}
+
+/* ── physical terminality ──────────────────────────────────────────── */
+
+// How long a group that outlived its launch is given to end itself after the
+// first SIGTERM, before the supervisor stops asking.
+const CONTAIN_GRACE_MS = 10_000;
+
+// Semantic terminality is a conclusion about a run; physical terminality is an
+// observation about what the run started, and the second gates the first. An
+// exit notice can be written by anything holding the fence — the run itself, a
+// person, an external script — but a process group answers to the kernel, so
+// an attempt whose own processes are still running is never settled on
+// anybody's word. Returns null when nothing owned by the launch is left.
+function physicalHold(ctx: CliContext, attempt: AttemptRecord, now: Date): string | null
+{
+    if (attempt.treeClosedAt === null)
     {
-        process.kill(attempt.pid, "SIGTERM");
+        const running = stillRunning(ctx, attempt);
+        if (running > 0)
+        {
+            return contain(ctx, attempt, running, now);
+        }
+        patchAttempt(ctx.storeDir, attempt, "tree.closed", {
+            treeClosedAt: now.toISOString()
+        }, now.toISOString(), attempt.fence);
     }
-    catch
+    return providerHold(ctx, attempt, now);
+}
+
+// What of the launch is still running. The wrapper is left out once it has
+// signed its own exit notice: a shell in the act of finishing is not a run
+// that is still going, and counting it would hold every attempt for one extra
+// pass. Only the wrapper the launch recorded can be excused this way, so an
+// exit notice written by anything else excuses nothing. Where the launch was
+// never spawned here there is no group to read, and the pid the supervisor was
+// handed is the whole of what it owns.
+function stillRunning(ctx: CliContext, attempt: AttemptRecord): number
+{
+    if (attempt.tree === null)
     {
-        // Already gone. The state change is what has to persist.
+        return refAlive(ctx.storeDir, attempt.wrapper) ? 1 : 0;
     }
+    const finishing = attempt.exitWriter === attempt.wrapper?.pid ? attempt.exitWriter : -1;
+    const members = treeMembers(ctx.storeDir, attempt.tree);
+    if (members !== null)
+    {
+        return members.filter((pid) => pid !== finishing).length;
+    }
+    // The process table could not be read at all. A group that still answers a
+    // signal probe is held rather than assumed finished.
+    return treeAlive(ctx.storeDir, attempt.tree) ? 1 : 0;
+}
+
+// A tree that outlived its launch is not left running: the launch owns it, so
+// ending it is the supervisor's job. SIGTERM first, so a process can finish
+// its own writes, then SIGKILL once the grace period is over — and no verdict
+// until the group is actually empty.
+function contain(ctx: CliContext, attempt: AttemptRecord, running: number, now: Date): string
+{
+    const signalled = attempt.treeSignalledAt;
+    const expired = signalled !== null && now.getTime() - Date.parse(signalled) > CONTAIN_GRACE_MS;
+    terminate(ctx.storeDir, attempt, expired ? "SIGKILL" : "SIGTERM");
+    if (signalled === null)
+    {
+        patchAttempt(ctx.storeDir, attempt, "tree.contain", {
+            treeSignalledAt: now.toISOString()
+        }, now.toISOString(), attempt.fence);
+    }
+    return `${running} process(es) the launch started are still running — settling waits for them`;
+}
+
+// A provider job runs where this machine cannot watch it. The run says it owns
+// one by claiming it, and until something releases that claim the attempt has
+// a live owner no local observation can speak for.
+function providerHold(ctx: CliContext, attempt: AttemptRecord, now: Date): string | null
+{
+    const claim = readClaim(ctx.storeDir, attempt);
+    if (claim !== null && claim.handle !== attempt.providerHandle)
+    {
+        patchAttempt(ctx.storeDir, attempt, "handle", { providerHandle: claim.handle }, now.toISOString(), attempt.fence);
+    }
+    return claim === null || claim.state === "closed"
+        ? null
+        : `the provider job it claimed is still open — release it with \`self attempt handle ${attempt.id} --close\``;
 }
 
 /* ── settlement ────────────────────────────────────────────────────── */
@@ -318,7 +445,7 @@ export function settle(ctx: CliContext, attempt: AttemptRecord, now: Date): void
             reasons: result.reasons,
             retryAt,
             exitSource: null,
-            pid: null,
+            ...forgetLaunch(),
             ...cost
         }, ts, attempt.fence);
         syncEvent(ctx, attempt, "attempt.waiting", { text: `${attempt.id} waiting on provider capacity until ${retryAt}`, attempt: attempt.id, retryAt });
@@ -331,7 +458,8 @@ export function settle(ctx: CliContext, attempt: AttemptRecord, now: Date): void
         envelope: result.envelope,
         requestedModel: result.envelope?.requestedModel ?? attempt.requestedModel,
         resolvedModel: result.envelope?.resolvedModel ?? null,
-        modelResolution: result.envelope?.modelResolution ?? null
+        modelResolution: result.envelope?.modelResolution ?? null,
+        providerHandle: result.envelope?.providerHandle ?? attempt.providerHandle
     }, ts, attempt.fence);
     beginSettlement(ctx, attempt, result, cost, policy, ts);
     runSettlement(ctx, attempt, { record }, ts);
@@ -359,8 +487,17 @@ function scheduleRetry(ctx: CliContext, attempt: AttemptRecord, result: { verdic
         settlement: null,
         settlementSteps: [],
         settlementCommitted: false,
-        envelope: null
+        envelope: null,
+        ...forgetLaunch()
     }, now.toISOString());
+}
+
+// A launch that is going to happen again drops what the previous one owned.
+// The group was observed empty before either path could be reached, so what
+// is dropped is a finished record and never a live process left untracked.
+function forgetLaunch(): Partial<AttemptRecord>
+{
+    return { pid: null, wrapper: null, tree: null, treeClosedAt: null, treeSignalledAt: null, exitWriter: null };
 }
 
 /* ── dispatch ──────────────────────────────────────────────────────── */
@@ -435,7 +572,7 @@ export function dispatchRefusal(
     {
         return `the circuit for ${circuitKey(attempt)} is open after ${threshold} failures`;
     }
-    const running = attempts.filter((item) => item.project === attempt.project && item.state === "running").length;
+    const running = attempts.filter((item) => item.project === attempt.project && holdsResources(item)).length;
     if (policy !== null && running >= policy.maxConcurrent)
     {
         return `already running ${running} of ${policy.maxConcurrent} allowed at once`;
@@ -501,6 +638,11 @@ export function launch(ctx: CliContext, attempt: AttemptRecord, now: Date): void
         owner: generation(),
         capabilities: decision.granted,
         pid: null,
+        wrapper: null,
+        tree: null,
+        treeClosedAt: null,
+        treeSignalledAt: null,
+        exitWriter: null,
         startedAt: ts,
         lastBeat: ts,
         tries: attempt.tries + 1,
@@ -528,7 +670,14 @@ export function launch(ctx: CliContext, attempt: AttemptRecord, now: Date): void
         })
     });
     child.unref();
-    patchAttempt(ctx.storeDir, attempt, "launch.pid", { pid: child.pid ?? null }, new Date().toISOString(), fence);
+    // Detached means the wrapper leads a new session, so its pid is also the
+    // id of the group every descendant inherits. That group, not the wrapper,
+    // is what the attempt owns from here on.
+    patchAttempt(ctx.storeDir, attempt, "launch.pid", {
+        pid: child.pid ?? null,
+        wrapper: child.pid === undefined ? null : processRef(ctx.storeDir, child.pid),
+        tree: child.pid === undefined ? null : ownedTree(ctx.storeDir, attempt.id, fence, child.pid)
+    }, new Date().toISOString(), fence);
     startWork(ctx, attempt, ts);
     syncEvent(ctx, attempt, "attempt.started", {
         text: `${attempt.work} attempt ${attempt.id} started on ${attempt.runtime}`,
@@ -539,7 +688,8 @@ export function launch(ctx: CliContext, attempt: AttemptRecord, now: Date): void
 
 // The wrapper records its own pid before it runs anything, which is what lets
 // a supervisor that died between spawn and its own bookkeeping still find the
-// process it started.
+// process it started — and, because that pid also names the session it leads,
+// everything the run goes on to start.
 function wrapper(ctx: CliContext, attempt: AttemptRecord, fence: number): string
 {
     const at = (name: string): string => quote(runFile(ctx.storeDir, attempt.id, fence, name));
@@ -547,7 +697,9 @@ function wrapper(ctx: CliContext, attempt: AttemptRecord, fence: number): string
         `printf %s "$$" > ${at("pid.part")}`,
         `mv ${at("pid.part")} ${at("pid")}`,
         `( ${attempt.command} ) > ${at("stdout")} 2> ${at("stderr")}`,
-        `printf %s "$?" > ${at("exit.part")}`,
+        // Signed with the wrapper's own pid, so the supervisor can tell an
+        // exit the wrapper reported from one somebody else wrote for it.
+        `printf '%s %s' "$?" "$$" > ${at("exit.part")}`,
         `mv ${at("exit.part")} ${at("exit")}`
     ].join("; ");
 }

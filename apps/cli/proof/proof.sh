@@ -844,6 +844,22 @@ settled()
     fail "attempt $1 never wrote an exit notice"
 }
 
+# a verdict waits for the launch's own processes to be gone, so a run that was
+# killed or timed out is read after ticking to convergence, not after one pass
+converge()
+{
+    for _ in $(seq 1 100)
+    do
+        if SELF attempt list | grep "$1" | grep -q "settled"
+        then
+            return 0
+        fi
+        SELF daemon tick > /dev/null
+        sleep 0.1
+    done
+    fail "attempt $1 never reached a terminal state"
+}
+
 # a run states what it did in a completion envelope correlated to its launch.
 # nothing else — not an exit code, not prose — can stand in for it.
 COMPLETE="node '$CLI_DIR/bin/self.mjs' attempt complete"
@@ -933,13 +949,97 @@ PID4="$(node -e 'const fs=require("fs");let pid="";for(const line of fs.readFile
 kill -9 "$PID4" 2>/dev/null || true
 SELF daemon tick > /dev/null
 SELF attempt show "$T4" | grep -q "^exit        vanished" || fail "a vanished process was reported as a confirmed exit"
+# the wrapper is gone but the command it started is not, so the launch is over
+# and the attempt is not: the supervisor contains the group it owns first
+SELF attempt list | grep "$T4" | grep -q "settled" && fail "a killed wrapper settled an attempt whose own process was still running"
+converge "$T4"
 SELF attempt show "$T4" | grep -q "(stale)" || fail "a vanished process was judged instead of left stale"
+SELF attempt show "$T4" | grep -q "empty since" || fail "a verdict was reached without observing the process group empty"
 T5="$(SELF attempt register --work "$W3" --runtime watcher --no-report --heartbeat 1 --command 'sleep 20' | tail -1)"
 SELF attempt run "$T5" > /dev/null
 sleep 2
 SELF daemon tick > /dev/null
 SELF attempt show "$T5" | grep -q "^exit        stale" || fail "a dead heartbeat was not distinguished from an exit"
+converge "$T5"
 SELF attempt show "$T5" | grep -q "no heartbeat" || fail "the stale reason did not name the heartbeat"
+
+# ── an attempt ends when everything it started has ──────────────────
+# the launch owns a process group, so a descendant that outlives the wrapper
+# holds the attempt out of every terminal state — and an exit notice written
+# by hand cannot settle it either, because a group answers to the kernel
+cat > "$ROOT/linger.sh" <<'LINGER'
+trap "" TERM
+sleep 8
+LINGER
+WT="$(SELF work add "an attempt ends when everything it started has" | tail -1)"
+SELF work start "$WT"
+OUTT="$ROOT/outt.txt"
+TT="$(SELF attempt register --work "$WT" --runtime tree --lease tree-slot --no-report --heartbeat 3600 --output "$OUTT" \
+    --command "sh '$ROOT/linger.sh' & printf built > '$OUTT'; $COMPLETE --resolved-model opus" | tail -1)"
+SELF attempt run "$TT" > /dev/null
+settled "$TT"
+SELF daemon tick | grep -q "$TT — .*the launch started are still running" || fail "an attempt was judged while a process it started was still running"
+SELF attempt list | grep "$TT" | grep -q "exited" || fail "the launch's own exit was not recorded"
+SELF attempt list | grep "$TT" | grep -q "settled" && fail "an attempt settled with a live process still in the group it owns"
+SELF daemon status | grep -q "tree-slot" || fail "an attempt released its lease while its own processes were still running"
+SELF attempt exited "$TT" --code 0 > /dev/null
+SELF daemon tick > /dev/null
+SELF attempt list | grep "$TT" | grep -q "settled" && fail "an exit notice written by hand settled an attempt whose processes were still running"
+converge "$TT"
+SELF attempt show "$TT" | grep -q "empty since" || fail "the attempt settled without observing the group it owns empty"
+SELF attempt show "$TT" | grep -q "(passed)" || fail "a run whose tree finished did not settle on its own evidence"
+SELF daemon status | grep -q "leases: none held" || fail "a settled attempt kept the lease its processes had finished with"
+
+# an exit notice nobody signed is a claim, not an exit: the wrapper signs its
+# own, and a run reported finished while its whole tree is up is still running
+TX="$(SELF attempt register --work "$WT" --runtime tree --no-report --heartbeat 3600 --command 'sleep 8' | tail -1)"
+SELF attempt run "$TX" > /dev/null
+SELF attempt exited "$TX" --code 0 | grep -q "exit notice recorded" || fail "an exit notice was not recorded"
+SELF daemon tick | grep -q "$TX — .*the launch started are still running" || fail "an unsigned exit notice settled a run that was still up"
+SELF attempt list | grep "$TX" | grep -q "settled" && fail "an attempt settled on an exit notice while every process it owns was running"
+SELF attempt cancel "$TX" > /dev/null
+converge "$TX"
+
+# a descendant that starts its own session leaves the launch's ownership with
+# it: the supervisor says what it can see, and does not claim the rest
+WD="$(SELF work add "ownership ends where the session does" | tail -1)"
+SELF work start "$WD"
+OUTD="$ROOT/outd.txt"
+TD="$(SELF attempt register --work "$WD" --runtime detach --no-report --heartbeat 3600 --output "$OUTD" \
+    --command "node -e 'require(\"child_process\").spawn(\"sleep\",[\"4\"],{detached:true,stdio:\"ignore\"}).unref()'; printf built > '$OUTD'; $COMPLETE --resolved-model opus" | tail -1)"
+SELF attempt run "$TD" > /dev/null
+settled "$TD"
+SELF daemon tick > /dev/null
+SELF attempt show "$TD" | grep -q "(passed)" || fail "a descendant outside the launch's session held an attempt it does not own"
+
+# work that runs at a provider outlives every local process, so the run claims
+# it and nothing local ends the attempt until the claim is released
+WH="$(SELF work add "a provider job is released before the attempt is judged" | tail -1)"
+SELF work start "$WH"
+OUTH="$ROOT/outh.txt"
+TH="$(SELF attempt register --work "$WH" --runtime provider --no-report --heartbeat 3600 --output "$OUTH" \
+    --command "printf built > '$OUTH'; $COMPLETE --resolved-model opus --provider-handle job-99" | tail -1)"
+SELF attempt run "$TH" > /dev/null
+SELF attempt handle "$TH" --open job-99 | grep -q "will not settle" || fail "a provider claim was not recorded"
+settled "$TH"
+SELF daemon tick | grep -q "$TH — the provider job it claimed is still open" || fail "an attempt settled while the provider job it claimed was open"
+SELF attempt list | grep "$TH" | grep -q "settled" && fail "a local exit settled an attempt that still owned provider work"
+BADCLOSE="$(SELF attempt handle "$TH" --close job-98 2>&1 || true)"
+echo "$BADCLOSE" | grep -q 'claimed provider job "job-99"' || fail "a release naming another job was accepted"
+SELF attempt handle "$TH" --close job-99 > /dev/null
+SELF daemon tick > /dev/null
+SELF attempt show "$TH" | grep -q "(passed)" || fail "a released provider job did not let the attempt settle"
+SELF attempt show "$TH" | grep -q "^provider    job-99" || fail "the provider job the attempt owned is not on its record"
+
+# a run that reports provider work it never claimed is refused, not judged:
+# an owner the supervisor was never able to watch is not evidence of anything
+OUTU="$ROOT/outu.txt"
+TU="$(SELF attempt register --work "$WH" --runtime provider --no-report --heartbeat 3600 --output "$OUTU" \
+    --command "printf built > '$OUTU'; $COMPLETE --resolved-model opus --provider-handle job-ghost" | tail -1)"
+SELF attempt run "$TU" > /dev/null
+settled "$TU"
+SELF daemon tick > /dev/null
+SELF attempt show "$TU" | grep -q "never claimed" || fail "a completion envelope reported provider work the launch never claimed"
 
 # a capacity refusal records retryAt and redispatches after the reset, never before
 W4="$(SELF work add "capacity waits for the reset" | tail -1)"
@@ -1012,7 +1112,7 @@ T10="$(SELF attempt register --work "$W5" --runtime actions --no-report --comman
 SELF attempt run "$T10" > /dev/null
 SELF attempt cancel "$T10" > /dev/null
 SELF attempt show "$T10" | grep -q "running" || fail "cancel lost the attempt state before the supervisor saw it"
-SELF daemon tick > /dev/null
+converge "$T10"
 SELF attempt show "$T10" | grep -q "cancelled" || fail "a cancellation did not settle the attempt"
 SELF attempt list | grep "$T10" | grep -q "cancelled" || fail "the cancellation did not survive into a fresh process"
 
@@ -1223,7 +1323,7 @@ echo "$STALEEXIT" | grep -q "no longer owns" || fail "a superseded process settl
 SELF attempt heartbeat "$TK" --fence 1 > /dev/null || fail "the current fence was refused its own heartbeat"
 SELF daemon status | grep -q "fence 1" || fail "the lease did not carry the fence that minted it"
 SELF attempt cancel "$TK" > /dev/null
-SELF daemon tick > /dev/null
+converge "$TK"
 SELF attempt show "$TK" | grep -q "cancelled" || fail "a cancelled attempt did not settle as cancelled"
 
 # ── a crash either side of spawn leaves nothing running untracked ───

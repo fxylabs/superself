@@ -100,7 +100,14 @@ sits next to git:
   matches the launch that produced it, names the model that actually answered,
   and covers the acceptance criteria the work unit carries at its current
   revision. A criterion added while the agent worked moves the attempt to
-  `revision_required` rather than closing the unit;
+  `revision_required` rather than closing the unit. Nor is a run over because
+  something said so: each launch owns a process group, and an attempt keeps its
+  lease and stays out of every terminal state until that group is observed
+  empty — a background process that outlived the wrapper is terminated and
+  waited for, and an exit notice written by hand settles nothing while the
+  processes it speaks for are still up. Work that runs at a provider outlives
+  every local process, so a run claims it with `self attempt handle --open` and
+  the attempt is judged only once the same job is released;
 - `self work require` states an acceptance criterion and bumps the unit's
   revision; `self work design` approves a design revision. Both are what a
   completion claim is measured against, so "done" means something a later

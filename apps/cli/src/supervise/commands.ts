@@ -10,6 +10,7 @@ import {
     circuits,
     findAttempt,
     foldAttempts,
+    holdsResources,
     newAttempt,
     patchAttempt,
     registerAttempt,
@@ -18,9 +19,10 @@ import {
 import { ALLOWED_ACTIONS, FORBIDDEN_ACTIONS, decideCapabilities } from "./capability.js";
 import { daemonRun, daemonStart, daemonStatus, daemonStop, parseInterval } from "./daemon.js";
 import { buildDigest, printDigest } from "./digest.js";
-import { ENVELOPE_FILE } from "./envelope.js";
+import { ENVELOPE_FILE, HANDLE_FILE, HandleClaim, readClaim } from "./envelope.js";
 import { withStoreLock } from "./lock.js";
 import { appendJournal, runFile, writeLocalFileDurable } from "./local.js";
+import { processRef } from "./process.js";
 import {
     DEFAULT_CIRCUIT_THRESHOLD,
     OvernightPolicy,
@@ -39,6 +41,7 @@ const ATTEMPT_USAGE = `usage: self attempt register --work <id> [--runtime r] [-
        self attempt list | show <id> | run <id> | cancel <id> | approve <id>
        self attempt started <id> --pid <n> [--fence n] | heartbeat <id> [--fence n]
        self attempt exited <id> [--code n] [--fence n] [--provider-status capacity] [--retry-at ts]
+       self attempt handle <id> --open <name> | --close <name> [--fence n]
        self attempt complete [--fence n] [--resolved-model m] [--requirement r-id] …
        self attempt propose <id> --action <kind>`;
 
@@ -66,6 +69,7 @@ export function runAttempt(rest: string[]): void
         started: markStarted,
         heartbeat: beat,
         exited: markExited,
+        handle: claimHandle,
         approve: approve,
         cancel: cancel,
         propose: proposeAction
@@ -308,6 +312,7 @@ const COMPLETE_OPTIONS = {
     "model-resolution": { type: "string" },
     "work-revision": { type: "string" },
     "design-revision": { type: "string" },
+    "provider-handle": { type: "string" },
     requirement: { type: "string", multiple: true },
     action: { type: "string", multiple: true },
     output: { type: "string", multiple: true },
@@ -343,6 +348,7 @@ function completeCommand(args: string[]): void
         modelResolution: resolution,
         requirements: values.requirement ?? splitEnv(process.env.SUPERSELF_REQUIREMENTS),
         actions: values.action ?? splitEnv(process.env.SUPERSELF_CAPABILITIES),
+        providerHandle: emptyToNull(values["provider-handle"] ?? process.env.SUPERSELF_PROVIDER_HANDLE),
         outputs: values.output ?? [],
         validations: (values.validation ?? []).map(parseValidation)
     };
@@ -413,6 +419,8 @@ function showAttempt(ctx: CliContext, attempt: AttemptRecord): void
         `declared    ${attempt.declared.length === 0 ? "none" : attempt.declared.map((path) => basename(path)).join(", ")}`,
         `contract    ${attempt.requireReport ? "report required" : "no report required"}, ${attempt.completes ? "completes the work" : "does not complete the work"}`,
         `fence       ${attempt.fence}${attempt.owner === null ? "" : ` held by ${attempt.owner}`}`,
+        `process     ${processLine(attempt)}`,
+        `provider    ${attempt.providerHandle ?? "no provider job claimed"}`,
         `heartbeat   every ${attempt.heartbeatSec}s, last ${attempt.lastBeat ?? "never"}`,
         `tries       ${attempt.tries}, retries allowed ${attempt.maxRetries}`,
         `cost        ${attempt.costUsd === null ? "unknown" : `$${attempt.costUsd}`}, tokens ${attempt.usage === null ? "unknown" : attempt.usage}`,
@@ -431,6 +439,21 @@ function showAttempt(ctx: CliContext, attempt: AttemptRecord): void
         lines.push(`reason      ${reason}`);
     }
     console.log(lines.join("\n"));
+}
+
+// Machine-local diagnostics only: a pid or a group id means nothing without
+// the machine and the boot it belongs to, and none of this ever reaches a
+// synced event. What it answers is the question the verdict rests on — is
+// anything this launch started still running.
+function processLine(attempt: AttemptRecord): string
+{
+    const group = attempt.tree === null
+        ? "no owned process group"
+        : `owns group ${attempt.tree.pgid} on ${attempt.tree.nodeId.slice(0, 8)}/${attempt.tree.bootId}`;
+    const closed = attempt.treeClosedAt === null
+        ? "not yet observed empty"
+        : `empty since ${attempt.treeClosedAt}`;
+    return `${attempt.pid === null ? "no pid" : `pid ${attempt.pid}`}, ${group}, ${closed}`;
 }
 
 // Manual dispatch answers to every gate except the overnight window: a person
@@ -466,10 +489,24 @@ function markStarted(ctx: CliContext, attempt: AttemptRecord, args: string[]): v
         throw new CliError("self attempt started <id> --pid <n>");
     }
     requireFence(attempt, presentedFence(values.fence));
+    const pid = Number.parseInt(values.pid, 10);
+    if (!Number.isFinite(pid) || pid <= 0)
+    {
+        throw new CliError("self attempt started <id> --pid <n> expects the process id the launch reported");
+    }
     const now = new Date().toISOString();
+    // A process this machine did not spawn leads no session of the supervisor's
+    // making, so the pid is all there is to own. It is still qualified by node,
+    // boot, and start time, and it still has to be gone before the attempt can
+    // be called finished.
     patchAttempt(ctx.storeDir, attempt, "start", {
         state: "running",
-        pid: Number.parseInt(values.pid, 10),
+        pid,
+        wrapper: processRef(ctx.storeDir, pid),
+        tree: null,
+        treeClosedAt: null,
+        treeSignalledAt: null,
+        exitWriter: null,
         startedAt: now,
         lastBeat: now,
         tries: attempt.tries + 1
@@ -530,6 +567,58 @@ function markExited(ctx: CliContext, attempt: AttemptRecord, args: string[]): vo
     console.log(`${attempt.id} exit notice recorded — the supervisor settles it on the next pass`);
 }
 
+const HANDLE_OPTIONS = {
+    open: { type: "string" },
+    close: { type: "string" },
+    fence: { type: "string" }
+} as const;
+
+// Work that runs at a provider outlives every process on this machine, so a
+// local exit says nothing about whether it is over. A run that starts such
+// work claims it here; until the same name is released, the attempt has an
+// owner still live somewhere else and no exit notice can settle it.
+function claimHandle(ctx: CliContext, attempt: AttemptRecord, args: string[]): void
+{
+    const { values } = parseArgs({ args, options: HANDLE_OPTIONS });
+    requireFence(attempt, presentedFence(values.fence));
+    const name = (values.open ?? values.close ?? "").trim();
+    if (name === "" || (values.open !== undefined && values.close !== undefined))
+    {
+        throw new CliError(`self attempt handle ${attempt.id} --open <name> | --close <name>`);
+    }
+    if (attempt.state === "settled")
+    {
+        throw new CliError(`${attempt.id} already settled as ${attempt.verdict} — a settled attempt claims nothing`);
+    }
+    const existing = readClaim(ctx.storeDir, attempt);
+    const state = values.close === undefined ? "open" : "closed";
+    requireClaimable(attempt, existing, name, state);
+    const now = new Date().toISOString();
+    writeLocalFileDurable(runFile(ctx.storeDir, attempt.id, attempt.fence, HANDLE_FILE),
+        JSON.stringify({ handle: name, state, at: now }) + "\n");
+    patchAttempt(ctx.storeDir, attempt, "handle", { providerHandle: name }, now);
+    console.log(state === "open"
+        ? `${attempt.id} claims provider job "${name}" — it will not settle until the job is released`
+        : `${attempt.id} released provider job "${name}"`);
+}
+
+// A release has to name the job that was claimed. Accepting any name would
+// make the claim releasable by anybody who can guess an attempt id, which is
+// the thing it exists to prevent.
+function requireClaimable(attempt: AttemptRecord, existing: HandleClaim | null, name: string, state: string): void
+{
+    if (state === "closed" && existing?.handle !== name)
+    {
+        throw new CliError(existing === null
+            ? `${attempt.id} has claimed no provider job to release`
+            : `${attempt.id} claimed provider job "${existing.handle}", not "${name}"`);
+    }
+    if (state === "open" && existing !== null && existing.state === "open" && existing.handle !== name)
+    {
+        throw new CliError(`${attempt.id} already holds provider job "${existing.handle}" — release it before claiming another`);
+    }
+}
+
 function approve(ctx: CliContext, attempt: AttemptRecord): void
 {
     const now = new Date().toISOString();
@@ -545,9 +634,11 @@ function approve(ctx: CliContext, attempt: AttemptRecord): void
 function cancel(ctx: CliContext, attempt: AttemptRecord): void
 {
     const now = new Date().toISOString();
-    if (attempt.state === "running")
+    // Including a launch that has already written its exit notice: what it
+    // started can still be running, and cancelling has to reach that too.
+    if (holdsResources(attempt))
     {
-        terminate(attempt);
+        terminate(ctx.storeDir, attempt);
     }
     patchAttempt(ctx.storeDir, attempt, "cancel", { cancelRequested: true }, now);
     record(ctx, attempt.project, "attempt.cancelled",

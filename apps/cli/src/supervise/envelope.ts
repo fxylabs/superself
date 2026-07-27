@@ -4,6 +4,41 @@ import { widenedCapabilities } from "./capability.js";
 import { readRun } from "./local.js";
 
 export const ENVELOPE_FILE = "completion.json";
+export const HANDLE_FILE = "handle.json";
+
+// Work that runs somewhere else has an owner this machine cannot watch. A
+// claim is how a run says so: while one is open the attempt owns something
+// live beyond its own process tree, and no local exit ends it. The claim is
+// written into the spool of the launch that made it, so a claim from a
+// superseded launch is invisible to the one that is current.
+export interface HandleClaim
+{
+    handle: string;
+    state: "open" | "closed";
+    at: string;
+}
+
+export function readClaim(storeDir: string, attempt: AttemptRecord): HandleClaim | null
+{
+    const raw = readRun(storeDir, attempt.id, attempt.fence, HANDLE_FILE);
+    if (raw === null || raw.trim() === "")
+    {
+        return null;
+    }
+    let parsed: Record<string, unknown>;
+    try
+    {
+        parsed = JSON.parse(raw) as Record<string, unknown>;
+    }
+    catch
+    {
+        return null;
+    }
+    const state = parsed.state === "open" || parsed.state === "closed" ? parsed.state : null;
+    return typeof parsed.handle === "string" && parsed.handle !== "" && state !== null
+        ? { handle: parsed.handle, state, at: String(parsed.at ?? "") }
+        : null;
+}
 
 // The one durable statement a run makes about what it did. It is correlated
 // to the attempt, the work unit, the revision it was written against, and the
@@ -20,6 +55,9 @@ export interface CompletionEnvelope
     requestedModel: string | null;
     resolvedModel: string | null;
     modelResolution: ModelResolution;
+    // The provider's own name for the job, when there is one. It is the only
+    // identity in the envelope that outlives this machine's process tree.
+    providerHandle: string | null;
     requirements: string[];
     actions: string[];
     outputs: string[];
@@ -80,6 +118,7 @@ export function readEnvelope(storeDir: string, attempt: AttemptRecord): Completi
         requestedModel: typeof parsed.requestedModel === "string" ? parsed.requestedModel : null,
         resolvedModel: typeof parsed.resolvedModel === "string" && parsed.resolvedModel !== "" ? parsed.resolvedModel : null,
         modelResolution: resolution,
+        providerHandle: typeof parsed.providerHandle === "string" && parsed.providerHandle !== "" ? parsed.providerHandle : null,
         requirements: asStringArray(parsed.requirements),
         actions: asStringArray(parsed.actions),
         outputs: asStringArray(parsed.outputs),
@@ -102,6 +141,7 @@ function summarize(envelope: CompletionEnvelope): EnvelopeSummary
         requestedModel: envelope.requestedModel,
         resolvedModel: envelope.resolvedModel,
         modelResolution: envelope.modelResolution,
+        providerHandle: envelope.providerHandle,
         workRevision: envelope.workRevision,
         designRevision: envelope.designRevision,
         requirements: envelope.requirements,
@@ -131,7 +171,7 @@ export function checkEnvelope(
             refused: false
         };
     }
-    const identity = identityReasons(attempt, envelope);
+    const identity = identityReasons(attempt, envelope, readClaim(storeDir, attempt));
     if (identity.length > 0)
     {
         return { summary: summarize(envelope), reasons: identity, revisionMismatch: false, refused: true };
@@ -156,9 +196,16 @@ export function checkEnvelope(
     };
 }
 
-function identityReasons(attempt: AttemptRecord, envelope: CompletionEnvelope): string[]
+function identityReasons(attempt: AttemptRecord, envelope: CompletionEnvelope, claim: HandleClaim | null): string[]
 {
     const reasons: string[] = [];
+    // A run that reports owning provider work must have claimed it, or the
+    // supervisor has no way to know when that work ends and would be settling
+    // the attempt on the strength of a name it has never been able to check.
+    if (envelope.providerHandle !== null && envelope.providerHandle !== claim?.handle)
+    {
+        reasons.push(`the completion envelope reports provider job "${envelope.providerHandle}", which this launch never claimed — claim it with \`self attempt handle ${attempt.id} --open\` before the run uses it`);
+    }
     if (envelope.attempt !== attempt.id)
     {
         reasons.push(`the completion envelope names attempt "${envelope.attempt}", not ${attempt.id}`);

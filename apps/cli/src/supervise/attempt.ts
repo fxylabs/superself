@@ -1,5 +1,6 @@
 import { CliError } from "../types.js";
 import { appendJournal, readJournal } from "./local.js";
+import { OwnedTree, ProcessRef } from "./process.js";
 
 export type AttemptState =
     | "registered"
@@ -33,6 +34,7 @@ export interface EnvelopeSummary
     requestedModel: string | null;
     resolvedModel: string | null;
     modelResolution: ModelResolution;
+    providerHandle: string | null;
     workRevision: number | null;
     designRevision: number | null;
     requirements: string[];
@@ -104,8 +106,33 @@ export interface AttemptRecord
     lastBeat: string | null;
     exitAt: string | null;
     settledAt: string | null;
+    // A machine-local diagnostic only. The identities that decide anything are
+    // the reference and the group below; this mirrors the wrapper's number so
+    // a person reading `attempt show` can find it in `ps`.
     pid: number | null;
+    // The local process this machine started, and the process group the launch
+    // owns. The wrapper answers "did the launch finish"; the group answers
+    // "did everything it started finish", which is a different question and
+    // the only one that may end an attempt.
+    wrapper: ProcessRef | null;
+    tree: OwnedTree | null;
+    // When the owned group was first observed with nothing left in it. Until
+    // it is set the attempt cannot become terminal, whoever says the run is
+    // over; once it is set the group is never probed again, so a group id
+    // handed to somebody else afterwards can never read back as this launch's.
+    treeClosedAt: string | null;
+    // When containment was first signalled to a group that outlived its
+    // launch, which is what the escalation to SIGKILL is timed from.
+    treeSignalledAt: string | null;
+    // The provider's own name for the job this launch claimed. A provider
+    // handle outlives every local process and is the only identity that
+    // survives this machine going away.
+    providerHandle: string | null;
     exitCode: number | null;
+    // The pid that signed the exit notice, when the wrapper signed it. An exit
+    // recorded by hand carries none, and then no process is excused from the
+    // liveness check the verdict waits on.
+    exitWriter: number | null;
     exitSource: ExitSource | null;
     providerStatus: string | null;
     retryAt: string | null;
@@ -174,7 +201,13 @@ export function newAttempt(id: string, project: string, work: string, ts: string
         exitAt: null,
         settledAt: null,
         pid: null,
+        wrapper: null,
+        tree: null,
+        treeClosedAt: null,
+        treeSignalledAt: null,
+        providerHandle: null,
         exitCode: null,
+        exitWriter: null,
         exitSource: null,
         providerStatus: null,
         retryAt: null,
@@ -283,12 +316,20 @@ export interface LeaseHold
     fence: number;
 }
 
+// What a launch still occupies. An exit notice is not the moment to hand the
+// slot on: the notice says the launch finished, and the processes it started
+// can outlive it, so the hold lasts until the owned group is observed empty.
+export function holdsResources(attempt: AttemptRecord): boolean
+{
+    return attempt.state === "running" || (attempt.state === "exited" && attempt.treeClosedAt === null);
+}
+
 export function heldLeases(attempts: AttemptRecord[]): Map<string, LeaseHold>
 {
     const held = new Map<string, LeaseHold>();
     for (const attempt of attempts)
     {
-        if (attempt.state === "running" && attempt.lease !== null)
+        if (holdsResources(attempt) && attempt.lease !== null)
         {
             const current = held.get(attempt.lease);
             if (current === undefined || attempt.fence > current.fence)
