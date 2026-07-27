@@ -48,6 +48,14 @@ export function commitExists(repoDir: string, rev: string): boolean
     return resolveSha(repoDir, rev) !== null;
 }
 
+// Whether `descendant` contains `ancestor` — what lets a merge receipt prove
+// the commits it names are really related, not merely well-formed.
+export function isAncestor(repoDir: string, ancestor: string, descendant: string): boolean
+{
+    const result = run(repoDir, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return result !== null && result.ok;
+}
+
 // The feature bytes: what this branch adds on top of where it forked from,
 // which is exactly what survives a conflict-free rebase onto a moved base.
 export function featureDiff(repoDir: string, base: string, head: string): string | null

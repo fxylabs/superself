@@ -2,11 +2,13 @@ import { readFileSync, existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { attemptId, mergeId } from "./ids.js";
 import { readEvents } from "./logfile.js";
+import { confirmHuman } from "./human.js";
 import {
     ChangeSet,
     IntegrationState,
     Repository,
     currentApproval,
+    mergeTargetOf,
     openChangeSets,
     repositoryOf,
     runningAttempt,
@@ -15,7 +17,7 @@ import {
 } from "./integration.js";
 import { ProjectContext } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
-import { commitExists, featureDigest } from "./repo.js";
+import { commitExists, featureDigest, isAncestor } from "./repo.js";
 import { dim, green, styled, yellow } from "./style.js";
 import {
     bindDigest,
@@ -32,7 +34,7 @@ const DEFAULT_TTL_MINUTES = 30;
 
 const LEASE_USAGE = "usage: self integration lease acquire --repo r --holder h [--ttl <minutes>] | release --repo r --fence N | show --repo r";
 const ATTEMPT_USAGE = "usage: self integration attempt start <change-set> --fence N --action rebase|resolve|merge | finish <attempt> --outcome completed|conflict|failed | cancel <attempt> --why w";
-const OBSERVE_USAGE = "usage: self integration observe ci --repo r --head h --check c --conclusion success|failure|pending [--at iso] | main --repo r --head h [--at iso] | --file <batch.json>";
+const OBSERVE_USAGE = "usage: self integration observe ci --repo r --head h --check c --conclusion success|failure|pending [--at iso] | main|target --repo r --head h [--at iso] | --file <batch.json>";
 
 /* ── lease ─────────────────────────────────────────────────────────── */
 
@@ -216,7 +218,7 @@ function startAttempt(ctx: ProjectContext, args: string[]): void
     const id = attemptId();
     const payload = {
         attempt: id, changeSet: changeSet.id, repository: repository.name, fence: Number(values.fence),
-        action, predecessor: changeSet.predecessors[0], oldHead: changeSet.head, mainAt: repository.mainHead
+        action, predecessor: changeSet.predecessors[0], oldHead: changeSet.head, mainAt: mergeTargetOf(repository).head
     };
     recordEvent(ctx, makeEvent(ctx.project, "attempt.started", strip(payload)), `${changeSet.id} ${action}`);
     if (!printMachine(values.json, { attempt: id, changeSet: changeSet.id, action, fence: Number(values.fence) }))
@@ -259,7 +261,7 @@ function attemptRefusal(state: IntegrationState, changeSet: ChangeSet, repositor
 // order, an unowned architecture collision, and a fence that is not current.
 const START_BLOCKING = ["predecessor_open", "dependency_cycle", "dependency_unknown", "unconsolidated_semantic_overlap"];
 
-function fenceRefusalOf(repository: Repository, fence: string | undefined): Refusal | null
+export function fenceRefusalOf(repository: Repository, fence: string | undefined): Refusal | null
 {
     const lease = repository.lease;
     if (lease === undefined || !lease.live)
@@ -412,7 +414,7 @@ export function cmdObserve(ctx: ProjectContext, rest: string[]): void
 
 interface Observation
 {
-    kind: "ci" | "main";
+    kind: "ci" | "main" | "target";
     repository: string;
     head: string;
     check?: string;
@@ -424,7 +426,7 @@ interface Observation
 
 function observationFrom(kind: string | undefined, values: Record<string, unknown>): Observation
 {
-    if (kind !== "ci" && kind !== "main")
+    if (kind !== "ci" && kind !== "main" && kind !== "target")
     {
         throw new CliError(OBSERVE_USAGE);
     }
@@ -434,7 +436,7 @@ function observationFrom(kind: string | undefined, values: Record<string, unknow
         head: requireText(values.head as string | undefined, "integration observe … --head <sha>"),
         check: values.check as string | undefined,
         conclusion: values.conclusion as string | undefined,
-        observedAt: (values.at as string | undefined) ?? new Date().toISOString(),
+        observedAt: values.at as string | undefined,
         url: values.url as string | undefined,
         dedupe: values.dedupe as string | undefined
     });
@@ -443,22 +445,29 @@ function observationFrom(kind: string | undefined, values: Record<string, unknow
 // A projection is keyed by what it says, not by when it arrived: the same
 // webhook delivered twice, or replayed after a restart, lands on the same key
 // and changes nothing.
+//
+// A wall-clock default never enters the key. A caller that states an instant
+// with --at gets an identity that includes it; a caller that states nothing
+// gets a pure content key, so an undedupe-keyed redelivery converges instead
+// of minting a fresh identity from whenever this process happened to run.
+// Webhook adapters must pass the delivery id as --dedupe.
 function normalize(raw: Record<string, unknown>): Observation
 {
-    const kind = raw.kind === "main" ? "main" : "ci";
+    const kind = raw.kind === "main" || raw.kind === "target" ? raw.kind : "ci";
+    const statedAt = raw.observedAt === undefined ? undefined : String(raw.observedAt);
     const observation: Observation = {
         kind,
         repository: String(raw.repository),
         head: String(raw.head),
         check: kind === "ci" ? String(raw.check ?? requireCheck()) : undefined,
         conclusion: kind === "ci" ? conclusionOf(raw.conclusion) : undefined,
-        observedAt: String(raw.observedAt ?? new Date().toISOString()),
+        observedAt: statedAt ?? new Date().toISOString(),
         url: raw.url === undefined ? undefined : String(raw.url),
         dedupe: ""
     };
     observation.dedupe = raw.dedupe === undefined
         ? [kind, observation.repository, observation.head, observation.check ?? "-", observation.conclusion ?? "-",
-            observation.observedAt].join(":")
+            ...(statedAt === undefined ? [] : [statedAt])].join(":")
         : String(raw.dedupe);
     return observation;
 }
@@ -496,7 +505,7 @@ function ingestObservations(ctx: ProjectContext, observations: Observation[], js
 {
     const state = loadIntegration(ctx);
     const fresh = observations.filter((item) => !state.seen.includes(item.dedupe));
-    const events = fresh.map((item) => makeEvent(ctx.project, item.kind === "main" ? "main.observed" : "ci.observed",
+    const events = fresh.map((item) => makeEvent(ctx.project, `${item.kind}.observed`,
         strip({ repository: item.repository, head: item.head, check: item.check, conclusion: item.conclusion,
             observedAt: item.observedAt, url: item.url, dedupe: item.dedupe })));
     const result = { observed: fresh.length, duplicates: observations.length - fresh.length };
@@ -512,11 +521,15 @@ function ingestObservations(ctx: ProjectContext, observations: Observation[], js
 
 /* ── approval and merge ────────────────────────────────────────────── */
 
+// The human gate on a merge that lands on main. The confirmation is read from
+// an interactive terminal and recorded in the event, and the fold refuses an
+// approval that does not carry it — so no agent-runnable invocation, and no
+// hand-built event, can self-assert a human.
 export function cmdApprove(ctx: ProjectContext, rest: string[]): void
 {
     const { values, positionals } = parseArgs({
         args: rest,
-        options: { head: { type: "string" }, by: { type: "string" } },
+        options: { head: { type: "string" }, by: { type: "string" }, json: { type: "boolean" } },
         allowPositionals: true
     });
     const state = loadIntegration(ctx);
@@ -527,7 +540,12 @@ export function cmdApprove(ctx: ProjectContext, rest: string[]): void
         throw new CliError(`approval names ${short(head)}, and ${changeSet.id} is at ${short(changeSet.head)} — ` +
             "an approval is bound to the exact head it was given for");
     }
-    const payload = { changeSet: changeSet.id, head, by: values.by ?? "maintainer" };
+    const confirmation = confirmHuman(`merge approval for ${changeSet.id} at head ${short(head)}`, short(head));
+    if ("code" in confirmation)
+    {
+        return refuse(values.json, confirmation);
+    }
+    const payload = { changeSet: changeSet.id, head, by: values.by ?? "maintainer", confirmation };
     recordEvent(ctx, makeEvent(ctx.project, "merge.approved", payload, undefined, true), `${changeSet.id} ${short(head)}`);
 }
 
@@ -544,7 +562,9 @@ export function cmdMerge(ctx: ProjectContext, rest: string[]): void
     const state = loadIntegration(ctx);
     const changeSet = requireChangeSet(state, positionals[0]);
     const repository = repositoryOf(state, changeSet.repository);
-    const refusal = mergeRefusal(changeSet, repository, values.fence) ?? driftRefusal(ctx, changeSet);
+    const refusal = mergeRefusal(changeSet, repository, values.fence)
+        ?? driftRefusal(ctx, changeSet)
+        ?? receiptRefusal(ctx, repository, changeSet.head, values);
     if (refusal !== null)
     {
         return refuse(values.json, refusal);
@@ -597,23 +617,99 @@ function driftRefusal(ctx: ProjectContext, changeSet: ChangeSet): Refusal | null
     };
 }
 
+const FULL_COMMIT = /^[0-9a-f]{40}$/;
+
+// The receipt is the durable record of what landed, so what it names is
+// validated like any other claim: full commit ids always, and — when a
+// checkout is reachable — commits that exist and really contain the reviewed
+// head. A receipt naming commits nobody can relate to the reviewed bytes is
+// refused, not recorded.
+export function commitShapeRefusal(commits: Record<string, string | undefined>): Refusal | null
+{
+    for (const [flag, sha] of Object.entries(commits))
+    {
+        if (sha !== undefined && !FULL_COMMIT.test(sha))
+        {
+            return {
+                code: "commit_malformed",
+                detail: `${flag} "${sha}" is not a full 40-character commit id`,
+                next: "record the receipt with the exact commit ids git reports"
+            };
+        }
+    }
+    return null;
+}
+
+// Proof of the commit relationship: reviewedHead is contained in the merge
+// commit, and the merge commit is contained in the branch head after. With no
+// reachable checkout the declared receipt stands on its own, exactly as a
+// declared digest does — and is caught the moment a checkout can look.
+export function commitProofRefusal(ctx: ProjectContext, reviewedHead: string, mergeCommit: string | undefined,
+    after: string, afterLabel: string): Refusal | null
+{
+    const repoDir = repoDirOf(ctx, undefined, false);
+    if (repoDir === null)
+    {
+        return null;
+    }
+    const named: [string, string | undefined][] =
+        [["reviewed head", reviewedHead], ["merge commit", mergeCommit], [afterLabel, after]];
+    for (const [label, sha] of named)
+    {
+        if (sha !== undefined && !commitExists(repoDir, sha))
+        {
+            return {
+                code: "commit_unknown",
+                detail: `the ${label} ${short(sha)} is not a commit in the reachable checkout`,
+                next: "record the receipt with the exact commit ids git reports"
+            };
+        }
+    }
+    const chain = mergeCommit === undefined ? [reviewedHead, after] : [reviewedHead, mergeCommit, after];
+    for (let step = 0; step + 1 < chain.length; step++)
+    {
+        if (!isAncestor(repoDir, chain[step], chain[step + 1]))
+        {
+            return {
+                code: "merge_unrelated",
+                detail: `${short(chain[step + 1])} does not contain ${short(chain[step])}, ` +
+                    "so this receipt does not describe a merge of the reviewed bytes",
+                next: "record the merge that really happened, with the commits git reports"
+            };
+        }
+    }
+    return null;
+}
+
+function receiptRefusal(ctx: ProjectContext, repository: Repository, head: string,
+    values: Record<string, unknown>): Refusal | null
+{
+    const mergeCommit = requireText(values["merge-commit"] as string | undefined, "integration merge <id> --merge-commit <sha>");
+    const mainBefore = requireText(values["main-before"] as string | undefined, "integration merge <id> --main-before <sha>");
+    const mainAfter = requireText(values["main-after"] as string | undefined, "integration merge <id> --main-after <sha>");
+    return commitShapeRefusal({ "--merge-commit": mergeCommit, "--main-before": mainBefore, "--main-after": mainAfter })
+        ?? commitProofRefusal(ctx, head, mergeCommit, mainAfter, `${mergeTargetOf(repository).branch} after the merge`);
+}
+
 function recordMerge(ctx: ProjectContext, changeSet: ChangeSet, repository: Repository, values: Record<string, unknown>): void
 {
     const id = mergeId();
+    const target = mergeTargetOf(repository);
     const approval = currentApproval(changeSet);
-    const payload = {
+    const payload = strip({
         merge: id, changeSet: changeSet.id, head: changeSet.head, fence: Number(values.fence),
         mergeCommit: requireText(values["merge-commit"] as string | undefined, "integration merge <id> --merge-commit <sha>"),
         mainBefore: requireText(values["main-before"] as string | undefined, "integration merge <id> --main-before <sha>"),
         mainAfter: requireText(values["main-after"] as string | undefined, "integration merge <id> --main-after <sha>"),
-        approval: approval?.id, ci: changeSet.ci.filter((item) => changeSet.checks.includes(item.check))
-    };
-    const advance = makeEvent(ctx.project, "main.observed", {
+        target: target.branch, approval: approval?.id,
+        ci: changeSet.ci.filter((item) => changeSet.checks.includes(item.check))
+    });
+    const advance = makeEvent(ctx.project, target.promotion ? "main.observed" : "target.observed", {
         repository: repository.name, head: payload.mainAfter, observedAt: new Date().toISOString(),
-        dedupe: `main:${repository.name}:${payload.mainAfter}:${id}`
+        dedupe: `${target.promotion ? "main" : "target"}:${repository.name}:${payload.mainAfter}:${id}`
     });
     recordEvents(ctx, [makeEvent(ctx.project, "merge.recorded", payload, { work: changeSet.work }, true), advance],
-        `${changeSet.id} merged as ${short(payload.mergeCommit)}`);
+        `${changeSet.id} merged as ${short(String(payload.mergeCommit))}`);
     if (!printMachine(values.json as boolean | undefined, payload))
     {
         console.log(id);
@@ -668,9 +764,9 @@ function expiryRecorded(ctx: ProjectContext, repository: string, fence: number):
 }
 
 // An attempt is only valid while the fence it started under is the fence that
-// is current, the main it planned against is the main that is there, and the
-// head it planned against has not moved. When one of those stops being true
-// the attempt is cancelled with the reason, never silently retried.
+// is current, the merge target it planned against is the one that is there,
+// and the head it planned against has not moved. When one of those stops
+// being true the attempt is cancelled with the reason, never silently retried.
 function collectCancellations(ctx: ProjectContext, state: IntegrationState, repository: Repository,
     events: SelfEvent[], actions: { action: string; subject: string; reason: string }[]): void
 {
@@ -695,9 +791,10 @@ function invalidReason(attempt: { fence: number; oldHead: string; mainAt?: strin
     {
         return { code: "stale_fence", detail: `fence ${attempt.fence} is no longer current on ${repository.name}` };
     }
-    if (attempt.mainAt !== undefined && repository.mainHead !== undefined && attempt.mainAt !== repository.mainHead)
+    const target = mergeTargetOf(repository);
+    if (attempt.mainAt !== undefined && target.head !== undefined && attempt.mainAt !== target.head)
     {
-        return { code: "main_advanced", detail: `main moved from ${short(attempt.mainAt)} to ${short(repository.mainHead)}` };
+        return { code: "target_moved", detail: `${target.branch} moved from ${short(attempt.mainAt)} to ${short(target.head)}` };
     }
     if (attempt.oldHead !== changeSet.head)
     {

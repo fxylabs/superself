@@ -65,7 +65,7 @@ export interface ReviewReceipt
     base: string;
     head: string;
     // The bytes this verdict is about: a feature diff digest, an integration
-    // delta digest, or the release-candidate commit for a release audit.
+    // delta digest, or the release-delta digest a promotion pinned.
     digest: string;
     verdict: ReviewVerdict;
     findings: string[];
@@ -125,6 +125,10 @@ export interface MergeApproval
     head: string;
     by: string;
     humanConfirmed: boolean;
+    // How the human was verified. Only a recognized method makes an approval
+    // count: an event asserting `confirmed` with no verified method behind it
+    // is an agent's claim, and the gate does not read claims.
+    method?: string;
     ts: string;
 }
 
@@ -147,9 +151,38 @@ export interface MergeReceipt
     mergeCommit: string;
     mainBefore: string;
     mainAfter: string;
-    approval: string;
+    // The branch this merge landed on: the configured integration branch, or
+    // main when the repository merges directly. An integration-target merge
+    // carries no approval — the human gate belongs to promotion into main.
+    target?: string;
+    approval?: string;
     ci: CiObservation[];
     ts: string;
+}
+
+// One bid to promote the integration branch into main. The candidate is an
+// exact commit, and the digest is the exact release-candidate bytes —
+// sha256(git diff base...candidate) — so the release review and the human
+// approval are both bound to precisely what promotion will land on main.
+export interface Promotion
+{
+    id: string;
+    repository: string;
+    candidate: string;
+    base: string;
+    digest: string;
+    digestSource: "computed" | "declared";
+    ts: string;
+    receipts: ReviewReceipt[];
+    approvals: MergeApproval[];
+    recorded?: {
+        mainBefore: string;
+        mainAfter: string;
+        mergeCommit?: string;
+        approval: string;
+        receipt: string;
+        ts: string;
+    };
 }
 
 export interface Blocker
@@ -227,13 +260,31 @@ export interface Repository
     lease?: RepositoryLease;
     mainHead?: string;
     mainObservedAt?: string;
+    // The configured integration branch, when the train merges somewhere
+    // before main. Its head is observed exactly as main's is.
+    integrationBranch?: string;
+    targetHead?: string;
+    targetObservedAt?: string;
     train: string[];
+}
+
+// Where this repository's change-set merges land. With a configured
+// integration branch the lane is autonomous; without one, every merge is
+// itself a promotion into main and takes the human gate with it.
+export function mergeTargetOf(repository: Repository): { branch: string; head?: string; promotion: boolean }
+{
+    if (repository.integrationBranch !== undefined)
+    {
+        return { branch: repository.integrationBranch, head: repository.targetHead, promotion: false };
+    }
+    return { branch: "main", head: repository.mainHead, promotion: true };
 }
 
 export interface IntegrationState
 {
     changeSets: ChangeSet[];
     repositories: Repository[];
+    promotions: Promotion[];
     ci: CiObservation[];
     // Every projected observation carries a key. A webhook delivered twice is
     // one observation, and the second delivery must add nothing.
@@ -242,10 +293,10 @@ export interface IntegrationState
 
 export function emptyIntegration(): IntegrationState
 {
-    return { changeSets: [], repositories: [], ci: [], seen: [] };
+    return { changeSets: [], repositories: [], promotions: [], ci: [], seen: [] };
 }
 
-export const INTEGRATION_PREFIXES = ["changeset.", "review.", "lease.", "attempt.", "merge.", "ci.", "main."];
+export const INTEGRATION_PREFIXES = ["changeset.", "review.", "lease.", "attempt.", "merge.", "ci.", "main.", "repo.", "target.", "promotion."];
 
 export function isIntegrationEvent(type: string): boolean
 {
@@ -281,7 +332,17 @@ export function applyIntegration(state: IntegrationState, event: SelfEvent): voi
         applyMerge(state, event);
         return;
     }
-    if (event.type === "ci.observed" || event.type === "main.observed")
+    if (event.type === "repo.target_set")
+    {
+        repositoryOf(state, String(event.payload.repository)).integrationBranch = str(event.payload.branch);
+        return;
+    }
+    if (event.type.startsWith("promotion."))
+    {
+        applyPromotion(state, event);
+        return;
+    }
+    if (event.type === "ci.observed" || event.type === "main.observed" || event.type === "target.observed")
     {
         applyObservation(state, event);
     }
@@ -398,6 +459,11 @@ function moveHead(changeSet: ChangeSet, event: SelfEvent): void
 
 function applyReview(state: IntegrationState, event: SelfEvent): void
 {
+    if (event.payload.promotion !== undefined)
+    {
+        applyReleaseReview(state, event);
+        return;
+    }
     const changeSet = findChangeSet(state, str(event.payload.changeSet));
     if (changeSet === undefined)
     {
@@ -581,14 +647,7 @@ function applyMerge(state: IntegrationState, event: SelfEvent): void
     changeSet.lastEventTs = event.ts;
     if (event.type === "merge.approved")
     {
-        changeSet.approvals.push({
-            id: event.id,
-            changeSet: changeSet.id,
-            head: String(event.payload.head),
-            by: String(event.payload.by ?? (event.origin.confirmed ? "human" : "agent")),
-            humanConfirmed: event.origin.confirmed,
-            ts: event.ts
-        });
+        changeSet.approvals.push(approvalOf(event, changeSet.id, str(event.payload.head)));
         return;
     }
     if (changeSet.merge !== undefined)
@@ -596,6 +655,35 @@ function applyMerge(state: IntegrationState, event: SelfEvent): void
         return;
     }
     changeSet.merge = newMergeReceipt(changeSet, event);
+}
+
+// An approval is human only when the event carries the record of how the
+// human was verified. `origin.confirmed` alone is a bit any process can set;
+// the confirmation method is the typed input the gate actually reads.
+function approvalOf(event: SelfEvent, subject: string, head: string | undefined): MergeApproval
+{
+    const method = confirmationMethodOf(event.payload.confirmation);
+    return {
+        id: event.id,
+        changeSet: subject,
+        head: head ?? "",
+        by: String(event.payload.by ?? (event.origin.confirmed ? "human" : "agent")),
+        humanConfirmed: event.origin.confirmed && method !== undefined,
+        method,
+        ts: event.ts
+    };
+}
+
+const VERIFIED_CONFIRMATION_METHODS = ["tty"];
+
+function confirmationMethodOf(value: unknown): string | undefined
+{
+    if (value === null || typeof value !== "object")
+    {
+        return undefined;
+    }
+    const method = (value as Record<string, unknown>).method;
+    return VERIFIED_CONFIRMATION_METHODS.includes(method as string) ? String(method) : undefined;
 }
 
 function newMergeReceipt(changeSet: ChangeSet, event: SelfEvent): MergeReceipt
@@ -609,10 +697,79 @@ function newMergeReceipt(changeSet: ChangeSet, event: SelfEvent): MergeReceipt
         mergeCommit: String(payload.mergeCommit),
         mainBefore: String(payload.mainBefore),
         mainAfter: String(payload.mainAfter),
-        approval: String(payload.approval),
+        target: str(payload.target),
+        approval: str(payload.approval),
         ci: Array.isArray(payload.ci) ? (payload.ci as CiObservation[]) : [],
         ts: event.ts
     };
+}
+
+function applyReleaseReview(state: IntegrationState, event: SelfEvent): void
+{
+    const promotion = findPromotion(state, str(event.payload.promotion));
+    if (promotion === undefined || event.type !== "review.received")
+    {
+        return;
+    }
+    const id = str(event.payload.receipt) ?? event.id;
+    if (promotion.receipts.some((receipt) => receipt.id === id))
+    {
+        return;
+    }
+    promotion.receipts.push(newReceipt(id, promotion.id, event));
+}
+
+function applyPromotion(state: IntegrationState, event: SelfEvent): void
+{
+    if (event.type === "promotion.requested")
+    {
+        registerPromotion(state, event);
+        return;
+    }
+    const promotion = findPromotion(state, str(event.payload.promotion));
+    if (promotion === undefined)
+    {
+        return;
+    }
+    if (event.type === "promotion.approved")
+    {
+        promotion.approvals.push(approvalOf(event, promotion.id, str(event.payload.candidate)));
+        return;
+    }
+    if (event.type !== "promotion.recorded" || promotion.recorded !== undefined)
+    {
+        return;
+    }
+    promotion.recorded = {
+        mainBefore: String(event.payload.mainBefore),
+        mainAfter: String(event.payload.mainAfter),
+        mergeCommit: str(event.payload.mergeCommit),
+        approval: String(event.payload.approval),
+        receipt: String(event.payload.receipt),
+        ts: event.ts
+    };
+}
+
+function registerPromotion(state: IntegrationState, event: SelfEvent): void
+{
+    const id = str(event.payload.promotion) ?? event.id;
+    if (findPromotion(state, id) !== undefined)
+    {
+        return;
+    }
+    const repository = String(event.payload.repository);
+    repositoryOf(state, repository);
+    state.promotions.push({
+        id,
+        repository,
+        candidate: String(event.payload.candidate),
+        base: String(event.payload.base),
+        digest: String(event.payload.digest),
+        digestSource: event.payload.digestSource === "computed" ? "computed" : "declared",
+        ts: event.ts,
+        receipts: [],
+        approvals: []
+    });
 }
 
 // Projections converge whatever order they arrive in: a key that was already
@@ -636,6 +793,11 @@ function applyObservation(state: IntegrationState, event: SelfEvent): void
         observeMain(repository, String(event.payload.head), observedAt);
         return;
     }
+    if (event.type === "target.observed")
+    {
+        observeTarget(repository, String(event.payload.head), observedAt);
+        return;
+    }
     observeCi(state, repository.name, event, observedAt);
 }
 
@@ -647,6 +809,16 @@ function observeMain(repository: Repository, head: string, observedAt: string): 
     }
     repository.mainHead = head;
     repository.mainObservedAt = observedAt;
+}
+
+function observeTarget(repository: Repository, head: string, observedAt: string): void
+{
+    if (repository.targetObservedAt !== undefined && repository.targetObservedAt > observedAt)
+    {
+        return;
+    }
+    repository.targetHead = head;
+    repository.targetObservedAt = observedAt;
 }
 
 function observeCi(state: IntegrationState, repository: string, event: SelfEvent, observedAt: string): void
@@ -688,6 +860,13 @@ export function deriveIntegration(state: IntegrationState, now: Date): string[]
     for (const changeSet of state.changeSets)
     {
         signals.push(...changeSetSignals(changeSet));
+    }
+    for (const promotion of state.promotions)
+    {
+        if (promotion.digestSource === "declared" && promotion.recorded === undefined)
+        {
+            signals.push(`${promotion.id} carries a declared release digest — no checkout was reachable to compute it`);
+        }
     }
     return signals;
 }
@@ -892,7 +1071,7 @@ function blockersOf(changeSet: ChangeSet, repository: Repository, train: ChangeS
         ...policyBlockers(changeSet, train),
         ...reviewBlockers(changeSet, cover),
         ...laneBlockers(changeSet, repository),
-        ...evidenceBlockers(changeSet)
+        ...evidenceBlockers(changeSet, repository)
     ];
 }
 
@@ -1010,17 +1189,25 @@ function laneBlockers(changeSet: ChangeSet, repository: Repository): Blocker[]
     return blockers;
 }
 
-function evidenceBlockers(changeSet: ChangeSet): Blocker[]
+// The human approval belongs to exactly one thing: promotion into main. A
+// repository with a configured integration branch merges its train there on
+// receipts, fence, CI and order alone; only a repository whose merges land
+// directly on main takes the human gate on each merge.
+function evidenceBlockers(changeSet: ChangeSet, repository: Repository): Blocker[]
 {
     const blockers: Blocker[] = [];
     blockers.push(...ciBlockers(changeSet));
+    if (!mergeTargetOf(repository).promotion)
+    {
+        return blockers;
+    }
     const approval = currentApproval(changeSet);
     if (approval === undefined)
     {
         blockers.push({
             code: "approval_missing",
-            detail: `no human merge approval names head ${short(changeSet.head)}`,
-            next: `a maintainer runs \`self integration approve ${changeSet.id} --head ${changeSet.head}\``
+            detail: `no human merge approval names head ${short(changeSet.head)}, and this merge lands on main`,
+            next: `a maintainer runs \`self integration approve ${changeSet.id} --head ${changeSet.head}\` in their own terminal`
         });
     }
     return blockers;
@@ -1053,6 +1240,23 @@ export function currentApproval(changeSet: ChangeSet): MergeApproval | undefined
 {
     return [...changeSet.approvals].reverse()
         .find((approval) => approval.head === changeSet.head && approval.humanConfirmed);
+}
+
+export function promotionApproval(promotion: Promotion): MergeApproval | undefined
+{
+    return [...promotion.approvals].reverse()
+        .find((approval) => approval.head === promotion.candidate && approval.humanConfirmed);
+}
+
+// The standing release verdict on exactly the release-candidate bytes this
+// promotion pinned. Same rule as every other receipt: the last word on those
+// bytes decides, and only an approval opens the gate.
+export function standingRelease(promotion: Promotion): ReviewReceipt | undefined
+{
+    const receipts = promotion.receipts.filter((receipt) =>
+        receipt.scope === "release" && receipt.digest === promotion.digest);
+    const last = receipts[receipts.length - 1];
+    return last !== undefined && last.verdict === "approve" ? last : undefined;
 }
 
 export function runningAttempt(changeSet: ChangeSet): IntegrationAttempt | undefined
@@ -1161,6 +1365,11 @@ export function findChangeSet(state: IntegrationState, id: string | undefined): 
 export function findAttempt(state: IntegrationState, id: string | undefined): IntegrationAttempt | undefined
 {
     return id === undefined ? undefined : state.changeSets.flatMap((item) => item.attempts).find((item) => item.id === id);
+}
+
+export function findPromotion(state: IntegrationState, id: string | undefined): Promotion | undefined
+{
+    return id === undefined ? undefined : state.promotions.find((item) => item.id === id);
 }
 
 export function repositoryOf(state: IntegrationState, name: string): Repository

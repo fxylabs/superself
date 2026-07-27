@@ -292,12 +292,14 @@ export function reviewContract(): Record<string, unknown>
             "artifact.path resolves relative to the envelope file and must match sha256 and bytes exactly",
             "digest binds the verdict to bytes: the feature diff digest for scope change, " +
                 "the integration delta digest for scope integration_delta, " +
-                "and the release-candidate feature digest for scope release",
+                "and the release-delta digest sha256(git diff main...candidate) a promotion pinned for scope release",
+            "a release review binds to a promotion: changeSet names the promotion id, " +
+                "head is the exact candidate commit",
             "an approve verdict must list at least one test"
         ],
         fields: {
             schema: `constant "${ENVELOPE_SCHEMA}"`,
-            changeSet: "the change set id the review was bounded to",
+            changeSet: "the change set id the review was bounded to — the promotion id for scope release",
             scope: REVIEW_SCOPES,
             base: "40-character base commit id",
             head: "40-character reviewed head commit id",
@@ -313,7 +315,7 @@ export function reviewContract(): Record<string, unknown>
             "envelope_missing", "envelope_unparsable", "schema_unknown", "field_missing", "scope_invalid",
             "verdict_invalid", "commit_invalid", "digest_invalid", "tests_missing", "artifact_undeclared",
             "artifact_digest_invalid", "artifact_missing", "artifact_outside_envelope", "artifact_size_mismatch",
-            "artifact_digest_mismatch", "changeset_unknown", "head_mismatch", "digest_unbound"
+            "artifact_digest_mismatch", "changeset_unknown", "promotion_unknown", "head_mismatch", "digest_unbound"
         ]
     };
 }

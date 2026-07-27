@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { ChangeSet, IntegrationState, Repository, findChangeSet, repositoryOf } from "./integration.js";
+import { ChangeSet, IntegrationState, Promotion, Repository, findChangeSet, findPromotion, repositoryOf } from "./integration.js";
 import { buildModel } from "./model.js";
 import { ProjectContext } from "./paths.js";
 import { changedPaths, featureDigest, isRepo, resolveSha } from "./repo.js";
@@ -21,6 +21,17 @@ export function requireChangeSet(state: IntegrationState, id: string | undefined
         throw new CliError(`unknown change set "${id ?? ""}" — run \`self integration list\` to see ids`);
     }
     return changeSet;
+}
+
+export function requirePromotion(state: IntegrationState, id: string | undefined): Promotion
+{
+    const promotion = findPromotion(state, id);
+    if (promotion === undefined)
+    {
+        throw new CliError(`unknown promotion "${id ?? ""}" — request one with ` +
+            "`self integration promote request --repo <name> --candidate <sha>`");
+    }
+    return promotion;
 }
 
 export function requireRepository(state: IntegrationState, name: string | undefined): Repository

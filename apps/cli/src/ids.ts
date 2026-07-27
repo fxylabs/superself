@@ -59,6 +59,11 @@ export function mergeId(): string
     return "mr-" + shortId();
 }
 
+export function promotionId(): string
+{
+    return "pm-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";

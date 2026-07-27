@@ -197,7 +197,8 @@ function integrationLines(model: ProjectModel): string[]
     {
         const lease = repository.lease;
         const held = lease !== undefined && lease.live ? `leased by ${lease.holder} at fence ${lease.fence}` : "no live lease";
-        lines.push(`- **${repository.name}** — ${held}${repository.mainHead === undefined ? "" : `, main ${repository.mainHead}`}`);
+        lines.push(`- **${repository.name}** — ${held}${repository.mainHead === undefined ? "" : `, main ${repository.mainHead}`}` +
+            `${repository.integrationBranch === undefined ? "" : `, merges into ${repository.integrationBranch}`}`);
         for (const changeSet of repository.train.map((id) => findChangeSet(model.integration, id)))
         {
             if (changeSet === undefined || changeSet.closed !== undefined)

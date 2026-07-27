@@ -11,6 +11,7 @@ import {
     short
 } from "./integration.js";
 import { cmdApprove, cmdAttempt, cmdLease, cmdMerge, cmdObserve, cmdReconcile, strip } from "./lane.js";
+import { cmdPromote, cmdTarget } from "./promote.js";
 import { ProjectContext } from "./paths.js";
 import { makeEvent, recordEvent, setMachineMode } from "./pipeline.js";
 import { blue, bold, dim, green, red, styled, yellow } from "./style.js";
@@ -27,7 +28,8 @@ import { CliError } from "./types.js";
 
 const USAGE = `usage: self integration [status] | register --repo r --base b --head h | show <id> | list | plan
                         | declare <id> | head <id> --head h | close <id> --as superseded|abandoned
-                        | lease … | attempt … | observe … | approve <id> --head h | merge <id> | reconcile`;
+                        | target --repo r [--branch b] | lease … | attempt … | observe … | approve <id> --head h
+                        | merge <id> | promote … | reconcile`;
 
 export function cmdIntegration(ctx: ProjectContext, rest: string[]): void
 {
@@ -54,6 +56,8 @@ const DELEGATES: Record<string, (ctx: ProjectContext, args: string[]) => void> =
     observe: cmdObserve,
     approve: cmdApprove,
     merge: cmdMerge,
+    target: cmdTarget,
+    promote: cmdPromote,
     reconcile: cmdReconcile
 };
 
