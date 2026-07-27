@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawn, SpawnOptions } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
+import { join } from "node:path";
+import { runnerStateDir } from "../machine.js";
 
 // The execution boundary an attempt runs inside: the wrapper that starts every
 // process (a sandbox, a container shim, or nothing), the directory it starts
@@ -69,14 +72,48 @@ export function nodeId(): string
 }
 
 // Cross-platform by construction: derived from the boot instant rather than
-// read from a platform-specific file, and rounded so that clock drift between
-// two calls on the same boot cannot change it. Its only job is to tell "this
-// pid belongs to the run I recorded" from "this pid was handed out again after
-// a restart".
+// read from a platform-specific file. Its only job is to tell "this pid
+// belongs to the run I recorded" from "this pid was handed out again after a
+// restart".
+//
+// The derived instant drifts by a second or two between calls, which rounding
+// alone cannot absorb — two calls either side of a boundary would disagree and
+// declare a restart that never happened, and a live attempt would be recovered
+// out from under its own runner. So the identity is minted once and kept, and
+// re-minted only when the boot instant has moved further than drift explains.
+const BOOT_DRIFT_SECONDS = 120;
+
 export function bootId(): string
 {
-    const bootSeconds = Math.round((Date.now() / 1000 - uptime()) / 60);
-    return createHash("sha256").update(`${hostname()}:${bootSeconds}`).digest("hex").slice(0, 16);
+    const bootSeconds = Math.round(Date.now() / 1000 - uptime());
+    const file = join(runnerStateDir(), "boot.json");
+    const held = readBootRecord(file);
+    if (held !== null && Math.abs(held.bootSeconds - bootSeconds) <= BOOT_DRIFT_SECONDS)
+    {
+        return held.bootId;
+    }
+    const record = { bootSeconds, bootId: createHash("sha256").update(`${hostname()}:${bootSeconds}`).digest("hex").slice(0, 16) };
+    mkdirSync(runnerStateDir(), { recursive: true });
+    writeFileSync(file + ".tmp", JSON.stringify(record) + "\n");
+    renameSync(file + ".tmp", file);
+    return record.bootId;
+}
+
+function readBootRecord(file: string): { bootSeconds: number; bootId: string } | null
+{
+    if (!existsSync(file))
+    {
+        return null;
+    }
+    try
+    {
+        const record = JSON.parse(readFileSync(file, "utf8"));
+        return typeof record.bootId === "string" && Number.isFinite(record.bootSeconds) ? record : null;
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 export interface BoundarySpawn
