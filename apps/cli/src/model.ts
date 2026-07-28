@@ -7,6 +7,9 @@ import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
+// How long a failed attempt stays a health signal. Past this it is history
+// that `self work show` still carries, not something the person can act on.
+export const ATTEMPT_FAILURE_DAYS = 7;
 
 // Work proposals carry no `work` id of their own, so they are routed before
 // the transition verbs that look one up.
@@ -39,6 +42,19 @@ export interface ReportEntry
     branch?: string;
 }
 
+// What a runner attempt left in the synced log: the state it reached, why it
+// stopped, and the hashes of what it published. The raw output that produced
+// them stays in the machine-local spool and never folds into project state.
+export interface AttemptSummary
+{
+    id: string;
+    state: "started" | "completed" | "failed" | "blocked" | "cancelled";
+    ts: string;
+    failure?: string;
+    detail?: string;
+    artifacts: { name: string; sha256: string; bytes: number }[];
+}
+
 export interface WorkState
 {
     id: string;
@@ -55,6 +71,7 @@ export interface WorkState
     // asserted: one unit runs on several branches, and one branch carries
     // several units.
     branches: string[];
+    attempts: AttemptSummary[];
     next?: string;
     // The outcomes this unit contributes to. Stated by `self work link`, never
     // inferred: one unit may serve several objectives, and a milestone is
@@ -145,6 +162,11 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (event.type === "report.added")
     {
         applyReport(model, event);
+        return;
+    }
+    if (event.type.startsWith("run."))
+    {
+        applyAttempt(model, event);
         return;
     }
     if (event.type === "convention.added")
@@ -249,7 +271,8 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             artifacts: [],
             branches: branchOf(event),
             objectives: [],
-            milestones: []
+            milestones: [],
+            attempts: []
         });
         return;
     }
@@ -302,6 +325,43 @@ function applyLink(work: WorkState, event: SelfEvent): void
     }
 }
 
+const ATTEMPT_STATES: Record<string, AttemptSummary["state"]> = {
+    "run.started": "started",
+    "run.completed": "completed",
+    "run.failed": "failed",
+    "run.blocked": "blocked",
+    "run.cancelled": "cancelled"
+};
+
+// One record per attempt, moved forward by each of its events, so a work unit
+// shows the state its last run actually reached rather than a count of lines.
+function applyAttempt(model: ProjectModel, event: SelfEvent): void
+{
+    const state = ATTEMPT_STATES[event.type];
+    const id = event.refs?.attempt ?? String(event.payload.attempt ?? "");
+    const work = model.works.find((item) => item.id === event.refs?.work);
+    if (state === undefined || id === "" || work === undefined)
+    {
+        return;
+    }
+    work.lastEventTs = event.ts;
+    noteBranch(work, event);
+    const existing = work.attempts.find((attempt) => attempt.id === id);
+    const attempt = existing ?? { id, state, ts: event.ts, artifacts: [] };
+    attempt.state = state;
+    attempt.ts = event.ts;
+    attempt.failure = event.payload.failure === undefined ? undefined : String(event.payload.failure);
+    attempt.detail = event.payload.detail === undefined ? undefined : String(event.payload.detail);
+    if (Array.isArray(event.payload.artifacts))
+    {
+        attempt.artifacts = event.payload.artifacts as AttemptSummary["artifacts"];
+    }
+    if (existing === undefined)
+    {
+        work.attempts.push(attempt);
+    }
+}
+
 function applyReport(model: ProjectModel, event: SelfEvent): void
 {
     const work = model.works.find((item) => item.id === event.refs?.work);
@@ -348,7 +408,43 @@ function deriveSignals(model: ProjectModel, now: Date): void
             const days = Math.floor(ageDays(work.lastEventTs, now));
             model.health.push(`${work.id} looks stalled — no events for ${days} days`);
         }
+        deriveAttemptSignals(model, work, now);
     }
+}
+
+// A blocked attempt is a request for a grant, so it belongs where the person
+// looks for what is waiting on them. A failed one is a health signal: nothing
+// is asked of anybody, but the work did not advance.
+//
+// Only the newest attempt speaks, and only while the unit is still open. An
+// attempt id is never reused, so a later attempt on the same unit is the
+// answer to the earlier one — the grant was given, or the failure was retried
+// — and nothing in an append-only log ever goes back to unblock a past
+// attempt. Every other signal here is either current state or age-gated;
+// without this these two would be the only ones that can only grow.
+function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): void
+{
+    const latest = work.status === "done" ? undefined : newestAttempt(work);
+    if (latest === undefined)
+    {
+        return;
+    }
+    if (latest.state === "blocked")
+    {
+        model.openQuestions.push(`${work.id} attempt ${latest.id} is waiting on a capability grant: ${latest.detail ?? "see `self attempt show`"}`);
+    }
+    if (latest.state === "failed" && ageDays(latest.ts, now) <= ATTEMPT_FAILURE_DAYS)
+    {
+        model.health.push(`${work.id} attempt ${latest.id} failed (${latest.failure ?? "unknown"})${latest.detail === undefined ? "" : ` — ${latest.detail}`}`);
+    }
+}
+
+function newestAttempt(work: WorkState): AttemptSummary | undefined
+{
+    return work.attempts.reduce<AttemptSummary | undefined>(
+        (newest, attempt) => newest === undefined || attempt.ts >= newest.ts ? attempt : newest,
+        undefined
+    );
 }
 
 function ageDays(ts: string, now: Date): number
