@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { runnerStateDir } from "../machine.js";
+import { withLock, writeAtomic } from "./atomic.js";
 import { RetryPlan } from "./plan.js";
 
 export interface Backoff
@@ -52,6 +53,11 @@ export interface BreakerRecord
     state: "closed" | "open";
     openedAt?: string;
     lastFailure?: string;
+    // When the cooled-down trial was taken, and by which attempt. Without it
+    // every attempt that arrives after the cooldown reads "cooled down" and
+    // they all go at once — the herd the breaker exists to prevent.
+    trialAt?: string;
+    trialBy?: string;
 }
 
 export type BreakerVerdict = "closed" | "half-open" | "open";
@@ -84,14 +90,12 @@ export function readBreaker(provider: string): BreakerRecord
 
 function writeBreaker(record: BreakerRecord): void
 {
-    const file = breakerFile(record.provider);
-    mkdirSync(join(file, ".."), { recursive: true });
-    writeFileSync(file + ".tmp", JSON.stringify(record, null, 2) + "\n");
-    renameSync(file + ".tmp", file);
+    writeAtomic(breakerFile(record.provider), JSON.stringify(record, null, 2) + "\n");
 }
 
-// An open breaker that has cooled down lets exactly one attempt through. That
-// trial either closes it or opens it again; it never half-opens for a queue.
+// What the record says right now, without taking anything. `self attempt
+// breaker` and any other reader wants this; a runner about to spend an attempt
+// wants admitAttempt(), which decides and leases in one step.
 export function breakerVerdict(provider: string, policy: BreakerPolicy, now: Date): BreakerVerdict
 {
     const record = readBreaker(provider);
@@ -99,32 +103,65 @@ export function breakerVerdict(provider: string, policy: BreakerPolicy, now: Dat
     {
         return "closed";
     }
-    return now.getTime() - new Date(record.openedAt).getTime() >= policy.cooldownMs ? "half-open" : "open";
+    if (now.getTime() - new Date(record.openedAt).getTime() < policy.cooldownMs)
+    {
+        return "open";
+    }
+    return trialInFlight(record, policy, now) ? "open" : "half-open";
+}
+
+// An open breaker that has cooled down lets exactly one attempt through. The
+// trial is leased in the record under the lock that writes it, so the attempts
+// queued behind one outage cannot all read "cooled down" and arrive together.
+// That trial either closes the breaker or opens it again; it never half-opens
+// for a queue.
+export function admitAttempt(provider: string, policy: BreakerPolicy, now: Date, attemptId: string): BreakerVerdict
+{
+    return withLock(breakerFile(provider), () =>
+    {
+        const verdict = breakerVerdict(provider, policy, now);
+        if (verdict === "half-open")
+        {
+            writeBreaker({ ...readBreaker(provider), trialAt: now.toISOString(), trialBy: attemptId });
+        }
+        return verdict;
+    });
+}
+
+// A trial that never answered must not hold the breaker shut for ever: after
+// one further cooldown the next attempt may take it instead.
+function trialInFlight(record: BreakerRecord, policy: BreakerPolicy, now: Date): boolean
+{
+    return record.trialAt !== undefined && now.getTime() - new Date(record.trialAt).getTime() < policy.cooldownMs;
 }
 
 export function recordProviderFailure(provider: string, policy: BreakerPolicy, now: Date): BreakerRecord
 {
-    const record = readBreaker(provider);
-    const failures = record.failures + 1;
-    const next: BreakerRecord = {
-        provider,
-        failures,
-        state: failures >= policy.threshold ? "open" : "closed",
-        lastFailure: now.toISOString()
-    };
-    if (next.state === "open")
+    return withLock(breakerFile(provider), () =>
     {
-        // Each further failure restarts the cooldown: a provider that is still
-        // down must not be re-tried on the schedule of the first outage.
-        next.openedAt = now.toISOString();
-    }
-    writeBreaker(next);
-    return next;
+        const record = readBreaker(provider);
+        const failures = record.failures + 1;
+        const next: BreakerRecord = {
+            provider,
+            failures,
+            state: failures >= policy.threshold ? "open" : "closed",
+            lastFailure: now.toISOString()
+        };
+        if (next.state === "open")
+        {
+            // Each further failure restarts the cooldown: a provider that is
+            // still down must not be re-tried on the schedule of the first
+            // outage. The answered trial is dropped with it.
+            next.openedAt = now.toISOString();
+        }
+        writeBreaker(next);
+        return next;
+    });
 }
 
 export function recordProviderSuccess(provider: string): void
 {
-    writeBreaker({ provider, failures: 0, state: "closed" });
+    withLock(breakerFile(provider), () => writeBreaker({ provider, failures: 0, state: "closed" }));
 }
 
 export function resetBreaker(provider: string): void

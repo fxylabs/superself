@@ -7,6 +7,9 @@ import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
+// How long a failed attempt stays a health signal. Past this it is history
+// that `self work show` still carries, not something the person can act on.
+const ATTEMPT_FAILURE_DAYS = 7;
 
 // Work proposals carry no `work` id of their own, so they are routed before
 // the transition verbs that look one up.
@@ -405,26 +408,43 @@ function deriveSignals(model: ProjectModel, now: Date): void
             const days = Math.floor(ageDays(work.lastEventTs, now));
             model.health.push(`${work.id} looks stalled — no events for ${days} days`);
         }
-        deriveAttemptSignals(model, work);
+        deriveAttemptSignals(model, work, now);
     }
 }
 
 // A blocked attempt is a request for a grant, so it belongs where the person
 // looks for what is waiting on them. A failed one is a health signal: nothing
 // is asked of anybody, but the work did not advance.
-function deriveAttemptSignals(model: ProjectModel, work: WorkState): void
+//
+// Only the newest attempt speaks, and only while the unit is still open. An
+// attempt id is never reused, so a later attempt on the same unit is the
+// answer to the earlier one — the grant was given, or the failure was retried
+// — and nothing in an append-only log ever goes back to unblock a past
+// attempt. Every other signal here is either current state or age-gated;
+// without this these two would be the only ones that can only grow.
+function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): void
 {
-    for (const attempt of work.attempts)
+    const latest = work.status === "done" ? undefined : newestAttempt(work);
+    if (latest === undefined)
     {
-        if (attempt.state === "blocked")
-        {
-            model.openQuestions.push(`${work.id} attempt ${attempt.id} is waiting on a capability grant: ${attempt.detail ?? "see `self attempt show`"}`);
-        }
-        if (attempt.state === "failed")
-        {
-            model.health.push(`${work.id} attempt ${attempt.id} failed (${attempt.failure ?? "unknown"})${attempt.detail === undefined ? "" : ` — ${attempt.detail}`}`);
-        }
+        return;
     }
+    if (latest.state === "blocked")
+    {
+        model.openQuestions.push(`${work.id} attempt ${latest.id} is waiting on a capability grant: ${latest.detail ?? "see `self attempt show`"}`);
+    }
+    if (latest.state === "failed" && ageDays(latest.ts, now) <= ATTEMPT_FAILURE_DAYS)
+    {
+        model.health.push(`${work.id} attempt ${latest.id} failed (${latest.failure ?? "unknown"})${latest.detail === undefined ? "" : ` — ${latest.detail}`}`);
+    }
+}
+
+function newestAttempt(work: WorkState): AttemptSummary | undefined
+{
+    return work.attempts.reduce<AttemptSummary | undefined>(
+        (newest, attempt) => newest === undefined || attempt.ts >= newest.ts ? attempt : newest,
+        undefined
+    );
 }
 
 function ageDays(ts: string, now: Date): number

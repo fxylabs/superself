@@ -20,7 +20,12 @@ const plan = {
         env: {
             AGENT_MODE: o.mode ?? "ok",
             ...(o.marker === undefined ? {} : { AGENT_MARKER: o.marker }),
-            ...(o.idfile === undefined ? {} : { AGENT_IDFILE: o.idfile })
+            ...(o.idfile === undefined ? {} : { AGENT_IDFILE: o.idfile }),
+            ...(o.gate === undefined ? {} : { AGENT_GATE: o.gate }),
+            // A credential the plan author put in the boundary environment: it
+            // is a literal in the plan, so it is in no runner environment the
+            // redaction scope could read it from.
+            ...(o.envsecret === undefined ? {} : { MY_API_KEY: o.envsecret })
         }
     },
     command: [process.execPath, o.agent],
@@ -39,7 +44,7 @@ const plan = {
     retry: { maxRuns: Number(o.maxRuns ?? 3), baseMs: Number(o.baseMs ?? 4), maxMs: Number(o.maxMs ?? 32) },
     heartbeatMs: 50,
     preflightTimeoutMs: 15_000,
-    runTimeoutMs: 120_000,
+    runTimeoutMs: Number(o.runTimeoutMs ?? 120_000),
     resume: o.resume === "on"
 };
 

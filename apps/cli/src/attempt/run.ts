@@ -1,20 +1,21 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runAttemptId } from "../ids.js";
 import { runnerStateDir } from "../machine.js";
 import { buildModel } from "../model.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { CliContext } from "../paths.js";
+import { withLock, writeAtomic } from "./atomic.js";
 import { boundaryCommand, identityOf } from "./boundary.js";
-import { classify, FailureClass, isTransient } from "./classify.js";
+import { classify, FailureClass, FailureSignal, fromDeclaration, isTransient } from "./classify.js";
 import { deliverDirectives, inboxPath } from "./directive.js";
-import { alreadyReported, attachReport, publishArtifacts, Published, ResultEnvelope, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
+import { alreadyCompleted, alreadyReported, attachReport, publishArtifacts, Published, ResultEnvelope, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
 import { CliError } from "../types.js";
 import { AttemptPlan, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
-import { redact, scopeFor } from "./redact.js";
-import { backoffFor, breakerVerdict, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
+import { MIN_LITERAL, redact, scopeFor, unredactableSecrets } from "./redact.js";
+import { admitAttempt, backoffFor, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
 import { AttemptStatus, createSpool, Spool } from "./spool.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
@@ -36,16 +37,39 @@ const BREAKER_DEFAULT = { threshold: 3, cooldownMs: 60_000 };
 
 // A monotonic per-machine counter. It rides on every receipt and status so a
 // stale runner that wakes up after a newer one took over can be told apart
-// from the one that owns the attempt.
-function nextFence(): number
+// from the one that owns the attempt — Spool.setStatus compares it, and
+// recovery takes an attempt over by minting a newer one.
+//
+// Minting is read-modify-write, and running several attempts at once on one
+// machine is the designed operating mode, so it is done under a lock: two
+// runners reading the same value would mint the same fence and neither could
+// then be told from the other.
+export function nextFence(): number
 {
     const file = join(runnerStateDir(), "fence.json");
-    mkdirSync(runnerStateDir(), { recursive: true });
-    const current = existsSync(file) ? Number(JSON.parse(readFileSync(file, "utf8")).fence) : 0;
-    const fence = (Number.isFinite(current) ? current : 0) + 1;
-    writeFileSync(file + ".tmp", JSON.stringify({ fence }) + "\n");
-    renameSync(file + ".tmp", file);
-    return fence;
+    return withLock(file, () =>
+    {
+        const fence = currentFence(file) + 1;
+        writeAtomic(file, JSON.stringify({ fence }) + "\n");
+        return fence;
+    });
+}
+
+function currentFence(file: string): number
+{
+    if (!existsSync(file))
+    {
+        return 0;
+    }
+    try
+    {
+        const held = Number(JSON.parse(readFileSync(file, "utf8")).fence);
+        return Number.isFinite(held) ? held : 0;
+    }
+    catch
+    {
+        return 0;
+    }
 }
 
 export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options: RunOptions): Promise<AttemptResult>
@@ -55,6 +79,7 @@ export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options
     const spool = new Spool(createSpool(id), scope);
     const identity = identityOf(plan.boundary);
     const fence = nextFence();
+    spool.claim(fence);
     writeBrief(spool, plan, id);
     // The normalized plan, kept beside the attempt so settlement after a crash
     // works from what this attempt was actually launched with rather than from
@@ -85,17 +110,47 @@ export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options
         fence,
         nodeId: identity.nodeId,
         bootId: identity.bootId,
+        pid: process.pid,
         provider: plan.capabilities.provider?.name,
         created: options.now.toISOString(),
         updated: options.now.toISOString()
     } satisfies AttemptStatus);
+    warnUnredactable(spool, plan);
 
-    const gated = await gateBeforeSpend(ctx, plan, spool, id, fence, identity, options);
+    // The liveness markers cover preflight too. A probe may legitimately take
+    // as long as the preflight bound allows, and recovery reads a missing pid
+    // or a missing heartbeat as a dead runner: without this, `self attempt
+    // recover` run in that window declares a healthy attempt dead and writes a
+    // run.failed it never suffered into the synced, append-only log.
+    const heart = beat(spool, plan.heartbeatMs);
+    let gated: AttemptResult | null;
+    try
+    {
+        gated = await gateBeforeSpend(ctx, plan, spool, id, fence, identity, options);
+    }
+    finally
+    {
+        heart.stop();
+    }
     if (gated !== null)
     {
         return gated;
     }
     return await driveRuns(ctx, plan, spool, id, options);
+}
+
+// A declared secret too short to be redacted by value is a coverage gap the
+// plan author cannot see: the declaration was accepted and does nothing. Only
+// the names are named — the values are what this exists to keep out of sight.
+function warnUnredactable(spool: Spool, plan: AttemptPlan): void
+{
+    const names = unredactableSecrets(plan.capabilities.secrets);
+    if (names.length === 0)
+    {
+        return;
+    }
+    spool.append("events.jsonl", { event: "redaction.uncovered", secrets: names });
+    console.error(`declared secret ${names.join(", ")} is shorter than ${MIN_LITERAL} characters and is not redacted by value — only the named patterns cover it`);
 }
 
 // Everything that must be true before a single token is spent. Each exit from
@@ -111,7 +166,7 @@ async function gateBeforeSpend(
 ): Promise<AttemptResult | null>
 {
     const provider = plan.capabilities.provider?.name;
-    if (provider !== undefined && breakerVerdict(provider, BREAKER_DEFAULT, options.now) === "open")
+    if (provider !== undefined && admitAttempt(provider, BREAKER_DEFAULT, options.now, id) === "open")
     {
         const detail = `the circuit breaker for provider "${provider}" is open — this work stays queued and no attempt was spent`;
         spool.setStatus({ state: "waiting-provider", failure: "transient-provider", detail });
@@ -203,17 +258,26 @@ interface RunRecord
     exit: number | null;
     signal: string | null;
     failure?: FailureClass;
+    declared?: boolean;
+    timedOut?: boolean;
     backoffMs?: number;
     backoffCapMs?: number;
     backoffJitter?: number;
     resumed?: boolean;
 }
 
+// How many runs in a row may be retried on a transient class the agent
+// declared and nothing the runner observed supports. One is a claim worth a
+// second look; a run of them is the child choosing its own retry budget out of
+// a policy that allows up to twenty.
+const UNSUPPORTED_TRANSIENT_RUNS = 2;
+
 async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, options: RunOptions): Promise<AttemptResult>
 {
     const provider = plan.capabilities.provider?.name;
     recordAttemptEvent(ctx, plan, "run.started", id, { role: plan.role, provider, adapter: adapterOf(plan.boundary) });
-    let last: { failure: FailureClass; detail: string } = { failure: "unknown", detail: "no run was made" };
+    let last: { failure: FailureClass; detail: string; observed: boolean } = { failure: "unknown", detail: "no run was made", observed: true };
+    let unsupported = 0;
     for (let run = 1; run <= plan.retry.maxRuns; run++)
     {
         const outcome = await executeRun(plan, spool, id, run);
@@ -225,7 +289,15 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
             }
             return await completeAttempt(ctx, plan, spool, id, outcome.envelope);
         }
-        last = { failure: outcome.failure, detail: outcome.detail };
+        unsupported = outcome.declaredOnly && isTransient(outcome.failure) ? unsupported + 1 : 0;
+        const exhausted = unsupported >= UNSUPPORTED_TRANSIENT_RUNS;
+        last = {
+            failure: outcome.failure,
+            detail: exhausted
+                ? `${outcome.detail} — the agent declared a transient failure ${unsupported} runs in a row and nothing the runner observed supports it`
+                : outcome.detail,
+            observed: !outcome.declaredOnly
+        };
         const record: RunRecord = {
             run,
             started: outcome.started,
@@ -233,9 +305,11 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
             exit: outcome.exit,
             signal: outcome.signal,
             failure: outcome.failure,
+            declared: outcome.declaredOnly,
+            timedOut: outcome.timedOut,
             resumed: outcome.resumed
         };
-        if (!isTransient(outcome.failure) || run === plan.retry.maxRuns)
+        if (!isTransient(outcome.failure) || run === plan.retry.maxRuns || exhausted)
         {
             spool.append("runs.jsonl", record as unknown as Record<string, unknown>);
             break;
@@ -247,13 +321,15 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
         spool.append("events.jsonl", { event: "retry.scheduled", run, failure: outcome.failure, delayMs: backoff.delayMs, capMs: backoff.capMs });
         await sleep(backoff.delayMs);
     }
-    return failAttempt(ctx, plan, spool, id, last.failure, last.detail, options);
+    return failAttempt(ctx, plan, spool, id, last.failure, last.detail, last.observed, options);
 }
 
-function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, failure: FailureClass, detail: string, options: RunOptions): AttemptResult
+function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, failure: FailureClass, detail: string, observed: boolean, options: RunOptions): AttemptResult
 {
     const provider = plan.capabilities.provider?.name;
-    if (provider !== undefined && isTransient(failure))
+    // A failure only the agent called transient is not evidence about the
+    // provider, and must not push a breaker that gates unrelated queued work.
+    if (provider !== undefined && isTransient(failure) && observed)
     {
         const record = recordProviderFailure(provider, BREAKER_DEFAULT, options.now);
         spool.append("events.jsonl", { event: "breaker.failure", provider, failures: record.failures, state: record.state });
@@ -269,6 +345,10 @@ interface RunOutcome
 {
     failure: FailureClass | null;
     detail: string;
+    // The class came from the agent's own declaration rather than from
+    // anything the runner observed.
+    declaredOnly: boolean;
+    timedOut: boolean;
     exit: number | null;
     signal: string | null;
     started: string;
@@ -283,24 +363,35 @@ async function executeRun(plan: AttemptPlan, spool: Spool, id: string, run: numb
 {
     const started = new Date().toISOString();
     const resumeFrom = plan.resume ? lastCheckpoint(spool) : null;
+    const stdout = `run-${run}.stdout.log`;
+    const stderr = `run-${run}.stderr.log`;
     spool.setStatus({ state: "running", run, runs: run, pid: process.pid });
     spool.heartbeat();
     spool.append("events.jsonl", { event: "run.started", run, resumed: resumeFrom !== null });
-    // A rerun must not inherit the previous run's staged output: a stale file
-    // would satisfy the completion gate for work this run never did.
-    clearStaged(spool);
+    clearRunOutput(spool);
     const env = childEnv(spool, id, run, resumeFrom);
     const command = boundaryCommand(plan.boundary, plan.command, env);
-    const child = spawn(command.argv[0], command.argv.slice(1), { ...command.options, stdio: ["ignore", "pipe", "pipe"] });
+    // Its own process group, so a bound that expires or a cancel that arrives
+    // reaches everything the launcher started and not only the wrapper in
+    // front of it.
+    const child = spawn(command.argv[0], command.argv.slice(1), { ...command.options, stdio: ["ignore", "pipe", "pipe"], detached: true });
     const control = watch(spool, child, plan);
-    child.stdout?.on("data", (chunk) => spool.appendRaw(`run-${run}.stdout.log`, String(chunk)));
-    child.stderr?.on("data", (chunk) => spool.appendRaw(`run-${run}.stderr.log`, String(chunk)));
+    const bound = boundRun(child, plan.runTimeoutMs);
+    child.stdout?.on("data", (chunk) => guard(() => spool.appendRaw(stdout, String(chunk))));
+    child.stderr?.on("data", (chunk) => guard(() => spool.appendRaw(stderr, String(chunk))));
     const exit = await waitFor(child);
     control.stop();
+    bound.stop();
+    // The streams are closed, so nothing can extend a redaction match any
+    // further: the tail each one held back is written before anything reads
+    // the files.
+    spool.flushRaw(stdout);
+    spool.flushRaw(stderr);
     const envelope = readEnvelope(spool);
-    spool.append("events.jsonl", { event: "run.ended", run, exit: exit.code, signal: exit.signal, cancelled: control.cancelled() });
+    spool.append("events.jsonl", { event: "run.ended", run, exit: exit.code, signal: exit.signal, cancelled: control.cancelled(), timedOut: bound.timedOut() });
     return {
-        ...verdictOf(exit, envelope, control.cancelled(), spool, run),
+        ...verdictOf(exit, envelope, control.cancelled(), bound.timedOut(), plan, spool, run),
+        timedOut: bound.timedOut(),
         exit: exit.code,
         signal: exit.signal,
         started,
@@ -313,29 +404,35 @@ function verdictOf(
     exit: { code: number | null; signal: NodeJS.Signals | null; spawnError?: NodeJS.ErrnoException },
     envelope: ResultEnvelope | null,
     cancelled: boolean,
+    timedOut: boolean,
+    plan: AttemptPlan,
     spool: Spool,
     run: number
-): { failure: FailureClass | null; detail: string }
+): { failure: FailureClass | null; detail: string; declaredOnly: boolean }
 {
     if (cancelled)
     {
-        return { failure: "cancelled", detail: "a durable cancel directive stopped this attempt" };
+        return { failure: "cancelled", detail: "a durable cancel directive stopped this attempt", declaredOnly: false };
     }
-    if (exit.code === 0 && envelope !== null && envelope.status === "completed")
+    // A run the runner killed on its own bound never finished, whatever the
+    // envelope it left behind says.
+    if (!timedOut && exit.code === 0 && envelope !== null && envelope.status === "completed")
     {
-        return { failure: null, detail: "" };
+        return { failure: null, detail: "", declaredOnly: false };
     }
     const stderr = tail(spool.path(`run-${run}.stderr.log`));
-    const failure = classify({
+    const signal: FailureSignal = {
         declared: envelope?.failure?.class,
         exitCode: exit.code,
         signal: exit.signal,
         stderr,
-        timedOut: false,
+        timedOut,
         spawnCode: exit.spawnError?.code
-    });
-    const detail = envelope?.failure?.message ?? exit.spawnError?.message ?? stderr.trim().split("\n").pop() ?? `exit ${exit.code}`;
-    return { failure, detail: redact(detail.slice(0, 400)) };
+    };
+    const detail = timedOut
+        ? `the provider did not finish within the ${plan.runTimeoutMs}ms this attempt allows`
+        : envelope?.failure?.message ?? exit.spawnError?.message ?? stderr.trim().split("\n").pop() ?? `exit ${exit.code}`;
+    return { failure: classify(signal), detail: redact(detail.slice(0, 400)), declaredOnly: fromDeclaration(signal) };
 }
 
 function childEnv(spool: Spool, id: string, run: number, resumeFrom: string | null): Record<string, string>
@@ -374,8 +471,14 @@ function lastCheckpoint(spool: Spool): string | null
     return spool.path("resume.json");
 }
 
-function clearStaged(spool: Spool): void
+// A rerun must not inherit the previous run's output: a stale file would
+// satisfy the completion gate for work this run never did. The result envelope
+// is the half that matters most — a plan that declares no artifact is
+// completed by the envelope alone, so a run that produced nothing would
+// otherwise publish the previous run's summary as its own report.
+function clearRunOutput(spool: Spool): void
 {
+    rmSync(spool.path("result.json"), { force: true });
     const out = spool.path("out");
     for (const entry of existsSync(out) ? readdirSync(out) : [])
     {
@@ -395,7 +498,7 @@ interface Control
 function watch(spool: Spool, child: ReturnType<typeof spawn>, plan: AttemptPlan): Control
 {
     let cancelled = false;
-    const timer = setInterval(() =>
+    const timer = setInterval(() => guard(() =>
     {
         spool.heartbeat();
         for (const directive of deliverDirectives(spool))
@@ -404,14 +507,98 @@ function watch(spool: Spool, child: ReturnType<typeof spawn>, plan: AttemptPlan)
             if (directive.kind === "cancel")
             {
                 cancelled = true;
-                child.kill("SIGTERM");
+                killTree(child, "SIGTERM");
             }
         }
-    }, plan.heartbeatMs);
+    }), plan.heartbeatMs);
     return {
         stop: () => clearInterval(timer),
         cancelled: () => cancelled
     };
+}
+
+// The heartbeat on its own, for the stretch before a child exists to watch.
+function beat(spool: Spool, everyMs: number): { stop: () => void }
+{
+    guard(() => spool.heartbeat());
+    const timer = setInterval(() => guard(() => spool.heartbeat()), everyMs);
+    return { stop: () => clearInterval(timer) };
+}
+
+// A throw inside a timer or a stream callback is an uncaught exception: it
+// kills the runner outright, orphans the provider it started, and leaves the
+// spool saying `running` for a process that no longer exists. The rest of the
+// runner turns I/O trouble into a typed failure, and these paths must not be
+// the ones that turn it into process death. Nothing is written about it,
+// because the filesystem that just failed is the only place to write it.
+function guard(work: () => void): void
+{
+    try
+    {
+        work();
+    }
+    catch
+    {
+        return;
+    }
+}
+
+interface Bound
+{
+    stop: () => void;
+    timedOut: () => boolean;
+}
+
+// How long a provider that ignored SIGTERM may take to close what it was
+// writing before it is killed outright.
+const TERM_GRACE_MS = 2_000;
+
+// The bound the plan declares, actually applied. Without it a hung provider
+// holds the runner for ever: the heartbeat keeps being written, so recovery
+// never touches it either, and no retry, no typed failure, and no release of
+// the attempt ever happen.
+function boundRun(child: ReturnType<typeof spawn>, timeoutMs: number): Bound
+{
+    let timedOut = false;
+    let hard: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() =>
+    {
+        timedOut = true;
+        killTree(child, "SIGTERM");
+        hard = setTimeout(() => killTree(child, "SIGKILL"), TERM_GRACE_MS);
+    }, timeoutMs);
+    return {
+        stop: () =>
+        {
+            clearTimeout(timer);
+            if (hard !== undefined)
+            {
+                clearTimeout(hard);
+            }
+        },
+        timedOut: () => timedOut
+    };
+}
+
+// The child leads its own process group, so signalling the negated pid reaches
+// everything the launcher started. A wrapper that exec'd its payload is one
+// process and the group signal still finds it; a wrapper that forked one is
+// two, and only the group signal finds both.
+function killTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void
+{
+    const pid = child.pid;
+    if (pid === undefined)
+    {
+        return;
+    }
+    try
+    {
+        process.kill(-pid, signal);
+    }
+    catch
+    {
+        child.kill(signal);
+    }
 }
 
 function waitFor(child: ReturnType<typeof spawn>): Promise<{ code: number | null; signal: NodeJS.Signals | null; spawnError?: NodeJS.ErrnoException }>
@@ -442,6 +629,9 @@ function tail(file: string, limit = 4_000): string
 // before this attempt is allowed to say it produced anything.
 async function completeAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, envelope: ResultEnvelope | null): Promise<AttemptResult>
 {
+    // Publication and the report are the two things this attempt cannot take
+    // back, so ownership is checked once more before either of them.
+    spool.assertOwned();
     const declared = verifyDeclarations(plan, spool, envelope);
     if (declared !== null)
     {
@@ -477,10 +667,15 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
     spool.writeJson("published.json", published);
     spool.setStatus({ state: "completed", failure: undefined, detail: undefined });
     spool.append("events.jsonl", { event: "run.completed", published: published.map((item) => item.name), reported });
-    recordAttemptEvent(ctx, plan, "run.completed", id, {
-        artifacts: published.map((item) => ({ name: item.name, sha256: item.sha256, bytes: item.bytes })),
-        reported
-    });
+    // The completion is exactly-once here, where the report's idempotency
+    // already lives, rather than in whichever caller reaches settlement twice.
+    if (!alreadyCompleted(ctx, id))
+    {
+        recordAttemptEvent(ctx, plan, "run.completed", id, {
+            artifacts: published.map((item) => ({ name: item.name, sha256: item.sha256, bytes: item.bytes })),
+            reported
+        });
+    }
     console.log(`attempt ${id} completed — ${published.length} artifact(s) published, report ${reported ? "attached" : "already attached"}`);
     return { attempt: id, state: "completed" };
 }
