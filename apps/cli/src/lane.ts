@@ -767,6 +767,10 @@ function expiryRecorded(ctx: ProjectContext, repository: string, fence: number):
 // is current, the merge target it planned against is the one that is there,
 // and the head it planned against has not moved. When one of those stops
 // being true the attempt is cancelled with the reason, never silently retried.
+//
+// An attempt admitted before any target head was observed planned against no
+// target at all, and that is settled the same way: the moment the target has a
+// head, an attempt that cannot be shown to have planned against it is gone.
 function collectCancellations(ctx: ProjectContext, state: IntegrationState, repository: Repository,
     events: SelfEvent[], actions: { action: string; subject: string; reason: string }[]): void
 {
@@ -792,9 +796,12 @@ function invalidReason(attempt: { fence: number; oldHead: string; mainAt?: strin
         return { code: "stale_fence", detail: `fence ${attempt.fence} is no longer current on ${repository.name}` };
     }
     const target = mergeTargetOf(repository);
-    if (attempt.mainAt !== undefined && target.head !== undefined && attempt.mainAt !== target.head)
+    if (target.head !== undefined && attempt.mainAt !== target.head)
     {
-        return { code: "target_moved", detail: `${target.branch} moved from ${short(attempt.mainAt)} to ${short(target.head)}` };
+        return attempt.mainAt === undefined
+            ? { code: "target_unobserved", detail: `this attempt was admitted before any ${target.branch} head was observed, ` +
+                `and ${target.branch} is now at ${short(target.head)}` }
+            : { code: "target_moved", detail: `${target.branch} moved from ${short(attempt.mainAt)} to ${short(target.head)}` };
     }
     if (attempt.oldHead !== changeSet.head)
     {
