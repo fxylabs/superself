@@ -1390,6 +1390,169 @@ node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.re
 SELF status | grep -q "attempt $AT_LASTBLOCK" && fail "an attempt nothing has touched for a month still holds a line under self status"
 SELF attempt list | grep -q "$AT_LASTBLOCK" || fail "the aged-out attempt is no longer reachable from the surface that lists every spool"
 
+# ---------------------------------------------------------------------------
+# Declarative work specs. Desired state is applied as an immutable, content-
+# addressed generation, and the runner attempt it materializes is pinned to the
+# exact generation it was admitted under — so editing intent while a run is in
+# flight decides what the next dispatch compiles and nothing about that run.
+# ---------------------------------------------------------------------------
+WSPEC="$(SELF work add "a work spec materializes one pinned runner attempt" | tail -1)"
+SELF work start "$WSPEC" > /dev/null
+WHOLD="$(SELF work add "a generation applied mid-attempt never reinterprets it" | tail -1)"
+SELF work start "$WHOLD" > /dev/null
+SPECS="$STORE/projects/demo/specs"
+
+workspec()
+{
+    local file="$1"
+    shift
+    node "$CLI_DIR/proof/workspec.mjs" "$file" "work=$WSPEC" "agent=$AGENT" "cwd=$DEMO" "$@"
+}
+head_digest()
+{
+    node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).sha256)' "$SPECS/$1/head.json"
+}
+
+# an incomplete spec is answered by the field it is missing, and asking leaves
+# the log, the tree, and the store commit exactly as they were
+workspec "$ROOT/ws-invalid.json" "id=ws-design" "drop=requestedModel"
+BEFORE="$(snapshot)"
+INVALID="$(SELF spec validate "$ROOT/ws-invalid.json" 2>&1 || true)"
+echo "$INVALID" | grep -q 'field "requestedModel"' || fail "an incomplete work spec was not rejected by the field it lacks"
+[ "$(snapshot)" = "$BEFORE" ] || fail "validating a rejected spec changed the log, the tree, or the store commit"
+
+# a validation contract has to be one the completion gate can actually enforce
+workspec "$ROOT/ws-noval.json" "id=ws-design" "drop=validation"
+NOVAL="$(SELF spec validate "$ROOT/ws-noval.json" 2>&1 || true)"
+echo "$NOVAL" | grep -q "must declare either" || fail "a spec declaring no validation contract was accepted"
+workspec "$ROOT/ws-badstatus.json" "id=ws-design" "badStatus=done"
+BADSTATUS="$(SELF spec validate "$ROOT/ws-badstatus.json" 2>&1 || true)"
+echo "$BADSTATUS" | grep -q "admits no other result status" || fail "a response schema the completion gate cannot enforce was accepted"
+
+# a valid spec validates without sealing anything
+workspec "$ROOT/ws-gen1.json" "id=ws-design" "dest=$ROOT/dest/spec-one.md"
+SELF spec validate "$ROOT/ws-gen1.json" | grep -q "generation 1 for $WSPEC is valid" || fail "a complete work spec did not validate"
+[ -d "$SPECS/ws-design" ] && fail "validate sealed a generation"
+
+# applying seals exactly one generation, named by the digest of its own bytes,
+# and commits it with the event that makes it real
+APPLIED_BEFORE="$(count_events spec.applied)"
+SELF spec apply "$ROOT/ws-gen1.json" | grep -q "generation 1 applied" || fail "a valid work spec did not apply"
+[ "$(count_events spec.applied)" -eq "$((APPLIED_BEFORE + 1))" ] || fail "applying a work spec did not record exactly one event"
+GEN1="$(head_digest ws-design)"
+[ -f "$SPECS/ws-design/000001-$GEN1.json" ] || fail "the sealed generation is not named by the digest of its content"
+node -e '
+const body = require("fs").readFileSync(process.argv[1]);
+const digest = require("crypto").createHash("sha256").update(body).digest("hex");
+if (digest !== process.argv[2]) { console.error("sealed bytes hash to " + digest); process.exit(1); }
+' "$SPECS/ws-design/000001-$GEN1.json" "$GEN1" || fail "the spec store is not content-addressed"
+git -C "$STORE" ls-files | grep -q "specs/ws-design/000001-$GEN1.json" || fail "the sealed generation was not committed with its event"
+
+# the same content applied twice is one generation: no second event, no second commit
+BEFORE="$(snapshot)"
+SELF spec apply "$ROOT/ws-gen1.json" | grep -q "already applied" || fail "re-applying identical content was not idempotent"
+[ "$(snapshot)" = "$BEFORE" ] || fail "an idempotent apply still changed the store"
+
+# conflicting content for a generation already sealed is refused outright
+workspec "$ROOT/ws-conflict.json" "id=ws-design" "dest=$ROOT/dest/spec-one.md" "model=some-other-model"
+CONFLICT="$(SELF spec apply "$ROOT/ws-conflict.json" 2>&1 || true)"
+echo "$CONFLICT" | grep -q "is immutable" || fail "conflicting content for a sealed generation was accepted"
+[ "$(snapshot)" = "$BEFORE" ] || fail "a refused generation still changed the store"
+
+# generations advance one at a time, so nothing lands on a number nobody sealed
+workspec "$ROOT/ws-skip.json" "id=ws-design" "generation=3" "dest=$ROOT/dest/spec-one.md"
+SKIP="$(SELF spec apply "$ROOT/ws-skip.json" 2>&1 || true)"
+echo "$SKIP" | grep -q "so the next one is 2" || fail "a generation number nothing leads to was accepted"
+
+# a spec names a work unit that exists, and a work unit has one desired-state HEAD
+workspec "$ROOT/ws-nowork.json" "id=ws-nowork" "work=w-nosuch" "dest=$ROOT/dest/spec-nowork.md"
+NOWORK="$(SELF spec apply "$ROOT/ws-nowork.json" 2>&1 || true)"
+echo "$NOWORK" | grep -q "unknown work id" || fail "a work spec naming no work unit was sealed"
+workspec "$ROOT/ws-second.json" "id=ws-second" "dest=$ROOT/dest/spec-second.md"
+SECOND="$(SELF spec apply "$ROOT/ws-second.json" 2>&1 || true)"
+echo "$SECOND" | grep -q "already has work spec ws-design" || fail "a second work spec claimed a work unit that already has one"
+
+# a spec id is not a path: one that would leave the project's state is refused
+workspec "$ROOT/ws-escape.json" "id=../escape" "dest=$ROOT/dest/spec-escape.md"
+ESCAPE="$(SELF spec apply "$ROOT/ws-escape.json" 2>&1 || true)"
+echo "$ESCAPE" | grep -q "single path segment" || fail "a work spec id that leaves the project's state was accepted"
+[ -d "$STORE/projects/escape" ] && fail "a hostile spec id sealed a generation outside the specs root"
+
+# a spec nobody applied materializes nothing
+UNKNOWN="$(SELF spec dispatch ws-nothing 2>&1 || true)"
+echo "$UNKNOWN" | grep -q "no work spec" || fail "dispatching a spec that was never applied was not refused"
+
+# dispatch compiles the current generation into an attempt plan, runs it down
+# the existing runner path, and settles through the same gate: one report on
+# the work unit, the declared artifact published, the generation on the record
+REPORTS_BEFORE="$(count_events report.added)"
+DISPATCHED_BEFORE="$(count_events spec.dispatched)"
+SELF spec dispatch ws-design > /dev/null || fail "dispatching the current generation did not complete"
+AT_SPEC="$(SELF attempt list --work "$WSPEC" | awk '{print $1}' | tail -1)"
+[ "$(attempt_state "$AT_SPEC")" = "completed" ] || fail "a dispatched attempt did not complete"
+[ -f "$ROOT/dest/spec-one.md" ] || fail "the artifact the spec declared was not published"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a dispatched attempt did not attach exactly one report"
+[ "$(count_events spec.dispatched)" -eq "$((DISPATCHED_BEFORE + 1))" ] || fail "a dispatch recorded no spec event"
+SELF work show "$WSPEC" | grep -q "$AT_SPEC (completed)" || fail "the work record does not carry the attempt its spec materialized"
+node -e '
+const record = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const pin = record.spec;
+if (pin === undefined) { console.error("the attempt record carries no spec pin"); process.exit(1); }
+if (pin.workSpec !== "ws-design" || pin.generation !== 1 || pin.sha256 !== process.argv[2]) { console.error("pinned to " + JSON.stringify(pin)); process.exit(1); }
+if (pin.requestedModel !== "opus-5") { console.error("the model the spec asked for was not recorded"); process.exit(1); }
+' "$(spool_of "$AT_SPEC")/attempt.json" "$GEN1" || fail "dispatch did not pin the attempt to the generation it was admitted under"
+
+# a declared blocker gates dispatch and nothing else: the spec still applies
+# while the work waits, and no spec.dispatched event is spent on a refusal
+DISPATCHED_BEFORE="$(count_events spec.dispatched)"
+SELF work block "$WSPEC" --on dependency --why "the upstream artifact is not published yet" > /dev/null
+BLOCKED="$(SELF spec dispatch ws-design 2>&1 || true)"
+echo "$BLOCKED" | grep -q "blocked on dependency" || fail "a work unit blocked on a dependency was still materialized"
+[ "$(count_events spec.dispatched)" -eq "$DISPATCHED_BEFORE" ] || fail "a refused dispatch still recorded a spec event"
+workspec "$ROOT/ws-gen2.json" "id=ws-design" "generation=2" "dest=$ROOT/dest/spec-one.md" "summary=desired state prepared while the work waits"
+SELF spec apply "$ROOT/ws-gen2.json" | grep -q "generation 2 applied" || fail "a blocked work unit refused the next generation of its desired state"
+SELF work unblock "$WSPEC" > /dev/null
+
+# a generation applied while an attempt is in flight moves HEAD for the next
+# dispatch and leaves the live attempt on the generation that admitted it
+workspec "$ROOT/ws-hold.json" "id=ws-hold" "work=$WHOLD" "mode=hold" "gate=$ROOT/spec-gate" "idfile=$ROOT/spec-hold-id"
+SELF spec apply "$ROOT/ws-hold.json" > /dev/null || fail "the held generation did not apply"
+HOLD1="$(head_digest ws-hold)"
+rm -f "$ROOT/spec-hold-id" "$ROOT/spec-gate"
+SELF spec dispatch ws-hold > /dev/null &
+HOLD_PID=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/spec-hold-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/spec-hold-id" ] || fail "the held attempt never reached the provider"
+AT_HOLD="$(cat "$ROOT/spec-hold-id")"
+
+# one work unit materializes one attempt at a time
+BUSY="$(SELF spec dispatch ws-hold 2>&1 || true)"
+echo "$BUSY" | grep -q "one work unit materializes one attempt at a time" || fail "a second attempt was dispatched onto a work unit already being driven"
+
+workspec "$ROOT/ws-hold2.json" "id=ws-hold" "work=$WHOLD" "generation=2" "mode=hold" "gate=$ROOT/spec-gate" "summary=the generation that lands mid-attempt"
+SELF spec apply "$ROOT/ws-hold2.json" | grep -q "generation 2 applied" || fail "a generation could not be applied while an attempt was running"
+HOLD2="$(head_digest ws-hold)"
+[ "$HOLD1" = "$HOLD2" ] && fail "the second generation hashed to the first"
+touch "$ROOT/spec-gate"
+wait "$HOLD_PID" || fail "the held attempt did not complete once it was released"
+[ "$(attempt_state "$AT_HOLD")" = "completed" ] || fail "the attempt that ran across an apply did not complete"
+node -e '
+const pin = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).spec;
+if (pin.generation !== 1 || pin.sha256 !== process.argv[2]) { console.error("a later generation reinterpreted a live attempt: " + JSON.stringify(pin)); process.exit(1); }
+' "$(spool_of "$AT_HOLD")/attempt.json" "$HOLD1" || fail "an apply mid-attempt changed what the live attempt was admitted under"
+[ -f "$SPECS/ws-hold/000001-$HOLD1.json" ] || fail "a superseded generation was edited or deleted"
+
+# work to generation to attempts, by stable id
+SELF spec list | grep -q "ws-design  $WSPEC  generation 2" || fail "spec list does not resolve a spec to its work and generation"
+SHOW="$(SELF spec show ws-hold)"
+echo "$SHOW" | grep -q "ws-hold  $WHOLD  generation 2" || fail "spec show does not name the work unit and the current generation"
+echo "$SHOW" | grep -q "model opus-5" || fail "spec show does not name the model the spec asks for"
+echo "$SHOW" | grep -q "$AT_HOLD  generation 1" || fail "spec show does not resolve which generation an attempt ran under"
+
 # the repository integration controller replays a real three-branch train, so
 # it builds its own git repository under a root of its own
 bash "$CLI_DIR/proof/integration.sh"
