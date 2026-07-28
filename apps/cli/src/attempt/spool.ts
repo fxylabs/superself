@@ -267,7 +267,7 @@ export function listSpools(): Spool[]
 // The states in which a spool claims a runner is still driving it. Only these
 // can be recovered, and only these are exempt from retention while they are
 // actually live.
-const DRIVEN_STATES: AttemptState[] = ["preflight", "running", "retrying"];
+export const DRIVEN_STATES: AttemptState[] = ["preflight", "running", "retrying"];
 
 // A heartbeat this old, from a runner that is supposed to be writing one every
 // second, means nobody is driving this attempt any more.

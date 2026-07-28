@@ -93,6 +93,11 @@ export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options
         adapter: adapterOf(plan.boundary),
         boundaryDigest: identity.digest,
         policyDigest: policyDigest(plan),
+        // The desired-state generation this attempt was admitted under, when a
+        // spec dispatched it. Snapshot at start: a generation applied while
+        // this attempt runs never reinterprets it, because what it was
+        // admitted under is already on its record.
+        spec: plan.spec,
         command: plan.command,
         capabilities: plan.capabilities,
         artifacts: plan.artifacts,

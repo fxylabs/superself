@@ -69,7 +69,10 @@ export function stageArtifacts(storeDir: string, slug: string, paths: string[] |
 // whatever fails afterwards — folding, rendering, committing — because the next
 // command folds and commits the store again, while nothing can bring back the
 // file a durable report already names.
-export function commitStaged(staged: StagedArtifacts, writeEvent: (recorded: () => void) => void): void
+// Anything staged in the store, not artifacts alone: a spec generation crosses
+// the same boundary — bytes written first, made real by the event that names
+// them — and one rule about when those bytes may stay is better than two.
+export function commitStaged(staged: { discard: () => void }, writeEvent: (recorded: () => void) => void): void
 {
     let recorded = false;
     const markRecorded = (): void =>
