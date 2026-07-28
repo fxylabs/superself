@@ -270,6 +270,14 @@ function stringMap(value: unknown, field: string): Record<string, string>
     return out;
 }
 
+// Every bound a plan declares ends up in setTimeout or setInterval, and Node
+// clamps anything past the 32-bit timer range to 1ms — so a bound declared
+// past about 24.8 days does not mean a generous one, it kills every run the
+// instant it starts. The realistic way to write one is a typo on a value that
+// was already large, and the bounds an attempt records have to be the bounds
+// it enforces.
+const MAX_BOUND = 2_147_483_647;
+
 function positive(value: unknown, fallback: number, field: string): number
 {
     if (value === undefined)
@@ -280,6 +288,10 @@ function positive(value: unknown, fallback: number, field: string): number
     if (!Number.isFinite(number) || number <= 0)
     {
         throw new CliError(`attempt plan field "${field}" must be a positive number`);
+    }
+    if (number > MAX_BOUND)
+    {
+        throw new CliError(`attempt plan field "${field}" is ${number}, past the ${MAX_BOUND} a timer can hold — a bound that large is clamped to 1ms and every run times out immediately`);
     }
     return number;
 }

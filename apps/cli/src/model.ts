@@ -9,7 +9,7 @@ const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
 // How long a failed attempt stays a health signal. Past this it is history
 // that `self work show` still carries, not something the person can act on.
-const ATTEMPT_FAILURE_DAYS = 7;
+export const ATTEMPT_FAILURE_DAYS = 7;
 
 // Work proposals carry no `work` id of their own, so they are routed before
 // the transition verbs that look one up.

@@ -995,6 +995,10 @@ plan "$ROOT/p-stale.json" "mode=stale" "provider=http://localhost:1/" "providerN
 STALE="$(SELF attempt run "$ROOT/p-stale.json" 2>&1 || true)"
 [ "$(wc -l < "$ROOT/ran-stale")" -eq 2 ] || fail "the stale-envelope case never reached its second run"
 echo "$STALE" | grep -q "completed" && fail "a run that produced nothing completed from the previous run's result envelope"
+# and it is told what was missing. An agent that forgets to write its result
+# envelope is the commonest misconfiguration there is, and the last line of an
+# empty stderr would report it as "failed: unknown — " with nothing after it.
+echo "$STALE" | grep -q "no structured result envelope" || fail "a run that exited clean with nothing written was reported with an empty failure detail"
 AT_STALE="$(last_attempt)"
 [ "$(attempt_state "$AT_STALE")" = "failed" ] || fail "an attempt whose runs left no result of their own did not fail"
 [ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a stale result envelope attached the previous run's summary as a report"
@@ -1010,6 +1014,42 @@ echo "$TIMEOUT" | grep -q "did not finish within the 1500ms" || fail "a hung pro
 AT_TIMEOUT="$(last_attempt)"
 [ "$(attempt_state "$AT_TIMEOUT")" = "failed" ] || fail "a run stopped on its own bound did not fail"
 grep -q '"timedOut":true' "$(spool_of "$AT_TIMEOUT")/runs.jsonl" || fail "the run record does not say the bound expired"
+
+# a bound past the 32-bit timer range is clamped to 1ms, so a typo'd extra zero
+# would kill every run the instant it starts. It is a plan error instead.
+plan "$ROOT/p-hugebound.json" "mode=ok" "runTimeoutMs=3000000000"
+HUGEBOUND="$(SELF attempt run "$ROOT/p-hugebound.json" 2>&1 || true)"
+echo "$HUGEBOUND" | grep -q "past the 2147483647 a timer can hold" || fail "a bound past the timer range was accepted and became an immediate timeout"
+
+# Ctrl-C on a running attempt. The provider leads its own process group so a
+# bound or a cancel can reach everything the launcher started, which also takes
+# it out of the terminal's — without a handler the operator's most natural way
+# to stop an attempt orphans a provider that keeps spending and freezes the
+# spool at `running`.
+plan "$ROOT/p-interrupt.json" "mode=slow" "idfile=$ROOT/interrupt-id"
+rm -f "$ROOT/interrupt-id"
+SELF attempt run "$ROOT/p-interrupt.json" > /dev/null 2>&1 &
+INTERRUPT_WRAPPER=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/interrupt-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/interrupt-id" ] || fail "the attempt to be interrupted never started"
+AT_INTERRUPT="$(cat "$ROOT/interrupt-id")"
+INTERRUPT_RUNNER="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).pid))' "$(spool_of "$AT_INTERRUPT")/status.json")"
+INTERRUPT_PROVIDER=""
+for _ in $(seq 1 200)
+do
+    INTERRUPT_PROVIDER="$(pgrep -P "$INTERRUPT_RUNNER" 2>/dev/null | head -1)"
+    [ -n "$INTERRUPT_PROVIDER" ] && break
+    sleep 0.1
+done
+[ -n "$INTERRUPT_PROVIDER" ] || fail "the attempt to be interrupted never started a provider"
+kill -INT "$INTERRUPT_RUNNER"
+wait "$INTERRUPT_WRAPPER" 2>/dev/null || true
+kill -0 "$INTERRUPT_PROVIDER" 2>/dev/null && fail "stopping the runner left the provider running and spending"
+[ "$(attempt_state "$AT_INTERRUPT")" = "cancelled" ] || fail "an interrupted attempt left its spool claiming a runner is still driving it"
 
 # a provider that keeps failing opens the circuit, and the work behind it stays
 # queued instead of burning the rest of the queue on the same outage
@@ -1027,6 +1067,33 @@ AT_QUEUED="$(last_attempt)"
 [ "$(grep -c "run 4" "$ROOT/ran-open")" -eq 0 ] 2>/dev/null || fail "an open circuit still reached the provider"
 SELF work show "$WATT" | grep -q "Status: active" || fail "an open circuit moved the work unit out of active"
 SELF attempt breaker flaky --reset | grep -q "reset" || fail "the circuit breaker could not be reset"
+
+# a cooled-down breaker lets exactly one attempt through, and an attempt that
+# stops in preflight never touched the provider: it must not be the one that
+# spends the trial the whole queue is waiting on
+plan "$ROOT/p-trial.json" "mode=alwaysdns" "provider=http://localhost:1/" "providerName=trialprov" "maxRuns=1"
+for _ in 1 2 3
+do
+    SELF attempt run "$ROOT/p-trial.json" > /dev/null 2>&1 || true
+done
+TRIAL_FILE="$(node -e 'process.stdout.write(process.argv[1] + "/.local/state/superself/runner/breakers/" + require("crypto").createHash("sha256").update("trialprov").digest("hex").slice(0, 16) + ".json")' "$HOME")"
+# backdated past the cooldown, so the next attempt reads the breaker as cooled
+# down and may take the one trial it allows
+node -e '
+const fs = require("fs");
+const record = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (record.state !== "open") { console.error("the trial breaker never opened"); process.exit(1); }
+record.openedAt = new Date(Date.now() - 600000).toISOString();
+delete record.trialAt;
+delete record.trialBy;
+fs.writeFileSync(process.argv[1], JSON.stringify(record, null, 2));
+' "$TRIAL_FILE" || fail "the trial breaker could not be cooled down"
+plan "$ROOT/p-trialblocked.json" "mode=ok" "provider=http://localhost:1/" "providerName=trialprov" "tools=definitely-not-a-real-tool" "marker=$ROOT/ran-trial"
+SELF attempt run "$ROOT/p-trialblocked.json" > /dev/null 2>&1 || true
+[ "$(attempt_state "$(last_attempt)")" = "preflight-failed" ] || fail "the trial case did not stop in preflight"
+[ -f "$ROOT/ran-trial" ] && fail "an attempt that failed preflight still reached the provider"
+node -e 'if (JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).trialAt !== undefined) { process.exit(1); }' "$TRIAL_FILE" || fail "an attempt that never reached the provider spent the breaker's half-open trial"
+SELF attempt breaker trialprov --reset > /dev/null
 
 # the agent may name its own failure class, but it may not spend the whole
 # retry budget on a class nothing the runner observed supports — nor push a
@@ -1220,6 +1287,23 @@ node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$(spoo
 # the break, so the raw writer holds back what a pattern could still grow into
 node "$CLI_DIR/proof/spool-chunks.mjs" || fail "a credential split across chunk boundaries survived the spool's redaction"
 
+# the synced log is committed and pushed, and a capability block names the exact
+# path that was missing. The request on that event is already rewritten; the
+# list of what is missing has to be too, or one event carries the private path
+# both ways
+plan "$ROOT/p-privatepath.json" "mode=ok" "read=$HOME/private/secretproject/nothing.key" "marker=$ROOT/ran-privatepath"
+SELF attempt run "$ROOT/p-privatepath.json" > /dev/null 2>&1 || true
+AT_PRIVATEPATH="$(last_attempt)"
+[ "$(attempt_state "$AT_PRIVATEPATH")" = "preflight-failed" ] || fail "a read capability on a missing private path did not block"
+grep -q "secretproject" "$LOG_A" || fail "the capability block never reached the synced log"
+grep "run.blocked" "$LOG_A" | grep -q "\"read:$HOME/private" && fail "a capability block wrote a raw private home path into the synced log"
+grep "run.blocked" "$LOG_A" | grep -q "read:~/private/secretproject" || fail "the missing capability was not named at all once the path was rewritten"
+
+# the lock the machine-local counters are minted under: broken when its holder
+# died, never broken out from under a holder that is still there, and never
+# released by a process that no longer owns it
+node "$CLI_DIR/proof/lock-ownership.mjs" || fail "the counter lock does not hold under contention"
+
 # a declared secret too short to redact by value is said out loud rather than
 # left silently uncovered
 export PROOF_TINY_SECRET="ab"
@@ -1278,6 +1362,14 @@ grep -q "attempt $AT_LASTBLOCK is waiting on a capability grant" "$STATE_A" || f
 grep -q "attempt $AT_DRIFT is waiting on a capability grant" "$STATE_A" && fail "a blocked attempt a later one superseded is still waiting on the person"
 grep -q "attempt $AT_CRASH failed" "$STATE_A" && fail "a failed attempt a later one superseded is still a health signal"
 SELF work show "$WATT" | grep -q "$AT_CRASH" || fail "a superseded attempt left the work record as well as the attention surface"
+
+# the same accumulation, one surface over: `self status` reads the machine-local
+# spools directly, and a spool lives until retention prunes it, so an unfinished
+# attempt from weeks ago would keep a line there for a month
+SELF status | grep -q "attempt $AT_LASTBLOCK" || fail "self status does not report this machine's unfinished attempts"
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.updated=new Date(Date.now()-30*86400000).toISOString();fs.writeFileSync(f,JSON.stringify(s,null,2))' "$(spool_of "$AT_LASTBLOCK")/status.json"
+SELF status | grep -q "attempt $AT_LASTBLOCK" && fail "an attempt nothing has touched for a month still holds a line under self status"
+SELF attempt list | grep -q "$AT_LASTBLOCK" || fail "the aged-out attempt is no longer reachable from the surface that lists every spool"
 
 # the repository integration controller replays a real three-branch train, so
 # it builds its own git repository under a root of its own
