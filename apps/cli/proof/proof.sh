@@ -496,6 +496,25 @@ grep -q "DECISIONS FROM THIS WORK" "$VIEW_A/demo/$WID2.html" && fail "an unlinke
 BADWORK="$(SELF decide "points at nothing" --work w-nope 2>&1 || true)"
 echo "$BADWORK" | grep -q "unknown work id" || fail "a decision was linked to a work id that does not exist"
 
+# an event carries what happened, never what the machine that wrote it could
+# see. The table of shapes the guard must refuse — and the prose it must not —
+# is driven directly; here the same guard is shown to hold at the boundary a
+# real command crosses, and to leave the log and the store commit untouched
+# when it refuses, since nothing can take back an appended event another clone
+# has already pulled.
+node "$CLI_DIR/proof/event-sanitization.mjs" > /dev/null || fail "the event sanitization guard does not refuse what a synced event must not carry"
+STORE_A="$ROOT/A/ws/.superself"
+BEFORE_LINES="$(wc -l < "$LOG_A")"
+BEFORE_COMMIT="$(git -C "$STORE_A" rev-parse HEAD)"
+HOMELEAK="$(SELF decide "the credentials live in $HOME/.config/creds.json" --why "guard" 2>&1 || true)"
+echo "$HOMELEAK" | grep -q "home directory" || fail "a decision carrying this machine's home path was recorded"
+echo "$HOMELEAK" | grep -qF "$HOME/.config/creds.json" && fail "the refusal printed the private path it refused"
+KEYLEAK="$(SELF decide "rotate sk-live-AAAABBBBCCCCDDDDEEEE00001111 tomorrow" --why "guard" 2>&1 || true)"
+echo "$KEYLEAK" | grep -q "shaped like a credential" || fail "a decision carrying a provider key was recorded"
+echo "$KEYLEAK" | grep -qF "sk-live-AAAABBBBCCCCDDDDEEEE00001111" && fail "the refusal printed the credential it refused"
+[ "$(wc -l < "$LOG_A")" = "$BEFORE_LINES" ] || fail "a refused event still reached the log"
+[ "$(git -C "$STORE_A" rev-parse HEAD)" = "$BEFORE_COMMIT" ] || fail "a refused event still made a store commit"
+
 # target dates are judged in the workspace zone, never the rendering locale
 cd "$ROOT/A/ws"
 SELF timezone | grep -q "^UTC$" || fail "the default target-date zone was not UTC"
