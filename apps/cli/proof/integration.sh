@@ -30,6 +30,10 @@ fail()
 
 # Reads one field out of a --json surface. The proof asserts against machine
 # output wherever a human line would let a wording change hide a broken gate.
+#
+# A path that runs off the end of the surface is the assertion failing, so it
+# says which step stopped it and on what — never a TypeError from inside the
+# reader, which reads as a broken proof rather than a broken gate.
 field()
 {
     node -e '
@@ -37,13 +41,33 @@ field()
         process.stdin.on("data", (chunk) => { raw += chunk; });
         process.stdin.on("end", () =>
         {
+            const path = process.argv[1].split(".");
             let value = JSON.parse(raw);
-            for (const key of process.argv[1].split("."))
+            for (let step = 0; step < path.length; step++)
             {
-                value = Array.isArray(value) && /^[0-9]+$/.test(key) ? value[Number(key)] : value[key];
+                if (value === null || typeof value !== "object")
+                {
+                    stop(path, step, value);
+                }
+                value = Array.isArray(value) && /^[0-9]+$/.test(path[step])
+                    ? value[Number(path[step])]
+                    : value[path[step]];
+            }
+            if (value === undefined)
+            {
+                stop(path, path.length, value);
             }
             console.log(typeof value === "object" ? JSON.stringify(value) : String(value));
         });
+
+        function stop(path, step, value)
+        {
+            const reached = step === 0 ? "the surface" : path.slice(0, step).join(".");
+            console.error("field " + path.join(".") + ": " + reached + " is " +
+                (value === undefined ? "not there" : JSON.stringify(value)) +
+                (step === path.length ? "" : ", so it has no \"" + path[step] + "\""));
+            process.exit(1);
+        }
     ' "$1"
 }
 
@@ -105,12 +129,21 @@ JSON
 
 # Projections are ordered by when they were observed, never by when they were
 # appended, so the fixture states its own order: every observation here is
-# stamped a fixed number of seconds after this run started, and a merge's own
-# "the branch is now here" — stamped at the real moment it happened — is older
-# than all of them by construction.
+# stamped inside one window ahead of this run, and a merge's own "the branch is
+# now here" — stamped at the real moment it happened — is older than all of
+# them by construction.
+#
+# The window is an hour wide because "by construction" has to survive a slow
+# run. Stamped seconds ahead of the start, as it first was, the wall clock
+# overtook the fixture partway through and a stated target advance was
+# discarded as older than a merge that had already been recorded — the proof
+# then failed on a gate that was not broken (#57).
+FIXTURE_BASE="$(node -e 'console.log(Date.now() + 3600 * 1000);')"
+
 at()
 {
-    node -e 'console.log(new Date(Date.now() + Number(process.argv[1]) * 1000).toISOString());' "$1"
+    node -e 'console.log(new Date(Number(process.argv[1]) + Number(process.argv[2]) * 1000).toISOString());' \
+        "$FIXTURE_BASE" "$1"
 }
 
 digest_of()
@@ -421,6 +454,26 @@ SELF review list "$CS43" | grep -q "$RR43" || fail "an ingested receipt is not o
 [ "$(SELF review list "$CS43" --json | field length)" = "1" ] || fail "a retried ingest created a second verdict"
 SELF review list "$CS43" | grep -q "current" || fail "a receipt bound to the current bytes did not read as current"
 SELF artifact list --project superself | grep -q "report.md" || fail "review artifact bytes did not reach the store registry"
+
+# ── an attempt admitted before the target had a head ────────────────
+#
+# Nothing has said where `next` is yet, so this attempt records no target to
+# plan against. An attempt with nothing recorded there was, until #57, immune
+# to the target check forever: with no head to compare, every later advance
+# left it running. The first observation is what settles it — an attempt that
+# cannot be shown to have planned against the head that is there is cancelled,
+# exactly as one whose target moved.
+IA0="$(SELF integration attempt start "$CS43" --fence "$FENCE" --action rebase | tail -1)"
+[ "$(phase_of "$CS43")" = "integration" ] || fail "an attempt in flight did not read as integrating"
+SELF integration reconcile --json | field converged | grep -q "true" \
+    || fail "an attempt was cancelled before anything had observed the target at all"
+SELF integration observe target --repo superself --head "$MAIN0" --at "$AT05" > /dev/null
+[ "$(SELF integration reconcile --json | field actions.0.subject)" = "$IA0" ] \
+    || fail "an attempt admitted before any target head was observed survived the first observation"
+[ "$(SELF integration show "$CS43" --json | field attempts.0.reason)" = "target_unobserved" ] \
+    || fail "the cancellation did not record that the attempt had planned against no observed target"
+[ "$(SELF integration show "$CS43" --json | field attempts.0.status)" = "cancelled" ] \
+    || fail "an attempt immune to the target check was left running"
 
 # ── conflict-free base movement preserves the receipt ───────────────
 #
@@ -754,7 +807,7 @@ MERGES="$(grep -c '"type":"merge.recorded"' "$ROOT/ws/.superself/projects/supers
 PROMOTED="$(grep -c '"type":"promotion.recorded"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
 [ "$PROMOTED" = "1" ] || fail "the log holds a promotion nobody gated (found $PROMOTED)"
 REBASES="$(grep -c '"type":"attempt.started"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
-[ "$REBASES" = "5" ] || fail "the train planned a duplicate rebase (found $REBASES attempts)"
+[ "$REBASES" = "6" ] || fail "the train planned a duplicate rebase (found $REBASES attempts)"
 
 # ── the surfaces an agent and a person read ─────────────────────────
 SELF integration | grep -q "superself" || fail "compact status does not name the repository"

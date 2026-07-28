@@ -211,6 +211,12 @@ durable and cancels every in-flight attempt whose fence is dead, whose main has
 moved, or whose head has changed — with the reason recorded. It never silently
 retries, and running it again writes nothing.
 
+An attempt admitted before anything had observed the merge target recorded no
+target head to plan against, and it is not exempt from that check: the first
+observation of a target head cancels it as `target_unobserved`, because an
+attempt that never planned against a head cannot be shown to have planned
+against the one that is there.
+
 ## Commands
 
 ```text
@@ -276,5 +282,6 @@ the candidate.
 It also carries a pair of branches with no file in common that declare one
 contract, so the semantic block is proved on an overlap no path comparison can
 reach; a second holder refused a live lease; and an attempt invalidated by each
-of the three things that can invalidate one — a dead fence, a main that moved,
-and an author's push under a pass in flight.
+of the four things that can invalidate one — a dead fence, a main that moved,
+an author's push under a pass in flight, and a target head observed for the
+first time under an attempt that had planned against none.
