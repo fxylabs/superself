@@ -179,6 +179,28 @@ grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/workspace.html" || fail "work
 grep -q 'aria-label="waiting on you"' "$VIEW_A/demo.html" || fail "project view missing the attention panel"
 grep -q 'aria-label="waiting on you"' "$VIEW_A/workspace.html" || fail "workspace view missing the attention panel"
 
+# work listing and detail are workspace reads, reachable from any directory:
+# a bare id resolves its owning project, --project names one explicitly, and
+# the output matches the linked checkout's byte for byte
+INSIDE_SHOW="$(cd "$ROOT/A/ws/demo" && SELF work show "$WID")"
+cd "$ROOT"
+SELF work --project demo | grep -q "$WID" || fail "work --project did not list from a non-project directory"
+[ "$(SELF work show "$WID")" = "$INSIDE_SHOW" ] || fail "cross-project work show differs from the linked-checkout output"
+[ "$(SELF work show "$WID" --project demo)" = "$INSIDE_SHOW" ] || fail "work show --project differs from the linked-checkout output"
+cd "$ROOT/outside/app"
+[ "$(SELF work show "$WID")" = "$INSIDE_SHOW" ] || fail "work show from another project's checkout did not resolve the owner"
+cd "$ROOT"
+NOID="$(SELF work show w-nosuch 2>&1 || true)"
+echo "$NOID" | grep -q 'unknown work id "w-nosuch"' || fail "an id in no project lost the unknown-id error"
+NOPROJ="$(SELF work --project nosuch 2>&1 || true)"
+echo "$NOPROJ" | grep -q 'unknown project "nosuch"' || fail "an unregistered --project slug was accepted"
+# every verb that writes still requires the linked checkout
+STARTOUT="$(SELF work start "$WID" 2>&1 || true)"
+echo "$STARTOUT" | grep -q "not inside a registered project" || fail "a work mutation escaped the checkout boundary"
+BARELIST="$(SELF work 2>&1 || true)"
+echo "$BARELIST" | grep -q "not inside a registered project" || fail "a bare work list escaped the checkout boundary"
+cd "$ROOT/A/ws/demo"
+
 # a report is atomic across the artifacts it declares: the whole set is checked
 # before a byte is copied, so a rejected member can never half-write a report
 STORE="$ROOT/A/ws/.superself"

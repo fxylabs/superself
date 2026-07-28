@@ -12,7 +12,7 @@ import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gi
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
-import { buildModel, WorkState } from "./model.js";
+import { buildModel, ProjectModel, WorkState } from "./model.js";
 import {
     CliContext,
     ensureDir,
@@ -73,9 +73,10 @@ const USAGE = `usage: self <command>
                                              re-judge coverage, or a reach, a revision left stale
   decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
   decide confirm <event-id>                  confirm a proposed decision
-  work                                       list open work
+  work [--project <slug>]                    list open work, from any directory with --project
   work add "<required outcome>"              create a work unit
-  work show <id>                             print full work detail: brief, reports, evidence
+  work show <id> [--project <slug>]          print full work detail: brief, reports, evidence
+                                             (resolves the owning project from any directory)
   work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
   work link|unlink <id> --objective o | --milestone m
                                              state, or withdraw, what a work unit contributes to
@@ -509,30 +510,25 @@ const TRANSITIONS: Record<string, string> = {
 
 function cmdWork(rest: string[]): void
 {
-    const ctx = requireProject(process.cwd());
-    if (rest.length === 0)
+    // Listing and showing are workspace reads, so they resolve from any
+    // directory; every verb that writes still requires the linked checkout.
+    if (rest.length === 0 || rest[0].startsWith("--"))
     {
-        printWorkList(ctx);
+        cmdWorkList(rest);
         return;
     }
+    if (rest[0] === "show")
+    {
+        cmdWorkShow(rest.slice(1));
+        return;
+    }
+    const ctx = requireProject(process.cwd());
     if (rest[0] === "add")
     {
         const outcome = requireText(rest[1], 'work add "<required outcome>"');
         const id = workId();
         recordEvent(ctx, makeEvent(ctx.project, "work.created", { work: id, outcome }), `${id} ${outcome}`);
         console.log(id);
-        return;
-    }
-    if (rest[0] === "show")
-    {
-        const wanted = requireText(rest[1], "work show <work-id>");
-        const model = buildModel(ctx.storeDir, ctx.project, new Date());
-        const work = model.works.find((item) => item.id === wanted);
-        if (work === undefined)
-        {
-            throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
-        }
-        console.log(markdownHeadings(renderWorkBody(work, model, loadVerdicts(ctx.storeDir, ctx.project)).trimEnd()));
         return;
     }
     if (rest[0] === "link" || rest[0] === "unlink")
@@ -556,6 +552,87 @@ function cmdWork(rest: string[]): void
         throw new CliError(`unknown work subcommand "${rest[0]}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline`);
     }
     transitionWork(ctx, type, rest.slice(1));
+}
+
+function cmdWorkList(rest: string[]): void
+{
+    const { values } = parseArgs({ args: rest, options: { project: { type: "string" } } });
+    if (values.project === undefined)
+    {
+        printWorkList(requireProject(process.cwd()));
+        return;
+    }
+    const ctx = requireWorkspace(process.cwd());
+    printWorkList({ ...ctx, project: requireRegistered(ctx.storeDir, values.project) });
+}
+
+function cmdWorkShow(args: string[]): void
+{
+    const { values, positionals } = parseArgs({
+        args,
+        options: { project: { type: "string" } },
+        allowPositionals: true
+    });
+    const wanted = requireText(positionals[0], "work show <work-id> [--project <slug>]");
+    const ctx = requireWorkspace(process.cwd());
+    const found = findWorkAcross(ctx, wanted, values.project);
+    if (found === null)
+    {
+        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+    }
+    console.log(markdownHeadings(renderWorkBody(found.work, found.model, loadVerdicts(ctx.storeDir, found.slug)).trimEnd()));
+}
+
+interface FoundWork
+{
+    slug: string;
+    model: ProjectModel;
+    work: WorkState;
+}
+
+// A bare id resolves across the whole workspace: the linked checkout's own
+// project wins outright, and a cross-project id collision demands --project.
+function findWorkAcross(ctx: CliContext, wanted: string, project: string | undefined): FoundWork | null
+{
+    const slugs = project === undefined
+        ? orderedSlugs(ctx)
+        : [requireRegistered(ctx.storeDir, project)];
+    const matches: FoundWork[] = [];
+    for (const slug of slugs)
+    {
+        const model = buildModel(ctx.storeDir, slug, new Date());
+        const work = model.works.find((item) => item.id === wanted);
+        if (work !== undefined)
+        {
+            matches.push({ slug, model, work });
+        }
+    }
+    if (matches.length > 0 && matches[0].slug === ctx.project)
+    {
+        return matches[0];
+    }
+    if (matches.length > 1)
+    {
+        throw new CliError(`work id "${wanted}" exists in more than one project (${matches.map((m) => m.slug).join(", ")}) — pass --project <slug>`);
+    }
+    return matches[0] ?? null;
+}
+
+// The current checkout's project first, so its lookups behave exactly as
+// they always have, then every other registered project.
+function orderedSlugs(ctx: CliContext): string[]
+{
+    const rest = readRegistry(ctx.storeDir).map((entry) => entry.slug).filter((slug) => slug !== ctx.project);
+    return ctx.project === undefined ? rest : [ctx.project, ...rest];
+}
+
+function requireRegistered(storeDir: string, slug: string): string
+{
+    if (!readRegistry(storeDir).some((entry) => entry.slug === slug))
+    {
+        throw new CliError(`unknown project "${slug}" — registered: ${readRegistry(storeDir).map((e) => e.slug).join(", ")}`);
+    }
+    return slug;
 }
 
 function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
