@@ -1,6 +1,7 @@
+import { AttemptStatus, listSpools } from "./attempt/spool.js";
 import { ChangeSet, openChangeSets } from "./integration.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { ATTEMPT_FAILURE_DAYS, buildModel, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { loadVerdicts, verdictSignals } from "./reachability.js";
@@ -148,6 +149,7 @@ export function printStatus(ctx: CliContext): void
     if (styled)
     {
         printStyledStatus(model);
+        printAttempts(ctx.project);
         return;
     }
     console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
@@ -156,6 +158,30 @@ export function printStatus(ctx: CliContext): void
     console.log(`integration: ${integrationCountLine(model)}`);
     console.log(`waiting on you: ${waitingCount(model)}`);
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
+    printAttempts(ctx.project);
+}
+
+// Attempt state is machine-local: it says what this machine is running right
+// now, which is not something the synced store can answer. Only unfinished
+// attempts are listed — a completed one has already become a report.
+//
+// And only recent ones. A spool lives until retention prunes it, thirty days
+// by default, so without an age gate a failed attempt from three weeks ago
+// keeps a line here forever — the same slow accumulation the folded model gates
+// on, one surface over, and gated on the same window. `self attempt list`
+// remains the surface that shows every spool.
+function printAttempts(project: string): void
+{
+    const cutoff = Date.now() - ATTEMPT_FAILURE_DAYS * 86_400_000;
+    const open = listSpools()
+        .map((spool) => spool.status())
+        .filter((status): status is AttemptStatus => status !== null && status.project === project && status.state !== "completed")
+        .filter((status) => new Date(status.updated).getTime() > cutoff);
+    for (const status of open)
+    {
+        const failure = status.failure === undefined ? "" : ` (${status.failure})`;
+        console.log(`attempt ${status.attempt} ${status.work}: ${status.state}${failure}`);
+    }
 }
 
 // A flat active count can look busy without saying whether the project is

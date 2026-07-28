@@ -64,6 +64,13 @@ export function promotionId(): string
     return "pm-" + shortId();
 }
 
+// A runner attempt is one launch of a provider under a plan, distinct from the
+// integration attempt above that carries a change set through the train.
+export function runAttemptId(): string
+{
+    return "at-" + shortId();
+}
+
 function shortId(): string
 {
     let id = "";

@@ -469,6 +469,11 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     {
         lines.push(`- Artifacts: ${work.artifacts.map((a) => `${a.id} ${a.name}`).join(", ")}`);
     }
+    if (work.attempts.length > 0)
+    {
+        const attempts = work.attempts.map((a) => `${a.id} (${a.state}${a.failure === undefined ? "" : `: ${a.failure}`})`);
+        lines.push(`- Attempts: ${attempts.join(", ")}`);
+    }
     lines.push("");
     if (work.reports.length > 0)
     {
