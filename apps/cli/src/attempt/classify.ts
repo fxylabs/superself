@@ -42,6 +42,15 @@ export interface FailureSignal
 // budget on.
 export function classify(signal: FailureSignal): FailureClass
 {
+    // A run the runner killed on its own bound is deliberately not transient,
+    // and that is a decision rather than an accident of this ordering. The
+    // bound is the plan's own statement of how long the work may take, so a
+    // provider that blew through it has not hit a passing condition that a
+    // second identical run would clear — it has contradicted the plan. Retrying
+    // would spend the whole budget on the same wall and push a shared breaker
+    // on evidence about the plan rather than about the provider. A plan author
+    // who wants three bounded tries of a hung provider is asking for a
+    // different policy, and it has to be declared rather than inferred here.
     if (signal.timedOut)
     {
         return "unknown";

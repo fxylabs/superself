@@ -131,20 +131,73 @@ export function unredactableSecrets(secretNames: string[]): string[]
 // arrive.
 //
 // Every pattern above is confined to one line, so a line break is that
-// boundary. A declared literal is not — a private key is several lines — so
-// the cut also stays the longest literal back from the end of the buffer.
+// boundary. A declared literal is not: a private key carries line breaks of
+// its own, and a cut on one of them splits the literal into two halves that
+// match nothing. So the boundary has to hold against a literal twice over —
+// the cut stays the longest literal back from the end of the buffer, which
+// keeps a literal whose tail has not arrived yet out of the flush, and it
+// steps back past any literal that has arrived and would be split.
 const MAX_HELD = 1_048_576;
 
 export function safeCut(pending: string, scope: RedactionScope): number
 {
-    const reserve = Math.max(0, ...scope.literals.map((literal) => literal.length - 1));
+    // Only the literals redaction actually covers: a shorter one is left alone
+    // by redactSecrets, so holding output back for it would buy nothing.
+    const literals = scope.literals.filter((literal) => literal.length >= MIN_LITERAL);
+    const reserve = Math.max(0, ...literals.map((literal) => literal.length - 1));
     const limit = pending.length - reserve;
-    const cut = limit <= 0 ? 0 : pending.lastIndexOf("\n", limit - 1) + 1;
+    let cut = limit <= 0 ? 0 : lineStartBefore(pending, limit);
+    for (let split = straddleStart(pending, cut, literals); cut > 0 && split !== -1; split = straddleStart(pending, cut, literals))
+    {
+        cut = lineStartBefore(pending, split);
+    }
     if (cut > 0)
     {
         return cut;
     }
     // A provider that emits no line break at all must not be buffered without
-    // bound; past this much held output the tail is written as it stands.
-    return pending.length > MAX_HELD ? Math.max(0, limit) : 0;
+    // bound; past this much held output the tail is written as it stands — at
+    // a position that still splits no declared literal, because that is the
+    // one thing this hold-back exists to prevent.
+    return pending.length > MAX_HELD ? clearOfLiterals(pending, Math.max(0, limit), literals) : 0;
+}
+
+// The start of the line the given position sits on, which is where a cut may
+// land without any pattern rule straddling it.
+function lineStartBefore(pending: string, at: number): number
+{
+    return at <= 0 ? 0 : pending.lastIndexOf("\n", at - 1) + 1;
+}
+
+// Where the earliest declared literal that this cut would split begins, or -1
+// when the cut splits none. Only the last occurrence starting before the cut
+// can reach past it, so one search per literal answers it.
+function straddleStart(pending: string, cut: number, literals: string[]): number
+{
+    let earliest = -1;
+    for (const literal of literals)
+    {
+        const start = pending.lastIndexOf(literal, cut - 1);
+        if (start !== -1 && start + literal.length > cut && (earliest === -1 || start < earliest))
+        {
+            earliest = start;
+        }
+    }
+    return earliest;
+}
+
+// The forced flush has already given up the line boundary, so it steps back
+// only as far as a split literal requires.
+function clearOfLiterals(pending: string, cut: number, literals: string[]): number
+{
+    for (let at = cut; at > 0; )
+    {
+        const split = straddleStart(pending, at, literals);
+        if (split === -1)
+        {
+            return at;
+        }
+        at = split;
+    }
+    return 0;
 }

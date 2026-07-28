@@ -41,6 +41,12 @@ export interface GateSuccess
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
 
+// What a run that wrote nothing is told. The runner reaches this verdict
+// before the gate does — a missing envelope is already a failed run — so the
+// sentence lives here, where the rule it states belongs, and is said in both
+// places rather than being reworded in one of them.
+export const NO_ENVELOPE = "the attempt produced no structured result envelope — an exit code alone is not a result";
+
 // Nothing here trusts the agent's word. An exit code says the process ended, a
 // summary says the agent believes it succeeded, and neither is evidence that
 // the declared file exists, holds what was declared, or reached the record.
@@ -48,7 +54,7 @@ export function verifyDeclarations(plan: AttemptPlan, spool: Spool, envelope: Re
 {
     if (envelope === null)
     {
-        return { reason: "the attempt produced no structured result envelope — an exit code alone is not a result" };
+        return { reason: NO_ENVELOPE };
     }
     if (envelope.status !== "completed")
     {

@@ -10,7 +10,7 @@ import { withLock, writeAtomic } from "./atomic.js";
 import { boundaryCommand, identityOf } from "./boundary.js";
 import { classify, FailureClass, FailureSignal, fromDeclaration, isTransient } from "./classify.js";
 import { deliverDirectives, inboxPath } from "./directive.js";
-import { alreadyCompleted, alreadyReported, attachReport, publishArtifacts, Published, ResultEnvelope, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
+import { alreadyCompleted, alreadyReported, attachReport, NO_ENVELOPE, publishArtifacts, Published, ResultEnvelope, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
 import { CliError } from "../types.js";
 import { AttemptPlan, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
@@ -165,6 +165,25 @@ async function gateBeforeSpend(
     options: RunOptions
 ): Promise<AttemptResult | null>
 {
+    const receipt = await runPreflight(plan, id, fence, identity, localChecks(ctx, plan));
+    spool.writeJson("preflight.json", receipt);
+    if (!receipt.ok)
+    {
+        return blockOnCapability(ctx, plan, spool, id, receipt);
+    }
+    const drift = boundaryDrift(plan, receipt);
+    if (drift !== null)
+    {
+        spool.setStatus({ state: "preflight-failed", failure: "capability", detail: drift });
+        spool.append("events.jsonl", { event: "boundary.drift", detail: drift });
+        recordAttemptEvent(ctx, plan, "run.blocked", id, { failure: "capability", detail: drift });
+        console.error(drift);
+        return { attempt: id, state: "preflight-failed", failure: "capability", detail: drift };
+    }
+    // Last, because a cooled-down breaker lets exactly one attempt through and
+    // the probe costs the provider nothing. An attempt that stops on a missing
+    // tool or an unwritable destination never reaches the provider, so it must
+    // not be the one that spends the trial the whole queue is waiting on.
     const provider = plan.capabilities.provider?.name;
     if (provider !== undefined && admitAttempt(provider, BREAKER_DEFAULT, options.now, id) === "open")
     {
@@ -174,22 +193,7 @@ async function gateBeforeSpend(
         console.log(detail);
         return { attempt: id, state: "waiting-provider", failure: "transient-provider", detail };
     }
-    const receipt = await runPreflight(plan, id, fence, identity, localChecks(ctx, plan));
-    spool.writeJson("preflight.json", receipt);
-    if (!receipt.ok)
-    {
-        return blockOnCapability(ctx, plan, spool, id, receipt);
-    }
-    const drift = boundaryDrift(plan, receipt);
-    if (drift === null)
-    {
-        return null;
-    }
-    spool.setStatus({ state: "preflight-failed", failure: "capability", detail: drift });
-    spool.append("events.jsonl", { event: "boundary.drift", detail: drift });
-    recordAttemptEvent(ctx, plan, "run.blocked", id, { failure: "capability", detail: drift });
-    console.error(drift);
-    return { attempt: id, state: "preflight-failed", failure: "capability", detail: drift };
+    return null;
 }
 
 function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, receipt: PreflightReceipt): AttemptResult
@@ -199,7 +203,10 @@ function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool: Spool,
     spool.setStatus({ state: "preflight-failed", failure: "capability", detail: missing.join(", ") });
     spool.append("events.jsonl", { event: "preflight.failed", missing });
     writeFileSync(spool.path("approval-request.txt"), request + "\n");
-    recordAttemptEvent(ctx, plan, "run.blocked", id, { failure: "capability", missing, request: redact(request) });
+    // A read or write capability names an absolute path, and this event is
+    // synced and committed. The same rewrite the request already goes through
+    // applies here, or one event carries the private path both ways.
+    recordAttemptEvent(ctx, plan, "run.blocked", id, { failure: "capability", missing: missing.map((item) => redact(item)), request: redact(request) });
     console.log(request);
     return { attempt: id, state: "preflight-failed", failure: "capability", detail: missing.join(", ") };
 }
@@ -377,20 +384,25 @@ async function executeRun(plan: AttemptPlan, spool: Spool, id: string, run: numb
     const child = spawn(command.argv[0], command.argv.slice(1), { ...command.options, stdio: ["ignore", "pipe", "pipe"], detached: true });
     const control = watch(spool, child, plan);
     const bound = boundRun(child, plan.runTimeoutMs);
+    const interrupt = onTermination(child);
     child.stdout?.on("data", (chunk) => guard(() => spool.appendRaw(stdout, String(chunk))));
     child.stderr?.on("data", (chunk) => guard(() => spool.appendRaw(stderr, String(chunk))));
     const exit = await waitFor(child);
     control.stop();
     bound.stop();
+    interrupt.stop();
     // The streams are closed, so nothing can extend a redaction match any
     // further: the tail each one held back is written before anything reads
     // the files.
     spool.flushRaw(stdout);
     spool.flushRaw(stderr);
     const envelope = readEnvelope(spool);
-    spool.append("events.jsonl", { event: "run.ended", run, exit: exit.code, signal: exit.signal, cancelled: control.cancelled(), timedOut: bound.timedOut() });
+    const cancelled = control.cancelled()
+        ? "a durable cancel directive stopped this attempt"
+        : interrupt.interrupted();
+    spool.append("events.jsonl", { event: "run.ended", run, exit: exit.code, signal: exit.signal, cancelled: cancelled !== null, timedOut: bound.timedOut() });
     return {
-        ...verdictOf(exit, envelope, control.cancelled(), bound.timedOut(), plan, spool, run),
+        ...verdictOf(exit, envelope, cancelled, bound.timedOut(), plan, spool, run),
         timedOut: bound.timedOut(),
         exit: exit.code,
         signal: exit.signal,
@@ -403,16 +415,16 @@ async function executeRun(plan: AttemptPlan, spool: Spool, id: string, run: numb
 function verdictOf(
     exit: { code: number | null; signal: NodeJS.Signals | null; spawnError?: NodeJS.ErrnoException },
     envelope: ResultEnvelope | null,
-    cancelled: boolean,
+    cancelled: string | null,
     timedOut: boolean,
     plan: AttemptPlan,
     spool: Spool,
     run: number
 ): { failure: FailureClass | null; detail: string; declaredOnly: boolean }
 {
-    if (cancelled)
+    if (cancelled !== null)
     {
-        return { failure: "cancelled", detail: "a durable cancel directive stopped this attempt", declaredOnly: false };
+        return { failure: "cancelled", detail: cancelled, declaredOnly: false };
     }
     // A run the runner killed on its own bound never finished, whatever the
     // envelope it left behind says.
@@ -429,10 +441,30 @@ function verdictOf(
         timedOut,
         spawnCode: exit.spawnError?.code
     };
-    const detail = timedOut
-        ? `the provider did not finish within the ${plan.runTimeoutMs}ms this attempt allows`
-        : envelope?.failure?.message ?? exit.spawnError?.message ?? stderr.trim().split("\n").pop() ?? `exit ${exit.code}`;
-    return { failure: classify(signal), detail: redact(detail.slice(0, 400)), declaredOnly: fromDeclaration(signal) };
+    return { failure: classify(signal), detail: redact(detailOf(exit, envelope, timedOut, plan, stderr).slice(0, 400)), declaredOnly: fromDeclaration(signal) };
+}
+
+// Why the run did not produce a result, in the operator's words. A child that
+// exits silently with nothing written is the commonest misconfiguration there
+// is, and an empty last stderr line would report it as `failed: unknown — `
+// with nothing after the dash; the completion gate already has the sentence
+// that names what is actually missing, and this is where it gets said.
+function detailOf(
+    exit: { code: number | null; spawnError?: NodeJS.ErrnoException },
+    envelope: ResultEnvelope | null,
+    timedOut: boolean,
+    plan: AttemptPlan,
+    stderr: string
+): string
+{
+    if (timedOut)
+    {
+        return `the provider did not finish within the ${plan.runTimeoutMs}ms this attempt allows`;
+    }
+    const last = stderr.trim().split("\n").pop() ?? "";
+    return envelope?.failure?.message
+        ?? exit.spawnError?.message
+        ?? (last !== "" ? last : envelope === null ? NO_ENVELOPE : `exit ${exit.code}`);
 }
 
 function childEnv(spool: Spool, id: string, run: number, resumeFrom: string | null): Record<string, string>
@@ -580,6 +612,63 @@ function boundRun(child: ReturnType<typeof spawn>, timeoutMs: number): Bound
     };
 }
 
+interface Interrupt
+{
+    stop: () => void;
+    // The reason this run was stopped, or null when nothing stopped it.
+    interrupted: () => string | null;
+}
+
+// The signals a terminal sends when the operator stops the attempt.
+const TERMINATION_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+
+// The provider leads its own process group so a bound or a cancel can reach
+// everything the launcher started — which also takes it out of the terminal's
+// group, so Ctrl-C now reaches the runner alone. Without this the operator's
+// most natural way to stop an attempt orphans a provider that keeps spending
+// the declared budget and freezes the spool at `running` until someone runs
+// `self attempt recover`.
+//
+// The signal is turned into the same stop a cancel directive makes, so the run
+// settles down the ordinary failure path and the spool ends at `cancelled`. The
+// handlers are removed as they fire, so a second signal falls back to the
+// default and kills the runner outright.
+function onTermination(child: ReturnType<typeof spawn>): Interrupt
+{
+    let reason: string | null = null;
+    let hard: NodeJS.Timeout | undefined;
+    const handlers = TERMINATION_SIGNALS.map((signal): [NodeJS.Signals, () => void] => [signal, () =>
+    {
+        reason = `the runner was stopped by ${signal} and the provider was stopped with it`;
+        stop();
+        killTree(child, "SIGTERM");
+        hard = setTimeout(() => killTree(child, "SIGKILL"), TERM_GRACE_MS);
+        hard.unref();
+    }]);
+    const stop = (): void =>
+    {
+        for (const [signal, handler] of handlers)
+        {
+            process.removeListener(signal, handler);
+        }
+    };
+    for (const [signal, handler] of handlers)
+    {
+        process.on(signal, handler);
+    }
+    return {
+        stop: () =>
+        {
+            stop();
+            if (hard !== undefined)
+            {
+                clearTimeout(hard);
+            }
+        },
+        interrupted: () => reason
+    };
+}
+
 // The child leads its own process group, so signalling the negated pid reaches
 // everything the launcher started. A wrapper that exec'd its payload is one
 // process and the group signal still finds it; a wrapper that forked one is
@@ -654,6 +743,12 @@ async function completeAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Sp
 
 function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, envelope: ResultEnvelope, published: Published[]): AttemptResult
 {
+    // Again, immediately before the report. The check at the top of
+    // completeAttempt is separated from this point by the declared validation
+    // command, which may run for as long as the preflight bound allows, and a
+    // takeover landing in that window would otherwise be caught only by the
+    // status write that happens after the report is already in the synced log.
+    spool.assertOwned();
     let reported: boolean;
     try
     {

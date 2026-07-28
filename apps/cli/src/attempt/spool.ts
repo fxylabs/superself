@@ -144,11 +144,16 @@ export class Spool
     appendRaw(name: string, chunk: string): void
     {
         const pending = (this.held.get(name) ?? "") + chunk;
+        // Held first, and narrowed only after the bytes are on disk: the caller
+        // swallows a write failure, and a buffer trimmed past a write that
+        // never happened loses that region for good rather than retrying it
+        // with the next chunk.
+        this.held.set(name, pending);
         const cut = safeCut(pending, this.scope);
-        this.held.set(name, pending.slice(cut));
         if (cut > 0)
         {
             appendFileSync(this.path(name), redact(pending.slice(0, cut), this.scope));
+            this.held.set(name, pending.slice(cut));
         }
     }
 
@@ -158,11 +163,11 @@ export class Spool
     flushRaw(name: string): void
     {
         const rest = this.held.get(name) ?? "";
-        this.held.delete(name);
         if (rest !== "")
         {
             appendFileSync(this.path(name), redact(rest, this.scope));
         }
+        this.held.delete(name);
     }
 
     readLines<T>(name: string): T[]
