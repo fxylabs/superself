@@ -1276,6 +1276,136 @@ grep -q "no longer owns it" "$ROOT/fence.out" || fail "the stale runner was not 
 [ "$(attempt_state "$AT_FENCE")" = "exited-unreconciled" ] || fail "a stale runner overwrote the verdict that replaced it"
 [ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a runner that no longer owned its attempt still attached a report"
 
+# ---------------------------------------------------------------------------
+# Externally launched attempts. A process the runner did not spawn joins the
+# same lifecycle: the spool and the capability receipt exist before anything
+# runs, the launcher that started the process claims it, and the exit it
+# reports is settled through the same completion gate.
+# ---------------------------------------------------------------------------
+LAUNCH="$CLI_DIR/proof/external-launch.mjs"
+SELF_JS="$CLI_DIR/bin/self.mjs"
+launch()
+{
+    node "$LAUNCH" "$SELF_JS" "$1" "$(spool_of "$1")" "$DEMO" "${@:2}"
+}
+# The whole exit record, source and code together: the code the launcher
+# reported is the one thing a confirmed exit is judged on, and an unconfirmed
+# exit must not carry a code nobody reported.
+exit_record()
+{
+    SELF attempt show "$1" | sed -n 's/^exit *//p'
+}
+
+# registration is the whole of the runner's work before the launch, and none of
+# the launch: capabilities proven, spool written, no process anywhere
+REPORTS_BEFORE="$(count_events report.added)"
+plan "$ROOT/p-external.json" "mode=ok" "dest=$ROOT/dest/external.md" "read=$DEMO"
+AT_EXT="$(SELF attempt register "$ROOT/p-external.json")"
+[ "$(attempt_state "$AT_EXT")" = "registered" ] || fail "a registered attempt did not reach the registered state"
+[ -f "$(spool_of "$AT_EXT")/preflight.json" ] || fail "registering an attempt did not record its capability receipt"
+[ -f "$(spool_of "$AT_EXT")/brief.md" ] || fail "registering an attempt did not write the brief its launch is handed"
+node -e 'if (JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).pid !== undefined) { process.exit(1); }' "$(spool_of "$AT_EXT")/status.json" || fail "a registered attempt recorded a process before one existed"
+
+# and then a launcher of the operator's own drives it to settlement
+launch "$AT_EXT" || fail "an externally launched attempt did not settle through the completion gate"
+[ "$(attempt_state "$AT_EXT")" = "completed" ] || fail "an externally launched attempt did not reach the completed state"
+[ "$(exit_record "$AT_EXT")" = "confirmed (code 0)" ] || fail "an exit a launcher watched happen was not recorded as confirmed with the code it reported"
+[ -f "$ROOT/dest/external.md" ] || fail "the externally launched attempt did not publish its declared artifact"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "an externally launched attempt did not attach exactly one report"
+SELF work show "$WATT" | grep -q "$AT_EXT (completed)" || fail "the work record does not show the externally launched attempt"
+# a settled attempt releases the work unit it was driving: every scenario
+# below claims this same unit again, and would be refused if it were held
+
+# a confirmed non-zero exit is judged on the exit, not on the envelope the run
+# left behind: `mode=stale` writes a completed envelope and then dies
+REPORTS_BEFORE="$(count_events report.added)"
+COMPLETED_BEFORE="$(count_events run.completed)"
+plan "$ROOT/p-extfail.json" "mode=stale" "maxRuns=1"
+AT_EXTFAIL="$(SELF attempt register "$ROOT/p-extfail.json")"
+launch "$AT_EXTFAIL" && fail "an externally launched attempt that exited non-zero reported success"
+[ "$(attempt_state "$AT_EXTFAIL")" = "failed" ] || fail "a confirmed non-zero exit did not fail the attempt"
+[ "$(exit_record "$AT_EXTFAIL")" = "confirmed (code 1)" ] || fail "a reported non-zero exit was not recorded as confirmed with the code the launcher watched"
+[ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a failed external exit attached the envelope its run left behind as a report"
+[ "$(count_events run.completed)" -eq "$COMPLETED_BEFORE" ] || fail "a failed external exit claimed a completion"
+
+# a launcher that walked away: the process finished and nobody ever reported
+# its exit, so nothing may be concluded from what is on disk
+plan "$ROOT/p-vanish.json" "mode=ok" "dest=$ROOT/dest/vanish.md"
+AT_VANISH="$(SELF attempt register "$ROOT/p-vanish.json")"
+launch "$AT_VANISH" --abandon --pidfile="$ROOT/vanish-pid" > /dev/null || fail "the abandoned launch was never claimed"
+VANISH_PID="$(cat "$ROOT/vanish-pid")"
+for _ in $(seq 1 200)
+do
+    kill -0 "$VANISH_PID" 2>/dev/null || break
+    sleep 0.1
+done
+kill -0 "$VANISH_PID" 2>/dev/null && fail "the abandoned process never finished"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_VANISH")" = "exited-unreconciled" ] || fail "an abandoned external attempt was not recovered"
+[ "$(exit_record "$AT_VANISH")" = "vanished" ] || fail "a process that disappeared was not told apart from a reported exit, or was given a code nobody reported"
+VANISHED_SETTLE="$(SELF attempt settle "$AT_VANISH" 2>&1 || true)"
+echo "$VANISHED_SETTLE" | grep -q "only a confirmed exit" || fail "an attempt whose exit nobody confirmed was offered to the completion gate"
+[ -f "$ROOT/dest/vanish.md" ] && fail "an unconfirmed exit published the artifact its process left staged"
+
+# and a live owner that stopped being watched is a third answer again: the
+# process is still there, and nothing is driving the attempt
+plan "$ROOT/p-quiet.json" "mode=slow"
+AT_QUIET="$(SELF attempt register "$ROOT/p-quiet.json")"
+launch "$AT_QUIET" --abandon --pidfile="$ROOT/quiet-pid" > /dev/null || fail "the unwatched launch was never claimed"
+QUIET_PID="$(cat "$ROOT/quiet-pid")"
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,JSON.stringify({ts:new Date(Date.now()-120000).toISOString(),pid:Number(process.argv[2])},null,2))' "$(spool_of "$AT_QUIET")/heartbeat.json" "$QUIET_PID"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_QUIET")" = "exited-unreconciled" ] || fail "an attempt nobody was heartbeating for was not recovered"
+[ "$(exit_record "$AT_QUIET")" = "stale" ] || fail "a stale heartbeat was not told apart from a process that disappeared"
+kill -0 "$QUIET_PID" 2>/dev/null || fail "the stale-heartbeat case proves nothing if its process had already exited"
+kill -9 "$QUIET_PID" 2>/dev/null || true
+
+# a process group id is only reserved while the group has members, so a group
+# that empties can have its number handed to somebody else. Nothing a launch
+# started can predate the launch, and that is the whole of the guard: a launch
+# instant later than every member of the group owns none of them.
+plan "$ROOT/p-recycle.json" "mode=slow"
+AT_RECYCLE="$(SELF attempt register "$ROOT/p-recycle.json")"
+launch "$AT_RECYCLE" --abandon --pidfile="$ROOT/recycle-pid" > /dev/null || fail "the recycled-group launch was never claimed"
+RECYCLE_PID="$(cat "$ROOT/recycle-pid")"
+node -e 'const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));o.startedAt=new Date(Date.now()+3600000).toISOString();fs.writeFileSync(f,JSON.stringify(o,null,2))' "$(spool_of "$AT_RECYCLE")/owner.json"
+CONTAIN="$(SELF attempt cancel "$AT_RECYCLE")"
+echo "$CONTAIN" | grep -q "no signal was sent" || fail "containment was aimed at a process group this launch does not own"
+kill -0 "$RECYCLE_PID" 2>/dev/null || fail "a stranger holding a recycled group id was signalled by this attempt's cancel"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_RECYCLE")" = "exited-unreconciled" ] || fail "an attempt whose group holds nothing of its own was left claiming a live owner"
+[ "$(exit_record "$AT_RECYCLE")" = "vanished" ] || fail "a recycled process group was counted as this launch's own"
+kill -9 "$RECYCLE_PID" 2>/dev/null || true
+
+# one live owner per work unit. Two owners driving one unit would each publish
+# and each attach a report against the same outcome, and neither would know.
+plan "$ROOT/p-lease.json" "mode=slow"
+AT_LEASE="$(SELF attempt register "$ROOT/p-lease.json")"
+plan "$ROOT/p-lease2.json" "mode=slow"
+AT_LEASE2="$(SELF attempt register "$ROOT/p-lease2.json")"
+launch "$AT_LEASE" --abandon --pidfile="$ROOT/lease-pid" > /dev/null || fail "the leasing launch was never claimed"
+LEASE_PID="$(cat "$ROOT/lease-pid")"
+# a live external owner holds the work unit it is driving: the claim below is
+# refused for exactly that reason
+CONTENDER="$(SELF attempt started "$AT_LEASE2" --pid "$LEASE_PID" 2>&1 || true)"
+echo "$CONTENDER" | grep -q "already being driven by attempt $AT_LEASE" || fail "a second owner was allowed to drive a work unit already being driven"
+[ "$(attempt_state "$AT_LEASE2")" = "registered" ] || fail "a refused claim still moved the attempt out of registered"
+SELF attempt cancel "$AT_LEASE" | grep -q "has been signalled" || fail "cancelling an externally launched attempt did not reach the group it was launched in"
+for _ in $(seq 1 200)
+do
+    kill -0 "$LEASE_PID" 2>/dev/null || break
+    sleep 0.1
+done
+kill -0 "$LEASE_PID" 2>/dev/null && fail "cancelling an externally launched attempt left its process running and spending"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_LEASE")" = "exited-unreconciled" ] || fail "a cancelled external attempt was not settled by recovery"
+# and settling the attempt that held the work unit released it: a fresh claim
+# of the same unit is admitted now
+RECLAIM_PID="$(node -e 'const p=require("child_process").spawn("sleep",["60"],{detached:true,stdio:"ignore"});p.unref();console.log(p.pid)')"
+SELF attempt started "$AT_LEASE2" --pid "$RECLAIM_PID" > /dev/null || fail "settling the attempt that held the work unit did not release it"
+SELF attempt exited "$AT_LEASE2" --code 1 > /dev/null 2>&1 || true
+kill -9 "$RECLAIM_PID" 2>/dev/null || true
+
 # an artifact claimed in prose with no file behind it fails the gate
 REPORTS_BEFORE="$(count_events report.added)"
 plan "$ROOT/p-prose.json" "mode=prose" "dest=$ROOT/dest/prose.md"

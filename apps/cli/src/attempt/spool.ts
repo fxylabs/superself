@@ -4,11 +4,13 @@ import { runnerStateDir } from "../machine.js";
 import { writeAtomic } from "./atomic.js";
 import { bootId } from "./boundary.js";
 import { redact, redactSecrets, RedactionScope, safeCut } from "./redact.js";
+import { alive, OwnedTree, treeAlive } from "./tree.js";
 import { CliError } from "../types.js";
 
 // Every state a spool can be in. `completed` is reachable only through the
 // completion gate; nothing else in the runner may write it.
 export type AttemptState =
+    | "registered"
     | "preflight"
     | "preflight-failed"
     | "waiting-provider"
@@ -18,6 +20,13 @@ export type AttemptState =
     | "cancelled"
     | "exited-unreconciled"
     | "completed";
+
+// How the runner learned that the process driving this attempt is no longer
+// running. A wrapper that reported the exit it watched is the only one of the
+// three that says anything about what the process produced: a pid that
+// disappeared and a heartbeat that went quiet both leave the output half
+// written for all anyone here can tell.
+export type ExitSource = "confirmed" | "vanished" | "stale";
 
 export interface AttemptStatus
 {
@@ -35,11 +44,18 @@ export interface AttemptStatus
     provider?: string;
     failure?: string;
     detail?: string;
+    exitSource?: ExitSource;
+    exitCode?: number;
     created: string;
     updated: string;
 }
 
 export const ATTEMPTS_SUBDIR = "attempts";
+
+// The process group an external launcher handed this attempt, written beside
+// the status rather than into it: the status is the attempt's state and this
+// is the identity of whatever is driving it.
+export const OWNER_FILE = "owner.json";
 
 export function attemptsRoot(): string
 {
@@ -227,9 +243,12 @@ export class Spool
         return next;
     }
 
-    heartbeat(): void
+    // The pid the beat belongs to. A launcher heartbeating on behalf of the
+    // process it started records that process, not the short-lived CLI run
+    // that carried the message.
+    heartbeat(pid: number = process.pid): void
     {
-        this.writeJson("heartbeat.json", { ts: new Date().toISOString(), pid: process.pid });
+        this.writeJson("heartbeat.json", { ts: new Date().toISOString(), pid });
     }
 
     heartbeatAt(): number | null
@@ -266,18 +285,38 @@ export function listSpools(): Spool[]
 
 // The states in which a spool claims a runner is still driving it. Only these
 // can be recovered, and only these are exempt from retention while they are
-// actually live.
+// actually live. `registered` is not one of them: a registered attempt has no
+// process by construction, so there is nothing about it to declare dead.
 export const DRIVEN_STATES: AttemptState[] = ["preflight", "running", "retrying"];
+
+// The process group an external launcher claimed this attempt with, when one
+// did. The runner's own attempts have no such record: their owner is the
+// runner process the status already names.
+export function ownerOf(spool: Spool): OwnedTree | null
+{
+    return spool.readJson<OwnedTree>(OWNER_FILE);
+}
 
 // A heartbeat this old, from a runner that is supposed to be writing one every
 // second, means nobody is driving this attempt any more.
 export const STALE_HEARTBEAT_MS = 30_000;
 
+// Why an attempt is no longer being driven, and how that was learned. The two
+// travel together because they are not the same statement: an owner that
+// disappeared and an owner that went quiet are equally not driving the
+// attempt, and only one of them is even in principle recoverable evidence
+// about what the run produced.
+export interface DeadVerdict
+{
+    reason: string;
+    exitSource: Exclude<ExitSource, "confirmed">;
+}
+
 // Three independent reasons, because no one of them is sufficient. A pid can
 // be handed out again after a restart, which is why the boot identity is
-// checked first; and a live pid that stopped writing its heartbeat is a runner
+// checked first; and a live owner that stopped writing its heartbeat is one
 // that is no longer driving this attempt.
-export function deadReason(spool: Spool, status: AttemptStatus, boot: string, now: number): string | null
+export function deadVerdict(spool: Spool, status: AttemptStatus, boot: string, now: number): DeadVerdict | null
 {
     if (!DRIVEN_STATES.includes(status.state))
     {
@@ -285,16 +324,19 @@ export function deadReason(spool: Spool, status: AttemptStatus, boot: string, no
     }
     if (status.bootId !== boot)
     {
-        return "the machine restarted while this attempt was running";
+        return { reason: "the machine restarted while this attempt was running", exitSource: "vanished" };
     }
-    if (status.pid === undefined || !alive(status.pid))
+    if (!ownerLive(spool, status))
     {
-        return "the runner process that owned this attempt is gone";
+        return { reason: "the process that owned this attempt is gone", exitSource: "vanished" };
     }
     const beat = spool.heartbeatAt();
     if (beat === null || now - beat > STALE_HEARTBEAT_MS)
     {
-        return `no heartbeat for ${beat === null ? "the whole run" : `${Math.round((now - beat) / 1000)}s`}`;
+        return {
+            reason: `no heartbeat for ${beat === null ? "the whole run" : `${Math.round((now - beat) / 1000)}s`}`,
+            exitSource: "stale"
+        };
     }
     return null;
 }
@@ -324,20 +366,18 @@ export function liveAttemptFor(work: string): AttemptStatus | null
 // the work unit against the next dispatch.
 export function isLive(spool: Spool, status: AttemptStatus, boot: string, now: number): boolean
 {
-    return DRIVEN_STATES.includes(status.state) && deadReason(spool, status, boot, now) === null;
+    return DRIVEN_STATES.includes(status.state) && deadVerdict(spool, status, boot, now) === null;
 }
 
-export function alive(pid: number): boolean
+// An externally launched attempt is alive while anything its launch put in the
+// process group is: the wrapper may be gone and the payload it forked still
+// running, and settling on the wrapper's pid alone would declare a spending
+// provider dead. The runner's own attempts have no group record, and their pid
+// is the whole of the answer.
+function ownerLive(spool: Spool, status: AttemptStatus): boolean
 {
-    try
-    {
-        process.kill(pid, 0);
-        return true;
-    }
-    catch (error)
-    {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-    }
+    const owner = ownerOf(spool);
+    return owner === null ? status.pid !== undefined && alive(status.pid) : treeAlive(owner);
 }
 
 export interface RunnerConfig
@@ -390,7 +430,7 @@ export function pruneSpools(days: number, now: Date): string[]
     for (const spool of listSpools())
     {
         const status = spool.status();
-        if (status === null || (DRIVEN_STATES.includes(status.state) && deadReason(spool, status, boot, now.getTime()) === null))
+        if (status === null || (DRIVEN_STATES.includes(status.state) && deadVerdict(spool, status, boot, now.getTime()) === null))
         {
             continue;
         }
