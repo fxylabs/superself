@@ -1,4 +1,4 @@
-import { carriesKeyMaterial, namesSecret, redactHome, redactLiterals, redactSecrets, RedactionScope, scopeFor, secretEnvNames } from "./attempt/redact.js";
+import { carriesCredential, namesSecret, redactHome, redactLiterals, RedactionScope, scopeFor, secretEnvNames } from "./attempt/redact.js";
 import { CliError, SelfEvent } from "./types.js";
 
 // An event is committed, pushed, pulled, and read on machines that were never
@@ -24,10 +24,16 @@ import { CliError, SelfEvent } from "./types.js";
 // product. `command` is the counter-example that sets the bar: the integration
 // train records the commands an attempt ran on purpose, so a command line is
 // judged by what it says, not refused for what it is called.
+//
+// What is listed is the concept, and it is matched against the whole name and
+// against each word inside it: `env`, `envVars` and `environmentVariables` are
+// one field, as are `pid` and `PIDs`, `cwd` and `workingDirectory`. A list of
+// exact spellings goes stale the moment a payload shape is added — and it goes
+// stale silently, which is the failure this list cannot afford.
 const FORBIDDEN_KEYS = [
-    "prompt", "prompts", "stdout", "stderr", "output", "outputs", "env", "environ", "environment",
-    "cookie", "cookies", "authorization", "auth", "pid", "processid",
-    "cwd", "homedir", "spool", "pii", "email", "phone"
+    "prompt", "stdout", "stderr", "output", "env", "environ", "environment",
+    "cookie", "authorization", "auth", "pid", "processid",
+    "cwd", "homedir", "home", "directory", "spool", "pii", "email", "phone"
 ];
 
 // A secret this environment declares, kept next to the name that declared it,
@@ -42,7 +48,16 @@ interface DeclaredSecret
 // so a refused event leaves the log, the fold, and the store commit untouched.
 export function assertSanitized(event: SelfEvent): void
 {
-    walk(event.payload, "payload", secretEnvNames().map((name) => ({ name, scope: scopeFor([name]) })));
+    const declared = secretEnvNames().map((name) => ({ name, scope: scopeFor([name]) }));
+    // Not the payload alone. The whole line is what gets appended, committed
+    // and pulled: `refs.commits` is whatever `--evidence` was handed, and
+    // `origin.session` is an environment variable, so a home path or a
+    // credential reaches the synced log through either without passing another
+    // check. `refs.branch` is the one field this cannot cover, and does not
+    // need to — the pipeline stamps it from the checkout after this runs.
+    walk(event.payload, "payload", declared);
+    walk(event.refs, "refs", declared);
+    walk(event.origin, "origin", declared);
 }
 
 function walk(value: unknown, at: string, declared: DeclaredSecret[]): void
@@ -61,13 +76,20 @@ function walk(value: unknown, at: string, declared: DeclaredSecret[]): void
     {
         return;
     }
+    let index = 0;
     for (const [key, child] of Object.entries(value as Record<string, unknown>))
     {
+        // A key is data too — a review envelope and an attempt payload carry
+        // objects their caller built — and it is the one string a refusal
+        // cannot name, since printing it is the leak. So a key that fails is
+        // located by where it sits rather than by what it says.
+        assertValue(key, `${at} key #${index}`, declared);
         if (forbiddenKey(key))
         {
             throw new CliError(`refusing to record ${at}.${key} — process handles, raw output, and credentials stay on the machine that produced them`);
         }
         walk(child, `${at}.${key}`, declared);
+        index += 1;
     }
 }
 
@@ -87,14 +109,15 @@ function assertValue(text: string, at: string, declared: DeclaredSecret[]): void
             throw new CliError(`refusing to record ${at} — it repeats the value the environment variable ${name} holds`);
         }
     }
-    // The shape test is held to values that also carry generated key material.
-    // Redaction alone is too eager to refuse on: it blanks the word after
-    // "token" or "basic", which costs nothing in provider output and would
-    // cost this a sentence like "reduced token counting overhead" — ordinary
-    // prose in the one log that exists to keep it. The trade is deliberate: a
-    // short low-entropy secret written into prose reads exactly like prose and
-    // is left to the key rule above, which is where such a value belongs.
-    if (redactSecrets(text) !== text && carriesKeyMaterial(text))
+    // Held back where redaction is eager, and only there. `carriesCredential`
+    // judges each rule at the span it matched: an explicit encoding —
+    // `api_key="abc123secret"`, a header, a vendor-prefixed literal — is
+    // refused however short and however ordinary the value reads, while the
+    // rules a sentence can trip have to find key material inside their own
+    // match. That is what keeps "reduced token counting overhead" recordable
+    // in the one log that exists to keep it, without the branch slug in the
+    // same sentence deciding anything.
+    if (carriesCredential(text))
     {
         throw new CliError(`refusing to record ${at} — its value is shaped like a credential`);
     }
@@ -105,5 +128,20 @@ function assertValue(text: string, at: string, declared: DeclaredSecret[]): void
 // such a field actually arrives, never the bare word.
 function forbiddenKey(key: string): boolean
 {
-    return FORBIDDEN_KEYS.includes(key.toLowerCase().replace(/[^a-z0-9]/g, "")) || namesSecret(key);
+    return namesSecret(key) || forbiddenWord(key.replace(/[^A-Za-z0-9]/g, "")) || keyWords(key).some(forbiddenWord);
+}
+
+// The words a field name is built from, however it was cased or separated:
+// `envVars`, `env_vars` and `Env-Vars` all arrive as two.
+function keyWords(key: string): string[]
+{
+    return key.split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])/);
+}
+
+// Matched as a word rather than as a substring, so `envelope` and `author` are
+// their own fields. A plural is the same word: `PIDs` is a list of pids.
+function forbiddenWord(word: string): boolean
+{
+    const lower = word.toLowerCase();
+    return FORBIDDEN_KEYS.includes(lower) || FORBIDDEN_KEYS.includes(lower.replace(/s$/, ""));
 }
