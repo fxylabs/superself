@@ -67,6 +67,19 @@ function looksGenerated(token: string): boolean
 // the synced log, withheld where the machine's own records need real paths.
 export function redactSecrets(text: string, scope: RedactionScope = { literals: [] }): string
 {
+    let out = redactLiterals(text, scope);
+    for (const [pattern, replacement] of PATTERNS)
+    {
+        out = out.replace(pattern, replacement);
+    }
+    return out.replace(DENSE, (token) => looksGenerated(token) ? REDACTED : token);
+}
+
+// The declared half of redaction on its own. A caller that has to tell a leaked
+// declared value from a value that merely looks like a credential cannot get
+// that from the combined pass: the patterns rewrite the same span either way.
+export function redactLiterals(text: string, scope: RedactionScope): string
+{
     let out = text;
     for (const literal of scope.literals)
     {
@@ -75,11 +88,7 @@ export function redactSecrets(text: string, scope: RedactionScope = { literals: 
             out = out.split(literal).join(REDACTED);
         }
     }
-    for (const [pattern, replacement] of PATTERNS)
-    {
-        out = out.replace(pattern, replacement);
-    }
-    return out.replace(DENSE, (token) => looksGenerated(token) ? REDACTED : token);
+    return out;
 }
 
 export function redact(text: string, scope: RedactionScope = { literals: [] }): string
@@ -109,6 +118,32 @@ export function scopeFor(secretNames: string[]): RedactionScope
         }
     }
     return { literals };
+}
+
+// Whether a name says the value beside it is a credential — of an environment
+// variable, or of a field in a record. The rule is the one the patterns above
+// are built from, so a name learned there is known to every caller without a
+// second list to keep in step.
+const SECRET_NAMED = new RegExp(`^${SECRET_NAME}$`, "i");
+
+export function namesSecret(name: string): boolean
+{
+    return SECRET_NAMED.test(name);
+}
+
+export function secretEnvNames(): string[]
+{
+    return Object.keys(process.env).filter(namesSecret);
+}
+
+// Whether a value carries a run of characters that looks like generated key
+// material rather than like a word someone wrote. Redaction is eager on
+// purpose — blanking a word of provider output costs nothing — but a caller
+// that refuses outright rather than rewriting needs the eagerness held back,
+// and this is the same judgement the backstop rule above already makes.
+export function carriesKeyMaterial(text: string): boolean
+{
+    return (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated);
 }
 
 // The names — never the values — of declared secrets too short to be redacted

@@ -4,6 +4,7 @@ import { foldProject } from "./fold.js";
 import { commitAll, currentBranch } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { CliContext, ensureDir, projectStateDir } from "./paths.js";
+import { assertSanitized } from "./sanitize.js";
 import { bold, dim, green, styled } from "./style.js";
 import { EventRefs, SelfEvent } from "./types.js";
 
@@ -57,6 +58,9 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, 
 // at, and a re-run of `work accept` would create a second one.
 export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: string, onRecorded?: () => void): void
 {
+    // First, before the branch stamp and before a byte reaches the log: what an
+    // event carries is checked while refusing it still costs only this command.
+    events.forEach((event) => assertSanitized(event));
     const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
     if (branch !== null)
     {
