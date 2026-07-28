@@ -184,6 +184,16 @@ export function alreadyReported(ctx: ProjectContext, attemptId: string): boolean
         .some((event) => event.type === "report.added" && event.refs?.attempt === attemptId);
 }
 
+// The completion is exactly-once for the same reason the report is, and it
+// says so here rather than in whichever caller happens to reach settlement
+// twice. The folded model would survive a duplicate — it folds by attempt id —
+// but the log it folds is append-only and synced.
+export function alreadyCompleted(ctx: ProjectContext, attemptId: string): boolean
+{
+    return readEvents(ctx.storeDir, ctx.project)
+        .some((event) => event.type === "run.completed" && event.refs?.attempt === attemptId);
+}
+
 export function attachReport(ctx: ProjectContext, plan: AttemptPlan, attemptId: string, envelope: ResultEnvelope, published: Published[]): boolean
 {
     if (alreadyReported(ctx, attemptId))

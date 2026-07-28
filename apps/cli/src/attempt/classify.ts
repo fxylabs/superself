@@ -33,20 +33,27 @@ export interface FailureSignal
     spawnCode?: string;
 }
 
-// Order matters. A declared class is authoritative; after that the most
+// Order matters. What the runner watched happen outranks what the child says
+// about it — a run the runner killed on its own bound did not end the way the
+// child claims, and a launcher that never started the child leaves nobody to
+// claim anything. After that a declared class is authoritative, then the most
 // specific evidence wins, and everything unrecognised stays `unknown` rather
 // than being flattened into a retryable class the runner would then spend
 // budget on.
 export function classify(signal: FailureSignal): FailureClass
 {
-    const declared = normalizeDeclared(signal.declared);
-    if (declared !== null)
+    if (signal.timedOut)
     {
-        return declared;
+        return "unknown";
     }
     if (signal.spawnCode === "ENOENT" || signal.spawnCode === "EACCES" || signal.spawnCode === "EPERM")
     {
         return "capability";
+    }
+    const declared = normalizeDeclared(signal.declared);
+    if (declared !== null)
+    {
+        return declared;
     }
     const text = signal.stderr.toLowerCase();
     if (NETWORK_CODES.some((code) => text.includes(code.toLowerCase())) || NETWORK_PHRASES.some((phrase) => text.includes(phrase)))
@@ -65,13 +72,23 @@ export function classify(signal: FailureSignal): FailureClass
     {
         return "capability";
     }
-    if (signal.timedOut || signal.signal === "SIGKILL" || signal.signal === "SIGTERM")
+    if (signal.signal === "SIGKILL" || signal.signal === "SIGTERM")
     {
         return "unknown";
     }
     // A clean non-zero exit with nothing recognisable in it is the agent
     // saying the task failed, not the runtime saying it broke.
     return signal.exitCode !== null && signal.exitCode !== 0 ? "task" : "unknown";
+}
+
+// Whether the child's own declaration, rather than anything the runner
+// observed, is what produced this class. The gate distrusts the child
+// everywhere else, and a child that names its own failure transient can
+// otherwise spend the whole retry budget and push the shared provider breaker
+// toward opening for unrelated queued work.
+export function fromDeclaration(signal: FailureSignal): boolean
+{
+    return normalizeDeclared(signal.declared) !== null && classify(signal) !== classify({ ...signal, declared: undefined });
 }
 
 const CLASSES: FailureClass[] = [

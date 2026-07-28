@@ -946,10 +946,13 @@ grep -q "\"attempt\":\"$AT_OK\"" "$LOG_A" || fail "the report does not carry the
 SELF work show "$WATT" | grep -q "$AT_OK (completed)" || fail "the work record does not show the attempt that completed"
 SELF status | grep -q "$AT_OK" && fail "a completed attempt still shows as open machine-local state"
 
-# the same attempt settled twice records nothing twice
+# the same attempt settled twice records nothing twice — neither the report
+# nor the completion beside it
+COMPLETED_BEFORE="$(count_events run.completed)"
 SETTLE="$(SELF attempt settle "$AT_OK")"
 echo "$SETTLE" | grep -q "already attached" || fail "settling a reported attempt did not recognise its own report"
 [ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "settling an already-reported attempt recorded a duplicate"
+[ "$(count_events run.completed)" -eq "$COMPLETED_BEFORE" ] || fail "settling an already-completed attempt recorded a duplicate completion"
 
 # a result larger than any terminal will hold stays complete in the spool
 plan "$ROOT/p-big.json" "mode=big" "dest=$ROOT/dest/big.md"
@@ -981,6 +984,33 @@ for (const r of backed) {
 [ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a retried attempt recorded more than one report"
 [ "$(SELF artifact list --work "$WATT" | grep -c "retry.md")" -eq 1 ] || fail "a retried attempt stored its artifact more than once"
 
+# a failed run's result envelope must not complete the run after it. A plan
+# that declares no artifact is judged on the envelope alone, so a rerun that
+# produced nothing would otherwise publish the previous run's summary as its
+# own report — the exact "done because it said so" this gate exists to refuse.
+REPORTS_BEFORE="$(count_events report.added)"
+COMPLETED_BEFORE="$(count_events run.completed)"
+rm -f "$ROOT/ran-stale"
+plan "$ROOT/p-stale.json" "mode=stale" "provider=http://localhost:1/" "providerName=stale-provider" "maxRuns=2" "marker=$ROOT/ran-stale"
+STALE="$(SELF attempt run "$ROOT/p-stale.json" 2>&1 || true)"
+[ "$(wc -l < "$ROOT/ran-stale")" -eq 2 ] || fail "the stale-envelope case never reached its second run"
+echo "$STALE" | grep -q "completed" && fail "a run that produced nothing completed from the previous run's result envelope"
+AT_STALE="$(last_attempt)"
+[ "$(attempt_state "$AT_STALE")" = "failed" ] || fail "an attempt whose runs left no result of their own did not fail"
+[ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a stale result envelope attached the previous run's summary as a report"
+[ "$(count_events run.completed)" -eq "$COMPLETED_BEFORE" ] || fail "a stale result envelope claimed a completion"
+grep -q "RUN-ONE-STALE-SUMMARY" "$LOG_A" && fail "a previous run's summary reached the synced log"
+[ -f "$(spool_of "$AT_STALE")/result.json" ] && fail "the result envelope of a run that never wrote one is still in the spool"
+
+# the bound the plan declares is applied to the provider run itself: a hung
+# provider costs that bound, not the runner
+plan "$ROOT/p-timeout.json" "mode=slow" "runTimeoutMs=1500" "maxRuns=1"
+TIMEOUT="$(SELF attempt run "$ROOT/p-timeout.json" 2>&1 || true)"
+echo "$TIMEOUT" | grep -q "did not finish within the 1500ms" || fail "a hung provider was not stopped by the run timeout the plan declared"
+AT_TIMEOUT="$(last_attempt)"
+[ "$(attempt_state "$AT_TIMEOUT")" = "failed" ] || fail "a run stopped on its own bound did not fail"
+grep -q '"timedOut":true' "$(spool_of "$AT_TIMEOUT")/runs.jsonl" || fail "the run record does not say the bound expired"
+
 # a provider that keeps failing opens the circuit, and the work behind it stays
 # queued instead of burning the rest of the queue on the same outage
 plan "$ROOT/p-open.json" "mode=alwaysdns" "provider=http://localhost:1/" "providerName=flaky" "maxRuns=1" "marker=$ROOT/ran-open"
@@ -997,6 +1027,16 @@ AT_QUEUED="$(last_attempt)"
 [ "$(grep -c "run 4" "$ROOT/ran-open")" -eq 0 ] 2>/dev/null || fail "an open circuit still reached the provider"
 SELF work show "$WATT" | grep -q "Status: active" || fail "an open circuit moved the work unit out of active"
 SELF attempt breaker flaky --reset | grep -q "reset" || fail "the circuit breaker could not be reset"
+
+# the agent may name its own failure class, but it may not spend the whole
+# retry budget on a class nothing the runner observed supports — nor push a
+# breaker that gates unrelated queued work
+rm -f "$ROOT/ran-liar"
+plan "$ROOT/p-liar.json" "mode=liar" "provider=http://localhost:1/" "providerName=liar-provider" "maxRuns=5" "marker=$ROOT/ran-liar"
+LIAR="$(SELF attempt run "$ROOT/p-liar.json" 2>&1 || true)"
+[ "$(wc -l < "$ROOT/ran-liar")" -eq 2 ] || fail "a declared transient class drove more provider runs than the runner allows"
+echo "$LIAR" | grep -q "nothing the runner observed supports it" || fail "the runner did not say why it stopped believing the declared class"
+SELF attempt breaker liar-provider | grep -q "closed" || fail "a failure only the agent called transient pushed the shared provider breaker"
 
 # a replacement run gets the same immutable brief and the checkpoints the
 # previous run left behind
@@ -1069,6 +1109,65 @@ SELF attempt recover > /dev/null
 [ "$(attempt_state "$AT_REBOOT")" = "exited-unreconciled" ] || fail "an attempt from before a restart was not recovered"
 SELF attempt show "$AT_REBOOT" | grep -q "machine restarted" || fail "the restart was not named as the reason"
 
+# recovery must not claim a false failure either. Proving capabilities takes as
+# long as the probe bound allows, and an attempt still in preflight is alive:
+# declaring it dead writes a run.failed it never suffered into the synced log.
+cat > "$ROOT/slow-browser-probe.mjs" <<'SLOWBROWSER'
+const until = Date.now() + 8000;
+while (Date.now() < until)
+{
+    // Deliberately busy: a signed-in tab check that takes real time.
+}
+SLOWBROWSER
+FAILED_BEFORE="$(count_events run.failed)"
+plan "$ROOT/p-live.json" "mode=ok" "browser=$ROOT/slow-browser-probe.mjs"
+SELF attempt run "$ROOT/p-live.json" > /dev/null 2>&1 &
+LIVE_PID=$!
+IN_PREFLIGHT=no
+for _ in $(seq 1 200)
+do
+    if SELF attempt list | grep -q "  preflight  run"
+    then
+        IN_PREFLIGHT=yes
+        break
+    fi
+    sleep 0.1
+done
+[ "$IN_PREFLIGHT" = yes ] || fail "the attempt never reached preflight for recovery to race"
+SELF attempt recover | grep -q "no attempt needed recovery" || fail "recovery declared an attempt still proving its capabilities dead"
+wait "$LIVE_PID" || fail "an attempt that recovery looked at during preflight did not complete"
+[ "$(count_events run.failed)" -eq "$FAILED_BEFORE" ] || fail "recovery recorded a run.failed for an attempt that then completed"
+
+# the fence is enforced, not merely recorded: a runner whose attempt was taken
+# over stops instead of overwriting the verdict that replaced it
+REPORTS_BEFORE="$(count_events report.added)"
+rm -f "$ROOT/fence-id" "$ROOT/fence-release"
+plan "$ROOT/p-fence.json" "mode=hold" "idfile=$ROOT/fence-id" "gate=$ROOT/fence-release"
+SELF attempt run "$ROOT/p-fence.json" > "$ROOT/fence.out" 2>&1 &
+FENCE_PID=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/fence-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/fence-id" ] || fail "the attempt to be taken over never started"
+AT_FENCE="$(cat "$ROOT/fence-id")"
+STATUS_FENCE="$(spool_of "$AT_FENCE")/status.json"
+FENCE_BEFORE="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).fence))' "$STATUS_FENCE")"
+# recovery is made to believe this machine restarted, while the runner it
+# would be recovering is in fact still running
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.bootId="0000000000000000";fs.writeFileSync(f,JSON.stringify(s,null,2))' "$STATUS_FENCE"
+SELF attempt recover | grep -q "recovered 1 attempt" || fail "recovery did not take over an attempt whose runner it could not see"
+node -e '
+const held = Number(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).fence);
+if (!(held > Number(process.argv[2]))) { console.error("taking an attempt over did not move the fence"); process.exit(1); }
+' "$STATUS_FENCE" "$FENCE_BEFORE" || fail "recovery took an attempt over without minting a newer fence"
+touch "$ROOT/fence-release"
+wait "$FENCE_PID" && fail "a runner that lost its attempt still exited successfully"
+grep -q "no longer owns it" "$ROOT/fence.out" || fail "the stale runner was not stopped by the fence"
+[ "$(attempt_state "$AT_FENCE")" = "exited-unreconciled" ] || fail "a stale runner overwrote the verdict that replaced it"
+[ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a runner that no longer owned its attempt still attached a report"
+
 # an artifact claimed in prose with no file behind it fails the gate
 REPORTS_BEFORE="$(count_events report.added)"
 plan "$ROOT/p-prose.json" "mode=prose" "dest=$ROOT/dest/prose.md"
@@ -1096,7 +1195,10 @@ node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f
 SELF attempt run "$ROOT/p-secret.json" > /dev/null || fail "the redaction attempt did not complete"
 AT_SECRET="$(last_attempt)"
 SPOOL_SECRET="$ROOT/A/home/.local/state/superself/runner/attempts/$AT_SECRET"
-for LEAK in "sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111" "abcdefghijklmnopqrstuvwxyz123456" "PROMPTINJECTEDSECRETVALUE" "7fK2xQ9wLm4RtV8yBn3JcZ6pHd5sAe1UgW0oXi2NrTb4Qv" "$ROOT/A/home/private"
+# the shell and header forms, and the JSON forms the spool itself writes: a
+# key's own closing quote sits between its name and the colon, so a rule
+# written for NAME=value never reaches a JSON-encoded pair
+for LEAK in "sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111" "abcdefghijklmnopqrstuvwxyz123456" "PROMPTINJECTEDSECRETVALUE" "7fK2xQ9wLm4RtV8yBn3JcZ6pHd5sAe1UgW0oXi2NrTb4Qv" "$ROOT/A/home/private" "JSONPRETTYSECRETVALUE1" "JSONNESTEDSECRETVALUE2" "JSONCOMPACTSECRETVALUE3" "JSONSHORTISHCREDENTIAL4"
 do
     grep -q "$LEAK" "$SPOOL_SECRET/run-1.stdout.log" && fail "the spool kept a value a log must redact: $LEAK"
 done
@@ -1105,6 +1207,34 @@ grep -q "«redacted»" "$SPOOL_SECRET/run-1.stdout.log" || fail "the spool log w
 # credential survives, or the spool would truncate the results it exists to keep
 grep -q "paragraph paragraph" "$SPOOL_SECRET/run-1.stdout.log" || fail "redaction destroyed long output that carried no credential"
 
+# a credential the plan author put in the boundary environment is a literal in
+# the plan, so it is in no runner environment the scope could read it from —
+# and the spooled plan is written as JSON
+plan "$ROOT/p-envsecret.json" "mode=ok" "envsecret=PLANENVSECRETVALUE0001"
+SELF attempt run "$ROOT/p-envsecret.json" > /dev/null || fail "the boundary-env secret attempt did not complete"
+AT_ENVSECRET="$(last_attempt)"
+grep -q "PLANENVSECRETVALUE0001" "$(spool_of "$AT_ENVSECRET")/plan.json" && fail "a secret supplied through boundary.env reached the spooled plan in the clear"
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$(spool_of "$AT_ENVSECRET")/plan.json" || fail "redacting the plan left it unreadable — settlement after a crash reads it back"
+
+# and a credential broken across two writes matches nothing on either side of
+# the break, so the raw writer holds back what a pattern could still grow into
+node "$CLI_DIR/proof/spool-chunks.mjs" || fail "a credential split across chunk boundaries survived the spool's redaction"
+
+# a declared secret too short to redact by value is said out loud rather than
+# left silently uncovered
+export PROOF_TINY_SECRET="ab"
+plan "$ROOT/p-tiny.json" "mode=ok" "secrets=PROOF_TINY_SECRET"
+TINY="$(SELF attempt run "$ROOT/p-tiny.json" 2>&1 || true)"
+echo "$TINY" | grep -q "PROOF_TINY_SECRET is shorter than" || fail "a declared secret too short to redact by value was accepted silently"
+unset PROOF_TINY_SECRET
+
+# a malformed artifact name is a plan error, not a hash of the staging
+# directory at the very end of the run
+plan "$ROOT/p-dot.json" "mode=ok" "dest=$ROOT/dest/dot.md"
+node -e 'const f=process.argv[1];const p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.artifacts[0].name=".";require("fs").writeFileSync(f,JSON.stringify(p))' "$ROOT/p-dot.json"
+DOT="$(SELF attempt run "$ROOT/p-dot.json" 2>&1 || true)"
+echo "$DOT" | grep -q "must be a single file name" || fail "an artifact named \".\" reached the completion gate instead of the plan validator"
+
 # retention and deletion are configurable, and a spool the person deleted is gone
 SELF attempt retention 7 | grep -q "kept for 7 day" || fail "the spool retention window could not be set"
 SELF attempt retention | grep -q "^7$" || fail "the spool retention window was not recorded"
@@ -1112,6 +1242,42 @@ SELF attempt prune --days 365 | grep -q "no attempt spool is older" || fail "pru
 node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.updated="2000-01-01T00:00:00.000Z";fs.writeFileSync(f,JSON.stringify(s,null,2))' "$SPOOL_SECRET/status.json"
 SELF attempt prune --days 1 | grep -q "deleted 1 attempt spool" || fail "prune did not delete a spool past the retention window"
 [ -d "$SPOOL_SECRET" ] && fail "a pruned spool is still on disk"
+
+# an attempt abandoned in `running` that nobody ever recovered is the spool
+# most likely to sit there for ever: liveness decides the exemption, not the
+# state the spool last managed to write
+plan "$ROOT/p-abandon.json" "mode=slow" "idfile=$ROOT/abandon-id"
+rm -f "$ROOT/abandon-id"
+SELF attempt run "$ROOT/p-abandon.json" > /dev/null 2>&1 &
+ABANDON_PID=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/abandon-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/abandon-id" ] || fail "the attempt to be abandoned never started"
+AT_ABANDON="$(cat "$ROOT/abandon-id")"
+crash_runner "$AT_ABANDON"
+wait "$ABANDON_PID" 2>/dev/null || true
+SPOOL_ABANDON="$(spool_of "$AT_ABANDON")"
+[ "$(attempt_state "$AT_ABANDON")" = "running" ] || fail "the abandoned attempt did not stay in running"
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.updated="2000-01-01T00:00:00.000Z";fs.writeFileSync(f,JSON.stringify(s,null,2))' "$SPOOL_ABANDON/status.json"
+SELF attempt prune --days 1 | grep -q "deleted 1 attempt spool" || fail "a spool abandoned in running was exempt from retention for ever"
+[ -d "$SPOOL_ABANDON" ] && fail "an abandoned spool survived a prune past its retention window"
+
+# blocked and failed attempts leave the attention surface once a later attempt
+# on the same unit answers them. An attempt id is never reused, so nothing in
+# an append-only log ever goes back to unblock one: without this the list could
+# only grow.
+STATE_A="$ROOT/A/ws/.superself/projects/demo/state.md"
+plan "$ROOT/p-lastblock.json" "mode=ok" "tools=definitely-not-a-real-tool"
+SELF attempt run "$ROOT/p-lastblock.json" > /dev/null 2>&1 || true
+AT_LASTBLOCK="$(last_attempt)"
+[ "$(attempt_state "$AT_LASTBLOCK")" = "preflight-failed" ] || fail "the missing-tool attempt did not block on a capability"
+grep -q "attempt $AT_LASTBLOCK is waiting on a capability grant" "$STATE_A" || fail "the newest blocked attempt is not waiting on the person"
+grep -q "attempt $AT_DRIFT is waiting on a capability grant" "$STATE_A" && fail "a blocked attempt a later one superseded is still waiting on the person"
+grep -q "attempt $AT_CRASH failed" "$STATE_A" && fail "a failed attempt a later one superseded is still a health signal"
+SELF work show "$WATT" | grep -q "$AT_CRASH" || fail "a superseded attempt left the work record as well as the attention surface"
 
 # the repository integration controller replays a real three-branch train, so
 # it builds its own git repository under a root of its own

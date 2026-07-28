@@ -5,16 +5,12 @@ import { queueDirective } from "./directive.js";
 import { readPlan } from "./plan.js";
 import { PreflightReceipt } from "./preflight.js";
 import { readBreaker, resetBreaker } from "./retry.js";
-import { AttemptStatus, listSpools, openSpool, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
-import { runAttempt, settleAttempt } from "./run.js";
+import { AttemptStatus, deadReason, listSpools, openSpool, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
+import { nextFence, runAttempt, settleAttempt } from "./run.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
-import { CliContext, requireProject } from "../paths.js";
+import { CliContext, ProjectContext, requireProject } from "../paths.js";
 import { dim, green, red, styled, yellow } from "../style.js";
 import { CliError } from "../types.js";
-
-// A heartbeat this old, from a runner that is supposed to be writing one every
-// second, means nobody is driving this attempt any more.
-const STALE_HEARTBEAT_MS = 30_000;
 
 export async function runAttemptCommand(rest: string[]): Promise<void>
 {
@@ -187,7 +183,7 @@ function cmdRecover(): void
     for (const spool of listSpools())
     {
         const status = spool.status();
-        if (status === null || (status.state !== "running" && status.state !== "retrying" && status.state !== "preflight"))
+        if (status === null)
         {
             continue;
         }
@@ -196,7 +192,11 @@ function cmdRecover(): void
         {
             continue;
         }
-        spool.setStatus({ state: "exited-unreconciled", failure: "unknown", detail: reason });
+        // Taking the attempt over, not just relabelling it: a runner that was
+        // wrongly declared dead, or one that comes back between the check and
+        // the write, finds a fence newer than its own and stops rather than
+        // overwriting this verdict.
+        spool.setStatus({ state: "exited-unreconciled", failure: "unknown", detail: reason, fence: nextFence() });
         spool.append("events.jsonl", { event: "run.recovered", detail: reason });
         recordRecovery(ctx, status, reason);
         recovered++;
@@ -204,45 +204,15 @@ function cmdRecover(): void
     console.log(recovered === 0 ? "no attempt needed recovery" : `recovered ${recovered} attempt(s) as exited-unreconciled`);
 }
 
-// Three independent reasons, because no one of them is sufficient. A pid can
-// be handed out again after a restart, which is why the boot identity is
-// checked first; and a live pid that stopped writing its heartbeat is a runner
-// that is no longer driving this attempt.
-function deadReason(spool: Spool, status: AttemptStatus, boot: string, now: number): string | null
+function recordRecovery(ctx: ProjectContext, status: AttemptStatus, reason: string): void
 {
-    if (status.bootId !== boot)
-    {
-        return "the machine restarted while this attempt was running";
-    }
-    if (status.pid === undefined || !alive(status.pid))
-    {
-        return "the runner process that owned this attempt is gone";
-    }
-    const beat = spool.heartbeatAt();
-    if (beat === null || now - beat > STALE_HEARTBEAT_MS)
-    {
-        return `no heartbeat for ${beat === null ? "the whole run" : `${Math.round((now - beat) / 1000)}s`}`;
-    }
-    return null;
-}
-
-function alive(pid: number): boolean
-{
-    try
-    {
-        process.kill(pid, 0);
-        return true;
-    }
-    catch (error)
-    {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-    }
-}
-
-function recordRecovery(ctx: CliContext, status: AttemptStatus, reason: string): void
-{
+    // The branch on an event is the checkout the change was made from. This
+    // command recovers every attempt on the machine, and the checkout it
+    // happens to run in is not the one another project's attempt belongs to,
+    // so nothing is stamped on an event that is not this project's.
+    const owner: CliContext = status.project === ctx.project ? ctx : { ...ctx, projectDir: undefined };
     recordEvent(
-        ctx,
+        owner,
         makeEvent(status.project, "run.failed", { attempt: status.attempt, failure: "unknown", detail: reason }, { work: status.work, attempt: status.attempt }),
         `${status.work} exited-unreconciled`
     );

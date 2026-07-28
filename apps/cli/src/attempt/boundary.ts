@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { spawn, SpawnOptions } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
 import { runnerStateDir } from "../machine.js";
+import { withLock, writeAtomic } from "./atomic.js";
 
 // The execution boundary an attempt runs inside: the wrapper that starts every
 // process (a sandbox, a container shim, or nothing), the directory it starts
@@ -83,20 +84,31 @@ export function nodeId(): string
 // re-minted only when the boot instant has moved further than drift explains.
 const BOOT_DRIFT_SECONDS = 120;
 
+// Minting is read-modify-write, and two runners starting together would each
+// derive a boot instant a second or two apart, mint two different identities,
+// and one would go on holding an identity the file no longer carries — which
+// the next comparison reads as a restart. The lock makes the second of them
+// read what the first wrote.
 export function bootId(): string
 {
-    const bootSeconds = Math.round(Date.now() / 1000 - uptime());
     const file = join(runnerStateDir(), "boot.json");
+    const bootSeconds = Math.round(Date.now() / 1000 - uptime());
     const held = readBootRecord(file);
     if (held !== null && Math.abs(held.bootSeconds - bootSeconds) <= BOOT_DRIFT_SECONDS)
     {
         return held.bootId;
     }
-    const record = { bootSeconds, bootId: createHash("sha256").update(`${hostname()}:${bootSeconds}`).digest("hex").slice(0, 16) };
-    mkdirSync(runnerStateDir(), { recursive: true });
-    writeFileSync(file + ".tmp", JSON.stringify(record) + "\n");
-    renameSync(file + ".tmp", file);
-    return record.bootId;
+    return withLock(file, () =>
+    {
+        const current = readBootRecord(file);
+        if (current !== null && Math.abs(current.bootSeconds - Math.round(Date.now() / 1000 - uptime())) <= BOOT_DRIFT_SECONDS)
+        {
+            return current.bootId;
+        }
+        const record = { bootSeconds, bootId: createHash("sha256").update(`${hostname()}:${bootSeconds}`).digest("hex").slice(0, 16) };
+        writeAtomic(file, JSON.stringify(record) + "\n");
+        return record.bootId;
+    });
 }
 
 function readBootRecord(file: string): { bootSeconds: number; bootId: string } | null

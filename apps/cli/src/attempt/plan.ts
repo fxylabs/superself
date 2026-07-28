@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { Boundary } from "./boundary.js";
 import { CliError } from "../types.js";
 
@@ -185,7 +185,10 @@ function normalizeArtifacts(raw: any, base: string): ArtifactPlan[]
         {
             artifact.minBytes = Number(entry.minBytes);
         }
-        if (artifact.name.includes("/") || artifact.name.includes("\\") || artifact.name === ".." )
+        // A single file name and nothing else. "." names the staging directory
+        // itself, which exists and is not a file: without this the plan parses
+        // and the gate dies hashing a directory instead.
+        if (artifact.name !== basename(artifact.name) || artifact.name.includes("\\") || artifact.name === "." || artifact.name === "..")
         {
             throw new CliError(`artifact name "${artifact.name}" must be a single file name staged in the attempt's out/ directory`);
         }
