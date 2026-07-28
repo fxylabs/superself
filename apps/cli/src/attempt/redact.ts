@@ -24,21 +24,34 @@ const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|password|passwd|token|ap
 // credential straddling the cut. Separators are written [ \t] rather than \s
 // for that reason — and a header whose value sits on the next line is not a
 // header anyway.
-const PATTERNS: [RegExp, string][] = [
-    [/\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`],
-    [/\b(set-cookie|cookie|authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, `$1: ${REDACTED}`],
+// A rule is eager when ordinary prose can match it: the first blanks whatever
+// word follows "token", which costs nothing in provider output and is not a
+// credential in a sentence. Redaction runs every rule the same way, but a
+// caller that refuses a payload instead of rewriting it has to tell the two
+// kinds apart — the rest of these are encodings nothing but a credential
+// produces, at whatever entropy the value happens to have.
+interface Rule
+{
+    pattern: RegExp;
+    replacement: string;
+    eager?: boolean;
+}
+
+const PATTERNS: Rule[] = [
+    { pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, eager: true },
+    { pattern: /\b(set-cookie|cookie|authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
     // JSON is the encoding the spool itself writes — the plan, the status, and
     // every structured line go through JSON.stringify — and the key's own
     // closing quote sits between the name and the colon, where a rule written
     // for `NAME=value` cannot reach it. The replacement stays a quoted string
     // because these files are read back with JSON.parse.
-    [new RegExp(String.raw`("${SECRET_NAME}"[ \t]*:[ \t]*)"(?:[^"\\\r\n]|\\.)+"`, "gi"), `$1"${REDACTED}"`],
-    [new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*[:=][ \t]*"?)([^\s"',;]{4,})`, "gi"), `$1$2${REDACTED}`],
-    [/\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}/g, REDACTED],
-    [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, REDACTED],
-    [/\bAKIA[0-9A-Z]{16}\b/g, REDACTED],
-    [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, REDACTED],
-    [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, REDACTED]
+    { pattern: new RegExp(String.raw`("${SECRET_NAME}"[ \t]*:[ \t]*)"(?:[^"\\\r\n]|\\.)+"`, "gi"), replacement: `$1"${REDACTED}"` },
+    { pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*[:=][ \t]*"?)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
+    { pattern: /\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED },
+    { pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: REDACTED },
+    { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED },
+    { pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, replacement: REDACTED },
+    { pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, replacement: REDACTED }
 ];
 
 // The backstop for a credential no named pattern knows: long, and varied the
@@ -68,7 +81,7 @@ function looksGenerated(token: string): boolean
 export function redactSecrets(text: string, scope: RedactionScope = { literals: [] }): string
 {
     let out = redactLiterals(text, scope);
-    for (const [pattern, replacement] of PATTERNS)
+    for (const { pattern, replacement } of PATTERNS)
     {
         out = out.replace(pattern, replacement);
     }
@@ -98,10 +111,39 @@ export function redact(text: string, scope: RedactionScope = { literals: [] }): 
 
 // A spool is machine-local, but its sanitized summaries travel into synced
 // events, and a home directory names the person who ran the attempt.
+//
+// One directory can be written more than one way and still open the same file:
+// macOS and Windows resolve a path without regard to case, and a home
+// directory holding a non-ASCII character arrives composed from one program
+// and decomposed from another. A byte-exact split lets those spellings through
+// while they still name the person, so every spelling that resolves here is
+// folded together.
+//
+// The pattern is built once per home directory, because this runs over every
+// byte a spool keeps.
+let homeRule: { home: string, pattern: RegExp } | null = null;
+
 export function redactHome(text: string): string
 {
     const home = homedir();
-    return home === "" || home === "/" ? text : text.split(home).join("~");
+    if (home === "" || home === "/")
+    {
+        return text;
+    }
+    if (homeRule === null || homeRule.home !== home)
+    {
+        homeRule = { home, pattern: homePattern(home) };
+    }
+    return text.replace(homeRule.pattern, "~");
+}
+
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+function homePattern(home: string): RegExp
+{
+    const spellings = [...new Set([home, home.normalize("NFC"), home.normalize("NFD")])];
+    const escaped = spellings.map((spelling) => spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return new RegExp(escaped.join("|"), CASE_INSENSITIVE_FS ? "gi" : "g");
 }
 
 // Environment values are never written anywhere, so a declared secret enters
@@ -136,12 +178,45 @@ export function secretEnvNames(): string[]
     return Object.keys(process.env).filter(namesSecret);
 }
 
-// Whether a value carries a run of characters that looks like generated key
-// material rather than like a word someone wrote. Redaction is eager on
-// purpose — blanking a word of provider output costs nothing — but a caller
-// that refuses outright rather than rewriting needs the eagerness held back,
-// and this is the same judgement the backstop rule above already makes.
-export function carriesKeyMaterial(text: string): boolean
+// Whether the text carries something only a credential produces — the question
+// a caller that refuses outright has to answer, where redaction only has to
+// decide which bytes to blank.
+//
+// Each rule is judged where it matched, never over the string around it. An
+// eager rule is held to key material inside its own span, so "reduced token
+// counting overhead" stays recordable while `Bearer <key>` does not; the
+// explicit encodings are a leak whatever their entropy, which is the case a
+// pasted config snippet and a human-chosen password fall into. Judging the
+// whole string instead would let a commit sha or a branch slug anywhere in a
+// sentence arm the eager rules, and would disarm the explicit ones for exactly
+// the short secrets that most need refusing.
+export function carriesCredential(text: string): boolean
+{
+    for (const { pattern, eager } of PATTERNS)
+    {
+        for (const [span] of text.matchAll(pattern))
+        {
+            if (eager !== true || carriesKeyMaterial(span))
+            {
+                return true;
+            }
+        }
+    }
+    // The backstop is eager by construction, and holds itself back the same way
+    // the redaction pass does.
+    for (const [span] of text.matchAll(DENSE))
+    {
+        if (looksGenerated(span))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether a matched span carries a run of characters that looks like generated
+// key material rather than like a word someone wrote.
+function carriesKeyMaterial(text: string): boolean
 {
     return (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated);
 }
