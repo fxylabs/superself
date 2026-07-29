@@ -179,6 +179,61 @@ grep -q "artifacts/demo/$AID-launch.html" "$VIEW_A/workspace.html" || fail "work
 grep -q 'aria-label="waiting on you"' "$VIEW_A/demo.html" || fail "project view missing the attention panel"
 grep -q 'aria-label="waiting on you"' "$VIEW_A/workspace.html" || fail "workspace view missing the attention panel"
 
+# opening an artifact from a run with no terminal resolves the path and leaves
+# the desktop alone. This proof is such a run, so the stubs ahead of the real
+# launchers on PATH are what would record a window nobody asked for; the whole
+# table of contexts the guard must refuse is driven in gui-launch.mjs.
+LAUNCHERS="$ROOT/launchers"
+LAUNCHED="$ROOT/launched.log"
+mkdir -p "$LAUNCHERS"
+for NAME in open xdg-open explorer
+do
+    printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> %s\n' "$LAUNCHED" > "$LAUNCHERS/$NAME"
+    chmod +x "$LAUNCHERS/$NAME"
+done
+OPENED="$(PATH="$LAUNCHERS:$PATH" node "$CLI_DIR/bin/self.mjs" artifact open "$AID")" || fail "artifact open did not exit zero without a terminal"
+echo "$OPENED" | grep -q "artifacts/demo/$AID-launch.html" || fail "artifact open did not print the resolved path"
+echo "$OPENED" | grep -q "suppressed" || fail "artifact open did not say the GUI launch was suppressed"
+VIEWED="$(PATH="$LAUNCHERS:$PATH" node "$CLI_DIR/bin/self.mjs" view demo)" || fail "view did not exit zero without a terminal"
+echo "$VIEWED" | grep -q "suppressed" || fail "view did not say the GUI launch was suppressed"
+# a detached launcher writes after the command returns, so the absence is read
+# on a deadline: a bare check here would pass while a window was still opening.
+WAITED=0
+while [ "$WAITED" -lt 10 ] && [ ! -f "$LAUNCHED" ]
+do
+    sleep 0.1
+    WAITED=$((WAITED + 1))
+done
+[ -f "$LAUNCHED" ] && fail "a launcher ran from a session with no terminal: $(cat "$LAUNCHED")"
+node "$CLI_DIR/proof/gui-launch.mjs" > /dev/null || fail "the GUI launch guard does not hold across the contexts it must refuse"
+node "$CLI_DIR/proof/attempt-boundary-marker.mjs" > /dev/null || fail "the attempt boundary does not mark the children the guard has to refuse"
+
+# the same command under a real pseudo-terminal, carrying the marker `self
+# attempt run` gives every child it starts. A terminal on both ends is exactly
+# what a harness hands its agent, and it is the context the piped run above
+# cannot speak for: with the marker read only after the tty, this row opened a
+# window on the operator's desktop.
+if command -v script > /dev/null 2>&1
+then
+    rm -f "$LAUNCHED"
+    if script --version > /dev/null 2>&1
+    then
+        PTY_OPENED="$(PATH="$LAUNCHERS:$PATH" SUPERSELF_SESSION=at-proof script -qec "node $CLI_DIR/bin/self.mjs artifact open $AID" /dev/null)"
+    else
+        PTY_OPENED="$(PATH="$LAUNCHERS:$PATH" SUPERSELF_SESSION=at-proof script -q /dev/null node "$CLI_DIR/bin/self.mjs" artifact open "$AID")"
+    fi
+    echo "$PTY_OPENED" | grep -q "suppressed" || fail "artifact open launched from an attempt run holding a pty"
+    WAITED=0
+    while [ "$WAITED" -lt 10 ] && [ ! -f "$LAUNCHED" ]
+    do
+        sleep 0.1
+        WAITED=$((WAITED + 1))
+    done
+    [ -f "$LAUNCHED" ] && fail "a launcher ran from an attempt run holding a pty: $(cat "$LAUNCHED")"
+else
+    echo "note: no script(1) on this machine — the pty row of the GUI guard was not run here" >&2
+fi
+
 # work listing and detail are workspace reads, reachable from any directory:
 # a bare id resolves its owning project, --project names one explicitly, and
 # the output matches the linked checkout's byte for byte

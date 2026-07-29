@@ -527,6 +527,12 @@ function detailOf(
 export function childEnv(spool: Spool, id: string, run: number, resumeFrom: string | null): Record<string, string>
 {
     const env: Record<string, string> = {
+        // The boundary marks itself: everything downstream of this environment
+        // is an agent run, whatever stdio the launcher hands it. Nothing else
+        // in the child's world says so — a harness that allocates a pty for
+        // colour output looks exactly like a person at a terminal — so the one
+        // place that knows says it, and the GUI guard reads it here.
+        SUPERSELF_SESSION: id,
         SUPERSELF_ATTEMPT_ID: id,
         SUPERSELF_ATTEMPT_RUN: String(run),
         SUPERSELF_ATTEMPT_DIR: spool.dir,
