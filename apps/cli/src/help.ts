@@ -370,12 +370,13 @@ export const COMMANDS: CommandHelp[] = [
             },
             {
                 syntax: "artifact search <query> | open <id> [--project slug]",
-                description: ["find an artifact or open it with the OS default app"]
+                description: ["find an artifact, or open it with the OS default app at a terminal"]
             }
         ],
         detail: [
             "browse the files reports have attached. Artifacts are ingested by",
-            "`self report --artifact`, never registered on their own.",
+            "`self report --artifact`, never registered on their own. Without an",
+            "interactive terminal, `open` prints the resolved path and launches nothing.",
             "",
             "  --work <work-id>    only artifacts attached to this work unit",
             "  --project <slug>    only artifacts of this project, instead of the current one"
@@ -406,8 +407,12 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: "view",
-        usage: [{ syntax: "view [slug]", description: ["open the live workspace or project view in the browser"] }],
-        detail: ["open the HTML view the last fold rendered: the workspace, or one project."]
+        usage: [{ syntax: "view [slug]", description: ["open the live workspace or project view in the browser at a terminal"] }],
+        detail: [
+            "open the HTML view the last fold rendered: the workspace, or one project.",
+            "Without an interactive terminal, `view` prints the rendered path and",
+            "launches nothing."
+        ]
     },
     {
         name: "context",
