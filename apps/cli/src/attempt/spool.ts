@@ -309,7 +309,7 @@ export const STALE_HEARTBEAT_MS = 30_000;
 export interface DeadVerdict
 {
     reason: string;
-    exitSource: Exclude<ExitSource, "confirmed">;
+    exitSource: ExitSource;
 }
 
 // Three independent reasons, because no one of them is sufficient. A pid can
@@ -322,6 +322,22 @@ export function deadVerdict(spool: Spool, status: AttemptStatus, boot: string, n
     {
         return null;
     }
+    const dead = deadReason(spool, status, boot, now);
+    // A status that already carries a confirmed exit is not a disappearance:
+    // the launcher watched the exit happen and recorded it, and what died was
+    // the settlement between that write and the terminal one. The verdict
+    // keeps the witnessed source rather than reclassifying it — a reported
+    // exit code stays evidence, and a result the gate already published stays
+    // settleable, where "vanished" would destroy both.
+    if (dead !== null && status.exitSource === "confirmed")
+    {
+        return { reason: `the exit was reported but its settlement never finished — ${dead.reason}`, exitSource: "confirmed" };
+    }
+    return dead;
+}
+
+function deadReason(spool: Spool, status: AttemptStatus, boot: string, now: number): DeadVerdict | null
+{
     if (status.bootId !== boot)
     {
         return { reason: "the machine restarted while this attempt was running", exitSource: "vanished" };
