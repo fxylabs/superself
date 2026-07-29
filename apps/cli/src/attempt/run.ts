@@ -336,7 +336,12 @@ const UNSUPPORTED_TRANSIENT_RUNS = 2;
 async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, options: RunOptions): Promise<AttemptResult>
 {
     const provider = plan.capabilities.provider?.name;
-    recordAttemptEvent(ctx, plan, "run.started", id, { role: plan.role, provider, adapter: adapterOf(plan.boundary) });
+    // The runtime this attempt ran under, stated once where the run begins.
+    // The model is the one the generation pinned — an attempt no work spec
+    // dispatched has none, and a completion policy that names a model class is
+    // what makes that difference matter.
+    recordAttemptEvent(ctx, plan, "run.started", id,
+        { role: plan.role, provider, adapter: adapterOf(plan.boundary), model: plan.spec?.requestedModel });
     let last: { failure: FailureClass; detail: string; observed: boolean } = { failure: "unknown", detail: "no run was made", observed: true };
     let unsupported = 0;
     for (let run = 1; run <= plan.retry.maxRuns; run++)
@@ -861,7 +866,25 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
         });
     }
     console.log(`attempt ${id} completed — ${published.length} artifact(s) published, report ${reported ? "attached" : "already attached"}`);
+    reportOutstanding(ctx, plan.work);
     return { attempt: id, state: "completed" };
+}
+
+// What settlement is and is not. A passing attempt has produced a verified
+// result and freed the work unit; whether the outcome was reached is a separate
+// question, and this is where both the runner and the supervisor ask it — the
+// same check `self work done` is refused by. Nothing is written: the answer is
+// derived from the log this settlement has just appended to.
+function reportOutstanding(ctx: ProjectContext, id: string): void
+{
+    const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === id);
+    if (work === undefined || work.status === "done")
+    {
+        return;
+    }
+    console.log(work.owes === undefined
+        ? `${id} is not done — settlement records what this run produced; close it with \`self work done ${id}\``
+        : `${id} is not done — ${work.owes}`);
 }
 
 function gateFailed(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, reason: string): AttemptResult

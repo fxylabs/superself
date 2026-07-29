@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { SpecPin } from "../attempt/plan.js";
 import { AttemptState, liveAttemptFor, listSpools } from "../attempt/spool.js";
+import { approvalPending } from "../completion.js";
 import { processStartTime } from "../attempt/tree.js";
 import { buildModel, WorkState } from "../model.js";
 import { ProjectContext } from "../paths.js";
@@ -59,6 +60,13 @@ function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined
     if (work.status === "blocked")
     {
         return { ...at, outcome: work.blockedOn === "decision" ? "awaiting-approval" : "not-ready" };
+    }
+    // The durable approval state the completion check owns, read here rather
+    // than re-decided: a unit that declares it needs a person's answer is not
+    // one a supervisor may dispatch at while that answer is missing.
+    if (approvalPending(work))
+    {
+        return { ...at, outcome: "awaiting-approval" };
     }
     if (liveAttemptFor(head.work) !== null || wakeInFlight(head.workSpec, head.generation))
     {
