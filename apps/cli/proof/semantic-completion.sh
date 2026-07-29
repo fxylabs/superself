@@ -51,7 +51,11 @@ unset SUPERSELF_SESSION SUPERSELF_ATTEMPT_ID || true
 cd "$ROOT/A/ws"
 SELF init --agents > /dev/null
 cd "$ROOT/A/ws/demo"
-git init -q
+# The initial branch is named here instead of being inherited from whatever
+# this machine's git starts a repository on. The policy case below leaves this
+# branch and returns to it by name, and a git whose default is `master` — the
+# CI runner's — would leave it with nothing to return to.
+git init -q -b main
 git commit -q --allow-empty -m "base"
 MAIN0="$(git rev-parse HEAD)"
 SELF project add --name demo --desc "semantic completion harness" > /dev/null
