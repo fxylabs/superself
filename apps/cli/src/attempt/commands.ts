@@ -7,7 +7,8 @@ import { claimStarted, externalExited, externalHeartbeat, registerAttempt } from
 import { readPlan } from "./plan.js";
 import { PreflightReceipt } from "./preflight.js";
 import { readBreaker, resetBreaker } from "./retry.js";
-import { AttemptStatus, deadVerdict, listSpools, openSpool, ownerOf, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
+import { AttemptStatus, deadVerdict, DeadVerdict, listSpools, openSpool, ownerOf, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
+import { BUSY, trySettling } from "./settlement.js";
 import { nextFence, runAttempt, settleAttempt } from "./run.js";
 import { treeAlive, treeContain, treeTerminate } from "./tree.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
@@ -28,7 +29,7 @@ export async function runAttemptCommand(rest: string[]): Promise<void>
         case "show": cmdShow(rest.slice(1)); return;
         case "directive": cmdDirective(rest.slice(1)); return;
         case "cancel": cmdCancel(rest.slice(1)); return;
-        case "settle": cmdSettle(rest.slice(1)); return;
+        case "settle": await cmdSettle(rest.slice(1)); return;
         case "recover": await cmdRecover(rest.slice(1)); return;
         case "prune": cmdPrune(rest.slice(1)); return;
         case "retention": cmdRetention(rest.slice(1)); return;
@@ -246,14 +247,14 @@ function cmdCancel(args: string[]): void
         : `no process this launch of attempt ${id} started is still running — no signal was sent`);
 }
 
-function cmdSettle(args: string[]): void
+async function cmdSettle(args: string[]): Promise<void>
 {
     const [id] = parseCommand("attempt", args, {}, 1).positionals;
     if (id === undefined)
     {
         throw new CliError("usage: self attempt settle <attempt-id>");
     }
-    settleAttempt(requireProject(process.cwd()), openSpool(id));
+    await settleAttempt(requireProject(process.cwd()), openSpool(id));
 }
 
 // A crash or a restart leaves a spool that still says `running`. Nothing here
@@ -278,47 +279,66 @@ async function cmdRecover(args: string[]): Promise<void>
         {
             continue;
         }
-        // The terminal write below releases the work unit, and a dead verdict
-        // does not mean a dead group: an owner that went quiet may still be
-        // running everything it started. Whatever is still alive is contained
-        // before the unit is let go, and an attempt whose group rides out the
-        // containment is left held rather than settled — releasing it would
-        // seat a second owner beside the processes of the first.
-        const owner = ownerOf(spool);
-        if (owner !== null && treeAlive(owner))
+        // Behind the attempt's settlement lock, and only if it is free. A
+        // settlement in flight is invisible in everything the verdict above
+        // reads — the launcher inside the completion gate is not the process
+        // the status names — and taking the attempt over would fence out the
+        // one settler that is finishing it properly. It is left alone and
+        // named, rather than recovered from under whoever holds it.
+        const taken = await trySettling(status.attempt, async () => recoverOne(ctx, spool, status, verdict));
+        if (taken === BUSY)
         {
-            const survivors = await treeContain(owner);
-            spool.append("events.jsonl", { event: "run.contained", contained: survivors.length === 0 });
-            if (survivors.length > 0)
-            {
-                console.error(`attempt ${status.attempt} is not being driven (${verdict.reason}) but ${survivors.length} process(es) its launch started survived containment (pid ${survivors.join(", ")}) — it keeps the work unit until they are gone`);
-                continue;
-            }
+            console.error(`attempt ${status.attempt} is being settled by another process right now — it was left alone`);
+            continue;
         }
-        // Taking the attempt over, not just relabelling it: a runner that was
-        // wrongly declared dead, or one that comes back between the check and
-        // the write, finds a fence newer than its own and stops rather than
-        // overwriting this verdict.
-        //
-        // What is recorded beside the verdict is how it was reached. Neither an
-        // owner that disappeared nor one that went quiet said anything about
-        // what its process produced, and settlement refuses both on that
-        // ground rather than on the state alone — while an exit the launcher
-        // did report keeps its source and its code, and only that record may
-        // carry one.
-        spool.setStatus({
-            state: "exited-unreconciled",
-            failure: "unknown",
-            detail: verdict.reason,
-            exitSource: verdict.exitSource,
-            exitCode: verdict.exitSource === "confirmed" ? status.exitCode : undefined,
-            fence: nextFence()
-        });
-        spool.append("events.jsonl", { event: "run.recovered", detail: verdict.reason, exitSource: verdict.exitSource });
-        recordRecovery(ctx, status, verdict.reason);
-        recovered++;
+        recovered += taken ? 1 : 0;
     }
     console.log(recovered === 0 ? "no attempt needed recovery" : `recovered ${recovered} attempt(s) as exited-unreconciled`);
+}
+
+// One attempt, judged again under the lock and written off. Answers whether it
+// was: an attempt whose launch rides out the containment keeps its work unit.
+async function recoverOne(ctx: ProjectContext, spool: Spool, status: AttemptStatus, verdict: DeadVerdict): Promise<boolean>
+{
+    // The terminal write below releases the work unit, and a dead verdict
+    // does not mean a dead group: an owner that went quiet may still be
+    // running everything it started. Whatever is still alive is contained
+    // before the unit is let go, and an attempt whose group rides out the
+    // containment is left held rather than settled — releasing it would
+    // seat a second owner beside the processes of the first.
+    const owner = ownerOf(spool);
+    if (owner !== null && treeAlive(owner))
+    {
+        const survivors = await treeContain(owner);
+        spool.append("events.jsonl", { event: "run.contained", contained: survivors.length === 0 });
+        if (survivors.length > 0)
+        {
+            console.error(`attempt ${status.attempt} is not being driven (${verdict.reason}) but ${survivors.length} process(es) its launch started survived containment (pid ${survivors.join(", ")}) — it keeps the work unit until they are gone`);
+            return false;
+        }
+    }
+    // Taking the attempt over, not just relabelling it: a runner that was
+    // wrongly declared dead, or one that comes back between the check and
+    // the write, finds a fence newer than its own and stops rather than
+    // overwriting this verdict.
+    //
+    // What is recorded beside the verdict is how it was reached. Neither an
+    // owner that disappeared nor one that went quiet said anything about
+    // what its process produced, and settlement refuses both on that
+    // ground rather than on the state alone — while an exit the launcher
+    // did report keeps its source and its code, and only that record may
+    // carry one.
+    spool.setStatus({
+        state: "exited-unreconciled",
+        failure: "unknown",
+        detail: verdict.reason,
+        exitSource: verdict.exitSource,
+        exitCode: verdict.exitSource === "confirmed" ? status.exitCode : undefined,
+        fence: nextFence()
+    });
+    spool.append("events.jsonl", { event: "run.recovered", detail: verdict.reason, exitSource: verdict.exitSource });
+    recordRecovery(ctx, status, verdict.reason);
+    return true;
 }
 
 function recordRecovery(ctx: ProjectContext, status: AttemptStatus, reason: string): void

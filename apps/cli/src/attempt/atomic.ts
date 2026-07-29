@@ -93,7 +93,11 @@ interface Held
     token: string;
 }
 
-function acquire(lock: string): Held | null
+// The identity written into the lock is the caller's, so a holder can be asked
+// about afterwards: the default names this process, and a caller that has to
+// tell a working holder from one a crash left behind says who it is in terms
+// that outlive the file.
+function acquire(lock: string, identity: string = String(process.pid)): Held | null
 {
     let fd: number;
     try
@@ -104,7 +108,7 @@ function acquire(lock: string): Held | null
     {
         return null;
     }
-    const token = `${process.pid}.${randomBytes(8).toString("hex")}`;
+    const token = `${identity}.${randomBytes(8).toString("hex")}`;
     try
     {
         writeFileSync(fd, token);
@@ -126,16 +130,65 @@ function release<T>(held: Held, lock: string, run: () => T): T
     }
     finally
     {
-        closeSync(held.fd);
-        // A waiter that judged this lock stale has already removed it and taken
-        // one of its own. Removing the path unconditionally would delete that
-        // waiter's lock and let a third process in behind it — one lost
-        // exclusion cascading into the next.
-        if (tokenOf(lock) === held.token)
-        {
-            rmSync(lock, { force: true });
-        }
+        releaseHeld(held, lock);
     }
+}
+
+function releaseHeld(held: Held, lock: string): void
+{
+    closeSync(held.fd);
+    // A waiter that judged this lock stale has already removed it and taken
+    // one of its own. Removing the path unconditionally would delete that
+    // waiter's lock and let a third process in behind it — one lost
+    // exclusion cascading into the next.
+    if (tokenOf(lock) === held.token)
+    {
+        rmSync(lock, { force: true });
+    }
+}
+
+// The lock taken and held by name, rather than wrapped around a call. What
+// needs this is work `withLock` cannot bracket: an attempt's completion gate is
+// asynchronous, and it may legitimately run for as long as a declared
+// validation takes — so the rule about when a holder counts as abandoned
+// belongs to the caller that knows what holding it means, not to the five
+// second timeout that suits a counter increment.
+export interface LockHold
+{
+    token: string;
+    release: () => void;
+}
+
+export function lockPath(file: string): string
+{
+    return `${file}.lock`;
+}
+
+export function takeLock(file: string, identity: string): LockHold | null
+{
+    const lock = lockPath(file);
+    mkdirSync(dirname(lock), { recursive: true });
+    const held = acquire(lock, identity);
+    return held === null ? null : { token: held.token, release: () => releaseHeld(held, lock) };
+}
+
+export function lockHolder(file: string): string | null
+{
+    return tokenOf(lockPath(file));
+}
+
+// Removed only if it is still the lock that was judged. A lock that changed
+// hands between the judgement and this call belongs to whoever took it, and
+// removing that one would let a third process in behind them.
+export function breakLock(file: string, token: string): boolean
+{
+    const lock = lockPath(file);
+    if (tokenOf(lock) !== token)
+    {
+        return false;
+    }
+    rmSync(lock, { force: true });
+    return true;
 }
 
 function tokenOf(lock: string): string | null
