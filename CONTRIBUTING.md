@@ -178,8 +178,11 @@ Rules the gate enforces:
 - `status` must be `completed` for the attempt to pass. Anything else is a
   failed or blocked attempt, and the gate treats it as one.
 - A missing envelope is a failed attempt. An exit code alone is not a result.
-- Every declared artifact must exist, hash to what was declared, and match the
-  declared byte count. One mismatch refuses the whole attempt.
+- Every artifact the plan declares must be claimed in the envelope, exist, hash
+  to what was claimed, and match the claimed byte count. One mismatch refuses the
+  whole attempt. The gate walks the plan, so an extra artifact in the envelope
+  that the plan never declared is ignored rather than verified — do not treat it
+  as a way to publish something.
 
 The same `{name, sha256, bytes}` shape appears in `AttemptSummary.artifacts`
 after the fold. Keep them identical.

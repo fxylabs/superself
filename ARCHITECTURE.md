@@ -17,6 +17,7 @@ it. The layers, lowest first:
 | Layer | Modules | Owns |
 | --- | --- | --- |
 | Types | `types.ts` | the event and context shapes; imports nothing local |
+| CLI surface | `args.ts`, `help.ts`, `human.ts` | how a command reads its arguments, describes itself, and confirms a human; `help.ts` and `human.ts` import nothing local |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives and how the log is read |
 | Domain | `completion.ts`, `objectives.ts`, `integration.ts`, `dates.ts` | per-domain state shapes and their reducers |
@@ -24,18 +25,24 @@ it. The layers, lowest first:
 | Render | `view.ts`, `views.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
-| Commands | `main.ts`, `lane.ts`, `goals.ts`, `train.ts`, `requirements.ts`, `<subsystem>/commands.ts` | argument parsing, refusals, dispatch |
+| Command support | `artifact.ts`, `envelope.ts`, `trainutil.ts` | what more than one command surface shares: artifact staging (`artifact.ts`, which also holds the `artifact` verb), receipt-envelope validation, change-set and promotion lookup |
+| Commands | `main.ts`, `lane.ts`, `goals.ts`, `train.ts`, `promote.ts`, `reviews.ts`, `requirements.ts`, `search.ts`, `setup.ts`, `sync.ts`, `<subsystem>/commands.ts` | argument parsing, refusals, dispatch |
 
-The append path runs top-down through these layers while imports run
-bottom-up: `pipeline.ts` imports `fold.ts`, which imports `model.ts` and
-`view.ts`. Data flows down the table; dependencies point up it. Never invert
-either — a renderer that imports `pipeline.ts` would make rendering able to
-write state.
+The table places every module in the `apps/cli/src` top level, so the
+no-upward-import rule is checkable for all of them. The seven train-cluster
+modules — `integration.ts`, `lane.ts`, `train.ts`, `promote.ts`, `reviews.ts`,
+`trainutil.ts`, `envelope.ts` — are placed by what they import today, not by
+where they belong once `integration/` exists; see [Known debt](#known-debt).
+
+The append path and the imports run the same way, from higher layers to lower
+ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
+`model.ts` and `view.ts`. Nothing points back up — a renderer that imported
+`pipeline.ts` would make rendering able to write state.
 
 - A new module joins an existing layer or declares a new one here first.
-- A domain module (`completion.ts`, `objectives.ts`) imports `types.ts` and its
-  own peers only. It never imports `model.ts`, so a reducer can never depend on
-  the fold that calls it.
+- A domain module (`completion.ts`, `objectives.ts`, `integration.ts`,
+  `dates.ts`) imports `types.ts`, lower layers, and its own peers only — never
+  `model.ts`, so a reducer can never depend on the fold that calls it.
 - `model.ts` imports domain modules, never commands.
 - Enforcement: review. `tsc` catches a cycle only when it becomes a type error,
   so the import direction is a reading check on every pull request.
@@ -69,8 +76,10 @@ attempt/ →  core
 
 ## Single gates
 
-Each rule below has exactly one implementation and exactly one path through it.
-A second path around any of them is a review finding, not a refactor note.
+Each rule below has exactly one implementation. Adding a second path around one
+of them is a review finding, not a refactor note. Four of the five have exactly
+one path through them today; the argument-parse gate has two, recorded under
+[Known debt](#known-debt), and a new command may not widen that.
 
 | Gate | Module | Rule |
 | --- | --- | --- |
@@ -78,7 +87,13 @@ A second path around any of them is a review finding, not a refactor note.
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Attempt completion | `attempt/gate.ts` `verifyDeclarations` | an attempt is complete only through the envelope check; an exit code is not a result |
-| Argument parse | `args.ts` `parseCommand` / `subcommand` | every command reads its arguments here, so an unknown flag is named instead of dropped (#28) |
+| Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). Required of every new or migrated command surface |
+
+Unknown flags are named CLI-wide even in the surfaces that still call
+`node:util` `parseArgs` directly, because `main.ts` `userMessage` translates
+node's `ERR_PARSE_ARGS_*` codes centrally. That second path does not carry
+`parseCommand`'s unexpected-positional refusal, which is why it is debt rather
+than a sanctioned alternative.
 
 - Adding a caller of a gate is normal. Adding a *second implementation* of what
   a gate decides is the violation — including a local re-check that duplicates
@@ -96,12 +111,16 @@ concern.
 | Namespace | Owner | Emitted from |
 | --- | --- | --- |
 | `run.*` | the runner supervisor | `attempt/`, `daemon/` |
-| `attempt.*` | the integration train | `lane.ts`, `integration.ts` |
+| `spec.*` | work specs | `spec/` |
 | `work.*` | work state, requirements, proposals | `main.ts`, `requirements.ts`, `goals.ts` |
 | `objective.*`, `milestone.*` | the outcome layer | `goals.ts` |
-| `review.*` | review receipts | `reviews.ts` |
-| `spec.*` | work specs | `spec/`, `daemon/` |
-| `goal.*`, `decision.*`, `report.*`, `convention.*` | core project state | `main.ts` |
+| `goal.*`, `decision.*`, `convention.*` | core project state | `main.ts` |
+| `report.*` | work reports | `main.ts`, `attempt/gate.ts` |
+| `changeset.*`, `attempt.*`, `lease.*`, `merge.*`, `promotion.*`, `repo.*`, `target.*`, `main.*`, `ci.*`, `review.*` | the integration train — `INTEGRATION_PREFIXES` in `integration.ts` is the list | `train.ts` (changeset), `lane.ts` (attempt, lease, merge, target/main), `promote.ts` (promotion, repo, main), `reviews.ts` (review) |
+
+`integration.ts` reduces the train namespaces; it emits none of them, as the
+layering rule requires of a domain module. `ci.*` is folded but nothing emits it
+yet, so extending it needs an emitter before it means anything.
 
 `run.*` and `attempt.*` name two different things and the split is
 deliberate: a *runner attempt* is one launch of a provider under a plan
@@ -137,8 +156,19 @@ reminders:
 ## Known debt
 
 Recorded here so the rules above can be stated without exceptions written into
-them. Tracked by #88; do not use any of these as precedent.
+them. The code moves are tracked by #88 and #90 adds the mechanical checks; an
+entry with no issue behind it says so. Do not use any of these as precedent.
 
+- Two argument-parse paths, not one. `main.ts`, `requirements.ts`,
+  `artifact.ts`, `daemon/commands.ts` and most of `attempt/commands.ts` go
+  through `args.ts` `parseCommand`; `goals.ts`, `lane.ts`, `train.ts`,
+  `promote.ts`, `reviews.ts` and the remainder of `spec/`, `attempt/commands.ts`
+  call `node:util` `parseArgs` directly — about 38 call sites. Those sites get
+  node's unknown-flag error translated by `main.ts` `userMessage`, but not
+  `parseCommand`'s unexpected-positional refusal, so a stray argument is still
+  dropped there (`lane.ts` `cancelAttempt` reads `positionals[0]` and ignores
+  the rest — the #28 class of bug, unclosed on that surface). No issue tracks
+  the migration yet.
 - The integration train cluster is flat: `integration.ts` (1,500 lines),
   `lane.ts`, `train.ts`, `trainutil.ts`, `promote.ts`, `reviews.ts`,
   `envelope.ts` form one subsystem with no directory.
