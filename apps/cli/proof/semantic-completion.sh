@@ -61,6 +61,12 @@ MAIN0="$(git rev-parse HEAD)"
 SELF project add --name demo --desc "semantic completion harness" > /dev/null
 SELF goal set "prove semantic completion is separate from physical completion" > /dev/null
 
+# The wake path dispatches on the operator's authority, so the case below that
+# reads a tick needs a policy in force. It is set as wide as a policy can be:
+# what an approval gate does is what this harness is about, and a narrower one
+# would refuse for a reason of its own before the gate was reached.
+SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 8 > /dev/null
+
 STORE="$ROOT/A/ws/.superself"
 LOG="$STORE/projects/demo/log.jsonl"
 DEMO="$ROOT/A/ws/demo"

@@ -339,6 +339,10 @@ export const COMMANDS: CommandHelp[] = [
                 syntax: 'attempt directive <id> "<text>" | cancel <id>',
                 description: ["deliver a follow-up or a cancellation through the spool"]
             },
+            {
+                syntax: "attempt propose <id> --action <kind>",
+                description: ["record what a running attempt is asking to do, and refuse a forbidden one"]
+            },
             { syntax: "attempt settle <id>", description: ["settle an attempt the runner finished but never settled"] },
             { syntax: "attempt recover", description: ["reconcile attempts a crash or restart left running"] },
             {
@@ -353,7 +357,13 @@ export const COMMANDS: CommandHelp[] = [
             "registers an attempt and then drives it through started, heartbeat, and",
             "exited.",
             "",
+            "An action a running attempt proposes is recorded and waits for a person.",
+            "One in a forbidden category — publication, outreach, payment, purchase,",
+            "provisioning, destructive action, policy change — is refused where it",
+            "arrives rather than queued, and the refusal is what reaches the digest.",
+            "",
             "  --work <work-id>    only attempts of this work unit",
+            "  --action <kind>     what a running attempt is asking to be allowed to do",
             "  --json              machine-readable listing",
             "  --pid <pid>         the process id the launcher started",
             "  --code <n>          the exit code the launched process reported",
@@ -386,6 +396,77 @@ export const COMMANDS: CommandHelp[] = [
             "  --interval <ms>     how long the loop waits between ticks (default 5000)",
             "  --foreground        run the loop in this process instead of detaching it",
             "  --json              machine-readable status, tick, or circuit listing"
+        ]
+    },
+    {
+        name: "overnight",
+        usage: [
+            {
+                syntax: "overnight set [--from 22:00] [--to 07:00] [--auto-dispatch] [--risk r] [--kind k]",
+                description: ["record the policy the daemon may dispatch under while nobody watches"]
+            },
+            { syntax: "overnight show [--json] | off", description: ["print the policy in force, or revoke it"] }
+        ],
+        detail: [
+            "grant the supervisor a bounded, versioned, revocable autonomy. Outside",
+            "the window, and with no policy at all, the daemon still reconciles,",
+            "settles and releases — it dispatches nothing new. Inside it, a work",
+            "spec is woken only if the policy allows its project, its risk class,",
+            "its work kind, its provider and its model, and only within the",
+            "concurrency cap, the declared-cost ceiling and the stop condition.",
+            "",
+            "A policy narrows and never widens. It cannot exempt a unit from its",
+            "approval requirement or from its completion policy, and it can never",
+            "grant publication, outreach, payment, purchase, provisioning,",
+            "destructive action or policy change — those are refused categorically,",
+            "at registration and again when a running attempt proposes one.",
+            "",
+            "  --from <hh:mm>       when the window opens, local time (default 22:00)",
+            "  --to <hh:mm>         when it closes (default 07:00)",
+            "  --digest-at <hh:mm>  when the operator reads the account (default 07:30)",
+            "  --auto-dispatch      let ready work dispatch on its own; off by default",
+            "  --project <slug>     repeatable; defaults to this project alone",
+            "  --risk <class>       repeatable; internal, external or privileged (default internal)",
+            "  --kind <role>        repeatable work spec role (default implementation)",
+            "  --provider <name>    repeatable; any provider the specs name by default",
+            "  --model <name>       repeatable; any model the specs name by default",
+            "  --max-concurrent <n> attempts running at once (default 1)",
+            "  --budget-usd <n>     ceiling on declared budget per window, never on observed spend",
+            "  --max-runs <n>       ceiling on the runs a spec's retry policy may declare",
+            "  --stop-after <n>     stop waking after this many failed runs this window",
+            "  --json               machine-readable policy"
+        ]
+    },
+    {
+        name: "digest",
+        usage: [
+            {
+                syntax: "digest [--since <ts> | --hours <n>] [--json]",
+                description: ["the account of what happened while nobody was watching"]
+            }
+        ],
+        detail: [
+            "fold this project's event log over a window and group it: completed,",
+            "failed, retried, waiting on approval, waiting on capacity, then the",
+            "next actions. Reading it records nothing.",
+            "",
+            "Completed, failed and retried are what happened inside the window.",
+            "Waiting on approval is what is still waiting when it ends — a unit",
+            "nobody answered all night has no events in the window, and dropping it",
+            "would leave out the main fact about that night.",
+            "",
+            "Cost and token counts come from what the provider reported and read",
+            "unknown otherwise — a window whose spending nobody can see must not",
+            "read as free. Nothing is inferred from prose, and no prompt, output,",
+            "path or credential can appear: every line comes from events that",
+            "already crossed the sanitization guard.",
+            "",
+            "  --since <ts>   an explicit instant to start from",
+            "  --hours <n>    the last n hours",
+            "  --json         machine-readable digest",
+            "",
+            "with neither, the window starts where the overnight policy's window",
+            "does, or twelve hours ago when there is no policy."
         ]
     },
     {

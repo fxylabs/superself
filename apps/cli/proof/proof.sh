@@ -2164,4 +2164,9 @@ bash "$CLI_DIR/proof/daemon-loop.sh"
 # runs under a machine root of its own as well
 bash "$CLI_DIR/proof/semantic-completion.sh"
 
+# the overnight policy and the digest dispatch real attempts under a window,
+# refuse forbidden actions, and fold a whole night's log, so they run under a
+# machine root of their own too
+bash "$CLI_DIR/proof/overnight-digest.sh"
+
 echo "proof OK"

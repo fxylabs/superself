@@ -4,7 +4,8 @@ import { parseCommand } from "../args.js";
 import { bootId } from "./boundary.js";
 import { queueDirective } from "./directive.js";
 import { claimStarted, externalExited, externalHeartbeat, registerAttempt } from "./external.js";
-import { readPlan } from "./plan.js";
+import { forbiddenAction, forbiddenDeclaration, forbiddenRefusal } from "../daemon/forbidden.js";
+import { AttemptPlan, readPlan } from "./plan.js";
 import { PreflightReceipt } from "./preflight.js";
 import { readBreaker, resetBreaker } from "./retry.js";
 import { AttemptStatus, deadVerdict, DeadVerdict, listSpools, openSpool, ownerOf, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
@@ -28,13 +29,14 @@ export async function runAttemptCommand(rest: string[]): Promise<void>
         case "list": cmdList(rest.slice(1)); return;
         case "show": cmdShow(rest.slice(1)); return;
         case "directive": cmdDirective(rest.slice(1)); return;
+        case "propose": cmdPropose(rest.slice(1)); return;
         case "cancel": cmdCancel(rest.slice(1)); return;
         case "settle": await cmdSettle(rest.slice(1)); return;
         case "recover": await cmdRecover(rest.slice(1)); return;
         case "prune": cmdPrune(rest.slice(1)); return;
         case "retention": cmdRetention(rest.slice(1)); return;
         case "breaker": cmdBreaker(rest.slice(1)); return;
-        default: throw new CliError("usage: self attempt run <plan.json> | register <plan.json> | started <id> --pid N | heartbeat <id> | exited <id> [--code N] | list | show <id> | directive <id> \"<text>\" | cancel <id> | settle <id> | recover | prune [--days N] | retention [<days>] | breaker [<provider>] [--reset]");
+        default: throw new CliError("usage: self attempt run <plan.json> | register <plan.json> | started <id> --pid N | heartbeat <id> | exited <id> [--code N] | list | show <id> | directive <id> \"<text>\" | propose <id> --action <kind> | cancel <id> | settle <id> | recover | prune [--days N] | retention [<days>] | breaker [<provider>] [--reset]");
     }
 }
 
@@ -46,7 +48,7 @@ async function cmdRun(args: string[]): Promise<void>
         throw new CliError("usage: self attempt run <plan.json>");
     }
     const ctx = requireProject(process.cwd());
-    const plan = readPlan(file);
+    const plan = refuseForbidden(readPlan(file), file);
     const result = await runAttempt(ctx, plan, { now: new Date() });
     if (result.state !== "completed")
     {
@@ -64,11 +66,26 @@ async function cmdRegister(args: string[]): Promise<void>
     {
         throw new CliError("usage: self attempt register <plan.json>");
     }
-    const result = await registerAttempt(requireProject(process.cwd()), readPlan(file), { now: new Date() });
+    const result = await registerAttempt(requireProject(process.cwd()), refuseForbidden(readPlan(file), file), { now: new Date() });
     if (result.state !== "registered")
     {
         process.exitCode = 1;
     }
+}
+
+// The forbidden-action list, at the moment a plan is first handed to the CLI.
+// This is not a capability check — preflight already owns what the run may
+// reach — it is the categorical one: an attempt that declares it will publish,
+// pay, provision or delete is refused before a spool exists for it, because
+// there is no later point at which refusing it costs nothing.
+function refuseForbidden(plan: AttemptPlan, file: string): AttemptPlan
+{
+    const forbidden = forbiddenDeclaration(plan);
+    if (forbidden !== null)
+    {
+        throw new CliError(forbiddenRefusal(forbidden, `attempt plan "${file}"`));
+    }
+    return plan;
 }
 
 function cmdStarted(args: string[]): void
@@ -217,6 +234,47 @@ function cmdDirective(args: string[]): void
     }
     const directive = queueDirective(openSpool(id), "followup", text);
     console.log(`follow-up ${directive.id} queued for ${id} — it is delivered from the spool, not from a terminal`);
+}
+
+// An agent may ask for anything mid-run, and the answer to a forbidden category
+// is the same one it would have got at registration. It is refused where it
+// arrives rather than queued for the morning: a queue is a promise that
+// somebody will decide, and these are the actions nobody decides unattended.
+//
+// The refusal is recorded before it is thrown, because the interesting fact is
+// not that the attempt was stopped — it kept running — but that it asked. An
+// operator who reads the digest has to find that out.
+function cmdPropose(args: string[]): void
+{
+    const { values, positionals } = parseCommand("attempt", args, { action: { type: "string" } }, 1);
+    const [id] = positionals;
+    if (id === undefined || values.action === undefined || values.action.trim() === "")
+    {
+        throw new CliError("usage: self attempt propose <attempt-id> --action <kind>");
+    }
+    const ctx = requireProject(process.cwd());
+    const status = openSpool(id).status();
+    if (status === null)
+    {
+        throw new CliError(`attempt "${id}" has no status record`);
+    }
+    // The same split settlement makes: an attempt of another project records
+    // into that project's log, and the branch stamp of this checkout is not
+    // that project's branch.
+    const owner: CliContext = status.project === ctx.project ? ctx : { ...ctx, projectDir: undefined };
+    const category = forbiddenAction(values.action);
+    const refs = { work: status.work, attempt: status.attempt };
+    if (category === null)
+    {
+        recordEvent(owner, makeEvent(status.project, "run.proposed", { attempt: status.attempt, action: values.action }, refs),
+            `${status.work} proposed ${values.action}`);
+        console.log(`${status.attempt} proposed "${values.action}" — it is on record and waits for a person; nothing was granted`);
+        return;
+    }
+    recordEvent(owner, makeEvent(status.project, "run.refused", { attempt: status.attempt, action: values.action, category }, refs),
+        `${status.work} refused ${values.action}`);
+    throw new CliError(forbiddenRefusal({ action: values.action, category }, `attempt ${status.attempt}`) +
+        " — the proposal is on record and the attempt keeps running");
 }
 
 // A cancel reaches the runner's own attempts through the spool, because the
