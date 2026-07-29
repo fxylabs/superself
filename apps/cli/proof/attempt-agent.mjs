@@ -8,6 +8,7 @@
 // its own output cannot prove that the spool does not.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 
 const out = process.env.SUPERSELF_ATTEMPT_OUT;
 const run = Number(process.env.SUPERSELF_ATTEMPT_RUN);
@@ -92,6 +93,17 @@ function main()
     if (mode === "slow")
     {
         spin(60_000);
+        return;
+    }
+    if (mode === "linger")
+    {
+        // A background process left in the payload's own group, still running
+        // when the payload exits: the launcher's exit report is about its
+        // process, not about this one.
+        const orphan = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        orphan.unref();
+        writeFileSync(process.env.AGENT_ORPHANFILE, String(orphan.pid));
+        finish({ status: "completed", summary: "left a process behind", artifacts: [stage("design.md", "linger body")] });
         return;
     }
     if (mode === "stale")

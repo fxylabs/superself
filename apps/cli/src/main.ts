@@ -109,6 +109,9 @@ const USAGE = `usage: self <command>
   spec dispatch <work-spec-id>               compile the current generation and run it as one attempt
   spec list [--json] | show <id> [--json]    work specs, their generations, and the attempts pinned to them
   attempt run <plan.json>                    preflight a work attempt's capabilities, then run and spool it
+  attempt register <plan.json>               preflight and spool an attempt a launcher of your own will start
+  attempt started <id> --pid N | heartbeat <id> | exited <id> [--code N]
+                                             drive a registered attempt from the launcher that owns its process
   attempt list [--work id] [--json]          list this machine's attempts and the state each reached
   attempt show <attempt-id>                  print one attempt's durable record and capability receipt
   attempt directive <id> "<text>" | cancel <id>

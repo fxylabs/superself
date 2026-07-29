@@ -22,6 +22,7 @@ const plan = {
             ...(o.marker === undefined ? {} : { AGENT_MARKER: o.marker }),
             ...(o.idfile === undefined ? {} : { AGENT_IDFILE: o.idfile }),
             ...(o.gate === undefined ? {} : { AGENT_GATE: o.gate }),
+            ...(o.orphanfile === undefined ? {} : { AGENT_ORPHANFILE: o.orphanfile }),
             // A credential the plan author put in the boundary environment: it
             // is a literal in the plan, so it is in no runner environment the
             // redaction scope could read it from.
