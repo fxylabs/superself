@@ -16,7 +16,7 @@ import { AttemptPlan, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
 import { MIN_LITERAL, redact, scopeFor, unredactableSecrets } from "./redact.js";
 import { admitAttempt, backoffFor, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
-import { AttemptStatus, createSpool, liveAttemptFor, Spool } from "./spool.js";
+import { AttemptState, AttemptStatus, createSpool, liveAttemptFor, Spool } from "./spool.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
 
@@ -76,12 +76,66 @@ function currentFence(file: string): number
     }
 }
 
+// The spool an attempt lives in, written before anything is spent and before
+// any process exists. The runner opens it in `preflight` and drives it itself;
+// `self attempt register` opens the same spool in `registered` and hands it to
+// a launcher of the operator's own. One writer, so the two cannot drift apart.
+export function prepareSpool(ctx: ProjectContext, plan: AttemptPlan, id: string, fence: number, state: AttemptState, options: RunOptions): Spool
+{
+    const spool = new Spool(createSpool(id), scopeFor(plan.capabilities.secrets));
+    const identity = identityOf(plan.boundary);
+    spool.claim(fence);
+    writeBrief(spool, plan, id);
+    // The normalized plan, kept beside the attempt so settlement after a crash
+    // works from what this attempt was actually launched with rather than from
+    // a plan file that may since have been edited.
+    spool.writeJson("plan.json", plan);
+    spool.writeJson("attempt.json", {
+        attempt: id,
+        work: plan.work,
+        project: ctx.project,
+        role: plan.role,
+        adapter: adapterOf(plan.boundary),
+        boundaryDigest: identity.digest,
+        policyDigest: policyDigest(plan),
+        // The desired-state generation this attempt was admitted under,
+        // when a spec dispatched it. Snapshot at start: a generation
+        // applied while this attempt runs never reinterprets it, because
+        // what it was admitted under is already on its record.
+        spec: plan.spec,
+        command: plan.command,
+        capabilities: plan.capabilities,
+        artifacts: plan.artifacts,
+        retry: plan.retry,
+        created: options.now.toISOString()
+    });
+    spool.writeJson("status.json", {
+        attempt: id,
+        work: plan.work,
+        project: ctx.project,
+        role: plan.role,
+        state,
+        run: 0,
+        runs: 0,
+        fence,
+        nodeId: identity.nodeId,
+        bootId: identity.bootId,
+        // A registered attempt has no process yet, and a pid recorded before
+        // one exists is a pid recovery would read as this attempt's own.
+        pid: state === "registered" ? undefined : process.pid,
+        provider: plan.capabilities.provider?.name,
+        created: options.now.toISOString(),
+        updated: options.now.toISOString()
+    } satisfies AttemptStatus);
+    warnUnredactable(spool, plan);
+    return spool;
+}
+
 export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options: RunOptions): Promise<AttemptResult>
 {
     const id = runAttemptId();
     const identity = identityOf(plan.boundary);
-    const { spool, fence } = claimWork(ctx, plan, id, identity, options);
-    warnUnredactable(spool, plan);
+    const { spool, fence } = claimWork(ctx, plan, id, options);
 
     // The liveness markers cover preflight too. A probe may legitimately take
     // as long as the preflight bound allows, and recovery reads a missing pid
@@ -111,67 +165,32 @@ export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options
 // check too. Both happen under a per-work lock, and the first heartbeat is
 // written before the lock is released, so the claim is fully observable the
 // moment it can next be raced.
-function claimWork(
-    ctx: ProjectContext,
-    plan: AttemptPlan,
-    id: string,
-    identity: ReturnType<typeof identityOf>,
-    options: RunOptions
-): { spool: Spool; fence: number }
+function claimWork(ctx: ProjectContext, plan: AttemptPlan, id: string, options: RunOptions): { spool: Spool; fence: number }
 {
-    return withLock(join(runnerStateDir(), "locks", `work.${encodeURIComponent(plan.work)}`), () =>
+    return claimWorkUnit(plan.work, () =>
     {
-        const live = liveAttemptFor(plan.work);
-        if (live !== null)
-        {
-            throw new CliError(`${plan.work} is already being driven by attempt ${live.attempt} (${live.state}) — one work unit materializes one attempt at a time`);
-        }
         options.onAdmitted?.();
-        const spool = new Spool(createSpool(id), scopeFor(plan.capabilities.secrets));
         const fence = nextFence();
-        spool.claim(fence);
-        writeBrief(spool, plan, id);
-        // The normalized plan, kept beside the attempt so settlement after a
-        // crash works from what this attempt was actually launched with rather
-        // than from a plan file that may since have been edited.
-        spool.writeJson("plan.json", plan);
-        spool.writeJson("attempt.json", {
-            attempt: id,
-            work: plan.work,
-            project: ctx.project,
-            role: plan.role,
-            adapter: adapterOf(plan.boundary),
-            boundaryDigest: identity.digest,
-            policyDigest: policyDigest(plan),
-            // The desired-state generation this attempt was admitted under,
-            // when a spec dispatched it. Snapshot at start: a generation
-            // applied while this attempt runs never reinterprets it, because
-            // what it was admitted under is already on its record.
-            spec: plan.spec,
-            command: plan.command,
-            capabilities: plan.capabilities,
-            artifacts: plan.artifacts,
-            retry: plan.retry,
-            created: options.now.toISOString()
-        });
-        spool.writeJson("status.json", {
-            attempt: id,
-            work: plan.work,
-            project: ctx.project,
-            role: plan.role,
-            state: "preflight",
-            run: 0,
-            runs: 0,
-            fence,
-            nodeId: identity.nodeId,
-            bootId: identity.bootId,
-            pid: process.pid,
-            provider: plan.capabilities.provider?.name,
-            created: options.now.toISOString(),
-            updated: options.now.toISOString()
-        } satisfies AttemptStatus);
+        const spool = prepareSpool(ctx, plan, id, fence, "preflight", options);
         spool.heartbeat();
         return { spool, fence };
+    });
+}
+
+// Every claim of a work unit serializes on this one lock — the runner claiming
+// for the child it is about to spawn, and a launcher claiming an attempt it
+// registered — and admission is the same refusal everywhere, decided by the
+// same evidence recovery uses.
+export function claimWorkUnit<T>(work: string, claim: () => T): T
+{
+    return withLock(join(runnerStateDir(), "locks", `work.${encodeURIComponent(work)}`), () =>
+    {
+        const live = liveAttemptFor(work);
+        if (live !== null)
+        {
+            throw new CliError(`${work} is already being driven by attempt ${live.attempt} (${live.state}) — one work unit materializes one attempt at a time`);
+        }
+        return claim();
     });
 }
 
@@ -232,7 +251,7 @@ async function gateBeforeSpend(
     return null;
 }
 
-function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, receipt: PreflightReceipt): AttemptResult
+export function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, receipt: PreflightReceipt): AttemptResult
 {
     const request = approvalRequest(receipt);
     const missing = receipt.checks.filter((check) => !check.ok).map((check) => `${check.capability}:${check.target}`);
@@ -250,7 +269,7 @@ function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool: Spool,
 // The checks that are about this workspace rather than about the boundary: no
 // probe inside a sandbox can tell whether the work unit this attempt names
 // exists, or whether anyone granted it a budget.
-function localChecks(ctx: ProjectContext, plan: AttemptPlan): PreflightCheck[]
+export function localChecks(ctx: ProjectContext, plan: AttemptPlan): PreflightCheck[]
 {
     const checks: PreflightCheck[] = [];
     if (plan.capabilities.context)
@@ -367,7 +386,9 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
     return failAttempt(ctx, plan, spool, id, last.failure, last.detail, last.observed, options);
 }
 
-function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, failure: FailureClass, detail: string, observed: boolean, options: RunOptions): AttemptResult
+// Reached only once a run has actually ended, so the exit behind it is one
+// this machine watched happen.
+export function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, failure: FailureClass, detail: string, observed: boolean, options: RunOptions): AttemptResult
 {
     const provider = plan.capabilities.provider?.name;
     // A failure only the agent called transient is not evidence about the
@@ -378,7 +399,7 @@ function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: s
         spool.append("events.jsonl", { event: "breaker.failure", provider, failures: record.failures, state: record.state });
     }
     const state = failure === "cancelled" ? "cancelled" : "failed";
-    spool.setStatus({ state, failure, detail });
+    spool.setStatus({ state, failure, detail, exitSource: "confirmed" });
     recordAttemptEvent(ctx, plan, failure === "cancelled" ? "run.cancelled" : "run.failed", id, { failure, detail: redact(detail) });
     console.error(`attempt ${id} ${state}: ${failure} — ${detail}`);
     return { attempt: id, state, failure, detail };
@@ -503,7 +524,7 @@ function detailOf(
         ?? (last !== "" ? last : envelope === null ? NO_ENVELOPE : `exit ${exit.code}`);
 }
 
-function childEnv(spool: Spool, id: string, run: number, resumeFrom: string | null): Record<string, string>
+export function childEnv(spool: Spool, id: string, run: number, resumeFrom: string | null): Record<string, string>
 {
     const env: Record<string, string> = {
         SUPERSELF_ATTEMPT_ID: id,
@@ -752,7 +773,7 @@ function tail(file: string, limit = 4_000): string
 
 // The last gate. Publication, verification, and the record all have to hold
 // before this attempt is allowed to say it produced anything.
-async function completeAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, envelope: ResultEnvelope | null): Promise<AttemptResult>
+export async function completeAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, envelope: ResultEnvelope | null): Promise<AttemptResult>
 {
     // Publication and the report are the two things this attempt cannot take
     // back, so ownership is checked once more before either of them.
@@ -796,7 +817,7 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
         return gateFailed(ctx, plan, spool, id, `the result could not be attached to self: ${(error as Error).message}`);
     }
     spool.writeJson("published.json", published);
-    spool.setStatus({ state: "completed", failure: undefined, detail: undefined });
+    spool.setStatus({ state: "completed", failure: undefined, detail: undefined, exitSource: "confirmed" });
     spool.append("events.jsonl", { event: "run.completed", published: published.map((item) => item.name), reported });
     // The completion is exactly-once here, where the report's idempotency
     // already lives, rather than in whichever caller reaches settlement twice.
@@ -814,7 +835,7 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
 function gateFailed(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, reason: string): AttemptResult
 {
     const detail = redact(reason);
-    spool.setStatus({ state: "failed", failure: "validation", detail });
+    spool.setStatus({ state: "failed", failure: "validation", detail, exitSource: "confirmed" });
     spool.append("events.jsonl", { event: "gate.failed", detail });
     recordAttemptEvent(ctx, plan, "run.failed", id, { failure: "validation", detail });
     console.error(`attempt ${id} failed the completion gate: ${detail}`);
@@ -828,6 +849,16 @@ function gateFailed(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: st
 export function settleAttempt(ctx: ProjectContext, spool: Spool): AttemptResult
 {
     const status = spool.status();
+    // Asked before anything is read out of the spool. A result envelope is a
+    // claim the process that wrote it had finished; an owner that disappeared
+    // or went quiet left whatever happened to be on disk at the moment nobody
+    // was watching, so the envelope beside it says nothing about whether the
+    // run reached its end — and that, not a missing file, is why this one
+    // cannot be settled.
+    if (status !== null && status.exitSource !== undefined && status.exitSource !== "confirmed")
+    {
+        throw new CliError(`attempt ${status.attempt} ${status.exitSource === "vanished" ? "disappeared without any process reporting its exit" : "stopped writing its heartbeat while its owner was still there"} — only a confirmed exit says anything about what a run produced, so this attempt cannot be settled through the completion gate`);
+    }
     const plan = spool.readJson<AttemptPlan>("plan.json");
     const envelope = spool.readJson<ResultEnvelope>("result.json");
     const published = spool.readJson<Published[]>("published.json");
