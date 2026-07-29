@@ -1,4 +1,4 @@
-import { carriesCredential, namesSecret, redactHome, redactLiterals, RedactionScope, scopeFor, secretEnvNames } from "./attempt/redact.js";
+import { findCredential, namesSecret, redactHome, redactLiterals, RedactionScope, scopeFor, secretEnvNames } from "./attempt/redact.js";
 import { CliError, SelfEvent } from "./types.js";
 
 // An event is committed, pushed, pulled, and read on machines that were never
@@ -15,6 +15,10 @@ import { CliError, SelfEvent } from "./types.js";
 //
 // A refusal names the key path and never the value: an error message is
 // printed, logged by whatever wrapped the command, and read over a shoulder.
+// Where a pattern matched, the refusal may add the rule and the part of the
+// span the pattern itself fixed — a field name, a vendor prefix, an armour
+// line, never a head taken off the value — so the writer can rephrase instead
+// of guessing.
 
 // Names that say the value beside them came off a machine rather than out of a
 // decision. These are judged by name alone, because the field existing at all
@@ -109,17 +113,20 @@ function assertValue(text: string, at: string, declared: DeclaredSecret[]): void
             throw new CliError(`refusing to record ${at} — it repeats the value the environment variable ${name} holds`);
         }
     }
-    // Held back where redaction is eager, and only there. `carriesCredential`
+    // Held back where redaction is eager, and only there. `findCredential`
     // judges each rule at the span it matched: an explicit encoding —
     // `api_key="abc123secret"`, a header, a vendor-prefixed literal — is
     // refused however short and however ordinary the value reads, while the
     // rules a sentence can trip have to find key material inside their own
     // match. That is what keeps "reduced token counting overhead" recordable
     // in the one log that exists to keep it, without the branch slug in the
-    // same sentence deciding anything.
-    if (carriesCredential(text))
+    // same sentence deciding anything. The refusal carries the rule and the
+    // redacted span, because "rephrase and retry" is the only recourse a
+    // refused writer has, and both are already safe to print.
+    const found = findCredential(text);
+    if (found !== null)
     {
-        throw new CliError(`refusing to record ${at} — its value is shaped like a credential`);
+        throw new CliError(`refusing to record ${at} — its value is shaped like a credential (rule ${found.rule}, matched ${found.preview})`);
     }
 }
 
