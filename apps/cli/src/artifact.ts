@@ -386,6 +386,10 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
     {
         throw new CliError(`artifact file ${record.path} is missing from this store — run \`self sync\` to fetch it`);
     }
-    launchFile(ctx, file);
+    if (!launchFile(ctx, file))
+    {
+        console.log(`${file} — ${record.name} (${record.id}) resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed`);
+        return;
+    }
     console.log(`opened ${record.name} (${record.id})`);
 }
