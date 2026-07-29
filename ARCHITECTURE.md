@@ -116,11 +116,17 @@ concern.
 | `objective.*`, `milestone.*` | the outcome layer | `goals.ts` |
 | `goal.*`, `decision.*`, `convention.*` | core project state | `main.ts` |
 | `report.*` | work reports | `main.ts`, `attempt/gate.ts` |
-| `changeset.*`, `attempt.*`, `lease.*`, `merge.*`, `promotion.*`, `repo.*`, `target.*`, `main.*`, `ci.*`, `review.*` | the integration train — `INTEGRATION_PREFIXES` in `integration.ts` is the list | `train.ts` (changeset), `lane.ts` (attempt, lease, merge, target/main), `promote.ts` (promotion, repo, main), `reviews.ts` (review) |
+| `changeset.*`, `attempt.*`, `lease.*`, `merge.*`, `promotion.*`, `repo.*`, `target.*`, `main.*`, `ci.*`, `review.*` | the integration train — `INTEGRATION_PREFIXES` in `integration.ts` is the list | `train.ts` (changeset), `lane.ts` (attempt, lease, merge, ci/main/target), `promote.ts` (promotion, repo, main), `reviews.ts` (review) |
 
 `integration.ts` reduces the train namespaces; it emits none of them, as the
-layering rule requires of a domain module. `ci.*` is folded but nothing emits it
-yet, so extending it needs an emitter before it means anything.
+layering rule requires of a domain module. `ci.observed` is emitted — along with
+`main.observed` and `target.observed` — by `ingestObservations` in `lane.ts`,
+which builds `` `${item.kind}.observed` `` from the kind that `self integration
+observe ci|main|target` was given; `lane.ts` emits `main.observed` or
+`target.observed` again when a merge advances the target. Because the
+observation site composes the type at runtime, a literal search for `"ci.`
+finds no emitter at all — search for the verb, not the namespace, before
+concluding a namespace is unwritten.
 
 `run.*` and `attempt.*` name two different things and the split is
 deliberate: a *runner attempt* is one launch of a provider under a plan
