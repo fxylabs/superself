@@ -21,11 +21,11 @@ Closes #
 
 <!-- ARCHITECTURE.md states these. Tick what holds; explain anything that does not. -->
 
-- [ ] I consulted [ARCHITECTURE.md](../ARCHITECTURE.md) before writing code
+- [ ] I consulted [ARCHITECTURE.md](https://github.com/fxylabs/superself/blob/main/ARCHITECTURE.md) before writing code
 - [ ] No module imports from a layer above it; no new import cycle
 - [ ] No new flat top-level subsystem — a new subsystem owns a directory with a `commands.ts`
 - [ ] No core module gained an import from a subsystem directory (`attempt/`, `spec/`, `daemon/`)
-- [ ] No second path around a single gate (event append, sanitization, completion refusal, attempt gate, argument parse)
+- [ ] No new path around a single gate (event append, sanitization, completion refusal, attempt gate); any command surface I touched parses through `args.ts` `parseCommand`
 - [ ] New events extend an owned namespace rather than minting a sibling
 - [ ] Helpers reused, not re-derived; functions within 20-30 lines
 - [ ] Proof scripts are checkout-agnostic: no assumed default branch, no assumed local `main`, no assumed git config, no macOS-only tools
