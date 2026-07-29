@@ -7,8 +7,10 @@ import { processStartTime } from "../attempt/tree.js";
 import { buildModel, WorkState } from "../model.js";
 import { ProjectContext } from "../paths.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
-import { listHeads, readGeneration, sealedGeneration, SpecHead, specDir } from "../spec/store.js";
+import { listHeads, SpecHead } from "../spec/store.js";
 import { admitDispatch } from "./circuits.js";
+import { forbiddenRefusal, forbiddenTools } from "./forbidden.js";
+import { generationOf, loadPolicy, OvernightPolicy, policyRefusal, PolicyOutcome, windowSpend, WindowSpend } from "./policy.js";
 import { recordWake, wakeInFlight } from "./state.js";
 
 // Why a work unit did not become a dispatch this tick, or that it did. Every
@@ -27,7 +29,11 @@ export type WakeOutcome =
     | "waiting-reset"
     // The dispatch could not be started at all. Nothing was spent and nothing
     // was recorded, so the next tick issues it again.
-    | "not-started";
+    | "not-started"
+    // Everything the overnight policy owns. These are refusals about the night
+    // rather than about the work, which is why they are named apart from the
+    // gates below them.
+    | PolicyOutcome;
 
 export interface WakeDecision
 {
@@ -35,23 +41,62 @@ export interface WakeDecision
     workSpec: string;
     generation: number;
     outcome: WakeOutcome;
+    detail?: string;
 }
+
+// The outcomes that mean the policy held this generation back. A tick counts
+// them as deferred: nothing was spent and nothing failed, and the next tick
+// inside the window decides again.
+export const POLICY_OUTCOMES: WakeOutcome[] = [
+    "no-policy", "auto-dispatch-off", "outside-window", "project-not-allowed", "risk-not-allowed",
+    "kind-not-allowed", "provider-not-allowed", "model-not-allowed", "retries-above-policy",
+    "at-concurrency-cap", "over-budget", "stopped", "forbidden-action"
+];
 
 // Every work unit with desired state, judged once. Waking is the only step of
 // the tick that starts something, so each refusal below is a reason a person
 // reading `self daemon tick` can act on.
+//
+// The overnight policy is asked before any of them. Nothing this supervisor
+// dispatches is dispatched on its own authority: with no policy in force, or
+// outside the window one declares, the answer is no before the work unit's own
+// state is even reached — and reconcile, settle and release, which spend
+// nothing, carry on regardless.
 export function wakeReady(ctx: ProjectContext, now: Date): WakeDecision[]
 {
     const works = buildModel(ctx.storeDir, ctx.project, now).works;
-    return listHeads(ctx.storeDir, ctx.project).map((head) => decide(ctx, head, works.find((work) => work.id === head.work), now));
+    const policy = loadPolicy(ctx.storeDir, ctx.project);
+    const spend = policy === null ? null : windowSpend(ctx, policy, now);
+    let dispatched = 0;
+    return listHeads(ctx.storeDir, ctx.project).map((head) =>
+    {
+        const decision = decide(ctx, head, works.find((work) => work.id === head.work), { policy, spend, dispatched }, now);
+        dispatched += decision.outcome === "woken" ? 1 : 0;
+        return decision;
+    });
 }
 
-function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined, now: Date): WakeDecision
+// What the policy is being asked against, carried through one tick rather than
+// re-derived per generation: the spend is a fold over the whole window, and a
+// wake set of any size would otherwise re-read the log once per entry.
+interface Night
+{
+    policy: OvernightPolicy | null;
+    spend: WindowSpend | null;
+    dispatched: number;
+}
+
+function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined, night: Night, now: Date): WakeDecision
 {
     const at = { work: head.work, workSpec: head.workSpec, generation: head.generation };
     if (work === undefined || work.status === "done")
     {
         return { ...at, outcome: "not-ready" };
+    }
+    const refusal = nightRefusal(ctx, head, night, now);
+    if (refusal !== null)
+    {
+        return { ...at, ...refusal };
     }
     // A unit blocked on a decision is waiting for a person to answer, and a
     // supervisor that dispatched it anyway would be answering on their behalf.
@@ -88,6 +133,33 @@ function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined
         return { ...at, outcome: admission };
     }
     return { ...at, outcome: dispatch(ctx, head, now) ? "woken" : "not-started" };
+}
+
+// Whether the night permits this generation, before anything about the work
+// unit is considered. Two refusals live here and they are not the same kind of
+// thing: the forbidden-action list is categorical and holds inside the window,
+// on an allowed project, for a unit a person approved during the day — while
+// everything the policy itself says is a bound the operator chose and may
+// change. A generation that is not sealed is left to the gates below, which
+// already refuse it for the reason it is actually refused for.
+function nightRefusal(ctx: ProjectContext, head: SpecHead, night: Night, now: Date): { outcome: WakeOutcome; detail: string } | null
+{
+    if (night.policy === null || night.spend === null)
+    {
+        return { outcome: "no-policy", detail: "no overnight policy is in force — `self overnight set` is what grants unattended dispatch" };
+    }
+    const spec = generationOf(ctx, head);
+    if (spec === null)
+    {
+        return null;
+    }
+    const forbidden = forbiddenTools(spec.capabilities.tools);
+    if (forbidden !== null)
+    {
+        return { outcome: "forbidden-action", detail: forbiddenRefusal(forbidden, `${head.workSpec} generation ${head.generation}`) };
+    }
+    const refusal = policyRefusal(night.policy, spec, ctx.project, night.spend, night.dispatched, now);
+    return refusal === null ? null : { outcome: refusal.outcome, detail: refusal.detail };
 }
 
 // What this machine has already run under the generation that is current now.
@@ -130,20 +202,7 @@ function onlyCapacityRefusals(attempts: GenerationAttempt[]): boolean
 // for the same reason, and waking it would only spend a process to be told so.
 export function providerOf(ctx: ProjectContext, head: SpecHead): string | null
 {
-    const dir = specDir(ctx.storeDir, ctx.project, head.workSpec);
-    const sealed = sealedGeneration(dir, head.generation);
-    if (sealed === null || sealed.sha256 !== head.sha256)
-    {
-        return null;
-    }
-    try
-    {
-        return readGeneration(dir, sealed).provider.name;
-    }
-    catch
-    {
-        return null;
-    }
+    return generationOf(ctx, head)?.provider.name ?? null;
 }
 
 // The dispatch is the CLI's own, run detached: the supervisor schedules and

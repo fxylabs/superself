@@ -54,6 +54,13 @@ git init -q
 SELF project add --name demo --desc "supervision loop harness" > /dev/null
 SELF goal set "prove the supervision loop" > /dev/null
 
+# The wake path dispatches on the operator's authority and never on its own, so
+# every case below that expects a dispatch needs a policy in force. This one is
+# deliberately the widest a policy can be — the whole day, a generous cap — so
+# that what these cases prove stays what they were written to prove; the bounds
+# themselves are proven in overnight-digest.sh.
+SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 8 > /dev/null
+
 STORE="$ROOT/A/ws/.superself"
 LOG_A="$STORE/projects/demo/log.jsonl"
 DEMO="$ROOT/A/ws/demo"
