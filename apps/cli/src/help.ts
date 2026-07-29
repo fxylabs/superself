@@ -186,22 +186,49 @@ export const COMMANDS: CommandHelp[] = [
             },
             {
                 syntax: "work start|block|unblock|done <id>",
-                description: ["move a work unit (block: --on decision|dependency|external [--why w])"]
+                description: [
+                    "move a work unit (block: --on decision|dependency|external [--why w])",
+                    "done is refused while anything the completion check asks for is missing"
+                ]
             },
             {
                 syntax: "work link|unlink <id> --objective o | --milestone m",
                 description: ["state, or withdraw, what a work unit contributes to"]
             },
             { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r' },
-            { syntax: "work accept|decline <proposal-id>", description: ["act on a goal-gap proposal"] }
+            { syntax: "work accept|decline <proposal-id>", description: ["act on a goal-gap proposal"] },
+            { syntax: 'work require <id> "<what the outcome must cover>"', description: ["declare a requirement; prints its id"] },
+            { syntax: 'work revise <id> --requirement r1 --statement "<restated>" --why w', description: ["restate one; its coverage goes stale"] },
+            { syntax: "work retire <id> --requirement r1 --why w" },
+            {
+                syntax: "work met <id> --requirement r1 --why w [--evidence c] [--artifact a] [--report e]",
+                description: ["cover a requirement with evidence the unit already carries"]
+            },
+            { syntax: "work recheck <id> --requirement r1 --why w", description: ["re-judge coverage a revision left stale"] },
+            { syntax: "work approval-required <id> [--why w]", description: ["make this unit wait for a person before dispatch and done"] },
+            { syntax: "work approve <id> [--by name]", description: ["grant it, from an interactive terminal only"] },
+            { syntax: "work policy <id> [--model class] [--fresh-review] [--why w]", description: ["what its implementation had to be"] }
         ],
         detail: [
             "create and move units of work, and state what each contributes to.",
             "`work add` prints the new id.",
             "",
+            "a unit is done only when every live requirement is covered by evidence,",
+            "any approval it waits on has been granted at a terminal, and its",
+            "completion policy is satisfied. A passing attempt never marks work done:",
+            "settlement records what the run produced and frees the unit.",
+            "",
             "  --project <slug>      list or show against this project, from any directory",
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
-            "  --why <text>          detail recorded with the block",
+            "  --why <text>          detail recorded with the block, a revision, or the done",
+            "  --requirement <id>    the requirement `met`, `recheck`, `revise` or `retire` speaks about",
+            "  --statement <text>    the restated requirement a revision records",
+            "  --evidence <hash>     a commit already attached to the unit that covers it",
+            "  --artifact <id>       an artifact already attached to the unit that covers it",
+            "  --report <event-id>   a report already attached to the unit that covers it",
+            "  --model <class>       the model class its implementation attempts had to run under",
+            "  --fresh-review        a review receipt from a session other than the implementer's",
+            "  --by <name>           who granted the approval",
             "  --objective <id>      the objective a linked unit contributes to",
             "  --milestone <id>      the milestone a linked or proposed unit contributes to",
             "  --value <text>        why the proposed work matters",
