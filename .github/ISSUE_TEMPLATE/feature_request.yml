@@ -9,6 +9,8 @@ body:
       value: |
         Describe the problem before proposing an implementation. Opening an issue is not approval to implement it. Wait for `status:accepted` and maintainer assignment before opening a pull request.
 
+        An accepted issue is the contract an implementer works from. Fill in Boundaries, Naming, and Verification so the rules live in the issue rather than nowhere — see [ARCHITECTURE.md](https://github.com/fxylabs/superself/blob/main/ARCHITECTURE.md) and [CONTRIBUTING.md](https://github.com/fxylabs/superself/blob/main/CONTRIBUTING.md).
+
   - type: textarea
     id: problem
     attributes:
@@ -22,7 +24,7 @@ body:
     id: outcome
     attributes:
       label: Desired outcome
-      description: Describe the user-visible result without prescribing the implementation.
+      description: The contract an implementer works from. Describe the user-visible result without prescribing the implementation, concretely enough that two implementers would agree on when it is met.
     validations:
       required: true
 
@@ -54,6 +56,36 @@ body:
       required: true
 
   - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundaries
+      description: What must not change. Name the files, modules, contracts, or behavior an implementation may not touch, and anything explicitly out of scope.
+      placeholder: |
+        - Documentation and templates only; no runtime source changes.
+        - The event log format and the sanitization guard stay as they are.
+    validations:
+      required: true
+
+  - type: textarea
+    id: naming
+    attributes:
+      label: Naming
+      description: Event namespaces, command verbs, ids, and exported types this touches or adds. Write "None" if it introduces no new name. New events extend an owned namespace; they never mint a sibling.
+      placeholder: |
+        - Namespace: extends `work.*`; adds `work.deferred`.
+        - Verb: `self work defer <id>`; ids unchanged.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How an implementation will be shown to satisfy this issue, beyond typecheck and build. Name the proof coverage, the spot-checks, and the observable result.
+    validations:
+      required: true
+
+  - type: textarea
     id: alternatives
     attributes:
       label: Alternatives or prior art
@@ -67,4 +99,8 @@ body:
         - label: I searched existing issues for the same proposal.
           required: true
         - label: This request describes a user problem, not only a preferred technology.
+          required: true
+        - label: I read ARCHITECTURE.md and this proposal does not add a flat top-level subsystem or a second path around a single gate.
+          required: true
+        - label: This issue contains no private path, credential, account identifier, or prompt content.
           required: true

@@ -41,6 +41,25 @@ body:
       required: true
 
   - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundaries
+      description: What must not change. Name the files, modules, contracts, or behavior an implementation may not touch. A pure move states that no behavior changes and no proof assertion changes.
+      placeholder: |
+        - Pure moves and mechanical extraction; no behavior change.
+        - Proof assertions unchanged.
+    validations:
+      required: true
+
+  - type: textarea
+    id: naming
+    attributes:
+      label: Naming
+      description: Event namespaces, command verbs, ids, exported types, and file paths this renames, moves, or adds. Write "None" if nothing is renamed.
+    validations:
+      required: true
+
+  - type: textarea
     id: verification
     attributes:
       label: Verification
@@ -64,4 +83,6 @@ body:
         - label: I searched existing issues for the same maintenance work.
           required: true
         - label: I removed secrets, credentials, active pairing links, and private data.
+          required: true
+        - label: I read ARCHITECTURE.md and this proposal does not add a flat top-level subsystem or a second path around a single gate.
           required: true
