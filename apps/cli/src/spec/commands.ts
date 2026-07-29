@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { parseCommand } from "../args.js";
 import { commitStaged } from "../artifact.js";
 import { withLock } from "../attempt/atomic.js";
 import { AttemptPlan } from "../attempt/plan.js";
@@ -32,9 +33,9 @@ export async function runSpecCommand(rest: string[]): Promise<void>
 {
     switch (rest[0])
     {
-        case "validate": cmdValidate(rest[1]); return;
-        case "apply": cmdApply(rest[1]); return;
-        case "dispatch": await cmdDispatch(rest[1]); return;
+        case "validate": cmdValidate(only(rest.slice(1))); return;
+        case "apply": cmdApply(only(rest.slice(1))); return;
+        case "dispatch": await cmdDispatch(only(rest.slice(1))); return;
         case "list": cmdList(rest.slice(1)); return;
         case "show": cmdShow(rest.slice(1)); return;
         default: throw new CliError(USAGE);
@@ -341,6 +342,14 @@ function requireUnblockedWork(ctx: ProjectContext, id: string): void
         const why = work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`;
         throw new CliError(`${id} is blocked on ${work.blockedOn}${why} — resolve the blocker and \`self work unblock ${id}\` before dispatching`);
     }
+}
+
+// The one argument these verbs take, read through the same parser as every
+// other command: a flag none of them accepts is named before validate reads a
+// file, and before apply or dispatch writes anything at all.
+function only(args: string[]): string | undefined
+{
+    return parseCommand("spec", args, {}, 1).positionals[0];
 }
 
 function required(value: string | undefined, usage: string): string
