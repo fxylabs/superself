@@ -15,7 +15,8 @@ import { CliError } from "../types.js";
 import { AttemptPlan, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
 import { MIN_LITERAL, redact, scopeFor, unredactableSecrets } from "./redact.js";
-import { admitAttempt, backoffFor, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
+import { admitAttempt, backoffFor, BREAKER_DEFAULT, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
+import { settling } from "./settlement.js";
 import { AttemptState, AttemptStatus, createSpool, liveAttemptFor, Spool } from "./spool.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
@@ -36,8 +37,6 @@ export interface AttemptResult
     failure?: FailureClass;
     detail?: string;
 }
-
-const BREAKER_DEFAULT = { threshold: 3, cooldownMs: 60_000 };
 
 // A monotonic per-machine counter. It rides on every receipt and status so a
 // stale runner that wakes up after a newer one took over can be told apart
@@ -349,7 +348,7 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
             {
                 recordProviderSuccess(provider);
             }
-            return await completeAttempt(ctx, plan, spool, id, outcome.envelope);
+            return await beating(spool, plan, () => settling(id, () => completeAttempt(ctx, plan, spool, id, outcome.envelope)));
         }
         unsupported = outcome.declaredOnly && isTransient(outcome.failure) ? unsupported + 1 : 0;
         const exhausted = unsupported >= UNSUPPORTED_TRANSIENT_RUNS;
@@ -381,9 +380,30 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
         spool.append("runs.jsonl", record as unknown as Record<string, unknown>);
         spool.setStatus({ state: "retrying", run, runs: run, failure: outcome.failure, detail: outcome.detail });
         spool.append("events.jsonl", { event: "retry.scheduled", run, failure: outcome.failure, delayMs: backoff.delayMs, capMs: backoff.capMs });
-        await sleep(backoff.delayMs);
+        await beating(spool, plan, () => sleep(backoff.delayMs));
     }
     return failAttempt(ctx, plan, spool, id, last.failure, last.detail, last.observed, options);
+}
+
+// The stretches where this runner is driving the attempt and has no child to
+// watch: the backoff between two runs, and the completion gate after the last
+// one. Both can outlast the window a quiet heartbeat is read as death in — a
+// declared validation runs under the whole preflight bound, and a capped
+// backoff reaches the same order — and the beat the child's watcher wrote
+// stopped when the child closed. Without this the supervisor probing every few
+// seconds declares a healthy runner dead and takes its attempt over mid-gate,
+// leaving the artifact published and the report nowhere.
+async function beating<T>(spool: Spool, plan: AttemptPlan, work: () => Promise<T>): Promise<T>
+{
+    const heart = beat(spool, plan.heartbeatMs);
+    try
+    {
+        return await work();
+    }
+    finally
+    {
+        heart.stop();
+    }
 }
 
 // Reached only once a run has actually ended, so the exit behind it is one
@@ -773,6 +793,12 @@ function tail(file: string, limit = 4_000): string
 
 // The last gate. Publication, verification, and the record all have to hold
 // before this attempt is allowed to say it produced anything.
+//
+// Every caller reaches this behind the attempt's settlement lock (settling() /
+// trySettling()), and a new one has to as well: the idempotence below is a read
+// of the log followed by an append to it, and two settlers that both pass the
+// read attach two reports to a synced, append-only log that cannot take either
+// of them back.
 export async function completeAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, envelope: ResultEnvelope | null): Promise<AttemptResult>
 {
     // Publication and the report are the two things this attempt cannot take
@@ -846,7 +872,20 @@ function gateFailed(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: st
 // verified result nobody knows about. Settlement finishes that attempt from
 // its own spool, and finds its own report already in the log when it was in
 // fact recorded — so running it twice records nothing twice.
-export function settleAttempt(ctx: ProjectContext, spool: Spool): AttemptResult
+export async function settleAttempt(ctx: ProjectContext, spool: Spool): Promise<AttemptResult>
+{
+    const attempt = spool.status()?.attempt;
+    if (attempt === undefined)
+    {
+        throw new CliError("this attempt has no verified result to settle — only an attempt that published and verified its artifacts can be settled");
+    }
+    // Behind the lock every settler takes. The check that finds this attempt's
+    // report already in the log and the append that would put a second one
+    // there are one step only while nothing else can arrive between them.
+    return await settling(attempt, async () => settleUnderLock(ctx, spool));
+}
+
+function settleUnderLock(ctx: ProjectContext, spool: Spool): AttemptResult
 {
     const status = spool.status();
     // Asked before anything is read out of the spool. A result envelope is a

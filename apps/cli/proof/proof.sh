@@ -2012,6 +2012,14 @@ for SUB in "register plan.json" "started at-nope --pid 1" "heartbeat at-nope" "e
 do
     rejects attempt attempt $SUB --bogus
 done
+# and the supervisor's own verbs: `start` launches a detached process and
+# `tick` settles attempts, so a flag none of them accepts has to be refused
+# before any of that, not swallowed into a supervision pass
+for SUB in start stop status tick circuits
+do
+    rejects daemon daemon $SUB --bogus
+done
+SELF daemon status | grep -q "no self daemon is running" || fail "a rejected daemon flag started a supervisor"
 # and the work spec verbs: validate only reads, but apply seals a generation
 # and dispatch spends an attempt, so none of them may reach its body with a
 # flag it never accepted
@@ -2090,5 +2098,10 @@ grep -q "never recorded" "$LOG_A" && fail "a refused --help value still wrote an
 # the repository integration controller replays a real three-branch train, so
 # it builds its own git repository under a root of its own
 bash "$CLI_DIR/proof/integration.sh"
+
+# the supervision loop kills payloads, crashes launchers in the middle of a
+# settlement, and starts and stops a daemon, so it too runs under a machine
+# root of its own
+bash "$CLI_DIR/proof/daemon-loop.sh"
 
 echo "proof OK"
