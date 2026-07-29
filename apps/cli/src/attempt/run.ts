@@ -16,13 +16,17 @@ import { AttemptPlan, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
 import { MIN_LITERAL, redact, scopeFor, unredactableSecrets } from "./redact.js";
 import { admitAttempt, backoffFor, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
-import { AttemptStatus, createSpool, Spool } from "./spool.js";
+import { AttemptStatus, createSpool, liveAttemptFor, Spool } from "./spool.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
 
 export interface RunOptions
 {
     now: Date;
+    // Runs inside the per-work claim, after the work unit is known to be free
+    // and before this attempt becomes observable: the one place an event tied
+    // to the admission is recorded exactly once, however many runners race.
+    onAdmitted?: () => void;
 }
 
 export interface AttemptResult
@@ -75,51 +79,8 @@ function currentFence(file: string): number
 export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options: RunOptions): Promise<AttemptResult>
 {
     const id = runAttemptId();
-    const scope = scopeFor(plan.capabilities.secrets);
-    const spool = new Spool(createSpool(id), scope);
     const identity = identityOf(plan.boundary);
-    const fence = nextFence();
-    spool.claim(fence);
-    writeBrief(spool, plan, id);
-    // The normalized plan, kept beside the attempt so settlement after a crash
-    // works from what this attempt was actually launched with rather than from
-    // a plan file that may since have been edited.
-    spool.writeJson("plan.json", plan);
-    spool.writeJson("attempt.json", {
-        attempt: id,
-        work: plan.work,
-        project: ctx.project,
-        role: plan.role,
-        adapter: adapterOf(plan.boundary),
-        boundaryDigest: identity.digest,
-        policyDigest: policyDigest(plan),
-        // The desired-state generation this attempt was admitted under, when a
-        // spec dispatched it. Snapshot at start: a generation applied while
-        // this attempt runs never reinterprets it, because what it was
-        // admitted under is already on its record.
-        spec: plan.spec,
-        command: plan.command,
-        capabilities: plan.capabilities,
-        artifacts: plan.artifacts,
-        retry: plan.retry,
-        created: options.now.toISOString()
-    });
-    spool.writeJson("status.json", {
-        attempt: id,
-        work: plan.work,
-        project: ctx.project,
-        role: plan.role,
-        state: "preflight",
-        run: 0,
-        runs: 0,
-        fence,
-        nodeId: identity.nodeId,
-        bootId: identity.bootId,
-        pid: process.pid,
-        provider: plan.capabilities.provider?.name,
-        created: options.now.toISOString(),
-        updated: options.now.toISOString()
-    } satisfies AttemptStatus);
+    const { spool, fence } = claimWork(ctx, plan, id, identity, options);
     warnUnredactable(spool, plan);
 
     // The liveness markers cover preflight too. A probe may legitimately take
@@ -142,6 +103,76 @@ export async function runAttempt(ctx: ProjectContext, plan: AttemptPlan, options
         return gated;
     }
     return await driveRuns(ctx, plan, spool, id, options);
+}
+
+// One work unit materializes one attempt at a time, and the gate holds under
+// concurrency: checking the spools and writing the status that same check
+// reads are two steps, so a second runner starting in between would pass the
+// check too. Both happen under a per-work lock, and the first heartbeat is
+// written before the lock is released, so the claim is fully observable the
+// moment it can next be raced.
+function claimWork(
+    ctx: ProjectContext,
+    plan: AttemptPlan,
+    id: string,
+    identity: ReturnType<typeof identityOf>,
+    options: RunOptions
+): { spool: Spool; fence: number }
+{
+    return withLock(join(runnerStateDir(), "locks", `work.${encodeURIComponent(plan.work)}`), () =>
+    {
+        const live = liveAttemptFor(plan.work);
+        if (live !== null)
+        {
+            throw new CliError(`${plan.work} is already being driven by attempt ${live.attempt} (${live.state}) — one work unit materializes one attempt at a time`);
+        }
+        options.onAdmitted?.();
+        const spool = new Spool(createSpool(id), scopeFor(plan.capabilities.secrets));
+        const fence = nextFence();
+        spool.claim(fence);
+        writeBrief(spool, plan, id);
+        // The normalized plan, kept beside the attempt so settlement after a
+        // crash works from what this attempt was actually launched with rather
+        // than from a plan file that may since have been edited.
+        spool.writeJson("plan.json", plan);
+        spool.writeJson("attempt.json", {
+            attempt: id,
+            work: plan.work,
+            project: ctx.project,
+            role: plan.role,
+            adapter: adapterOf(plan.boundary),
+            boundaryDigest: identity.digest,
+            policyDigest: policyDigest(plan),
+            // The desired-state generation this attempt was admitted under,
+            // when a spec dispatched it. Snapshot at start: a generation
+            // applied while this attempt runs never reinterprets it, because
+            // what it was admitted under is already on its record.
+            spec: plan.spec,
+            command: plan.command,
+            capabilities: plan.capabilities,
+            artifacts: plan.artifacts,
+            retry: plan.retry,
+            created: options.now.toISOString()
+        });
+        spool.writeJson("status.json", {
+            attempt: id,
+            work: plan.work,
+            project: ctx.project,
+            role: plan.role,
+            state: "preflight",
+            run: 0,
+            runs: 0,
+            fence,
+            nodeId: identity.nodeId,
+            bootId: identity.bootId,
+            pid: process.pid,
+            provider: plan.capabilities.provider?.name,
+            created: options.now.toISOString(),
+            updated: options.now.toISOString()
+        } satisfies AttemptStatus);
+        spool.heartbeat();
+        return { spool, fence };
+    });
 }
 
 // A declared secret too short to be redacted by value is a coverage gap the

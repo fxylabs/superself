@@ -3,7 +3,8 @@ import { join, relative, resolve, sep } from "node:path";
 import { writeAtomic } from "../attempt/atomic.js";
 import { bootId } from "../attempt/boundary.js";
 import { SpecPin } from "../attempt/plan.js";
-import { AttemptStatus, deadReason, DRIVEN_STATES, listSpools, Spool } from "../attempt/spool.js";
+import { AttemptStatus, isLive, listSpools, Spool } from "../attempt/spool.js";
+import { runnerStateDir } from "../machine.js";
 import { projectStateDir } from "../paths.js";
 import { sha256File } from "../repo.js";
 import { CliError } from "../types.js";
@@ -48,6 +49,16 @@ const GENERATION_DIGITS = 6;
 export function specsRoot(storeDir: string, slug: string): string
 {
     return join(projectStateDir(storeDir, slug), SPECS_SUBDIR);
+}
+
+// One apply at a time per project: everything `spec apply` reads before it
+// seals (HEAD, the sealed set, every other spec's claim on the work unit) is
+// what a concurrent apply is about to change. The lock lives in the machine's
+// runner state, not in the store — the store is committed with `git add -A`,
+// and a lock is per-machine by nature, never synced state.
+export function applyLockFile(slug: string): string
+{
+    return join(runnerStateDir(), "locks", `spec-apply.${encodeURIComponent(slug)}`);
 }
 
 // The id reaches the filesystem here. A registry slug is checked the same way
@@ -131,19 +142,20 @@ export function readGeneration(dir: string, entry: SealedGeneration): WorkSpec
 // content-addressed by construction rather than by a recorded claim.
 export function seal(dir: string, spec: WorkSpec, digest: string, now: Date): () => void
 {
+    // Refused here as well as in the apply flow above it: the apply lock makes
+    // two sealers of one generation impossible, and this keeps a caller that
+    // somehow bypassed the lock at a refusal instead of a poisoned store.
+    const sealed = listGenerations(dir).find((entry) => entry.generation === spec.generation);
+    if (sealed !== undefined)
+    {
+        throw new CliError(`generation ${spec.generation} of ${spec.workSpecId} is already sealed as ${sealed.sha256.slice(0, 12)} — a generation is written once and never again`);
+    }
     const createdRoot = mkdirSync(dir, { recursive: true });
     const blob = join(dir, `${String(spec.generation).padStart(GENERATION_DIGITS, "0")}-${digest}.json`);
     const headFile = join(dir, HEAD_FILE);
     const previousHead = existsSync(headFile) ? readFileSync(headFile, "utf8") : null;
-    const head: SpecHead = {
-        workSpec: spec.workSpecId,
-        work: spec.workId,
-        generation: spec.generation,
-        sha256: digest,
-        applied: now.toISOString()
-    };
     writeAtomic(blob, specBody(spec));
-    writeAtomic(headFile, JSON.stringify(head, null, 2) + "\n");
+    advanceHead(dir, spec, digest, now);
     return (): void =>
     {
         rmSync(blob, { force: true });
@@ -160,6 +172,22 @@ export function seal(dir: string, spec: WorkSpec, digest: string, now: Date): ()
             rmSync(createdRoot, { recursive: true, force: true });
         }
     };
+}
+
+// The HEAD advance on its own, for the repair path: a crash that interrupted
+// an apply after the generation blob was durable left HEAD behind, and the
+// blob — verified against the digest in its own name — carries everything the
+// pointer records.
+export function advanceHead(dir: string, spec: WorkSpec, digest: string, now: Date): void
+{
+    const head: SpecHead = {
+        workSpec: spec.workSpecId,
+        work: spec.workId,
+        generation: spec.generation,
+        sha256: digest,
+        applied: now.toISOString()
+    };
+    writeAtomic(join(dir, HEAD_FILE), JSON.stringify(head, null, 2) + "\n");
 }
 
 export function listHeads(storeDir: string, slug: string): SpecHead[]
@@ -198,30 +226,3 @@ export function pinnedAttempts(workSpecId: string): PinnedAttempt[]
     });
 }
 
-// One work unit materializes one attempt at a time. Every attempt counts, not
-// only the ones a spec dispatched: a work unit already being driven is busy
-// whoever launched the runner. Nothing here reaches into another machine's
-// spools, and it does not need to — an attempt is owned by the machine running
-// it, and that is the machine a dispatch is issued from.
-export function liveAttemptFor(work: string): AttemptStatus | null
-{
-    const boot = bootId();
-    const now = Date.now();
-    for (const spool of listSpools())
-    {
-        const status = spool.status();
-        if (status !== null && status.work === work && isLive(spool, status, boot, now))
-        {
-            return status;
-        }
-    }
-    return null;
-}
-
-// Liveness is decided by the same evidence recovery uses, never by the state
-// the spool last managed to write: an attempt whose runner died is not holding
-// the work unit against the next dispatch.
-function isLive(spool: Spool, status: AttemptStatus, boot: string, now: number): boolean
-{
-    return DRIVEN_STATES.includes(status.state) && deadReason(spool, status, boot, now) === null;
-}

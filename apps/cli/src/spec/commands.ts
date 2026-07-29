@@ -1,16 +1,21 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { commitStaged } from "../artifact.js";
+import { withLock } from "../attempt/atomic.js";
 import { AttemptPlan } from "../attempt/plan.js";
 import { runAttempt } from "../attempt/run.js";
+import { liveAttemptFor } from "../attempt/spool.js";
 import { buildModel, WorkState } from "../model.js";
-import { ProjectContext, requireProject } from "../paths.js";
+import { ProjectContext, projectStateDir, requireProject } from "../paths.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { dim, styled } from "../style.js";
 import { CliError } from "../types.js";
 import {
+    advanceHead,
+    applyLockFile,
     listGenerations,
     listHeads,
-    liveAttemptFor,
     pinnedAttempts,
     readGeneration,
     readHead,
@@ -63,6 +68,17 @@ function cmdApply(file: string | undefined): void
     requireOpenWork(ctx, spec.workId);
     const dir = specDir(ctx.storeDir, ctx.project, spec.workSpecId);
     const digest = specDigest(spec);
+    // Everything from here reads state a concurrent apply is about to change —
+    // HEAD, the sealed set, the other specs' claims — and then writes it. Two
+    // appliers passing those reads together would seal one generation number
+    // twice, and a generation sealed twice with different content is a store
+    // no repair verb can un-poison.
+    withLock(applyLockFile(ctx.project), () => applyUnderLock(ctx, spec, dir, digest));
+}
+
+function applyUnderLock(ctx: ProjectContext, spec: WorkSpec, dir: string, digest: string): void
+{
+    repairInterruptedApply(ctx, dir);
     const head = readHead(dir);
     if (head !== null && head.work !== spec.workId)
     {
@@ -103,6 +119,72 @@ function cmdApply(file: string | undefined): void
     console.log(`${spec.workSpecId} generation ${spec.generation} applied — ${digest.slice(0, 12)} is now HEAD for ${spec.workId}`);
 }
 
+// An apply is three durable writes — the generation blob, the HEAD advance,
+// the spec.applied event — and a crash can stop after any of them. The blob is
+// the journal entry: written first, content-addressed, and read by nothing
+// until HEAD points at it, so a store holding a blob past HEAD is fully-before
+// to every reader. The next apply completes the interrupted commit here, under
+// the apply lock, instead of misreading the blob as "already applied" and
+// leaving a spec that can never advance again.
+function repairInterruptedApply(ctx: ProjectContext, dir: string): void
+{
+    const latest = listGenerations(dir).at(-1);
+    if (latest === undefined)
+    {
+        return;
+    }
+    const head = readHead(dir);
+    if (head !== null && head.generation >= latest.generation && appliedEventRecorded(ctx, head.workSpec, latest))
+    {
+        return;
+    }
+    const spec = readGeneration(dir, latest);
+    if (head === null || head.generation < latest.generation)
+    {
+        advanceHead(dir, spec, latest.sha256, new Date());
+    }
+    if (!appliedEventRecorded(ctx, spec.workSpecId, latest))
+    {
+        recordEvent(
+            ctx,
+            makeEvent(ctx.project, "spec.applied", { spec: spec.workSpecId, generation: latest.generation, sha256: latest.sha256, requestedModel: spec.requestedModel }, { work: spec.workId }),
+            `${spec.workSpecId} generation ${latest.generation} (completing an interrupted apply)`
+        );
+    }
+}
+
+// Whether the log already admits this generation. The sealed blob and the
+// HEAD pointer answer from the store tree; the event is the one leg of the
+// apply that only the log itself can answer for.
+function appliedEventRecorded(ctx: ProjectContext, workSpecId: string, sealed: { generation: number; sha256: string }): boolean
+{
+    const log = join(projectStateDir(ctx.storeDir, ctx.project), "log.jsonl");
+    if (!existsSync(log))
+    {
+        return false;
+    }
+    return readFileSync(log, "utf8")
+        .split("\n")
+        .filter((line) => line.includes(sealed.sha256))
+        .some((line) => isAppliedEvent(line, workSpecId, sealed));
+}
+
+function isAppliedEvent(line: string, workSpecId: string, sealed: { generation: number; sha256: string }): boolean
+{
+    try
+    {
+        const event = JSON.parse(line);
+        return event.type === "spec.applied"
+            && event.payload?.spec === workSpecId
+            && event.payload?.generation === sealed.generation
+            && event.payload?.sha256 === sealed.sha256;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
 // The only path from desired state to a running process. The generation is read
 // once, compiled once, and pinned onto the attempt before the provider is
 // reached, so an apply that lands while this runs changes what the next
@@ -119,12 +201,17 @@ async function cmdDispatch(id: string | undefined): Promise<void>
     }
     const plan: AttemptPlan = compileSpec(spec, ctx.projectDir);
     plan.spec = pinFor(spec, head.sha256);
-    recordEvent(
-        ctx,
-        makeEvent(ctx.project, "spec.dispatched", { spec: head.workSpec, generation: head.generation, sha256: head.sha256, requestedModel: spec.requestedModel }, { work: head.work }),
-        `${head.workSpec} generation ${head.generation} dispatched`
-    );
-    const result = await runAttempt(ctx, plan, { now: new Date() });
+    // Recorded inside the per-work claim: a dispatch that loses the race for
+    // the work unit is a refusal, and a refusal spends no spec.dispatched
+    // event — however close together the racers started.
+    const result = await runAttempt(ctx, plan, {
+        now: new Date(),
+        onAdmitted: () => recordEvent(
+            ctx,
+            makeEvent(ctx.project, "spec.dispatched", { spec: head.workSpec, generation: head.generation, sha256: head.sha256, requestedModel: spec.requestedModel }, { work: head.work }),
+            `${head.workSpec} generation ${head.generation} dispatched`
+        )
+    });
     if (result.state !== "completed")
     {
         process.exitCode = 1;
