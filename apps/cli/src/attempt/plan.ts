@@ -49,6 +49,18 @@ export interface RetryPlan
     maxMs: number;
 }
 
+// The exact desired-state generation an attempt was admitted under. Set by
+// `self spec dispatch` at the moment it compiles, and deliberately not read out
+// of a plan file: a pin is what the spec store says was current when the run
+// started, never something a hand-written plan can claim for itself.
+export interface SpecPin
+{
+    workSpec: string;
+    generation: number;
+    sha256: string;
+    requestedModel: string;
+}
+
 export interface AttemptPlan
 {
     work: string;
@@ -63,6 +75,7 @@ export interface AttemptPlan
     runTimeoutMs: number;
     heartbeatMs: number;
     resume: boolean;
+    spec?: SpecPin;
 }
 
 export function readPlan(file: string): AttemptPlan
