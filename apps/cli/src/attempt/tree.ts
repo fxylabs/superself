@@ -16,20 +16,29 @@ export interface OwnedTree
     // earlier fence belongs to a previous run and is never this one's.
     attempt: string;
     fence: number;
-    // When the launch that owns this group happened. A group id is only
-    // reserved while the group has members, so a group that empties can have
-    // its number handed to somebody else — and the one thing that tells the
-    // two apart is that nothing this launch started can predate the launch.
-    // Null where the process table could not answer, and then no member can be
-    // qualified this way.
+    // The claimed payload itself: its pid, and when the process table said it
+    // started. The instant refuses two impostors at once — a member older
+    // than the launch is a pre-existing sibling in a shared group, and a
+    // process wearing the payload's own pid at a different instant is a
+    // reused pid, not the payload. Null where the table could not answer,
+    // and then no member can be qualified this way.
+    pid: number;
     startedAt: string | null;
+    // When the process leading the group started. A group id is only
+    // reserved while the group has members, so a group that empties can have
+    // its number handed to somebody else — and everything in that new group
+    // starts after this launch, so ordering alone cannot refuse it. What a
+    // new group cannot fake is its leader: a group with id N is created by a
+    // process with pid N, so a leader holding this number who did not start
+    // when the recorded one did is a new group wearing this launch's number.
+    leaderStartedAt: string | null;
 }
 
 let cachedGroup: number | null = null;
 
-export function ownedTree(attempt: string, fence: number, pgid: number, startedAt: string | null): OwnedTree
+export function ownedTree(attempt: string, fence: number, pid: number, pgid: number, startedAt: string | null, leaderStartedAt: string | null): OwnedTree
 {
-    return { pgid, nodeId: nodeId(), bootId: bootId(), attempt, fence, startedAt };
+    return { pgid, nodeId: nodeId(), bootId: bootId(), attempt, fence, pid, startedAt, leaderStartedAt };
 }
 
 // Whether a pid holds a running process at all. A pid this process may not
@@ -98,6 +107,48 @@ export function treeTerminate(tree: OwnedTree | null, signal: NodeJS.Signals): b
     }
 }
 
+// How long a group that ignored SIGTERM may take to close what it was writing
+// before it is killed outright — the same grace the runner gives its own child.
+const CONTAIN_GRACE_MS = 2_000;
+
+const CONTAIN_POLL_MS = 50;
+
+// Containment as an operation rather than a single signal: TERM first, KILL
+// for whatever ignored it, and the pids still standing afterwards are the
+// answer. A caller that gets any back must not treat the group as spent —
+// releasing the work unit over a live group would seat a second owner beside
+// the processes of the first.
+export async function treeContain(tree: OwnedTree | null): Promise<number[]>
+{
+    for (const signal of ["SIGTERM", "SIGKILL"] as NodeJS.Signals[])
+    {
+        if (!treeAlive(tree))
+        {
+            return [];
+        }
+        treeTerminate(tree, signal);
+        if (await drained(tree))
+        {
+            return [];
+        }
+    }
+    return treeMembers(tree) ?? [];
+}
+
+async function drained(tree: OwnedTree | null): Promise<boolean>
+{
+    const deadline = Date.now() + CONTAIN_GRACE_MS;
+    while (Date.now() < deadline)
+    {
+        if (!treeAlive(tree))
+        {
+            return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, CONTAIN_POLL_MS));
+    }
+    return false;
+}
+
 // The pids still in the group, so a refusal to settle can say how much of the
 // run is still running rather than only that something is. Null when the
 // process table cannot be read at all, which is not the same answer as none.
@@ -112,16 +163,71 @@ export function treeMembers(tree: OwnedTree | null): number[] | null
     {
         return null;
     }
-    const members: number[] = [];
+    const rows: TableRow[] = [];
     for (const line of table.split("\n"))
     {
         const fields = /^\s*(\d+)\s+(\d+)\s+(\S.*)$/.exec(line);
-        if (fields !== null && Number.parseInt(fields[2], 10) === tree.pgid && startedWithLaunch(tree, fields[3]))
+        if (fields !== null)
         {
-            members.push(Number.parseInt(fields[1], 10));
+            rows.push({ pid: Number.parseInt(fields[1], 10), pgid: Number.parseInt(fields[2], 10), lstart: fields[3].trim() });
         }
     }
-    return members;
+    if (groupRecycled(tree, rows))
+    {
+        return [];
+    }
+    return rows
+        .filter((row) => row.pgid === tree.pgid && startedWithLaunch(tree, row.lstart) && !reusedPayloadPid(tree, row))
+        .map((row) => row.pid);
+}
+
+interface TableRow
+{
+    pid: number;
+    pgid: number;
+    lstart: string;
+}
+
+// The one identity a recycled group cannot fake. Every process in a group
+// handed out after this launch emptied it starts after the launch, so the
+// ordering guard below passes all of them — but a group with id N is created
+// by a process with pid N, and a leader holding this number who started at a
+// different instant than the recorded one is a new group wearing the old
+// number. A leader that is merely gone proves nothing either way: the group
+// id stays reserved while any member remains, so members without a leader
+// are this launch's own survivors.
+function groupRecycled(tree: OwnedTree, rows: TableRow[]): boolean
+{
+    const recorded = tree.leaderStartedAt ?? null;
+    if (recorded === null)
+    {
+        return false;
+    }
+    const leader = rows.find((row) => row.pid === tree.pgid);
+    return leader !== undefined && !sameInstant(leader.lstart, recorded);
+}
+
+// A process wearing the claimed payload's pid but started at another instant
+// is whoever the kernel handed that number to after the payload died — never
+// the payload.
+function reusedPayloadPid(tree: OwnedTree, row: TableRow): boolean
+{
+    const recorded = tree.startedAt ?? null;
+    return row.pid === tree.pid && recorded !== null && !sameInstant(row.lstart, recorded);
+}
+
+// ps reports lstart to the second, and the same process answers with the same
+// second every time it is asked — the slack below only absorbs a parser that
+// rendered the instant differently between the two reads.
+function sameInstant(observed: string, recorded: string): boolean
+{
+    const left = Date.parse(observed.trim());
+    const right = Date.parse(recorded.trim());
+    if (Number.isFinite(left) && Number.isFinite(right))
+    {
+        return Math.abs(left - right) < 1_000;
+    }
+    return observed.trim() === recorded.trim();
 }
 
 // ps reports whole seconds and a descendant can be stamped in the same second

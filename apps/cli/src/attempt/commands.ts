@@ -8,7 +8,7 @@ import { PreflightReceipt } from "./preflight.js";
 import { readBreaker, resetBreaker } from "./retry.js";
 import { AttemptStatus, deadVerdict, listSpools, openSpool, ownerOf, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
 import { nextFence, runAttempt, settleAttempt } from "./run.js";
-import { treeTerminate } from "./tree.js";
+import { treeAlive, treeContain, treeTerminate } from "./tree.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { CliContext, ProjectContext, requireProject } from "../paths.js";
 import { dim, green, red, styled, yellow } from "../style.js";
@@ -28,7 +28,7 @@ export async function runAttemptCommand(rest: string[]): Promise<void>
         case "directive": cmdDirective(rest.slice(1)); return;
         case "cancel": cmdCancel(rest[1]); return;
         case "settle": cmdSettle(rest[1]); return;
-        case "recover": cmdRecover(); return;
+        case "recover": await cmdRecover(); return;
         case "prune": cmdPrune(rest.slice(1)); return;
         case "retention": cmdRetention(rest[1]); return;
         case "breaker": cmdBreaker(rest.slice(1)); return;
@@ -254,7 +254,7 @@ function cmdSettle(id: string | undefined): void
 // A crash or a restart leaves a spool that still says `running`. Nothing here
 // may promote such an attempt to success: the only honest verdict is that it
 // exited without being reconciled, and that is what the work record shows.
-function cmdRecover(): void
+async function cmdRecover(): Promise<void>
 {
     const ctx = requireProject(process.cwd());
     const boot = bootId();
@@ -272,6 +272,23 @@ function cmdRecover(): void
         {
             continue;
         }
+        // The terminal write below releases the work unit, and a dead verdict
+        // does not mean a dead group: an owner that went quiet may still be
+        // running everything it started. Whatever is still alive is contained
+        // before the unit is let go, and an attempt whose group rides out the
+        // containment is left held rather than settled — releasing it would
+        // seat a second owner beside the processes of the first.
+        const owner = ownerOf(spool);
+        if (owner !== null && treeAlive(owner))
+        {
+            const survivors = await treeContain(owner);
+            spool.append("events.jsonl", { event: "run.contained", contained: survivors.length === 0 });
+            if (survivors.length > 0)
+            {
+                console.error(`attempt ${status.attempt} is not being driven (${verdict.reason}) but ${survivors.length} process(es) its launch started survived containment (pid ${survivors.join(", ")}) — it keeps the work unit until they are gone`);
+                continue;
+            }
+        }
         // Taking the attempt over, not just relabelling it: a runner that was
         // wrongly declared dead, or one that comes back between the check and
         // the write, finds a fence newer than its own and stops rather than
@@ -280,8 +297,17 @@ function cmdRecover(): void
         // What is recorded beside the verdict is how it was reached. Neither an
         // owner that disappeared nor one that went quiet said anything about
         // what its process produced, and settlement refuses both on that
-        // ground rather than on the state alone.
-        spool.setStatus({ state: "exited-unreconciled", failure: "unknown", detail: verdict.reason, exitSource: verdict.exitSource, fence: nextFence() });
+        // ground rather than on the state alone — while an exit the launcher
+        // did report keeps its source and its code, and only that record may
+        // carry one.
+        spool.setStatus({
+            state: "exited-unreconciled",
+            failure: "unknown",
+            detail: verdict.reason,
+            exitSource: verdict.exitSource,
+            exitCode: verdict.exitSource === "confirmed" ? status.exitCode : undefined,
+            fence: nextFence()
+        });
         spool.append("events.jsonl", { event: "run.recovered", detail: verdict.reason, exitSource: verdict.exitSource });
         recordRecovery(ctx, status, verdict.reason);
         recovered++;

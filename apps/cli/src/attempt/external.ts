@@ -8,7 +8,7 @@ import { adapterOf, runPreflight } from "./preflight.js";
 import { redact, scopeFor } from "./redact.js";
 import { AttemptResult, blockOnCapability, childEnv, claimWorkUnit, completeAttempt, failAttempt, localChecks, nextFence, prepareSpool, recordAttemptEvent, RunOptions } from "./run.js";
 import { AttemptStatus, openSpool, ownerOf, OWNER_FILE, Spool } from "./spool.js";
-import { alive, OwnedTree, ownedTree, processGroup, processStartTime } from "./tree.js";
+import { alive, OwnedTree, ownedTree, processGroup, processStartTime, treeAlive, treeContain } from "./tree.js";
 import { CliError } from "../types.js";
 
 type ProjectContext = CliContext & { project: string; projectDir: string };
@@ -65,6 +65,25 @@ export function claimStarted(ctx: ProjectContext, id: string, pid: number): Atte
     {
         throw new CliError(`no process ${pid} is running — an attempt is claimed by the launcher that started it, while it is still there to claim`);
     }
+    // The pid leads its own group when the launcher started it detached, and
+    // is a member of somebody else's when it did not. Either way the group is
+    // read from the kernel rather than assumed, and the launch instant is
+    // read with it — and the reads race the process. A pid that died between
+    // the liveness check and these reads answers nothing, and a claim
+    // recorded without its launch instant has no recycled-group guard for
+    // the rest of its life, so a claim the table cannot time is refused
+    // rather than taken blind.
+    const pgid = processGroup(pid);
+    const startedAt = processStartTime(pid);
+    if (pgid === null || startedAt === null || !alive(pid))
+    {
+        throw new CliError(`the process table could not time process ${pid} — an attempt is claimed while its process is there to be read, so start it again and claim it then`);
+    }
+    // The launch instant of whoever leads the group, beside the payload's
+    // own: a recycled group id arrives with a new leader wearing the same
+    // number, and the leader's start is the identity that refuses it. Where
+    // the payload leads its own group the two instants are one.
+    const leaderStartedAt = pgid === pid ? startedAt : processStartTime(pgid);
     // The same per-work claim the runner takes for its own child: admission
     // and the writes that make this claim observable happen under the one
     // lock every claim of the unit serializes on.
@@ -72,12 +91,7 @@ export function claimStarted(ctx: ProjectContext, id: string, pid: number): Atte
     {
         const fence = nextFence();
         spool.claim(fence);
-        // The pid leads its own group when the launcher started it detached, and
-        // is a member of somebody else's when it did not. Either way the group is
-        // read from the kernel rather than assumed, and the launch instant is read
-        // with it: a group id handed out again after this one emptied is what the
-        // instant exists to refuse.
-        const tree = ownedTree(id, fence, processGroup(pid) ?? pid, processStartTime(pid));
+        const tree = ownedTree(id, fence, pid, pgid, startedAt, leaderStartedAt);
         spool.writeJson(OWNER_FILE, tree);
         spool.heartbeat(pid);
         const next = spool.setStatus({ state: "running", run: 1, runs: 1, fence, pid });
@@ -124,6 +138,21 @@ export async function externalExited(ctx: ProjectContext, id: string, code: numb
     spool.claim(owner.fence);
     spool.setStatus({ exitSource: "confirmed", exitCode: code });
     spool.append("events.jsonl", { event: "run.ended", run: status.run, exit: code, external: true });
+    // The exit the launcher watched was its process's, not the whole
+    // launch's: a child the payload left in its group is still running right
+    // now, and settlement below ends in a terminal write that releases the
+    // work unit. Whatever survived is contained first, and settlement is
+    // refused while anything rides out the containment — the confirmed exit
+    // above keeps, and reporting again once the group is gone finishes it.
+    if (treeAlive(owner))
+    {
+        const survivors = await treeContain(owner);
+        spool.append("events.jsonl", { event: "run.contained", contained: survivors.length === 0 });
+        if (survivors.length > 0)
+        {
+            throw new CliError(`attempt ${id} still has ${survivors.length} process(es) its launch started (pid ${survivors.join(", ")}) — they survived containment, so report the exit again once they are gone`);
+        }
+    }
     const envelope = spool.readJson<ResultEnvelope>("result.json");
     if (code === 0 && envelope !== null && envelope.status === "completed")
     {

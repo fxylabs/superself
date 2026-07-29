@@ -1328,6 +1328,18 @@ launch "$AT_EXTFAIL" && fail "an externally launched attempt that exited non-zer
 [ "$(count_events report.added)" -eq "$REPORTS_BEFORE" ] || fail "a failed external exit attached the envelope its run left behind as a report"
 [ "$(count_events run.completed)" -eq "$COMPLETED_BEFORE" ] || fail "a failed external exit claimed a completion"
 
+# the exit the launcher watched was its process's, not the whole launch's: a
+# background process the payload left in its group is still running when the
+# exit is reported, and settlement ends in a write that releases the work
+# unit. What survived the payload is contained before anything is let go.
+plan "$ROOT/p-linger.json" "mode=linger" "dest=$ROOT/dest/linger.md" "orphanfile=$ROOT/linger-orphan"
+AT_LINGER="$(SELF attempt register "$ROOT/p-linger.json")"
+launch "$AT_LINGER" || fail "an exit reported over a surviving group member did not settle after containing it"
+[ "$(attempt_state "$AT_LINGER")" = "completed" ] || fail "a contained launch did not reach the completed state"
+ORPHAN_PID="$(cat "$ROOT/linger-orphan")"
+kill -0 "$ORPHAN_PID" 2>/dev/null && fail "settling an external exit released the work unit while a process its launch started was still running"
+kill -9 "$ORPHAN_PID" 2>/dev/null || true
+
 # a launcher that walked away: the process finished and nobody ever reported
 # its exit, so nothing may be concluded from what is on disk
 plan "$ROOT/p-vanish.json" "mode=ok" "dest=$ROOT/dest/vanish.md"
@@ -1348,17 +1360,43 @@ echo "$VANISHED_SETTLE" | grep -q "only a confirmed exit" || fail "an attempt wh
 [ -f "$ROOT/dest/vanish.md" ] && fail "an unconfirmed exit published the artifact its process left staged"
 
 # and a live owner that stopped being watched is a third answer again: the
-# process is still there, and nothing is driving the attempt
+# process is still there, and nothing is driving the attempt. The terminal
+# write of recovery releases the work unit, so recovery must first contain
+# what the launch started — a unit released over a live group would seat a
+# second owner beside the processes of the first.
 plan "$ROOT/p-quiet.json" "mode=slow"
 AT_QUIET="$(SELF attempt register "$ROOT/p-quiet.json")"
 launch "$AT_QUIET" --abandon --pidfile="$ROOT/quiet-pid" > /dev/null || fail "the unwatched launch was never claimed"
 QUIET_PID="$(cat "$ROOT/quiet-pid")"
 node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,JSON.stringify({ts:new Date(Date.now()-120000).toISOString(),pid:Number(process.argv[2])},null,2))' "$(spool_of "$AT_QUIET")/heartbeat.json" "$QUIET_PID"
+kill -0 "$QUIET_PID" 2>/dev/null || fail "the stale-heartbeat case proves nothing if its process had already exited"
 SELF attempt recover > /dev/null
 [ "$(attempt_state "$AT_QUIET")" = "exited-unreconciled" ] || fail "an attempt nobody was heartbeating for was not recovered"
 [ "$(exit_record "$AT_QUIET")" = "stale" ] || fail "a stale heartbeat was not told apart from a process that disappeared"
-kill -0 "$QUIET_PID" 2>/dev/null || fail "the stale-heartbeat case proves nothing if its process had already exited"
+kill -0 "$QUIET_PID" 2>/dev/null && fail "recovery released the work unit while the process the launch started was still running"
+# a recovered attempt is terminal and holds the work unit no longer: the very
+# next scenario claims this same unit, and would be refused if it were held
 kill -9 "$QUIET_PID" 2>/dev/null || true
+
+# the crash window inside `self attempt exited`: the launcher reported the
+# exit, the status carries it as confirmed, and the process died before the
+# terminal write. What was witnessed must survive recovery — reclassified as
+# a disappearance it would carry a code nobody reported, and a result the
+# gate already published would be forever unsettleable.
+plan "$ROOT/p-window.json" "mode=ok" "dest=$ROOT/dest/window.md"
+AT_WINDOW="$(SELF attempt register "$ROOT/p-window.json")"
+launch "$AT_WINDOW" --abandon --pidfile="$ROOT/window-pid" > /dev/null || fail "the crash-window launch was never claimed"
+WINDOW_PID="$(cat "$ROOT/window-pid")"
+for _ in $(seq 1 200)
+do
+    kill -0 "$WINDOW_PID" 2>/dev/null || break
+    sleep 0.1
+done
+kill -0 "$WINDOW_PID" 2>/dev/null && fail "the crash-window process never finished"
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.exitSource="confirmed";s.exitCode=0;fs.writeFileSync(f,JSON.stringify(s,null,2))' "$(spool_of "$AT_WINDOW")/status.json"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_WINDOW")" = "exited-unreconciled" ] || fail "a confirmed exit whose settlement crashed was not recovered"
+[ "$(exit_record "$AT_WINDOW")" = "confirmed (code 0)" ] || fail "recovery rewrote an exit the launcher reported, or dropped the code it carried"
 
 # a process group id is only reserved while the group has members, so a group
 # that empties can have its number handed to somebody else. Nothing a launch
@@ -1377,6 +1415,27 @@ SELF attempt recover > /dev/null
 [ "$(exit_record "$AT_RECYCLE")" = "vanished" ] || fail "a recycled process group was counted as this launch's own"
 kill -9 "$RECYCLE_PID" 2>/dev/null || true
 
+# and the direction a real recycle takes: the number is handed out only after
+# this launch's group emptied, so everything in the stranger group started
+# after the launch and ordering alone refuses none of it. What a new group
+# cannot fake is its leader — a group with id N is created by a process with
+# pid N, and a leader at the wrong instant is a new group wearing this
+# launch's number. Moving the recorded launch into the past makes the live
+# group exactly that stranger.
+plan "$ROOT/p-recycle2.json" "mode=slow"
+AT_RECYCLE2="$(SELF attempt register "$ROOT/p-recycle2.json")"
+launch "$AT_RECYCLE2" --abandon --pidfile="$ROOT/recycle2-pid" > /dev/null || fail "the post-launch recycle launch was never claimed"
+RECYCLE2_PID="$(cat "$ROOT/recycle2-pid")"
+node -e 'const fs=require("fs");const f=process.argv[1];const o=JSON.parse(fs.readFileSync(f,"utf8"));const past=new Date(Date.now()-3600000).toISOString();o.startedAt=past;o.leaderStartedAt=past;fs.writeFileSync(f,JSON.stringify(o,null,2))' "$(spool_of "$AT_RECYCLE2")/owner.json"
+CONTAIN2="$(SELF attempt cancel "$AT_RECYCLE2")"
+echo "$CONTAIN2" | grep -q "no signal was sent" || fail "containment was aimed at a group recycled after this launch emptied it"
+kill -0 "$RECYCLE2_PID" 2>/dev/null || fail "a stranger group younger than the recorded launch was signalled by this attempt's cancel"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_RECYCLE2")" = "exited-unreconciled" ] || fail "an attempt whose group was recycled after its launch was left claiming a live owner"
+[ "$(exit_record "$AT_RECYCLE2")" = "vanished" ] || fail "a group recycled after the launch was counted as this launch's own"
+kill -0 "$RECYCLE2_PID" 2>/dev/null || fail "recovery contained a group this launch does not own"
+kill -9 "$RECYCLE2_PID" 2>/dev/null || true
+
 # one live owner per work unit. Two owners driving one unit would each publish
 # and each attach a report against the same outcome, and neither would know.
 plan "$ROOT/p-lease.json" "mode=slow"
@@ -1385,6 +1444,11 @@ plan "$ROOT/p-lease2.json" "mode=slow"
 AT_LEASE2="$(SELF attempt register "$ROOT/p-lease2.json")"
 launch "$AT_LEASE" --abandon --pidfile="$ROOT/lease-pid" > /dev/null || fail "the leasing launch was never claimed"
 LEASE_PID="$(cat "$ROOT/lease-pid")"
+# a claim records the identity every later ownership question is answered
+# from: the payload's pid and instant, and the group leader's instant. A
+# claim the process table could not time is refused at claim, so no owner
+# record without them can exist.
+node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(typeof o.pid!=="number"||typeof o.startedAt!=="string"||typeof o.leaderStartedAt!=="string"){process.exit(1);}' "$(spool_of "$AT_LEASE")/owner.json" || fail "a claim was taken without the identity the recycled-group guard is built on"
 # a live external owner holds the work unit it is driving: the claim below is
 # refused for exactly that reason
 CONTENDER="$(SELF attempt started "$AT_LEASE2" --pid "$LEASE_PID" 2>&1 || true)"
