@@ -267,7 +267,7 @@ export function listSpools(): Spool[]
 // The states in which a spool claims a runner is still driving it. Only these
 // can be recovered, and only these are exempt from retention while they are
 // actually live.
-const DRIVEN_STATES: AttemptState[] = ["preflight", "running", "retrying"];
+export const DRIVEN_STATES: AttemptState[] = ["preflight", "running", "retrying"];
 
 // A heartbeat this old, from a runner that is supposed to be writing one every
 // second, means nobody is driving this attempt any more.
@@ -297,6 +297,34 @@ export function deadReason(spool: Spool, status: AttemptStatus, boot: string, no
         return `no heartbeat for ${beat === null ? "the whole run" : `${Math.round((now - beat) / 1000)}s`}`;
     }
     return null;
+}
+
+// One work unit materializes one attempt at a time. Every attempt counts, not
+// only the ones a spec dispatched: a work unit already being driven is busy
+// whoever launched the runner. Nothing here reaches into another machine's
+// spools, and it does not need to — an attempt is owned by the machine running
+// it, and that is the machine a dispatch is issued from.
+export function liveAttemptFor(work: string): AttemptStatus | null
+{
+    const boot = bootId();
+    const now = Date.now();
+    for (const spool of listSpools())
+    {
+        const status = spool.status();
+        if (status !== null && status.work === work && isLive(spool, status, boot, now))
+        {
+            return status;
+        }
+    }
+    return null;
+}
+
+// Liveness is decided by the same evidence recovery uses, never by the state
+// the spool last managed to write: an attempt whose runner died is not holding
+// the work unit against the next dispatch.
+export function isLive(spool: Spool, status: AttemptStatus, boot: string, now: number): boolean
+{
+    return DRIVEN_STATES.includes(status.state) && deadReason(spool, status, boot, now) === null;
 }
 
 export function alive(pid: number): boolean

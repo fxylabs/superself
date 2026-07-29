@@ -35,6 +35,7 @@ import { loadVerdicts } from "./reachability.js";
 import { cmdReview } from "./reviews.js";
 import { cmdIntegration } from "./train.js";
 import { runSearch } from "./search.js";
+import { runSpecCommand } from "./spec/commands.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
@@ -103,6 +104,10 @@ const USAGE = `usage: self <command>
   review request <id> --scope change|integration_delta|release
   review ingest --file <envelope.json>       the only way a review receipt comes into being
   review list [<id>] | contract              receipts on record, or the runner's result contract
+  spec validate <workspec.json>              check a work spec without touching project state
+  spec apply <workspec.json>                 seal a work spec as an immutable generation and move its HEAD
+  spec dispatch <work-spec-id>               compile the current generation and run it as one attempt
+  spec list [--json] | show <id> [--json]    work specs, their generations, and the attempts pinned to them
   attempt run <plan.json>                    preflight a work attempt's capabilities, then run and spool it
   attempt list [--work id] [--json]          list this machine's attempts and the state each reached
   attempt show <attempt-id>                  print one attempt's durable record and capability receipt
@@ -149,6 +154,7 @@ async function main(argv: string[]): Promise<void>
         case "integration": cmdIntegration(requireProject(process.cwd()), rest); break;
         case "review": cmdReview(requireProject(process.cwd()), rest); break;
         case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
+        case "spec": await runSpecCommand(rest); break;
         case "attempt": await runAttemptCommand(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
