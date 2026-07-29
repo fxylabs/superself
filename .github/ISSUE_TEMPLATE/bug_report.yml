@@ -10,6 +10,8 @@ body:
         Thanks for reporting a bug. Remove secrets, pairing links, credentials, and private workspace data before submitting.
         Opening an issue is not approval to implement it. Wait for `status:accepted` and maintainer assignment before opening a pull request.
 
+        An accepted bug is the contract a fix works from. Boundaries and Verification are required so a fix cannot quietly widen into a refactor — see [ARCHITECTURE.md](https://github.com/fxylabs/superself/blob/main/ARCHITECTURE.md) and [CONTRIBUTING.md](https://github.com/fxylabs/superself/blob/main/CONTRIBUTING.md).
+
   - type: input
     id: version
     attributes:
@@ -81,6 +83,32 @@ body:
     validations:
       required: true
 
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundaries
+      description: What a fix must not change. Name the behavior, contracts, or modules that are correct today and must stay as they are, and say if this should stay a fix rather than becoming a refactor.
+      placeholder: |
+        - The event log format and existing folded state stay unchanged.
+        - Only the refusal message changes; the refusal condition is correct.
+    validations:
+      required: true
+
+  - type: input
+    id: naming
+    attributes:
+      label: Naming
+      description: Event namespaces, command verbs, or exported types involved, if you know them. Write "Unknown" if you do not.
+      placeholder: '`self work done`, `work.done`'
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How a fix will be shown to work. The smallest reproduction that must stop reproducing, plus any proof coverage it should gain.
+    validations:
+      required: true
+
   - type: checkboxes
     id: data-impact
     attributes:
@@ -96,4 +124,6 @@ body:
         - label: I searched existing issues for a duplicate.
           required: true
         - label: I removed secrets, active pairing links, and private data.
+          required: true
+        - label: This issue contains no private path, credential, account identifier, or prompt content.
           required: true
