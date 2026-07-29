@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { parseArgs } from "node:util";
+import { helpHint, parseCommand, subcommand, unknownOption } from "./args.js";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
 import { runAttemptCommand } from "./attempt/commands.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
@@ -9,6 +9,7 @@ import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
 import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
+import { commandUsage, findCommand, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -43,99 +44,15 @@ import { openFile, validTheme, viewFile } from "./view.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
-const USAGE = `usage: self <command>
-
-  init [--lang <code>] [--agents]             initialize the current directory as a workspace
-  workspace [<path>]                         show or set the workspace this machine uses
-  lang [<code>]                              show or set the language of the HTML views
-  theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)
-  timezone [<zone>]                          show or set the zone every target date is judged in
-  project add [path] [--name s] [--desc d] [--no-connect]
-                                             register a project and render its agent block
-  project link [slug] [path]                 link this checkout of a registered project on this machine
-  remote add <url>                           connect the workspace store to a git remote
-  sync                                       pull, refold, and push the workspace store
-  clone <url> [dir]                          clone a workspace store onto a new machine
-  goal set "<text>"                          set the long-term project goal
-  objective                                  list objectives and their milestones
-  objective add "<outcome>" [--horizon week|month|quarter|year] [--target d]
-              [--success s] [--stop s] [--priority n] [--proposed] [--supersedes id]
-  objective show|confirm <id>                print an objective, or confirm a proposed one
-  objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]
-                                             an empty --target/--horizon/--priority withdraws that field
-  objective close <id> --as reached|dropped [--why w]
-  milestone                                  list milestones with state, reason, and linked work
-  milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]
-  milestone show <id>                        print a milestone, its exit criteria, and its coverage
-  milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]
-  milestone met <id> --criterion c1 --why w [--work id] [--evidence c]
-  milestone reach <id>                       record a milestone as reached once every criterion is covered
-  milestone recheck <id> [--criterion c1] --why w
-                                             re-judge coverage, or a reach, a revision left stale
-  decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]
-  decide confirm <event-id>                  confirm a proposed decision
-  work [--project <slug>]                    list open work, from any directory with --project
-  work add "<required outcome>"              create a work unit
-  work show <id> [--project <slug>]          print full work detail: brief, reports, evidence
-                                             (resolves the owning project from any directory)
-  work start|block|unblock|done <id>         move a work unit (block: --on decision|dependency|external [--why w])
-  work link|unlink <id> --objective o | --milestone m
-                                             state, or withdraw, what a work unit contributes to
-  work propose "<outcome>" --milestone m --value v --success s --stop s --risk r
-              --capacity c --evidence-plan e --confidence low|medium|high --expires d
-  work accept|decline <proposal-id>          act on a goal-gap proposal
-  report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]
-  integration [status]                       compact status of every repository's integration train
-  integration register --repo r --base b --head h [--pr n] [--work id] [--domain name@ver]
-              [--depends cs] [--supersedes cs] [--check name] [--rank n] [--diff-digest d]
-  integration show|list|plan [--json]        machine-readable train, receipts, and blockers
-  integration declare <id> [--depends cs] [--consolidates cs --why w] [--domain d] [--check c]
-  integration head <id> --head h             record an author's new head; a changed digest owes a review
-  integration lease acquire|release|show --repo r [--holder h] [--fence N]
-  integration attempt start <id> --fence N --action rebase|resolve|merge
-  integration attempt finish <attempt> --outcome completed|conflict|failed [--head h]
-  integration observe ci|main|target --repo r --head h [--check c] [--conclusion x] [--at iso] [--dedupe k]
-  integration target --repo r [--branch b]   configure the autonomous integration branch merges land on
-  integration approve <id> --head h          the human gate on a merge that lands on main (interactive terminal)
-  integration merge <id> --fence N --merge-commit m --main-before a --main-after b
-  integration promote request|approve|record|show
-                                             the only lane into main: release review + human approval, exact candidate
-  integration reconcile [--repo r]           converge leases and in-flight attempts, idempotently
-  review request <id> --scope change|integration_delta|release
-  review ingest --file <envelope.json>       the only way a review receipt comes into being
-  review list [<id>] | contract              receipts on record, or the runner's result contract
-  spec validate <workspec.json>              check a work spec without touching project state
-  spec apply <workspec.json>                 seal a work spec as an immutable generation and move its HEAD
-  spec dispatch <work-spec-id>               compile the current generation and run it as one attempt
-  spec list [--json] | show <id> [--json]    work specs, their generations, and the attempts pinned to them
-  attempt run <plan.json>                    preflight a work attempt's capabilities, then run and spool it
-  attempt register <plan.json>               preflight and spool an attempt a launcher of your own will start
-  attempt started <id> --pid N | heartbeat <id> | exited <id> [--code N]
-                                             drive a registered attempt from the launcher that owns its process
-  attempt list [--work id] [--json]          list this machine's attempts and the state each reached
-  attempt show <attempt-id>                  print one attempt's durable record and capability receipt
-  attempt directive <id> "<text>" | cancel <id>
-                                             deliver a follow-up or a cancellation through the spool
-  attempt recover                            reconcile attempts a crash or restart left running
-  attempt prune [--days N] | retention [<days>] | breaker <provider> [--reset]
-                                             manage spool retention and the provider circuit breaker
-  artifact list [--work id] [--project slug]  list artifacts from the derived registry
-  artifact search <query> | open <id> [--project slug]
-                                             find an artifact or open it with the OS default app
-  convention add "<text>" | drop <event-id>  record or retire a convention
-  connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
-                                             (--global: into this machine's agent instruction files)
-  view [slug]                                open the live workspace or project view in the browser
-  context                                    print derived context for agents
-  status                                     print a short state summary
-  setup                                      print the workspace, project, and store this directory resolves to
-  log [-n N]                                 print recent events
-  search <query> [--type t] [--project p]    grep state across the workspace
-  fold                                       re-derive canonical files from the log`;
-
 async function main(argv: string[]): Promise<void>
 {
-    const cmd = argv[0];
+    const help = helpText(argv);
+    if (help !== null)
+    {
+        printUsage(help);
+        return;
+    }
+    const cmd = argv[0] ?? "";
     const rest = argv.slice(1);
     switch (cmd)
     {
@@ -146,8 +63,8 @@ async function main(argv: string[]): Promise<void>
         case "timezone": cmdTimezone(rest); break;
         case "project": cmdProject(rest); break;
         case "remote": cmdRemote(rest); break;
-        case "sync": syncStore(requireWorkspace(process.cwd())); break;
-        case "clone": cloneStore(requireText(rest[0], "clone <url> [dir]"), rest[1]); break;
+        case "sync": cmdSync(rest); break;
+        case "clone": cmdClone(rest); break;
         case "goal": cmdGoal(rest); break;
         case "objective": cmdObjective(requireProject(process.cwd()), guarded(rest)); break;
         case "milestone": cmdMilestone(requireProject(process.cwd()), guarded(rest)); break;
@@ -156,31 +73,89 @@ async function main(argv: string[]): Promise<void>
         case "report": cmdReport(rest); break;
         case "integration": cmdIntegration(requireProject(process.cwd()), rest); break;
         case "review": cmdReview(requireProject(process.cwd()), rest); break;
-        case "artifact": runArtifact(requireWorkspace(process.cwd()), rest); break;
+        case "artifact": cmdArtifact(rest); break;
         case "spec": await runSpecCommand(rest); break;
         case "attempt": await runAttemptCommand(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
-        case "context": printContext(requireWorkspace(process.cwd())); break;
-        case "status": printStatus(requireWorkspace(process.cwd())); break;
-        case "setup": printSetup(process.cwd()); break;
+        case "context": cmdContext(rest); break;
+        case "status": cmdStatus(rest); break;
+        case "setup": cmdSetup(rest); break;
         case "log": cmdLog(rest); break;
         case "search": cmdSearch(rest); break;
-        case "fold": cmdFold(); break;
-        default: printUsage(); break;
+        case "fold": cmdFold(rest); break;
+        default: cmdUnknown(cmd); break;
     }
 }
 
+// Bare `self` is a request for the verb list; anything else that reached no
+// command is a mistake, named on stderr with a non-zero exit so a caller that
+// typoed a verb never reads the usage text as success. An option-looking one
+// is a flag that reached no command, so it is named as a flag.
+function cmdUnknown(cmd: string): void
+{
+    if (cmd === "")
+    {
+        printUsage(rootUsage());
+        return;
+    }
+    if (cmd.startsWith("-"))
+    {
+        throw new CliError(unknownOption(cmd, undefined));
+    }
+    throw new CliError(`unknown command '${cmd}' — ${helpHint(undefined)}`);
+}
+
+// Help is answered before any command runs, so asking for it needs no
+// workspace, writes no event, and always exits successfully.
+function helpText(argv: string[]): string | null
+{
+    if (argv[0] !== "help" && !asksForHelp(argv))
+    {
+        return null;
+    }
+    const command = findCommand(argv[0] === "help" ? argv[1] : argv[0]);
+    return command === undefined ? rootUsage() : commandUsage(command);
+}
+
+// After `--` a flag is a positional the user meant literally, not a request.
+// The token right after an option is that option's value position, so a
+// `--help` standing there is handed to the command's own parser — which
+// names the mistake, or takes the value — instead of hijacking the call;
+// anywhere a flag could stand, `--help` wins.
+function asksForHelp(argv: string[]): boolean
+{
+    let value = false;
+    for (const arg of argv)
+    {
+        if (arg === "--")
+        {
+            return false;
+        }
+        if (value)
+        {
+            value = false;
+            continue;
+        }
+        if (arg === "--help" || arg === "-h")
+        {
+            return true;
+        }
+        value = arg.startsWith("-") && !arg.includes("=");
+    }
+    return false;
+}
+
 // Dim the description column so the command column stands out; piped output is untouched.
-function printUsage(): void
+function printUsage(usage: string): void
 {
     if (!styled)
     {
-        console.log(USAGE);
+        console.log(usage);
         return;
     }
-    console.log(USAGE.split("\n").map((line) =>
+    console.log(usage.split("\n").map((line) =>
     {
         const match = line.match(/^(  \S.*?)(\s{2,})(\S.*)$/);
         if (match !== null)
@@ -193,7 +168,7 @@ function printUsage(): void
 
 async function cmdInit(rest: string[]): Promise<void>
 {
-    const { values } = parseArgs({ args: rest, options: { lang: { type: "string" }, agents: { type: "boolean" } } });
+    const { values } = parseCommand("init", rest, { lang: { type: "string" }, agents: { type: "boolean" } }, 0);
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
@@ -248,12 +223,13 @@ function connectMachineAgents(): void
 
 function cmdWorkspace(rest: string[]): void
 {
-    if (rest[0] === undefined)
+    const [path] = parseCommand("workspace", rest, {}, 1).positionals;
+    if (path === undefined)
     {
         console.log(machineWorkspace() ?? "no workspace set — run `self init` in the directory that should hold it");
         return;
     }
-    const dir = resolve(rest[0]);
+    const dir = resolve(path);
     if (!isStore(join(dir, STORE_DIR)))
     {
         throw new CliError(`${dir} holds no workspace store — run \`self init\` there first`);
@@ -286,13 +262,14 @@ function validLang(code: string): string
 
 function cmdLang(rest: string[]): void
 {
+    const [code] = parseCommand("lang", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
-    if (rest[0] === undefined)
+    if (code === undefined)
     {
         console.log(readStoreConfig(ctx.storeDir).lang ?? "en");
         return;
     }
-    const lang = validLang(rest[0]);
+    const lang = validLang(code);
     writeConfig(ctx, { lang }, `lang set ${lang}`);
     console.log(`views now render in "${lang}"`);
 }
@@ -305,26 +282,28 @@ function guarded(rest: string[]): string[]
 
 function cmdTimezone(rest: string[]): void
 {
+    const [zone] = parseCommand("timezone", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
-    if (rest[0] === undefined)
+    if (zone === undefined)
     {
         console.log(readStoreConfig(ctx.storeDir).timezone ?? DEFAULT_ZONE);
         return;
     }
-    const timezone = validZone(rest[0]);
+    const timezone = validZone(zone);
     writeConfig(ctx, { timezone }, `timezone set ${timezone}`);
     console.log(`target dates are now judged in "${timezone}"`);
 }
 
 function cmdTheme(rest: string[]): void
 {
+    const [name] = parseCommand("theme", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
-    if (rest[0] === undefined)
+    if (name === undefined)
     {
         console.log(readStoreConfig(ctx.storeDir).theme ?? "violet");
         return;
     }
-    const theme = validTheme(rest[0]);
+    const theme = validTheme(name);
     writeConfig(ctx, { theme }, `theme set ${theme}`);
     console.log(`views now render with the "${theme}" accent`);
 }
@@ -344,12 +323,13 @@ function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
 
 function cmdProject(rest: string[]): void
 {
-    if (rest[0] === "add")
+    const sub = subcommand("project", rest);
+    if (sub === "add")
     {
         projectAdd(rest.slice(1));
         return;
     }
-    if (rest[0] === "link")
+    if (sub === "link")
     {
         projectLink(rest.slice(1));
         return;
@@ -359,11 +339,12 @@ function cmdProject(rest: string[]): void
 
 function projectAdd(args: string[]): void
 {
-    const { values, positionals } = parseArgs({
+    const { values, positionals } = parseCommand(
+        "project",
         args,
-        options: { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } },
-        allowPositionals: true
-    });
+        { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } },
+        1
+    );
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(positionals[0] ?? process.cwd());
     const slug = values.name ?? basename(projectDir);
@@ -396,15 +377,16 @@ function projectAdd(args: string[]): void
 
 function projectLink(args: string[]): void
 {
+    const [wanted, path] = parseCommand("project", args, {}, 2).positionals;
     const ctx = requireWorkspace(process.cwd());
-    const projectDir = resolve(args[1] ?? process.cwd());
+    const projectDir = resolve(path ?? process.cwd());
     if (!existsSync(projectDir))
     {
         throw new CliError(`"${projectDir}" does not exist`);
     }
     // Omitting the slug is the worktree case: the repository already answers
     // which project this checkout belongs to.
-    const slug = args[0] ?? requireText(siblingSlug(ctx.storeDir, projectDir) ?? undefined, "project link <slug> [path]");
+    const slug = wanted ?? requireText(siblingSlug(ctx.storeDir, projectDir) ?? undefined, "project link <slug> [path]");
     if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
@@ -416,12 +398,13 @@ function projectLink(args: string[]): void
 
 function cmdView(rest: string[]): void
 {
+    const [slug] = parseCommand("view", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
-    if (rest[0] !== undefined && !readRegistry(ctx.storeDir).some((entry) => entry.slug === rest[0]))
+    if (slug !== undefined && !readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
-        throw new CliError(`unknown project "${rest[0]}" — registered: ${readRegistry(ctx.storeDir).map((e) => e.slug).join(", ")}`);
+        throw new CliError(`unknown project "${slug}" — registered: ${readRegistry(ctx.storeDir).map((e) => e.slug).join(", ")}`);
     }
-    openFile(ctx, viewFile(ctx.storeDir, rest[0]));
+    openFile(ctx, viewFile(ctx.storeDir, slug));
 }
 
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
@@ -435,44 +418,84 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
     excludeLocally(projectDir, MARKER_FILE);
 }
 
+function cmdSync(rest: string[]): void
+{
+    parseCommand("sync", rest, {}, 0);
+    syncStore(requireWorkspace(process.cwd()));
+}
+
+function cmdClone(rest: string[]): void
+{
+    const [url, dir] = parseCommand("clone", rest, {}, 2).positionals;
+    cloneStore(requireText(url, "clone <url> [dir]"), dir);
+}
+
+function cmdContext(rest: string[]): void
+{
+    parseCommand("context", rest, {}, 0);
+    printContext(requireWorkspace(process.cwd()));
+}
+
+function cmdStatus(rest: string[]): void
+{
+    parseCommand("status", rest, {}, 0);
+    printStatus(requireWorkspace(process.cwd()));
+}
+
+function cmdSetup(rest: string[]): void
+{
+    parseCommand("setup", rest, {}, 0);
+    printSetup(process.cwd());
+}
+
+function cmdArtifact(rest: string[]): void
+{
+    runArtifact(() => requireWorkspace(process.cwd()), rest);
+}
+
 function cmdRemote(rest: string[]): void
 {
-    if (rest[0] !== "add")
+    if (subcommand("remote", rest) !== "add")
     {
         throw new CliError("usage: self remote add <url>");
     }
-    remoteAdd(requireWorkspace(process.cwd()), requireText(rest[1], "remote add <url>"));
+    const [, url] = parseCommand("remote", rest, {}, 2).positionals;
+    remoteAdd(requireWorkspace(process.cwd()), requireText(url, "remote add <url>"));
 }
 
 function cmdGoal(rest: string[]): void
 {
-    if (rest[0] !== "set")
+    if (subcommand("goal", rest) !== "set")
     {
         throw new CliError('usage: self goal set "<text>"');
     }
+    const text = requireText(parseCommand("goal", rest, {}, 2).positionals[1], 'goal set "<text>"');
     const ctx = requireProject(process.cwd());
-    const text = requireText(rest[1], 'goal set "<text>"');
     recordEvent(ctx, makeEvent(ctx.project, "goal.set", { text }, undefined, true), text);
 }
 
 function cmdDecide(rest: string[]): void
 {
-    const ctx = requireProject(process.cwd());
+    // `confirm` is the only subcommand: every other first argument is the
+    // decision text, which may itself start with a dash after `--`.
     if (rest[0] === "confirm")
     {
-        confirmDecision(ctx, rest[1]);
+        const [, prefix] = parseCommand("decide", rest, {}, 2).positionals;
+        confirmDecision(requireProject(process.cwd()), prefix);
         return;
     }
-    const { values, positionals } = parseArgs({
-        args: rest,
-        options: {
+    const { values, positionals } = parseCommand(
+        "decide",
+        rest,
+        {
             proposed: { type: "boolean" },
             why: { type: "string" },
             supersedes: { type: "string", multiple: true },
             work: { type: "string" }
         },
-        allowPositionals: true
-    });
+        1
+    );
+    const ctx = requireProject(process.cwd());
     const text = requireText(positionals[0], 'decide "<decision>" [--why w] [--proposed]');
     const payload: Record<string, unknown> = { text };
     if (values.why !== undefined)
@@ -521,51 +544,53 @@ function cmdWork(rest: string[]): void
 {
     // Listing and showing are workspace reads, so they resolve from any
     // directory; every verb that writes still requires the linked checkout.
-    if (rest.length === 0 || rest[0].startsWith("--"))
+    // A bare `--` is not a listing flag: subcommand() explains it below.
+    if (rest.length === 0 || (rest[0] !== "--" && rest[0].startsWith("--")))
     {
         cmdWorkList(rest);
         return;
     }
-    if (rest[0] === "show")
+    const sub = subcommand("work", rest);
+    if (sub === "show")
     {
         cmdWorkShow(rest.slice(1));
         return;
     }
-    const ctx = requireProject(process.cwd());
-    if (rest[0] === "add")
+    if (sub === "add")
     {
-        const outcome = requireText(rest[1], 'work add "<required outcome>"');
+        const outcome = requireText(parseCommand("work", rest, {}, 2).positionals[1], 'work add "<required outcome>"');
+        const ctx = requireProject(process.cwd());
         const id = workId();
         recordEvent(ctx, makeEvent(ctx.project, "work.created", { work: id, outcome }), `${id} ${outcome}`);
         console.log(id);
         return;
     }
-    if (rest[0] === "link" || rest[0] === "unlink")
+    if (sub === "link" || sub === "unlink")
     {
-        cmdWorkLink(ctx, rest.slice(1), rest[0] === "link");
+        cmdWorkLink(requireProject(process.cwd()), rest.slice(1), sub === "link");
         return;
     }
-    if (rest[0] === "propose")
+    if (sub === "propose")
     {
-        cmdPropose(ctx, rest.slice(1));
+        cmdPropose(requireProject(process.cwd()), rest.slice(1));
         return;
     }
-    if (rest[0] === "accept" || rest[0] === "decline")
+    if (sub === "accept" || sub === "decline")
     {
-        cmdProposalDecision(ctx, rest.slice(1), rest[0] === "accept");
+        cmdProposalDecision(requireProject(process.cwd()), rest.slice(1), sub === "accept");
         return;
     }
-    const type = TRANSITIONS[rest[0]];
+    const type = TRANSITIONS[sub as string];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${rest[0]}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline`);
+        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline`);
     }
-    transitionWork(ctx, type, rest.slice(1));
+    transitionWork(type, rest.slice(1));
 }
 
 function cmdWorkList(rest: string[]): void
 {
-    const { values } = parseArgs({ args: rest, options: { project: { type: "string" } } });
+    const { values } = parseCommand("work", rest, { project: { type: "string" } }, 0);
     if (values.project === undefined)
     {
         printWorkList(requireProject(process.cwd()));
@@ -577,11 +602,7 @@ function cmdWorkList(rest: string[]): void
 
 function cmdWorkShow(args: string[]): void
 {
-    const { values, positionals } = parseArgs({
-        args,
-        options: { project: { type: "string" } },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseCommand("work", args, { project: { type: "string" } }, 1);
     const wanted = requireText(positionals[0], "work show <work-id> [--project <slug>]");
     const ctx = requireWorkspace(process.cwd());
     const found = findWorkAcross(ctx, wanted, values.project);
@@ -644,13 +665,10 @@ function requireRegistered(storeDir: string, slug: string): string
     return slug;
 }
 
-function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
+function transitionWork(type: string, args: string[]): void
 {
-    const { values, positionals } = parseArgs({
-        args,
-        options: { on: { type: "string" }, why: { type: "string" } },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseCommand("work", args, { on: { type: "string" }, why: { type: "string" } }, 1);
+    const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
     const payload: Record<string, unknown> = { work: work.id };
     if (type === "work.blocked")
@@ -670,17 +688,18 @@ function transitionWork(ctx: ProjectContext, type: string, args: string[]): void
 
 function cmdReport(rest: string[]): void
 {
-    const ctx = requireProject(process.cwd());
-    const { values, positionals } = parseArgs({
-        args: rest,
-        options: {
+    const { values, positionals } = parseCommand(
+        "report",
+        rest,
+        {
             evidence: { type: "string", multiple: true },
             artifact: { type: "string", multiple: true },
             next: { type: "string" },
             file: { type: "string" }
         },
-        allowPositionals: true
-    });
+        2
+    );
+    const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
     const text = values.file === undefined
         ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
@@ -756,16 +775,19 @@ function headEvidence(ctx: ProjectContext): string[]
 
 function cmdConvention(rest: string[]): void
 {
-    const ctx = requireProject(process.cwd());
-    if (rest[0] === "add")
+    const sub = subcommand("convention", rest);
+    const [, value] = parseCommand("convention", rest, {}, 2).positionals;
+    if (sub === "add")
     {
-        const text = requireText(rest[1], 'convention add "<text>"');
+        const text = requireText(value, 'convention add "<text>"');
+        const ctx = requireProject(process.cwd());
         recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, undefined, true), text);
         return;
     }
-    if (rest[0] === "drop")
+    if (sub === "drop")
     {
-        const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(rest[1], "convention drop <event-id>"));
+        const ctx = requireProject(process.cwd());
+        const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(value, "convention drop <event-id>"));
         if (target.type !== "convention.added")
         {
             throw new CliError(`${target.id} is not a convention`);
@@ -778,30 +800,31 @@ function cmdConvention(rest: string[]): void
 
 function cmdLog(rest: string[]): void
 {
-    const ctx = requireProject(process.cwd());
-    const { values } = parseArgs({ args: rest, options: { lines: { type: "string", short: "n" } } });
+    const { values } = parseCommand("log", rest, { lines: { type: "string", short: "n" } }, 0);
     const limit = values.lines === undefined ? 20 : Number.parseInt(values.lines, 10);
     if (Number.isNaN(limit) || limit <= 0)
     {
         throw new CliError("log -n expects a positive number");
     }
-    printLog(ctx, limit);
+    printLog(requireProject(process.cwd()), limit);
 }
 
 function cmdSearch(rest: string[]): void
 {
-    const { values, positionals } = parseArgs({
-        args: rest,
-        options: { type: { type: "string" }, project: { type: "string" } },
-        allowPositionals: true
-    });
+    const { values, positionals } = parseCommand(
+        "search",
+        rest,
+        { type: { type: "string" }, project: { type: "string" } },
+        1
+    );
     const query = requireText(positionals[0], "search <query>");
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
 }
 
 function cmdConnect(rest: string[]): void
 {
-    if (rest[0] === "--global")
+    const { values } = parseCommand("connect", rest, { global: { type: "boolean" } }, 0);
+    if (values.global === true)
     {
         connectMachineAgents();
         return;
@@ -812,8 +835,9 @@ function cmdConnect(rest: string[]): void
     console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
 }
 
-function cmdFold(): void
+function cmdFold(rest: string[]): void
 {
+    parseCommand("fold", rest, {}, 0);
     const ctx = requireProject(process.cwd());
     foldProject(ctx.storeDir, ctx.project);
     commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
@@ -829,19 +853,38 @@ function requireText(value: string | undefined, usage: string): string
     return value;
 }
 
+// A bad flag is a user mistake, not a defect: node reports it by throwing from
+// parseArgs, and without this it would surface as an internal stack trace.
+// Commands here parse through parseCommand; the modules that call parseArgs
+// directly — goals, integration, review, attempt — are answered the same way.
+function userMessage(error: unknown, argv: string[]): string | null
+{
+    if (error instanceof CliError)
+    {
+        return error.message;
+    }
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (!(error instanceof Error) || code === undefined || !code.startsWith("ERR_PARSE_ARGS_"))
+    {
+        return null;
+    }
+    // node appends advice about `--` that repeats the flag; the first sentence
+    // is the part that names what went wrong.
+    const cause = error.message.split(". ")[0];
+    return `${cause.charAt(0).toLowerCase()}${cause.slice(1)} — ${helpHint(argv[0])}`;
+}
+
 try
 {
     await main(process.argv.slice(2));
 }
 catch (error)
 {
-    if (error instanceof CliError)
-    {
-        console.error(`${errRed("error:")} ${error.message}`);
-        process.exitCode = 1;
-    }
-    else
+    const message = userMessage(error, process.argv.slice(2));
+    if (message === null)
     {
         throw error;
     }
+    console.error(`${errRed("error:")} ${message}`);
+    process.exitCode = 1;
 }

@@ -1,5 +1,6 @@
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { parseCommand, subcommand } from "./args.js";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
 import { CliContext, readRegistry } from "./paths.js";
@@ -284,41 +285,40 @@ function summaryOf(event: { type: string; payload: Record<string, unknown> }): s
     return `${event.payload.scope} review ${event.payload.verdict} for ${event.payload.changeSet}`;
 }
 
-export function runArtifact(ctx: CliContext, rest: string[]): void
+// The workspace is resolved only once the arguments check out, so a typo is
+// named the same way on a machine that has no workspace at all.
+export function runArtifact(workspace: () => CliContext, rest: string[]): void
 {
-    if (rest[0] === "list")
+    const sub = subcommand("artifact", rest);
+    if (sub === "list")
     {
-        printRecords(scopedRecords(ctx, rest.slice(1)));
+        const { values } = parseCommand("artifact", rest.slice(1), { work: { type: "string" }, project: { type: "string" } }, 0);
+        printRecords(scopedRecords(workspace(), values.work, values.project));
         return;
     }
-    if (rest[0] === "search")
+    if (sub === "search")
     {
-        searchArtifacts(ctx, rest[1]);
+        const [, query] = parseCommand("artifact", rest, {}, 2).positionals;
+        searchArtifacts(workspace(), query);
         return;
     }
-    if (rest[0] === "open")
+    if (sub === "open")
     {
-        openArtifact(ctx, rest.slice(1));
+        const { values, positionals } = parseCommand("artifact", rest, { project: { type: "string" } }, 2);
+        openArtifact(workspace(), positionals[1], values.project);
         return;
     }
     throw new CliError("usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]");
 }
 
-function scopedRecords(ctx: CliContext, args: string[]): ArtifactRecord[]
+function scopedRecords(ctx: CliContext, work: string | undefined, project: string | undefined): ArtifactRecord[]
 {
-    const work = valueAfter(args, "--work");
-    const project = valueAfter(args, "--project") ?? ctx.project;
-    const slugs = project === undefined
+    const scope = project ?? ctx.project;
+    const slugs = scope === undefined
         ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
-        : [requireRegistered(ctx, project)];
+        : [requireRegistered(ctx, scope)];
     const records = listArtifacts(ctx.storeDir, slugs);
     return work === undefined ? records : records.filter((record) => record.work === work);
-}
-
-function valueAfter(args: string[], flag: string): string | undefined
-{
-    const index = args.indexOf(flag);
-    return index === -1 ? undefined : args[index + 1];
 }
 
 function requireRegistered(ctx: CliContext, slug: string): string
@@ -356,15 +356,13 @@ function printRecords(records: ArtifactRecord[]): void
     }
 }
 
-function openArtifact(ctx: CliContext, args: string[]): void
+function openArtifact(ctx: CliContext, id: string | undefined, project: string | undefined): void
 {
-    const id: string | undefined = args[0];
     const wanted = id?.trim();
-    if (wanted === undefined || wanted === "" || wanted.startsWith("--"))
+    if (wanted === undefined || wanted === "")
     {
         throw new CliError("usage: self artifact open <id> [--project slug]");
     }
-    const project = valueAfter(args, "--project");
     const slugs = project === undefined
         ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
         : [requireRegistered(ctx, project)];
