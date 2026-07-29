@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { withLock, writeAtomic } from "../attempt/atomic.js";
+import { withLock, withLockAsync, writeAtomic } from "../attempt/atomic.js";
 import { bootId, nodeId } from "../attempt/boundary.js";
 import { sameProcess } from "../attempt/tree.js";
 import { runnerStateDir } from "../machine.js";
@@ -143,9 +143,33 @@ export function releaseDaemon(pid: number): void
     });
 }
 
+export function tickFile(): string
+{
+    return join(daemonDir(), TICK_FILE);
+}
+
+// One tick at a time on this machine, whoever asked for it. The loop's tick and
+// a tick a person runs by hand read the same live-attempt count and the same
+// window spend, and both decide against it before either dispatch has claimed
+// anything — so two of them running together each see room under the
+// concurrency cap that only one of them has, and the cap is overshot by exactly
+// the work the other one issued. Serialising them is what makes the cap a
+// statement about the machine rather than about one tick.
+//
+// The patience is long because the section is: a tick settles attempts through
+// the completion gate, and a gate runs whatever validation a spec declared. A
+// timeout shorter than a real tick would have every contended caller judge the
+// holder stale and run anyway, which is this lock not existing.
+const TICK_LOCK_TIMEOUT_MS = 30_000;
+
+export function withTickLock<T>(run: () => Promise<T>): Promise<T>
+{
+    return withLockAsync(tickFile(), run, TICK_LOCK_TIMEOUT_MS);
+}
+
 export function readTick(): TickRecord | null
 {
-    return readRecord<TickRecord>(join(daemonDir(), TICK_FILE));
+    return readRecord<TickRecord>(tickFile());
 }
 
 export function writeTick(counts: TickCounts, at: Date, failed?: string): TickRecord
@@ -155,7 +179,7 @@ export function writeTick(counts: TickCounts, at: Date, failed?: string): TickRe
     {
         record.failed = failed;
     }
-    writeRecord(join(daemonDir(), TICK_FILE), record);
+    writeRecord(tickFile(), record);
     return record;
 }
 

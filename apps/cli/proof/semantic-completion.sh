@@ -61,11 +61,27 @@ MAIN0="$(git rev-parse HEAD)"
 SELF project add --name demo --desc "semantic completion harness" > /dev/null
 SELF goal set "prove semantic completion is separate from physical completion" > /dev/null
 
+# A policy is granted by a person at a terminal, so the one this harness runs
+# under is granted the way that person grants it: a real pseudo-terminal, with
+# the window typed back. The gate itself is proven in overnight-digest.sh.
+grant_policy()
+{
+    local typed="$1"
+    shift
+    if script --version > /dev/null 2>&1
+    then
+        { printf '%s\n' "$typed"; sleep 1; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
+    else
+        { printf '%s\n' "$typed"; sleep 1; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
+    fi
+}
+
 # The wake path dispatches on the operator's authority, so the case below that
 # reads a tick needs a policy in force. It is set as wide as a policy can be:
 # what an approval gate does is what this harness is about, and a narrower one
 # would refuse for a reason of its own before the gate was reached.
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 8 > /dev/null
+grant_policy "00:00-00:00" overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 8
+SELF overnight show | grep -q "auto-dispatch on" || fail "the harness policy was not granted"
 
 STORE="$ROOT/A/ws/.superself"
 LOG="$STORE/projects/demo/log.jsonl"

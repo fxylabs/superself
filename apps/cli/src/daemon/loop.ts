@@ -6,7 +6,7 @@ import { sleep } from "../attempt/retry.js";
 import { alive, processStartTime } from "../attempt/tree.js";
 import { ProjectContext } from "../paths.js";
 import { CliError } from "../types.js";
-import { claimDaemon, claimUnderLock, daemonDir, DaemonRecord, emptyCounts, liveDaemon, readDaemon, refusal, releaseDaemon, withDaemonLock, writeTick } from "./state.js";
+import { claimDaemon, claimUnderLock, daemonDir, DaemonRecord, emptyCounts, liveDaemon, readDaemon, refusal, releaseDaemon, withDaemonLock, withTickLock, writeTick } from "./state.js";
 import { runTick, TickSummary } from "./tick.js";
 import { cliEntry } from "./wake.js";
 
@@ -83,7 +83,19 @@ export async function runLoop(ctx: ProjectContext, intervalMs: number): Promise<
 // filesystem or a provider can fail, and a supervisor that exits on the first
 // of them stops reconciling everything else too. What went wrong is kept on
 // the record `self daemon status` reads.
+//
+// Every tick goes through the same mutex, whether the loop asked for it or a
+// person did. The concurrency cap, the window's spend and the live-attempt
+// count are all read before anything this tick dispatches has claimed its work,
+// so a second tick running beside this one would decide against a picture that
+// is already out of date and wake past the cap — the one thing the policy says
+// it will not do.
 export async function tickOnce(ctx: ProjectContext): Promise<TickSummary>
+{
+    return withTickLock(() => tickUnderLock(ctx));
+}
+
+async function tickUnderLock(ctx: ProjectContext): Promise<TickSummary>
 {
     const now = new Date();
     try

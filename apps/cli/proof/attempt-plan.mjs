@@ -29,7 +29,7 @@ const plan = {
             ...(o.envsecret === undefined ? {} : { MY_API_KEY: o.envsecret })
         }
     },
-    command: [process.execPath, o.agent],
+    command: o.command === undefined ? [process.execPath, o.agent] : JSON.parse(o.command),
     capabilities: {
         context: o.context !== "off",
         read: o.read === undefined ? [] : o.read.split(","),

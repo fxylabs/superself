@@ -17,7 +17,10 @@ const spec = {
     summary: o.summary ?? "prove the declarative work spec contract",
     provider: { name: o.providerName ?? "spec-provider", endpoint: o.provider ?? "http://localhost:1/" },
     requestedModel: o.model ?? "opus-5",
-    command: [process.execPath, o.agent],
+    // The invocation the generation materializes. A case that names its own
+    // command is stating what this run will actually do — which the policy
+    // reads as part of the declaration, exactly as it reads the tools.
+    command: o.command === undefined ? [process.execPath, o.agent] : JSON.parse(o.command),
     boundary: {
         wrapper: [],
         cwd: o.cwd,
