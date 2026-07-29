@@ -202,6 +202,6 @@ export async function stopDaemon(): Promise<string>
         }
         await sleep(STOP_POLL_MS);
     }
-    throw new CliError(`self daemon ${held.pid} did not stop within ${STOP_TIMEOUT_MS}ms — it is finishing the tick it is in, so try again`);
+    throw new CliError(`self daemon ${held.pid} did not stop within ${STOP_TIMEOUT_MS}ms — it is inside a tick or waiting for one, so try again`);
 }
 
