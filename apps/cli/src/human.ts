@@ -15,6 +15,16 @@ export interface HumanRefusal
     next: string;
 }
 
+// The environment the runner stamps on every child it starts. A process
+// carrying one of these is an agent's, and the answer to anything that needs a
+// person is already known before a terminal is looked for.
+const ATTEMPT_MARKERS = ["SUPERSELF_SESSION", "SUPERSELF_ATTEMPT_ID"];
+
+export function attemptMarker(): string | undefined
+{
+    return ATTEMPT_MARKERS.find((name) => process.env[name] !== undefined);
+}
+
 // The human gate. What makes this input human is the interactive terminal:
 // a process running with piped or scripted stdio never reaches the prompt,
 // and no flag, environment variable or event payload substitutes for it.

@@ -6,7 +6,7 @@ import { makeEvent, recordEvent } from "../pipeline.js";
 import { noteCapacityRefusal } from "./circuits.js";
 import { Disposition, Reconciled, reconcileProject } from "./reconcile.js";
 import { emptyCounts, TickCounts } from "./state.js";
-import { WakeDecision, wakeReady } from "./wake.js";
+import { POLICY_OUTCOMES, WakeDecision, wakeReady } from "./wake.js";
 
 export interface TickSummary extends TickCounts
 {
@@ -55,7 +55,10 @@ function countOf(attempts: Reconciled[], wakes: WakeDecision[]): TickCounts
     for (const wake of wakes)
     {
         counts.woken += wake.outcome === "woken" ? 1 : 0;
-        counts.deferred += wake.outcome === "circuit-open" || wake.outcome === "waiting-reset" ? 1 : 0;
+        // Deferred is "nothing was spent and nothing failed, and a later tick
+        // decides again" — which is exactly what a provider reset and an
+        // overnight policy each leave behind.
+        counts.deferred += wake.outcome === "circuit-open" || wake.outcome === "waiting-reset" || POLICY_OUTCOMES.includes(wake.outcome) ? 1 : 0;
     }
     return counts;
 }
