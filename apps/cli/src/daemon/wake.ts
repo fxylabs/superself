@@ -71,19 +71,43 @@ export function wakeReady(ctx: ProjectContext, now: Date): WakeDecision[]
     const night: Night = { policy, spend, dispatched: { count: 0, declaredUsd: 0 } };
     return listHeads(ctx.storeDir, ctx.project).map((head) =>
     {
-        // Read once and carried, rather than read again by every gate that
-        // wants it: what the policy is judging, what its budget is committing
-        // and which provider the dispatch reaches are all statements about the
-        // same sealed bytes.
-        const spec = generationOf(ctx, head);
+        const spec = sealedOnce(ctx, head);
         const decision = decide(ctx, head, spec, works.find((work) => work.id === head.work), night, now);
         if (decision.outcome === "woken")
         {
+            const woken = spec();
             night.dispatched.count += 1;
-            night.dispatched.declaredUsd += spec === null ? 0 : declaredBudget(spec);
+            night.dispatched.declaredUsd += woken === null ? 0 : declaredBudget(woken);
         }
         return decision;
     });
+}
+
+// The sealed bytes behind one head, read at most once and only if something
+// asks. Once, because what the policy is judging, what its budget is committing
+// and which provider the dispatch reaches are all statements about the same
+// bytes, and reading them per gate meant hashing the blob three times. Only if
+// asked, because reading verifies the sha256 the generation was sealed under,
+// and most heads in a project belong to work that is finished or not ready —
+// a tick that hashed those too would pay for the whole project's history every
+// few seconds while holding the machine's tick mutex, and one unreadable
+// generation under finished work would fail a tick that had no business
+// reading it.
+type Sealed = () => WorkSpec | null;
+
+function sealedOnce(ctx: ProjectContext, head: SpecHead): Sealed
+{
+    let spec: WorkSpec | null = null;
+    let read = false;
+    return () =>
+    {
+        if (!read)
+        {
+            spec = generationOf(ctx, head);
+            read = true;
+        }
+        return spec;
+    };
 }
 
 // What the policy is being asked against, carried through one tick rather than
@@ -98,14 +122,16 @@ interface Night
     dispatched: TickDispatch;
 }
 
-function decide(ctx: ProjectContext, head: SpecHead, spec: WorkSpec | null, work: WorkState | undefined, night: Night, now: Date): WakeDecision
+function decide(ctx: ProjectContext, head: SpecHead, sealed: Sealed, work: WorkState | undefined, night: Night, now: Date): WakeDecision
 {
     const at = { work: head.work, workSpec: head.workSpec, generation: head.generation };
+    // Before anything is read: work that is finished or gone is not a
+    // candidate, and saying so costs a lookup in a model that is already built.
     if (work === undefined || work.status === "done")
     {
         return { ...at, outcome: "not-ready" };
     }
-    const refusal = nightRefusal(ctx.project, head, spec, night, now);
+    const refusal = nightRefusal(ctx.project, head, sealed, night, now);
     if (refusal !== null)
     {
         return { ...at, ...refusal };
@@ -134,6 +160,7 @@ function decide(ctx: ProjectContext, head: SpecHead, spec: WorkSpec | null, work
     {
         return { ...at, outcome: "materialized" };
     }
+    const spec = sealed();
     if (spec === null)
     {
         return { ...at, outcome: "no-spec" };
@@ -153,12 +180,16 @@ function decide(ctx: ProjectContext, head: SpecHead, spec: WorkSpec | null, work
 // everything the policy itself says is a bound the operator chose and may
 // change. A generation that is not sealed is left to the gates below, which
 // already refuse it for the reason it is actually refused for.
-function nightRefusal(project: string, head: SpecHead, spec: WorkSpec | null, night: Night, now: Date): { outcome: WakeOutcome; detail: string } | null
+function nightRefusal(project: string, head: SpecHead, sealed: Sealed, night: Night, now: Date): { outcome: WakeOutcome; detail: string } | null
 {
+    // Asked before the generation is read, and it is the answer for every head
+    // on a machine whose operator granted no night: with no policy in force
+    // there is nothing to judge the sealed bytes against.
     if (night.policy === null || night.spend === null)
     {
         return { outcome: "no-policy", detail: "no overnight policy is in force — `self overnight set` is what grants unattended dispatch" };
     }
+    const spec = sealed();
     if (spec === null)
     {
         return null;

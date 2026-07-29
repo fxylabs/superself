@@ -753,6 +753,48 @@ wait "$HOLDER" 2>/dev/null || true
 [ ! -f "$RUNNER/daemon/tick.json.lock" ] || fail "the tick that took the mutex never released it"
 
 # ---------------------------------------------------------------------------
+# A holder that died inside the section is not something to be patient about
+# ---------------------------------------------------------------------------
+# The lock file outlives the process that took it, and its token never changes
+# again. Waiting out the whole window for it would make every crash mid-tick
+# cost that window of supervision — the loop reconciling nothing, and, because
+# the wait would be inside the tick, a process no stop signal reaches. So the
+# holder is asked about instead: a pid that is not alive holds nothing.
+DEAD_HOLD="$ROOT/tick-held-dead"
+node "$CLI_DIR/proof/tick-lock.mjs" "$RUNNER/daemon/tick.json" "$DEAD_HOLD" 60000 &
+DOOMED=$!
+await '[ -f "$DEAD_HOLD" ]' || fail "the tick mutex was never taken by the holder that is about to die"
+kill -9 "$DOOMED" 2>/dev/null || true
+wait "$DOOMED" 2>/dev/null || true
+[ -f "$RUNNER/daemon/tick.json.lock" ] || fail "the killed holder left no lock behind, so nothing about a crash is under test"
+
+STARTED="$(date +%s)"
+SELF daemon tick > /dev/null || fail "a tick after a holder was killed inside the section never ran"
+BROKE=$(( $(date +%s) - STARTED ))
+[ "$BROKE" -lt 10 ] || fail "a tick waited ${BROKE}s for a lock whose holder was already gone"
+[ ! -f "$RUNNER/daemon/tick.json.lock" ] || fail "the tick that took a dead holder's lock never released its own"
+
+# and the same from the supervisor's side, which is where it was costing
+# something: a loop started onto a mutex a crash left behind ticks at once, and
+# is still a process `stop` can reach
+node "$CLI_DIR/proof/tick-lock.mjs" "$RUNNER/daemon/tick.json" "$ROOT/tick-held-dead2" 60000 &
+DOOMED2=$!
+await '[ -f "$ROOT/tick-held-dead2" ]' || fail "the tick mutex was never taken before the supervisor case"
+kill -9 "$DOOMED2" 2>/dev/null || true
+wait "$DOOMED2" 2>/dev/null || true
+[ -f "$RUNNER/daemon/tick.json.lock" ] || fail "the second killed holder left no lock behind"
+
+TICKS_BEFORE="$(tick_field ticks)"
+SELF daemon start --interval 200 > /dev/null || fail "a daemon could not be started onto a mutex a crash left behind"
+DPID4="$(daemon_pid)"
+await '[ "$(tick_field ticks)" -gt "'"$TICKS_BEFORE"'" ]' 20 || fail "a supervisor started onto a stale tick mutex never ticked"
+STOP_AT="$(date +%s)"
+SELF daemon stop | grep -q "stopped" || fail "a supervisor that had to take a stale tick mutex could not be stopped"
+STOP_TOOK=$(( $(date +%s) - STOP_AT ))
+[ "$STOP_TOOK" -lt 15 ] || fail "stopping a supervisor that took a stale tick mutex waited ${STOP_TOOK}s"
+await "! kill -0 $DPID4 2>/dev/null" || fail "the stopped supervisor is still running"
+
+# ---------------------------------------------------------------------------
 # Nothing the supervisor records may carry what only this machine can see
 # ---------------------------------------------------------------------------
 grep -q '"pid"' "$LOG_A" && fail "a supervisor event carried a process handle into the synced log"

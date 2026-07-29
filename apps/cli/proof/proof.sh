@@ -2154,6 +2154,11 @@ grep -q "never recorded" "$LOG_A" && fail "a refused --help value still wrote an
 # it builds its own git repository under a root of its own
 bash "$CLI_DIR/proof/integration.sh"
 
+# the machine's tick mutex, contended by two ticks that start together. Each
+# round is a pair of processes against a machine root of its own, so it needs
+# no store and leaves none.
+node "$CLI_DIR/proof/tick-mutex.mjs" || fail "two ticks were inside the tick mutex together"
+
 # the supervision loop kills payloads, crashes launchers in the middle of a
 # settlement, and starts and stops a daemon, so it too runs under a machine
 # root of its own

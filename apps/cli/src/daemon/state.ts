@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { withLock, withLockAsync, writeAtomic } from "../attempt/atomic.js";
+import { breakLock, LockHold, lockHolder, lockPath, takeLock, withLock, writeAtomic } from "../attempt/atomic.js";
 import { bootId, nodeId } from "../attempt/boundary.js";
-import { sameProcess } from "../attempt/tree.js";
+import { alive, sameProcess } from "../attempt/tree.js";
 import { runnerStateDir } from "../machine.js";
 import { CliError } from "../types.js";
 
@@ -161,10 +161,136 @@ export function tickFile(): string
 // timeout shorter than a real tick would have every contended caller judge the
 // holder stale and run anyway, which is this lock not existing.
 const TICK_LOCK_TIMEOUT_MS = 30_000;
+const TICK_LOCK_POLL_MS = 100;
 
-export function withTickLock<T>(run: () => Promise<T>): Promise<T>
+// The lock a crash left behind is not something to be patient about. A
+// supervisor killed mid-tick leaves the file with its own pid in it, and that
+// pid's token will never change again — so patience alone would have every
+// tick after the crash sit out the whole window before breaking a lock that
+// was free the instant the holder died. During that window supervision does
+// nothing, which is the state the supervisor exists to end rather than one it
+// may enter.
+//
+// So the holder is asked about rather than waited on, the same rule the
+// settlement lock in attempt/settlement.ts applies for the same reason: a pid
+// that is not alive on this machine holds nothing, and its lock is taken now.
+//
+// The age rule is the backstop the pid alone cannot give, because a number is
+// handed out again and a lock could name a live process that never took it.
+// It is far longer than any wait on purpose: a tick may legitimately run for
+// minutes when a completion gate runs a declared validation, and an age rule
+// as short as the wait would take the lock from a tick that is working.
+const TICK_LOCK_WEDGED_MS = 600_000;
+
+export async function withTickLock<T>(run: () => Promise<T>): Promise<T>
 {
-    return withLockAsync(tickFile(), run, TICK_LOCK_TIMEOUT_MS);
+    const held = await claimTick();
+    try
+    {
+        return await run();
+    }
+    finally
+    {
+        held.release();
+    }
+}
+
+// The mutex, waited for on the event loop rather than through it. The wait has
+// to yield: a supervisor answers its stop signal between turns, and a
+// synchronous poll would make a contended tick a process `self daemon stop`
+// cannot reach.
+async function claimTick(): Promise<LockHold>
+{
+    const deadline = Date.now() + TICK_LOCK_TIMEOUT_MS;
+    for (;;)
+    {
+        const held = claimTickOnce();
+        if (held !== null)
+        {
+            return held;
+        }
+        if (Date.now() >= deadline)
+        {
+            // A holder that is alive and has not been holding it long enough
+            // to be wedged is a tick that is running right now. Taking it from
+            // there would be the exclusion this lock provides, gone — so the
+            // caller is told, the loop catches it and ticks again, and a person
+            // who asked by hand gets one line rather than a second tick.
+            throw new CliError(`a tick is already running on this machine as process ${tickHolder() ?? "?"} — nothing was ticked, and the next tick decides again`);
+        }
+        await pause(TICK_LOCK_POLL_MS);
+    }
+}
+
+function claimTickOnce(): LockHold | null
+{
+    const file = tickFile();
+    const held = takeLock(file, String(process.pid));
+    if (held !== null)
+    {
+        return held;
+    }
+    const token = lockHolder(file);
+    if (token === null || !abandonedTick(file, token))
+    {
+        return null;
+    }
+    // Broken only if it is still the lock that was judged: a tick that took it
+    // between the judgement and here is working behind a lock of its own.
+    return breakLock(file, token) ? takeLock(file, String(process.pid)) : null;
+}
+
+// Whether the lock may be taken from whoever the file says has it.
+//
+// A lock that names no holder is a lock being taken right now, and it is the
+// one answer that must not be "yes": the file is created exclusively and its
+// token is written a syscall later, so a waiter that read the gap and called
+// it abandoned would delete the lock of the process that had just won it, and
+// two ticks would run believing they were alone. That is not a rare window —
+// two ticks started together arrive at it together. Only the age rule can
+// judge a lock with nothing in it, and it will hardly ever have to.
+function abandonedTick(file: string, token: string): boolean
+{
+    const pid = tickHolderOf(token);
+    if (pid !== null && !alive(pid))
+    {
+        return true;
+    }
+    return lockAge(lockPath(file)) > TICK_LOCK_WEDGED_MS;
+}
+
+function tickHolder(): number | null
+{
+    const token = lockHolder(tickFile());
+    return token === null ? null : tickHolderOf(token);
+}
+
+// The process that took the lock, as its token records it. `takeLock` and
+// `withLock` both write the identity they were given followed by a random
+// suffix, and the identity is the pid.
+function tickHolderOf(token: string): number | null
+{
+    const pid = Number.parseInt(token.split(".")[0] ?? "", 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+// How long the lock has existed. A lock file is created once and never written
+// again, so its own timestamp is when its holder took it.
+function lockAge(lock: string): number
+{
+    try
+    {
+        return Date.now() - statSync(lock).mtimeMs;
+    }
+    catch
+    {
+        return 0;
+    }
+}
+
+function pause(ms: number): Promise<void>
+{
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function readTick(): TickRecord | null

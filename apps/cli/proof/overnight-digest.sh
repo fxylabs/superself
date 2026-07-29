@@ -141,6 +141,15 @@ workspec()
     shift
     node "$MKSPEC" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
 }
+# One command array, written from its parts. A case that states an invocation
+# carrying a prompt has quotes, slashes and sentences in it, and escaping that
+# into a JSON literal inside a shell string is how a case ends up proving
+# something other than what it says.
+command_json()
+{
+    node -e 'process.stdout.write("command=" + JSON.stringify(process.argv.slice(1)))' "$@"
+}
+NODE_BIN="$(node -e 'process.stdout.write(process.execPath)')"
 # Drives one CLI command under a real pseudo-terminal, typing one line. A
 # policy is granted by a person at a terminal, so every case that sets one has
 # to reach the CLI the way that person does: the command sees a tty on stdin
@@ -502,6 +511,37 @@ SELF spec apply "$ROOT/ws-net.json" > /dev/null
 [ "$(tick_json | wake_outcome ws-net)" = "risk-not-allowed" ] || fail "a spec that curls an undeclared host was judged internal risk"
 [ -z "$(attempts_of "$WNET")" ] || fail "a spec that curls an undeclared host materialized an attempt"
 
+# ---------------------------------------------------------------------------
+# The list reads the invocation, not the prompt the invocation carries
+# ---------------------------------------------------------------------------
+# In this product a command token is usually an agent prompt: a real plan here
+# is ["claude", "-p", "<pages of English>", "--model", …]. English says
+# "release", "checkout", "delete" and "grant" in their ordinary senses, and a
+# list with no override by design must not refuse a night's work over a word in
+# somebody's sentence — there would be nothing to do about it but reword the
+# prompt. The other direction is the two cases above: the same command array
+# posting a charge through `sh -c curl …` is still refused, and still external.
+PROSE='the release notes must not delete the old checkout, nothing here may grant, deploy or buy anything, and see https://github.com/fxylabs/superself/issues/86 for the contract'
+
+WPROSE="$(SELF work add "a plan whose prompt says forbidden words in ordinary English" | tail -1)"
+SELF work start "$WPROSE" > /dev/null
+plan "$ROOT/plan-prose.json" "work=$WPROSE" "dest=$ROOT/dest/prose.md" "$(command_json "$NODE_BIN" "$AGENT" -p "$PROSE")"
+SELF attempt run "$ROOT/plan-prose.json" > /dev/null 2>&1 || fail "a plan was refused over words inside the prompt it carries"
+[ -f "$ROOT/dest/prose.md" ] || fail "the plan admitted on its invocation never ran"
+
+# and on the wake side, where the same reading also decides the risk class: a
+# prompt that cites an issue URL mentions a link, it does not reach one, and a
+# spec judged external for quoting one would be refused by every default policy
+# for the rest of the night
+WPWAKE="$(SELF work add "a spec whose prompt cites a URL is not a spec that reaches it" | tail -1)"
+SELF work start "$WPWAKE" > /dev/null
+workspec "$ROOT/ws-prose.json" "id=ws-prose" "work=$WPWAKE" "dest=$ROOT/dest/prose-wake.md" \
+    "providerName=night-provider" "$(command_json "$NODE_BIN" "$AGENT" -p "$PROSE")"
+SELF spec apply "$ROOT/ws-prose.json" > /dev/null
+[ "$(tick_json | wake_outcome ws-prose)" = "woken" ] || fail "a spec was held out of the wake set over words inside the prompt it carries"
+await '[ -f "$ROOT/dest/prose-wake.md" ]' || fail "the dispatch admitted on its invocation never published"
+await 'wake_settled ws-prose' || fail "the prose dispatch never finished"
+
 # mid-run: an attempt that is already running asks, and is refused where it
 # asked rather than queued for the morning
 WPROP="$(SELF work add "an attempt proposes a forbidden action mid-run" | tail -1)"
@@ -712,5 +752,43 @@ LEAK="$(SELF attempt propose "$AT_PROP" --action "read $HOME/notes.md" 2>&1 || t
 one_line "$LEAK"
 echo "$LEAK" | grep -q "absolute path under this machine's home directory" || fail "a proposal carried a home path into the synced log"
 [ "$(wc -l < "$LOG")" = "$BEFORE" ] || fail "a refused proposal still wrote an event"
+
+# ---------------------------------------------------------------------------
+# A tick reads the generations it is deciding about, and no others
+# ---------------------------------------------------------------------------
+# Reading one is a sha256 over the sealed blob, and most heads in a project
+# belong to work that is already finished — a tick that read all of them would
+# pay for the project's whole history every few seconds, while holding the
+# machine's tick mutex.
+#
+# Nothing observes a read directly, so the case makes one impossible to miss:
+# three finished units are left with a generation directory holding the same
+# generation twice, which is the one shape a read refuses outright. A tick that
+# reads every head fails on the first of them and wakes nothing; a tick that
+# reads only the heads it could still dispatch never opens them, and wakes the
+# one live spec standing beside them.
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4
+for n in 1 2 3
+do
+    W="$(SELF work add "finished work whose sealed generation is never read again ($n)" | tail -1)"
+    SELF work start "$W" > /dev/null
+    workspec "$ROOT/ws-done$n.json" "id=ws-done$n" "work=$W" "dest=$ROOT/dest/done$n.md" "providerName=night-provider"
+    SELF spec apply "$ROOT/ws-done$n.json" > /dev/null
+    SELF work done "$W" > /dev/null
+    node "$CLI_DIR/proof/spec-double-seal.mjs" "$STORE" demo "ws-done$n"
+done
+
+WLIVE="$(SELF work add "the one live unit beside three unreadable finished ones" | tail -1)"
+SELF work start "$WLIVE" > /dev/null
+workspec "$ROOT/ws-live.json" "id=ws-live" "work=$WLIVE" "dest=$ROOT/dest/live.md" "providerName=night-provider"
+SELF spec apply "$ROOT/ws-live.json" > /dev/null
+
+LAZY="$(tick_json)"
+[ "$(echo "$LAZY" | wake_outcome ws-live)" = "woken" ] || fail "a tick beside three unreadable finished generations dispatched nothing"
+for n in 1 2 3
+do
+    [ "$(echo "$LAZY" | wake_outcome "ws-done$n")" = "not-ready" ] || fail "a finished unit's generation was read rather than passed over"
+done
+await 'wake_settled ws-live' || fail "the dispatch beside the finished units never finished"
 
 echo "overnight policy and digest proof OK"

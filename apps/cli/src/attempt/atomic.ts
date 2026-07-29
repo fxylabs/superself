@@ -38,29 +38,14 @@ export function withLock<T>(file: string, run: () => T): T
     return release(waitForLock(lock, LOCK_TIMEOUT_MS), lock, run);
 }
 
-// The same exclusion, held across work that awaits. `withLock` cannot bracket
-// an asynchronous body: it would release the moment the call returned its
-// promise and hand the lock to the next waiter while the critical section was
-// still running. Acquisition is unchanged — exclusive creation, the same wait,
-// the same stale rule — and only the release moves to where the work ends.
-//
-// How long to wait belongs to the caller. Five seconds suits a counter
-// increment; a section that legitimately runs for longer needs patience that
-// outlasts it, or every contended caller breaks the lock and both run.
-export async function withLockAsync<T>(file: string, run: () => Promise<T>, timeoutMs: number = LOCK_TIMEOUT_MS): Promise<T>
-{
-    const lock = lockPath(file);
-    const held = waitForLock(lock, timeoutMs);
-    try
-    {
-        return await run();
-    }
-    finally
-    {
-        releaseHeld(held, lock);
-    }
-}
-
+// A section that awaits is not held through this primitive. The wait below is
+// synchronous — it has to be, because everything it serialises is synchronous
+// filesystem work in one process — and a caller that blocked the event loop
+// for the length of somebody else's asynchronous section would be a process
+// that answers no signal while it waits. Those callers take the lock by name
+// with `takeLock` and decide for themselves when a holder counts as abandoned:
+// `attempt/settlement.ts` and `daemon/state.ts` both do, and both ask whether
+// the holder is still alive rather than sitting out a fixed window.
 function waitForLock(lock: string, timeoutMs: number): Held
 {
     mkdirSync(dirname(lock), { recursive: true });

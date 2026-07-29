@@ -14,6 +14,18 @@ import { WorkSpec } from "../spec/workspec.js";
 // what may run and can never widen it, and there is deliberately no flag, no
 // risk class and no allow list anywhere in this product that admits one of
 // these. The only way past it is a person, awake, doing it themselves.
+//
+// What this layer is not, said here rather than left to be discovered: it is
+// not a security boundary. It reads a declaration — a tool list and an
+// invocation — as literal text, and ordinary shell composition walks past it.
+// `cu""rl` is not the word curl, a host decoded at runtime is not in the
+// command, `/dev/tcp/host/80` names no client, and a fetch assembled from
+// character codes says nothing at all. An author who wants past this gets past
+// it. It is a fail-closed default against the effect nobody meant to run while
+// they were asleep, which is the plainly written one that actually shows up.
+// The bound that holds against an author who is trying is the runner's
+// preflight — declared reads, writes, domains and secrets, enforced rather
+// than read — and this list sits in front of it, not instead of it.
 export const FORBIDDEN_ACTIONS = [
     "publish",
     "outreach",
@@ -123,17 +135,13 @@ export function forbiddenTools(tools: unknown): ForbiddenMatch | null
 // categorical list opt-in: an author who declared nothing was judged as having
 // asked for nothing.
 //
-// An absolute or relative path is judged by its last segment. The directories a
-// program happens to sit under on somebody's machine are not a declaration — a
-// node binary inside a checkout called `deploy-tools` says nothing about what
-// the run does — while `/usr/local/bin/aws` says everything. Every other token
-// is judged whole, so a shell payload with a host inside it is read as the one
-// thing it is: the effect this run will have.
+// What is read is the invocation, not everything the invocation carries —
+// `invocation()` below is where that line is drawn and what it costs.
 export function forbiddenCommand(command: unknown): ForbiddenMatch | null
 {
-    for (const token of tokens(command))
+    for (const token of invocation(command))
     {
-        const match = wordMatch(judged(token));
+        const match = wordMatch(token);
         if (match !== null)
         {
             return { action: match.word, category: match.category };
@@ -142,15 +150,76 @@ export function forbiddenCommand(command: unknown): ForbiddenMatch | null
     return null;
 }
 
+// The tokens of a command array that state what it will do, with the payload
+// it merely carries left out.
+//
+// A command array is one invocation rather than a document. argv[0] is the
+// program, and what follows is either part of the invocation — a subcommand, a
+// flag, a path, a URL — or an argument only the program itself knows how to
+// read. In this product that argument is usually an agent prompt: a real plan
+// here is ["claude", "-p", "<thousands of words of English>", "--model", …],
+// and English contains "release", "checkout", "delete" and "grant" in their
+// ordinary senses. Matching a table of program names against prose refuses
+// legitimate work, and this list has no override by design — so a false
+// positive here has no recovery except rewording somebody's prompt.
+//
+// The line: a token with whitespace in it was quoted to arrive as one
+// argument, which is what a payload looks like and what an invocation token
+// never is. The one exception is a shell's -c script, which is not carried
+// anywhere — it is invocation text this machine executes word for word, and it
+// is exactly where a command that declares nothing else hides a charge posted
+// with `curl`.
+//
+// What the line gives up, stated rather than found out later:
+//   - a payload that is a single word ("deploy") is still read as invocation,
+//     because nothing tells it apart from a subcommand;
+//   - a shell script that itself carries a prompt — sh -c "claude -p '…'" — is
+//     read as code, so a word in that prose can still refuse it. Written as
+//     ["claude", "-p", …] the same plan is payload again, which is how every
+//     real plan in this product is written;
+//   - a payload in another language (node -e, python -c) is not read at all.
+//     This table is program and verb vocabulary, which is what shell words are
+//     and what program source is not, and matching it against source would
+//     produce noise rather than signal. What such a run may reach is the
+//     capability declaration's statement and the runner's preflight enforces it.
+function invocation(command: unknown): string[]
+{
+    const argv = tokens(command);
+    const script = shellScript(argv);
+    return argv.filter((token, index) => index === 0 || index === script || !/\s/.test(token)).map(judged);
+}
+
+// The shells whose -c argument is a script rather than a payload, and the flags
+// that say so: `-c`, and the combined forms a wrapper writes like `-lc`.
+const SHELLS = ["sh", "bash", "zsh", "dash", "ksh", "ash"];
+const SHELL_C = /^-[a-z]*c$/;
+
+// Where the script sits in the argument vector, or -1 when this command is not
+// a shell being handed one.
+function shellScript(argv: string[]): number
+{
+    if (argv.length === 0 || !SHELLS.includes(judged(argv[0])))
+    {
+        return -1;
+    }
+    const flag = argv.findIndex((token, index) => index > 0 && SHELL_C.test(token));
+    return flag === -1 ? -1 : flag + 1;
+}
+
 function tokens(command: unknown): string[]
 {
     return Array.isArray(command) ? command.filter((token): token is string => typeof token === "string") : [];
 }
 
 // A token is a path when it is one filesystem name and nothing else. A shell
-// payload has spaces in it and a bare URL has no leading slash, and neither is
+// script has spaces in it and a bare URL has no leading slash, and neither is
 // a program this machine happens to store somewhere.
 const PATH_TOKEN = /^(?:\.{0,2}|~)\/\S*$/;
+
+// An absolute or relative path is judged by its last segment. The directories a
+// program happens to sit under on somebody's machine are not a declaration — a
+// node binary inside a checkout called `deploy-tools` says nothing about what
+// the run does — while `/usr/local/bin/aws` says everything.
 
 function judged(token: string): string
 {
@@ -166,9 +235,14 @@ const NETWORK_WORDS = ["curl", "wget", "ssh", "scp", "sftp", "rsync", "netcat", 
 // boundary from declared domains, so a spec that declares none and curls a host
 // it never named is not internal risk — it is the case the declaration failed
 // to state, and narrowing is the only honest way to guess.
+//
+// Read over the invocation for the same reason the forbidden list is: a URL
+// quoted inside an agent's prompt is a thing the prompt mentions, and a run
+// that is judged external for citing an issue link would be refused by every
+// default policy for the rest of the night.
 export function commandReachesNetwork(command: unknown): boolean
 {
-    return tokens(command).some((token) => reaches(judged(token)));
+    return invocation(command).some(reaches);
 }
 
 function reaches(token: string): boolean
