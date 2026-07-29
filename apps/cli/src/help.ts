@@ -335,6 +335,33 @@ export const COMMANDS: CommandHelp[] = [
         ]
     },
     {
+        name: "daemon",
+        usage: [
+            { syntax: "daemon start [--interval ms] [--foreground]", description: ["supervise this project's attempts without a chat turn"] },
+            { syntax: "daemon stop | status [--json]", description: ["stop the supervisor, or report what it has done"] },
+            { syntax: "daemon tick [--json]", description: ["run exactly one supervision pass in the foreground"] },
+            { syntax: "daemon circuits [--json]", description: ["provider circuit state and any capacity reset"] }
+        ],
+        detail: [
+            "run the supervision loop over this project's attempts: reconcile what is",
+            "still being driven against what has exited, settle a confirmed exit",
+            "through the completion gate, release the work unit it held, and wake",
+            "ready approved work that has a work spec.",
+            "",
+            "One supervisor per machine, supervising the project it was started in.",
+            "It is not one per project: a start from another project's checkout is",
+            "refused while this one runs, and that project's attempts are left",
+            "unsupervised until it stops.",
+            "",
+            "`tick` is one iteration of exactly that, in the foreground — running it",
+            "twice in a row does nothing the second time.",
+            "",
+            "  --interval <ms>     how long the loop waits between ticks (default 5000)",
+            "  --foreground        run the loop in this process instead of detaching it",
+            "  --json              machine-readable status, tick, or circuit listing"
+        ]
+    },
+    {
         name: "artifact",
         usage: [
             {

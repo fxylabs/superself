@@ -7,6 +7,7 @@ import { AttemptPlan } from "./plan.js";
 import { adapterOf, runPreflight } from "./preflight.js";
 import { redact, scopeFor } from "./redact.js";
 import { AttemptResult, blockOnCapability, childEnv, claimWorkUnit, completeAttempt, failAttempt, localChecks, nextFence, prepareSpool, recordAttemptEvent, RunOptions } from "./run.js";
+import { settling } from "./settlement.js";
 import { AttemptStatus, openSpool, ownerOf, OWNER_FILE, Spool } from "./spool.js";
 import { alive, OwnedTree, ownedTree, processGroup, processStartTime, treeAlive, treeContain } from "./tree.js";
 import { CliError } from "../types.js";
@@ -123,7 +124,21 @@ export function externalHeartbeat(id: string): void
 // a conclusion from. Everything after it is the runner's ordinary settlement:
 // the completion gate on a clean exit with a completed envelope, a typed
 // failure otherwise.
+// Behind the attempt's settlement lock, from before the confirmed exit is
+// written to after the gate has finished. The moment the exit is on record and
+// the payload's group is empty, everything a supervisor can observe about this
+// attempt says its settlement died — the launcher inside the gate is not
+// visible in the process the status names, and the whole gate can easily
+// outlast one supervision interval. Without the lock a tick landing in that
+// window mints a newer fence, runs the same gate concurrently, and fences out
+// the healthy launcher that was finishing properly; `attempt exited`, the
+// documented settlement verb, then fails for a run that in fact completed.
 export async function externalExited(ctx: ProjectContext, id: string, code: number, options: RunOptions): Promise<AttemptResult>
+{
+    return await settling(id, () => exitedUnderLock(ctx, id, code, options));
+}
+
+async function exitedUnderLock(ctx: ProjectContext, id: string, code: number, options: RunOptions): Promise<AttemptResult>
 {
     const spool = openSpool(id);
     const status = requireStatus(spool, id);

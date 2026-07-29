@@ -5,6 +5,7 @@ import { helpHint, parseCommand, subcommand, unknownOption } from "./args.js";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
 import { runAttemptCommand } from "./attempt/commands.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
+import { runDaemonCommand } from "./daemon/commands.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
@@ -76,6 +77,7 @@ async function main(argv: string[]): Promise<void>
         case "artifact": cmdArtifact(rest); break;
         case "spec": await runSpecCommand(rest); break;
         case "attempt": await runAttemptCommand(rest); break;
+        case "daemon": await runDaemonCommand(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
