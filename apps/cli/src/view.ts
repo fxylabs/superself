@@ -244,15 +244,51 @@ export function viewFile(storeDir: string, slug: string | undefined): string
 
 export function openFile(ctx: CliContext, file: string): void
 {
-    launchFile(ctx, file);
+    if (!launchFile(ctx, file))
+    {
+        console.log(`${file} — nobody is at a terminal in this run, so the GUI launch was suppressed; open that path yourself`);
+        return;
+    }
     console.log(`opened ${file} — the page reloads itself when state changes and you are not interacting`);
 }
 
-export function launchFile(ctx: CliContext, file: string): void
+// Every launch of the OS default app puts a window on somebody's desktop, and
+// a run with no terminal has nobody in front of one: an agent session that
+// opened an artifact left the operator hunting an intrusion. The terminal is
+// what says a person asked for the window, so the launch happens only there
+// and every caller of this primitive inherits the guard. The return value says
+// which of the two happened, so the caller can say so too.
+export function launchFile(ctx: CliContext, file: string): boolean
 {
+    if (unattended() || !atTerminal())
+    {
+        return false;
+    }
     const command = process.platform === "darwin" ? "open"
         : process.platform === "win32" ? "explorer" : "xdg-open";
     spawn(command, [file], { cwd: ctx.workspaceDir, detached: true, stdio: "ignore" }).unref();
+    return true;
+}
+
+// A run that says itself nobody is watching it. A runner can hand its child a
+// pty on both ends and still have no desktop in front of it, so this is read
+// before the terminal check rather than alongside it: the marker settles the
+// question and the tty never gets to overrule it. `self attempt run` marks
+// every child it starts (SUPERSELF_SESSION, set in the attempt boundary's
+// environment), which is what makes this CLI's own agent runs fail closed
+// instead of resting on markers somebody else has to remember to set.
+function unattended(): boolean
+{
+    return process.env.CI !== undefined
+        || process.env.SUPERSELF_SESSION !== undefined
+        || process.env.SUPERSELF_ATTEMPT_ID !== undefined;
+}
+
+// A terminal on both ends is the signal, as it is for the human gate.
+function atTerminal(): boolean
+{
+    return process.stdin.isTTY === true
+        && process.stdout.isTTY === true;
 }
 
 function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
