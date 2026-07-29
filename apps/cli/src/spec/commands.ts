@@ -7,6 +7,7 @@ import { withLock } from "../attempt/atomic.js";
 import { AttemptPlan } from "../attempt/plan.js";
 import { runAttempt } from "../attempt/run.js";
 import { liveAttemptFor } from "../attempt/spool.js";
+import { approvalPending } from "../completion.js";
 import { buildModel, WorkState } from "../model.js";
 import { ProjectContext, projectStateDir, requireProject } from "../paths.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
@@ -341,6 +342,12 @@ function requireUnblockedWork(ctx: ProjectContext, id: string): void
     {
         const why = work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`;
         throw new CliError(`${id} is blocked on ${work.blockedOn}${why} — resolve the blocker and \`self work unblock ${id}\` before dispatching`);
+    }
+    // The same durable approval state the supervisor's wake path reads. A unit
+    // waiting on a person is waiting whoever issues the dispatch.
+    if (approvalPending(work))
+    {
+        throw new CliError(`${id} requires human approval before anything is dispatched at it — grant it from an interactive terminal with \`self work approve ${id}\``);
     }
 }
 

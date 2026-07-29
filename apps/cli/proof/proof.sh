@@ -2159,4 +2159,9 @@ bash "$CLI_DIR/proof/integration.sh"
 # root of its own
 bash "$CLI_DIR/proof/daemon-loop.sh"
 
+# semantic completion dispatches real attempts, settles one through a
+# supervision tick, and opens a pseudo terminal for a human approval, so it
+# runs under a machine root of its own as well
+bash "$CLI_DIR/proof/semantic-completion.sh"
+
 echo "proof OK"
