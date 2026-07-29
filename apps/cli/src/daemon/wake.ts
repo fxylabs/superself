@@ -8,9 +8,10 @@ import { buildModel, WorkState } from "../model.js";
 import { ProjectContext } from "../paths.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { listHeads, SpecHead } from "../spec/store.js";
+import { WorkSpec } from "../spec/workspec.js";
 import { admitDispatch } from "./circuits.js";
-import { forbiddenRefusal, forbiddenTools } from "./forbidden.js";
-import { generationOf, loadPolicy, OvernightPolicy, policyRefusal, PolicyOutcome, windowSpend, WindowSpend } from "./policy.js";
+import { forbiddenRefusal, forbiddenSpec } from "./forbidden.js";
+import { declaredBudget, generationOf, loadPolicy, OvernightPolicy, policyRefusal, PolicyOutcome, TickDispatch, windowSpend, WindowSpend } from "./policy.js";
 import { recordWake, wakeInFlight } from "./state.js";
 
 // Why a work unit did not become a dispatch this tick, or that it did. Every
@@ -67,33 +68,44 @@ export function wakeReady(ctx: ProjectContext, now: Date): WakeDecision[]
     const works = buildModel(ctx.storeDir, ctx.project, now).works;
     const policy = loadPolicy(ctx.storeDir, ctx.project);
     const spend = policy === null ? null : windowSpend(ctx, policy, now);
-    let dispatched = 0;
+    const night: Night = { policy, spend, dispatched: { count: 0, declaredUsd: 0 } };
     return listHeads(ctx.storeDir, ctx.project).map((head) =>
     {
-        const decision = decide(ctx, head, works.find((work) => work.id === head.work), { policy, spend, dispatched }, now);
-        dispatched += decision.outcome === "woken" ? 1 : 0;
+        // Read once and carried, rather than read again by every gate that
+        // wants it: what the policy is judging, what its budget is committing
+        // and which provider the dispatch reaches are all statements about the
+        // same sealed bytes.
+        const spec = generationOf(ctx, head);
+        const decision = decide(ctx, head, spec, works.find((work) => work.id === head.work), night, now);
+        if (decision.outcome === "woken")
+        {
+            night.dispatched.count += 1;
+            night.dispatched.declaredUsd += spec === null ? 0 : declaredBudget(spec);
+        }
         return decision;
     });
 }
 
 // What the policy is being asked against, carried through one tick rather than
 // re-derived per generation: the spend is a fold over the whole window, and a
-// wake set of any size would otherwise re-read the log once per entry.
+// wake set of any size would otherwise re-read the log once per entry. What
+// this tick has itself handed out is carried the same way and for the same
+// reason — it is spending and concurrency the fold cannot see yet.
 interface Night
 {
     policy: OvernightPolicy | null;
     spend: WindowSpend | null;
-    dispatched: number;
+    dispatched: TickDispatch;
 }
 
-function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined, night: Night, now: Date): WakeDecision
+function decide(ctx: ProjectContext, head: SpecHead, spec: WorkSpec | null, work: WorkState | undefined, night: Night, now: Date): WakeDecision
 {
     const at = { work: head.work, workSpec: head.workSpec, generation: head.generation };
     if (work === undefined || work.status === "done")
     {
         return { ...at, outcome: "not-ready" };
     }
-    const refusal = nightRefusal(ctx, head, night, now);
+    const refusal = nightRefusal(ctx.project, head, spec, night, now);
     if (refusal !== null)
     {
         return { ...at, ...refusal };
@@ -122,12 +134,11 @@ function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined
     {
         return { ...at, outcome: "materialized" };
     }
-    const provider = providerOf(ctx, head);
-    if (provider === null)
+    if (spec === null)
     {
         return { ...at, outcome: "no-spec" };
     }
-    const admission = admitDispatch(provider, now);
+    const admission = admitDispatch(spec.provider.name, now);
     if (admission !== "admitted")
     {
         return { ...at, outcome: admission };
@@ -142,23 +153,22 @@ function decide(ctx: ProjectContext, head: SpecHead, work: WorkState | undefined
 // everything the policy itself says is a bound the operator chose and may
 // change. A generation that is not sealed is left to the gates below, which
 // already refuse it for the reason it is actually refused for.
-function nightRefusal(ctx: ProjectContext, head: SpecHead, night: Night, now: Date): { outcome: WakeOutcome; detail: string } | null
+function nightRefusal(project: string, head: SpecHead, spec: WorkSpec | null, night: Night, now: Date): { outcome: WakeOutcome; detail: string } | null
 {
     if (night.policy === null || night.spend === null)
     {
         return { outcome: "no-policy", detail: "no overnight policy is in force — `self overnight set` is what grants unattended dispatch" };
     }
-    const spec = generationOf(ctx, head);
     if (spec === null)
     {
         return null;
     }
-    const forbidden = forbiddenTools(spec.capabilities.tools);
+    const forbidden = forbiddenSpec(spec);
     if (forbidden !== null)
     {
         return { outcome: "forbidden-action", detail: forbiddenRefusal(forbidden, `${head.workSpec} generation ${head.generation}`) };
     }
-    const refusal = policyRefusal(night.policy, spec, ctx.project, night.spend, night.dispatched, now);
+    const refusal = policyRefusal(night.policy, spec, project, night.spend, night.dispatched, now);
     return refusal === null ? null : { outcome: refusal.outcome, detail: refusal.detail };
 }
 

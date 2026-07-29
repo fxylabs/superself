@@ -141,6 +141,52 @@ workspec()
     shift
     node "$MKSPEC" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
 }
+# Drives one CLI command under a real pseudo-terminal, typing one line. A
+# policy is granted by a person at a terminal, so every case that sets one has
+# to reach the CLI the way that person does: the command sees a tty on stdin
+# and stdout, and the typed line arrives through the terminal.
+pty_self()
+{
+    local typed="$1"
+    shift
+    # The feeder stays open after the line: closing it immediately delivers an
+    # EOF to the terminal before the prompt has read, which is not what a
+    # human's terminal ever does.
+    if script --version > /dev/null 2>&1
+    then
+        { printf '%s\n' "$typed"; sleep 1; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
+    else
+        { printf '%s\n' "$typed"; sleep 1; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
+    fi
+}
+# The challenge `overnight set` asks for is the window being granted, so it is
+# read off the very flags the case passed rather than restated beside them.
+challenge_for()
+{
+    local from="22:00" to="07:00" prev=""
+    for arg in "$@"
+    do
+        case "$prev" in
+            --from) from="$arg";;
+            --to) to="$arg";;
+        esac
+        prev="$arg"
+    done
+    printf '%s-%s' "$from" "$to"
+}
+# One policy set, at a terminal, and proven to have landed. A pty run reports
+# nothing this shell can read, so the record it left is what says it worked —
+# without this, a gate that silently refused would leave every case below
+# passing against the policy the case before it set.
+set_policy()
+{
+    local before after
+    before="$(count_events overnight.set)"
+    pty_self "$(challenge_for "$@")" overnight set "$@"
+    after="$(count_events overnight.set)"
+    [ "$after" = "$((before + 1))" ] || fail "overnight set recorded no policy: $*"
+}
+
 # A window that is nowhere near now, and one that certainly holds it. Written
 # from the machine's own clock rather than from a fixed pair of times: a case
 # about "outside the window" must be outside it whatever hour the proof runs.
@@ -160,11 +206,11 @@ process.stdout.write(`${String(from).padStart(2, "0")}:00 ${String(to).padStart(
 [ "$(SELF overnight show)" = "no overnight policy is in force — the daemon supervises what exists and dispatches nothing new" ] \
     || fail "a project with no policy did not say so"
 
-SELF overnight set --from 22:00 --to 07:00 --digest-at 07:30 --auto-dispatch --max-concurrent 2 > /dev/null
+set_policy --from 22:00 --to 07:00 --digest-at 07:30 --auto-dispatch --max-concurrent 2
 SELF overnight show | grep -q "version       1" || fail "the first policy was not version 1"
 SELF overnight show | grep -q "22:00–07:00" || fail "the window the policy was set with is not what it shows"
 
-SELF overnight set --from 23:00 --to 06:00 > /dev/null
+set_policy --from 23:00 --to 06:00
 [ "$(SELF overnight show --json | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0,"utf8")).version))')" = "2" ] \
     || fail "a second policy did not supersede the first as version 2"
 
@@ -179,7 +225,7 @@ echo "$NOTHING" | grep -q "nothing to revoke" || fail "revoking twice was not re
 
 # and the next set counts from where the revoked one left off: a version reused
 # after a revocation would make two different nights indistinguishable
-SELF overnight set --from 22:00 --to 07:00 > /dev/null
+set_policy --from 22:00 --to 07:00
 [ "$(SELF overnight show --json | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0,"utf8")).version))')" = "3" ] \
     || fail "a policy set after a revocation reused a version"
 
@@ -187,7 +233,7 @@ SELF overnight set --from 22:00 --to 07:00 > /dev/null
 # Outside the window a tick settles and releases, and wakes nothing
 # ---------------------------------------------------------------------------
 read -r AWAY_FROM AWAY_TO <<< "$(away_window 3)"
-SELF overnight set --from "$AWAY_FROM" --to "$AWAY_TO" --auto-dispatch --max-concurrent 4 > /dev/null
+set_policy --from "$AWAY_FROM" --to "$AWAY_TO" --auto-dispatch --max-concurrent 4
 
 WWAKE="$(SELF work add "eligible work waits for the window and then runs" | tail -1)"
 SELF work start "$WWAKE" > /dev/null
@@ -217,7 +263,7 @@ SELF overnight off > /dev/null
 [ -z "$(attempts_of "$WWAKE")" ] || fail "a tick with no policy materialized an attempt"
 
 # and a window that holds now dispatches the very same work
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 > /dev/null
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4
 [ "$(tick_json | wake_outcome ws-wake)" = "woken" ] || fail "eligible work was not dispatched inside the window"
 await '[ -f "$ROOT/dest/wake.md" ]' || fail "the woken dispatch never published its artifact"
 await 'wake_settled ws-wake' || fail "the woken dispatch never finished"
@@ -242,18 +288,18 @@ ALLOW="$(tick_json)"
 [ -z "$(attempts_of "$WRISK")" ] || fail "a disallowed risk class materialized an attempt"
 
 # naming the kind is what admits it, and nothing else changed
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 --kind implementation --kind research > /dev/null
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 --kind implementation --kind research
 [ "$(tick_json | wake_outcome ws-kind)" = "woken" ] || fail "a kind the policy names was still refused"
 await 'wake_settled ws-kind' || fail "the research dispatch never finished"
 
 # a policy that names another project wakes nothing here
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --project other > /dev/null
+set_policy --from 00:00 --to 00:00 --auto-dispatch --project other
 [ "$(tick_json | wake_outcome ws-risk)" = "project-not-allowed" ] || fail "a project outside the allow list was woken"
 
 # ---------------------------------------------------------------------------
 # The concurrency cap holds
 # ---------------------------------------------------------------------------
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 2 > /dev/null
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 2
 for n in 1 2 3
 do
     W="$(SELF work add "one of three ready units under a cap of two ($n)" | tail -1)"
@@ -284,7 +330,7 @@ SELF spec apply "$ROOT/ws-bound.json" > /dev/null
 
 bound_outcome()
 {
-    SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 "$@" > /dev/null
+    set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 "$@"
     tick_json | wake_outcome ws-bound
 }
 
@@ -305,10 +351,68 @@ SELF attempt run "$ROOT/plan-stop.json" > /dev/null 2>&1 || true
     || fail "a spec inside every bound the policy carries was still refused"
 await 'wake_settled ws-bound' || fail "the bounded dispatch never finished"
 
+# a policy names a model class the way a completion policy does. `opus` is what
+# an operator writes when they mean the family, and a window that refused
+# claude-opus-5 for not being that exact string would read as a bug rather than
+# as a bound. A provider name has no family to stand for, so it stays exact.
+WCLASS="$(SELF work add "a policy that names a model class rather than an identifier" | tail -1)"
+SELF work start "$WCLASS" > /dev/null
+workspec "$ROOT/ws-class.json" "id=ws-class" "work=$WCLASS" "dest=$ROOT/dest/class.md" \
+    "providerName=night-provider" "model=claude-opus-5"
+SELF spec apply "$ROOT/ws-class.json" > /dev/null
+
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 --model opus
+[ "$(tick_json | wake_outcome ws-class)" = "woken" ] || fail "a policy naming a model class refused the model that belongs to it"
+await 'wake_settled ws-class' || fail "the class-matched dispatch never finished"
+
+# ---------------------------------------------------------------------------
+# The declared-cost ceiling holds inside one tick, not only across ticks
+# ---------------------------------------------------------------------------
+# Two eligible specs, each declaring more than half the window's remaining
+# ceiling. Both are judged in one pass against one fold of the log, and the
+# first one woken records its `run.woken` far too late for that fold to see —
+# so a tick that measured each of them against the log alone would find the
+# same room twice and wake both, committing $120 of a $100 ceiling in one pass.
+# What this tick has already handed out is part of what the next generation is
+# measured against.
+#
+# The margin is wide on purpose: the cases above have committed a few dollars
+# of this window already, and what is under test is the second spec of this
+# pair, not the arithmetic of everything that ran before it.
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 --budget-usd 100
+for n in 1 2
+do
+    W="$(SELF work add "one of two specs whose declared budgets do not both fit ($n)" | tail -1)"
+    SELF work start "$W" > /dev/null
+    workspec "$ROOT/ws-usd$n.json" "id=ws-usd$n" "work=$W" "dest=$ROOT/dest/usd$n.md" \
+        "providerName=night-provider" "budgetUsd=60"
+    SELF spec apply "$ROOT/ws-usd$n.json" > /dev/null
+done
+
+USD="$(tick_json)"
+USD_WOKEN=0
+USD_DEFERRED=""
+for n in 1 2
+do
+    case "$(echo "$USD" | wake_outcome "ws-usd$n")" in
+        woken) USD_WOKEN=$((USD_WOKEN + 1));;
+        over-budget) USD_DEFERRED="ws-usd$n";;
+    esac
+done
+[ "$USD_WOKEN" = "1" ] || fail "one tick woke $USD_WOKEN specs whose declared budgets together exceed the window's ceiling"
+[ -n "$USD_DEFERRED" ] || fail "the spec that no longer fits the ceiling was refused for some other reason than the budget"
+[ "$(SELF spec show "$USD_DEFERRED" --json | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0,"utf8")).attempts.length))')" = "0" ] \
+    || fail "the spec refused on the ceiling still materialized an attempt"
+await 'wake_settled ws-usd1 && wake_settled ws-usd2' || fail "the budgeted dispatch never finished"
+
+# and the next tick refuses it again, now against a ceiling the log itself
+# accounts for: what one tick committed is what the next one reads
+[ "$(tick_json | wake_outcome "$USD_DEFERRED")" = "over-budget" ] || fail "the spec refused on the ceiling was not refused by the following tick"
+
 # ---------------------------------------------------------------------------
 # Approval and the completion policy are not widened by any window
 # ---------------------------------------------------------------------------
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4 > /dev/null
+set_policy --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 4
 
 WAPP="$(SELF work add "work a person has to approve stays waiting all night" | tail -1)"
 SELF work start "$WAPP" > /dev/null
@@ -367,6 +471,36 @@ workspec "$ROOT/ws-forb.json" "id=ws-forb" "work=$WFORB" "tools=deploy" "dest=$R
 SELF spec apply "$ROOT/ws-forb.json" > /dev/null
 [ "$(tick_json | wake_outcome ws-forb)" = "forbidden-action" ] || fail "a spec declaring a forbidden action entered the overnight wake set"
 [ -z "$(attempts_of "$WFORB")" ] || fail "a spec declaring a forbidden action materialized an attempt"
+
+# and a declaration that named no tool at all is judged by what it will run.
+# The command is sealed declared bytes exactly like the tool list, and a run
+# that reaches a payment API through it has asked for a payment however empty
+# its capabilities read — the categorical list is not opt-in.
+PAY='command=["/bin/sh","-c","curl -s -X POST https://api.stripe.invalid/v1/charges -d amount=999"]'
+plan "$ROOT/plan-cmd.json" "work=$WFORB" "dest=$ROOT/dest/cmd.md" "$PAY"
+CMDREG="$(SELF attempt register "$ROOT/plan-cmd.json" 2>&1 || true)"
+one_line "$CMDREG"
+echo "$CMDREG" | grep -q "which is payment" || fail "a plan whose command posts a charge was registered with an empty tool list"
+[ -z "$(attempts_of "$WFORB")" ] || fail "a plan refused on its command still left an attempt"
+
+WPAY="$(SELF work add "a spec that reaches a payment API through its command alone" | tail -1)"
+SELF work start "$WPAY" > /dev/null
+workspec "$ROOT/ws-pay.json" "id=ws-pay" "work=$WPAY" "dest=$ROOT/dest/pay.md" "providerName=night-provider" "$PAY"
+SELF spec apply "$ROOT/ws-pay.json" > /dev/null
+[ "$(tick_json | wake_outcome ws-pay)" = "forbidden-action" ] || fail "a spec whose command posts a charge entered the overnight wake set"
+[ -z "$(attempts_of "$WPAY")" ] || fail "a spec whose command posts a charge materialized an attempt"
+
+# the same bytes decide the risk class. Preflight probes the domains a spec
+# declared and the default boundary wrapper is empty, so a spec that declares
+# no domain and curls a host anyway is not internal risk — reading only the
+# capability list would hand it to a default policy to wake.
+WNET="$(SELF work add "a spec that reaches a host it never declared" | tail -1)"
+SELF work start "$WNET" > /dev/null
+workspec "$ROOT/ws-net.json" "id=ws-net" "work=$WNET" "dest=$ROOT/dest/net.md" "providerName=night-provider" \
+    'command=["/bin/sh","-c","curl -s https://api.example.invalid/status"]'
+SELF spec apply "$ROOT/ws-net.json" > /dev/null
+[ "$(tick_json | wake_outcome ws-net)" = "risk-not-allowed" ] || fail "a spec that curls an undeclared host was judged internal risk"
+[ -z "$(attempts_of "$WNET")" ] || fail "a spec that curls an undeclared host materialized an attempt"
 
 # mid-run: an attempt that is already running asks, and is refused where it
 # asked rather than queued for the morning
@@ -495,6 +629,48 @@ import(guard).then(({ assertSanitized }) =>
 grep -q "$HOME" "$ROOT/digest.txt" && fail "the digest printed a path under this machine's home directory"
 grep -qi "supervised design complete" "$ROOT/digest.txt" && fail "the digest carried an agent's own prose"
 grep -q "$RUNNER" "$ROOT/digest.txt" && fail "the digest named a machine-local spool"
+
+# ---------------------------------------------------------------------------
+# The policy is granted by a person, and never from inside an attempt
+# ---------------------------------------------------------------------------
+# The verb that authorizes unattended spending is the one an agent must not be
+# able to reach: a policy an attempt could write is a policy that bounds
+# nothing, and the widest one in this file would be one command away from
+# every run the supervisor starts.
+GRANTS="$(count_events overnight.set)"
+policy_version()
+{
+    SELF overnight show --json | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0,"utf8")).version))'
+}
+IN_FORCE="$(policy_version)"
+
+PIPED="$(SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --risk privileged --max-concurrent 16 < /dev/null 2>&1 || true)"
+one_line "$PIPED"
+echo "$PIPED" | grep -q "human_gate_unavailable" || fail "a policy was granted to a process with no terminal"
+
+# the marker the runner stamps on every child, either one of them
+for marker in SUPERSELF_SESSION SUPERSELF_ATTEMPT_ID
+do
+    MARKED="$(env "$marker=at-evil" node "$SELF_JS" overnight set --auto-dispatch --risk privileged --max-concurrent 16 2>&1 || true)"
+    one_line "$MARKED"
+    echo "$MARKED" | grep -q "cannot be set from an agent attempt" || fail "$marker did not refuse a policy set from inside an attempt"
+    echo "$MARKED" | grep -q "$marker" || fail "the refusal did not name the marker it read"
+done
+
+# revoking is refused the same way — an attempt does not change the document it
+# runs under, in either direction
+REVOKED="$(env SUPERSELF_ATTEMPT_ID=at-evil node "$SELF_JS" overnight off 2>&1 || true)"
+one_line "$REVOKED"
+echo "$REVOKED" | grep -q "cannot be revoked from an agent attempt" || fail "an attempt revoked the policy that governs it"
+
+# and a terminal alone is not enough: what is typed has to be the window being
+# granted, so a person states what they are authorizing rather than that they
+# authorize something
+pty_self "not-the-window" overnight set --from 00:00 --to 00:00 --auto-dispatch --risk privileged --max-concurrent 16
+
+[ "$(count_events overnight.set)" = "$GRANTS" ] || fail "a refused grant still recorded a policy"
+[ "$(policy_version)" = "$IN_FORCE" ] || fail "the policy in force changed under refused grants"
+SELF overnight show | grep -q "concurrency   at most 16" && fail "a refused grant widened the policy in force"
 
 # ---------------------------------------------------------------------------
 # The verbs are parse-guarded and documented like every other verb

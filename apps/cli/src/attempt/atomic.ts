@@ -34,24 +34,52 @@ const LOCK_TIMEOUT_MS = 5_000;
 // which of them goes first.
 export function withLock<T>(file: string, run: () => T): T
 {
-    const lock = `${file}.lock`;
+    const lock = lockPath(file);
+    return release(waitForLock(lock, LOCK_TIMEOUT_MS), lock, run);
+}
+
+// The same exclusion, held across work that awaits. `withLock` cannot bracket
+// an asynchronous body: it would release the moment the call returned its
+// promise and hand the lock to the next waiter while the critical section was
+// still running. Acquisition is unchanged — exclusive creation, the same wait,
+// the same stale rule — and only the release moves to where the work ends.
+//
+// How long to wait belongs to the caller. Five seconds suits a counter
+// increment; a section that legitimately runs for longer needs patience that
+// outlasts it, or every contended caller breaks the lock and both run.
+export async function withLockAsync<T>(file: string, run: () => Promise<T>, timeoutMs: number = LOCK_TIMEOUT_MS): Promise<T>
+{
+    const lock = lockPath(file);
+    const held = waitForLock(lock, timeoutMs);
+    try
+    {
+        return await run();
+    }
+    finally
+    {
+        releaseHeld(held, lock);
+    }
+}
+
+function waitForLock(lock: string, timeoutMs: number): Held
+{
     mkdirSync(dirname(lock), { recursive: true });
     const first = acquire(lock);
     if (first !== null)
     {
-        return release(first, lock, run);
+        return first;
     }
     // Which holder this process is waiting on. What makes breaking a lock
     // defensible is that one holder sat on it for the whole window, so the
     // identity is read before the wait and checked again after it.
     const waitingOn = tokenOf(lock);
-    for (let waited = 0; waited < LOCK_TIMEOUT_MS; waited += LOCK_POLL_MS)
+    for (let waited = 0; waited < timeoutMs; waited += LOCK_POLL_MS)
     {
         pause(LOCK_POLL_MS);
         const held = acquire(lock);
         if (held !== null)
         {
-            return release(held, lock, run);
+            return held;
         }
     }
     const taken = breakStale(lock, waitingOn);
@@ -65,7 +93,7 @@ export function withLock<T>(file: string, run: () => T): T
         // failure it can retry instead of a silent double write.
         throw new CliError(`could not take ${lock}: another process holds it and it is not stale — nothing was written`);
     }
-    return release(taken, lock, run);
+    return taken;
 }
 
 // A lock still held by the same owner after the whole window belongs to a

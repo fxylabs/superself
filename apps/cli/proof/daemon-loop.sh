@@ -47,19 +47,43 @@ mkdir -p "$HOME/.claude" "$ROOT/A/ws/demo" "$ROOT/dest"
 git config --global user.name "proof A"
 git config --global user.email "proof-A@superself.local"
 
+# The markers the runner sets on every child it starts. This proof drives the
+# CLI as a person would — it grants the policy the wake cases run under — so it
+# must not inherit an attempt marker from whatever started it.
+unset SUPERSELF_SESSION SUPERSELF_ATTEMPT_ID || true
+
 cd "$ROOT/A/ws"
 SELF init --agents > /dev/null
 cd "$ROOT/A/ws/demo"
-git init -q
+# The initial branch is named rather than inherited: a machine whose git starts
+# repositories on `master` would leave the cases below on a branch they never
+# named.
+git init -q -b main
 SELF project add --name demo --desc "supervision loop harness" > /dev/null
 SELF goal set "prove the supervision loop" > /dev/null
+
+# A policy is granted by a person at a terminal, so the one this harness runs
+# under is granted the way that person grants it: a real pseudo-terminal, with
+# the window typed back. The gate itself is proven in overnight-digest.sh.
+grant_policy()
+{
+    local typed="$1"
+    shift
+    if script --version > /dev/null 2>&1
+    then
+        { printf '%s\n' "$typed"; sleep 1; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
+    else
+        { printf '%s\n' "$typed"; sleep 1; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
+    fi
+}
 
 # The wake path dispatches on the operator's authority and never on its own, so
 # every case below that expects a dispatch needs a policy in force. This one is
 # deliberately the widest a policy can be — the whole day, a generous cap — so
 # that what these cases prove stays what they were written to prove; the bounds
 # themselves are proven in overnight-digest.sh.
-SELF overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 8 > /dev/null
+grant_policy "00:00-00:00" overnight set --from 00:00 --to 00:00 --auto-dispatch --max-concurrent 8
+SELF overnight show | grep -q "auto-dispatch on" || fail "the harness policy was not granted"
 
 STORE="$ROOT/A/ws/.superself"
 LOG_A="$STORE/projects/demo/log.jsonl"
@@ -695,6 +719,38 @@ await '[ -z "$(tick_field failed)" ]' || fail "the loop never recovered once the
 SELF daemon stop | grep -q "stopped" || fail "the supervisor that rode out a failure could not be stopped"
 await "! kill -0 $DPID3 2>/dev/null" || fail "the stopped supervisor is still running"
 SELF daemon status | grep -q "no self daemon is running" || fail "status still reports a daemon after it stopped"
+
+# ---------------------------------------------------------------------------
+# One tick at a time on this machine, whoever asked for it
+# ---------------------------------------------------------------------------
+# A tick reads the live-attempt count, the window's spend and the concurrency
+# cap, and decides against all three before anything it dispatches has claimed
+# its work. Two of them running together would each see room only one of them
+# has — so a tick a person runs by hand beside the loop's own is exactly the
+# case the cap is overshot in, and both go through one mutex.
+#
+# What a proof can hold is the mutex itself: the section is held by another
+# process, and a tick that ignored it would come back at once.
+#
+# The policy is revoked first, so the tick under test reconciles and wakes
+# nothing: what is being timed is the mutex, and a dispatch left running would
+# be this case's doing rather than the case before it.
+SELF overnight off > /dev/null
+
+HOLD="$ROOT/tick-held"
+node "$CLI_DIR/proof/tick-lock.mjs" "$RUNNER/daemon/tick.json" "$HOLD" 6000 &
+HOLDER=$!
+await '[ -f "$HOLD" ]' || fail "the tick mutex was never taken by the holder"
+
+STARTED="$(date +%s)"
+SELF daemon tick > /dev/null || fail "a tick that waited for the mutex did not run once it had it"
+WAITED=$(( $(date +%s) - STARTED ))
+wait "$HOLDER" 2>/dev/null || true
+[ "$WAITED" -ge 4 ] || fail "a manual tick ran in ${WAITED}s while another process held the tick mutex"
+
+# and the mutex is given back: the tick that waited is not the tick that keeps
+# the next one out
+[ ! -f "$RUNNER/daemon/tick.json.lock" ] || fail "the tick that took the mutex never released it"
 
 # ---------------------------------------------------------------------------
 # Nothing the supervisor records may carry what only this machine can see

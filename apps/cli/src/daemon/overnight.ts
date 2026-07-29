@@ -1,4 +1,5 @@
 import { parseCommand, subcommand } from "../args.js";
+import { attemptMarker, confirmHuman, HumanConfirmation } from "../human.js";
 import { ProjectContext, requireProject } from "../paths.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { CliError } from "../types.js";
@@ -67,12 +68,55 @@ function cmdSet(args: string[]): void
         stopAfterFailures: values["stop-after"] === undefined ? null : count(values["stop-after"], 1, "--stop-after"),
         autoDispatch: values["auto-dispatch"] === true
     };
+    // Everything above is a parse: a flag that is not a time, not a risk class
+    // or not a whole number is answered before a person is asked for anything,
+    // because a typo costs the command and nothing else.
+    const confirmation = grantedByHand(policy);
     recordEvent(
         ctx,
-        makeEvent(ctx.project, "overnight.set", { version: policy.version, policy: policy as unknown as Record<string, unknown> }),
+        makeEvent(ctx.project, "overnight.set", { version: policy.version, policy: policy as unknown as Record<string, unknown>, confirmation }, undefined, true),
         `overnight policy v${policy.version}, ${policy.from}–${policy.to}`
     );
     console.log(describePolicy(policy).join("\n"));
+}
+
+// The one thing in this product that authorizes spending a provider's money
+// with nobody watching, gated the way `self work approve` is gated. Two
+// different processes are refused here and they are refused for two different
+// reasons.
+//
+// An attempt is refused by its marker: the policy names the risk classes, the
+// budget and the concurrency an agent's own runs are bounded by, and an agent
+// that could write it would be bounding itself. A marker is only the honest
+// half of that, though — a process that sets its own environment can take one
+// off — so the terminal is the half that actually holds. An agent attempt has
+// no terminal to be at, and nothing it can put in its environment gives it one.
+function grantedByHand(policy: OvernightPolicy): HumanConfirmation
+{
+    const marker = attemptMarker();
+    if (marker !== undefined)
+    {
+        throw new CliError(`an overnight policy cannot be set from an agent attempt — this process carries the attempt marker ${marker}, ` +
+            "and the policy that bounds what an attempt may spend is written by a person at their own terminal");
+    }
+    const window = `${policy.from}-${policy.to}`;
+    const confirmation = confirmHuman(`overnight policy v${policy.version} — ${grant(policy)}`, window);
+    if ("code" in confirmation)
+    {
+        throw new CliError(`${confirmation.detail} [${confirmation.code}] — next: ${confirmation.next}`);
+    }
+    return confirmation;
+}
+
+// What the operator is being asked to grant, on one line, before they type the
+// window back. The flags they passed are the statement; this is that statement
+// read out in the terms that cost something.
+function grant(policy: OvernightPolicy): string
+{
+    const spend = policy.budgetUsd === null ? "no ceiling on declared cost" : `at most $${policy.budgetUsd} declared`;
+    return policy.autoDispatch
+        ? `${policy.from}–${policy.to} local, ${policy.riskClasses.join("/")} risk, up to ${policy.maxConcurrent} attempt(s) at once, ${spend}`
+        : `${policy.from}–${policy.to} local, auto-dispatch off — nothing is woken under it`;
 }
 
 // Risk is the one allow list this refuses to widen past what it understands: an
@@ -130,10 +174,22 @@ function cmdShow(args: string[]): void
 
 // Revocation is a recorded event rather than the absence of one: a night that
 // stopped early has to be as legible afterwards as a night that never started.
+//
+// An attempt is refused this too — an agent revoking the policy that governs it
+// is the same process reaching for the same document. It is not asked for a
+// terminal, though, and that asymmetry with `set` is deliberate: revoking only
+// narrows, and a person who wants unattended spending to stop must never be
+// held up by a script that has no terminal to be at.
 function cmdOff(args: string[]): void
 {
     const ctx = requireProject(process.cwd());
     parseCommand("overnight", args, {}, 0);
+    const marker = attemptMarker();
+    if (marker !== undefined)
+    {
+        throw new CliError(`an overnight policy cannot be revoked from an agent attempt — this process carries the attempt marker ${marker}, ` +
+            "and the policy an attempt runs under is not one it may change");
+    }
     const policy = revocable(ctx);
     recordEvent(
         ctx,

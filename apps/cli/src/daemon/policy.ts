@@ -4,7 +4,8 @@ import { ProjectContext } from "../paths.js";
 import { readGeneration, sealedGeneration, SpecHead, specDir } from "../spec/store.js";
 import { WorkSpec } from "../spec/workspec.js";
 import { CliError, SelfEvent } from "../types.js";
-import { FORBIDDEN_ACTIONS } from "./forbidden.js";
+import { matchesModel } from "../completion.js";
+import { commandReachesNetwork, FORBIDDEN_ACTIONS } from "./forbidden.js";
 
 // The autonomy the operator granted, written down.
 //
@@ -174,6 +175,13 @@ export function generationOf(ctx: ProjectContext, head: SpecHead): WorkSpec | nu
 // A separate risk field would be a second thing to keep true; the capability
 // declaration is already the statement of what this run can reach, and the
 // runner's preflight already enforces it.
+//
+// The command counts as part of that declaration. Preflight probes the domains
+// a spec named, and the default boundary wrapper is empty, so a spec that names
+// no domain and curls a host anyway reaches the network with nothing in its way
+// — and reading only the capability list would call that internal and hand it
+// to a default policy to wake. What the command says it will do is the class it
+// gets, and the disagreement resolves toward the wider risk.
 export function riskClassOf(spec: WorkSpec): RiskClass
 {
     const capabilities = spec.capabilities;
@@ -181,7 +189,7 @@ export function riskClassOf(spec: WorkSpec): RiskClass
     {
         return "privileged";
     }
-    if (list(capabilities.domains).length > 0 || capabilities.browser !== undefined)
+    if (list(capabilities.domains).length > 0 || capabilities.browser !== undefined || commandReachesNetwork(spec.command))
     {
         return "external";
     }
@@ -281,6 +289,17 @@ function liveAttempts(project: string): number
     }).length;
 }
 
+// What this tick has issued so far, which is spending the window has committed
+// and cannot read yet. Both bounds a tick can walk past need it: the wake set
+// is judged against one fold of the log, and every generation woken before this
+// one has already taken an attempt slot and already committed its declared
+// budget, while neither is visible in `run.woken` events the fold has read.
+export interface TickDispatch
+{
+    count: number;
+    declaredUsd: number;
+}
+
 // The whole policy gate, in one function, so the daemon and any other caller
 // answer the question identically. Null means the policy permits this dispatch
 // — never that anything else does: the approval gate, the live-attempt claim
@@ -290,7 +309,7 @@ export function policyRefusal(
     spec: WorkSpec,
     project: string,
     spend: WindowSpend,
-    dispatchedThisTick: number,
+    dispatched: TickDispatch,
     now: Date
 ): PolicyRefusal | null
 {
@@ -307,7 +326,7 @@ export function policyRefusal(
         return { outcome: "outside-window", detail: `outside the overnight window ${policy.from}–${policy.to}` };
     }
     return allowRefusal(policy, spec, project)
-        ?? spendRefusal(policy, spec, spend, dispatchedThisTick);
+        ?? spendRefusal(policy, spec, spend, dispatched);
 }
 
 function allowRefusal(policy: OvernightPolicy, spec: WorkSpec, project: string): PolicyRefusal | null
@@ -325,11 +344,17 @@ function allowRefusal(policy: OvernightPolicy, spec: WorkSpec, project: string):
     {
         return { outcome: "kind-not-allowed", detail: `work kind "${spec.role}" is not one the policy allows (${policy.kinds.join(", ")})` };
     }
+    // A provider is matched exactly and a model is matched by class. The
+    // difference is not an oversight: a provider name is an endpoint's identity
+    // and there is no family it stands for, while model names are versioned
+    // under a class an operator means — `opus` is what a completion policy is
+    // written in, and a night that refused `claude-opus-5` for not being the
+    // string `opus` would read as a bug rather than as a bound.
     if (policy.providers !== null && !policy.providers.includes(spec.provider.name))
     {
         return { outcome: "provider-not-allowed", detail: `provider ${spec.provider.name} is not one the policy allows (${policy.providers.join(", ")})` };
     }
-    if (policy.models !== null && !policy.models.includes(spec.requestedModel))
+    if (policy.models !== null && !policy.models.some((allowed) => matchesModel(spec.requestedModel, allowed)))
     {
         return { outcome: "model-not-allowed", detail: `model ${spec.requestedModel} is not one the policy allows (${policy.models.join(", ")})` };
     }
@@ -343,7 +368,7 @@ function allowRefusal(policy: OvernightPolicy, spec: WorkSpec, project: string):
     return null;
 }
 
-function spendRefusal(policy: OvernightPolicy, spec: WorkSpec, spend: WindowSpend, dispatchedThisTick: number): PolicyRefusal | null
+function spendRefusal(policy: OvernightPolicy, spec: WorkSpec, spend: WindowSpend, dispatched: TickDispatch): PolicyRefusal | null
 {
     if (policy.stopAfterFailures !== null && spend.failures >= policy.stopAfterFailures)
     {
@@ -352,17 +377,24 @@ function spendRefusal(policy: OvernightPolicy, spec: WorkSpec, spend: WindowSpen
             detail: `${spend.failures} run(s) failed this window and the policy stops after ${policy.stopAfterFailures}`
         };
     }
-    const running = spend.live + dispatchedThisTick;
+    const running = spend.live + dispatched.count;
     if (running >= policy.maxConcurrent)
     {
         return { outcome: "at-concurrency-cap", detail: `${running} attempt(s) already running and the policy caps concurrency at ${policy.maxConcurrent}` };
     }
+    // What this tick has already handed out counts against the ceiling exactly
+    // like what the window committed before it. A wake set is judged in one
+    // pass against one fold, and a generation woken a moment ago records its
+    // `run.woken` too late for that fold to see — so a ceiling read only off
+    // the log would admit every eligible spec in the set, each one measured
+    // against a window that still looks empty.
+    const committed = spend.committedUsd + dispatched.declaredUsd;
     const declared = declaredBudget(spec);
-    if (policy.budgetUsd !== null && spend.committedUsd + declared > policy.budgetUsd)
+    if (policy.budgetUsd !== null && committed + declared > policy.budgetUsd)
     {
         return {
             outcome: "over-budget",
-            detail: `this window has committed $${spend.committedUsd} of a $${policy.budgetUsd} declared budget and this spec declares $${declared}`
+            detail: `this window has committed $${committed} of a $${policy.budgetUsd} declared budget and this spec declares $${declared}`
         };
     }
     return null;
