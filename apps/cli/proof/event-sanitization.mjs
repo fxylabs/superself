@@ -29,6 +29,37 @@ function refusal(payload, rest)
     }
 }
 
+// The longest stretch of the refused value the message repeats, or "" when it
+// repeats none of it. Checking the whole value is not the test: a message that
+// keeps a head of the match — the first characters of a token, the characters
+// after a vendor prefix — hands over usable key material while the whole value
+// is still absent, and a refusal is printed, logged, and read over a shoulder.
+//
+// Eight is the floor: it is the head length the preview used to print, and it
+// is short enough to catch what a vendor prefix hides behind it. Below it the
+// test stops being about the value — a message that names the rule
+// `secret-json-field` shares six characters with the password `abc123secret`
+// without having seen it.
+const MIN_FRAGMENT = 8;
+
+function repeatedFragment(message, secret)
+{
+    let longest = "";
+    for (let at = 0; at + MIN_FRAGMENT <= secret.length; at++)
+    {
+        for (let end = at + MIN_FRAGMENT; end <= secret.length; end++)
+        {
+            const fragment = secret.slice(at, end);
+            if (!message.includes(fragment))
+            {
+                break;
+            }
+            longest = fragment.length > longest.length ? fragment : longest;
+        }
+    }
+    return longest;
+}
+
 // Refused, and the message names where it was without repeating what it was.
 function refuses(what, payload, keyPath, secret, rest)
 {
@@ -42,9 +73,18 @@ function refuses(what, payload, keyPath, secret, rest)
     {
         failures.push(`${what}: the refusal does not say which key it was — ${message}`);
     }
-    if (secret !== undefined && message.includes(secret))
+    if (secret !== undefined)
     {
-        failures.push(`${what}: the refusal printed the value it refused`);
+        assertKeepsNothingOf(what, message, secret);
+    }
+}
+
+function assertKeepsNothingOf(what, message, secret)
+{
+    const repeated = repeatedFragment(message, secret);
+    if (repeated !== "")
+    {
+        failures.push(`${what}: the refusal repeats ${repeated.length} characters of the value it refused`);
     }
 }
 
@@ -166,6 +206,91 @@ records("a branch slug beside prose about tokens", { text: "on feat/61-event-san
 records("an issue slug beside prose about basic authentication", { text: "issue 148-pairing-token-replay: we chose basic authentication" });
 records("a head sha beside prose about basic authentication", { text: "we chose basic authentication for the admin surface, head 3fd418a8f0d9c2b1e4a5f6d7c8b9a0e1f2d3c4b5" });
 records("a report body carrying all of it", { text: "# brief\n\nbranch feat/61-event-sanitization-guard at 3fd418a8f0d9c2b1e4a5f6d7c8b9a0e1f2d3c4b5.\n\nwe kept basic authentication and reduced token counting overhead.\n" });
+
+// Issue #69: the shapes the guard actually refused in the field, verbatim. A
+// staged artifact name is dated prose joined by dashes, and the high-entropy
+// backstop read the whole token as one generated run; the report that
+// described the failure was refused the same way. Every unbroken run inside
+// these is a date fragment or a word, and that is what the judgment now sees.
+records("a declared artifact name from the plan", { artifacts: [{ name: "review.json", sha256: "5916a501b11a1302708c7297a899db639810d3380a23d83ac6d428a54890fd3f", bytes: 7516 }] });
+records("a dated staged artifact name and path", { artifacts: [{ id: "ar-1", name: "2026-07-28-superself-pr68-fresh-review-14adc0c.json", path: "artifacts/superself/ar-1-2026-07-28-superself-pr68-fresh-review-14adc0c.json" }] });
+records("a report naming a file the way prose does", { text: "the envelope declared name='review.json' and the staged file matched it" });
+records("a report discussing sha256 values in prose", { text: "the staged artifact's sha256 5916a501b11a1302708c7297a899db639810d3380a23d83ac6d428a54890fd3f matched the declaration over 7516 bytes" });
+records("a report quoting the refused staged name", { text: "attempt at-kyexm failed the gate: 2026-07-28-superself-pr68-fresh-review-14adc0c.json could not be attached" });
+
+// What the same backstop must still take: one unbroken generated run, and a
+// private key named by its armour line rather than by its body's entropy.
+const GENERATED = "mZ4kQ9vX2rB7tN1cW8jP3fH6dL0sG5yA9uE4iR7oT2";
+refuses("a high-entropy token in prose", { text: `the leaked value ${GENERATED} must be rotated` }, "payload.text", GENERATED);
+refuses("a pem private key block", { text: "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----" }, "payload.text", "b3BlbnNzaC1rZXktdjEAAAAA");
+refuses("the closing armour of a key block", { text: "the log ended with -----END EC PRIVATE KEY----- and nothing after" }, "payload.text");
+
+// A generated secret whose own separators fall close together. The per-run
+// judgment above is what lets a dated name record, and these are the shapes it
+// must not let through with it: base64url writes '-' and '_' wherever the bytes
+// land, a UUID is a realistic opaque bearer token, and a key body pasted out of
+// its armour is still a key body. None of these has a long unbroken run — each
+// is caught by having several word-length runs that mix digits into letters,
+// which no assembled name does.
+const BASE64URL = "mZ4k-Q9vX2rB_7tN1cW-8jP3fH6d_L0sG5yA9uE-4iR";
+const SEPARATED = "mZ4kQ9vX2rB7tN-1cW8jP3fH6dL0-sG5yA9uE4iR7oT2";
+const UUID = "550e8400-e29b-41d4-a716-446655440000";
+const KEY_BODY = "SGVsbG8xMjM0/QUJDRGVGZ0hp+SktMbW5PcFFy/U3RVdld4WXox+MjM0NTY3ODk=";
+const SEGMENTED = "sk-ant-api03-mZ4kQ9vX2rB7-tN1cW8jP3fH6-dL0sG5yA9uE4";
+const JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+refuses("a base64url token in prose", { text: `the leaked value ${BASE64URL} must be rotated` }, "payload.text", BASE64URL);
+refuses("a generated token broken by separators", { text: `the leaked value ${SEPARATED} must be rotated` }, "payload.text", SEPARATED);
+refuses("an opaque bearer token in prose", { text: `it sent bearer ${UUID} on every call` }, "payload.text", UUID);
+refuses("a key body pasted without its armour", { text: KEY_BODY }, "payload.text", KEY_BODY);
+refuses("a dash-segmented provider key", { text: `rotate ${SEGMENTED} tomorrow` }, "payload.text", SEGMENTED);
+refuses("a json web token in prose", { text: `the session carried ${JWT} yesterday` }, "payload.text", JWT);
+// The identifier the shape above belongs to. A UUID standing on its own is
+// what this product writes in a hundred places, and only the scheme word in
+// front of it makes it a credential.
+records("a uuid on its own in prose", { text: `the run id was ${UUID} in that log` });
+
+// A refusal says which rule matched and shows the span with its value
+// blanked, because rephrasing is the only recourse and guessing is not a
+// procedure. What the preview may show is what the pattern itself fixed: the
+// field name, the vendor prefix, the armour line — never a head taken off the
+// value, which is the value.
+const explained = refusal({ why: "password=hunter2correct works" }) ?? "";
+if (!explained.includes("rule secret-assignment"))
+{
+    failures.push(`a refusal does not name the rule that matched — ${explained}`);
+}
+if (!explained.includes("password=«redacted»"))
+{
+    failures.push(`a refusal does not show a redacted span preview — ${explained}`);
+}
+const backstopped = refusal({ text: `the leaked value ${GENERATED} must be rotated` }) ?? "";
+if (!backstopped.includes("rule high-entropy"))
+{
+    failures.push(`a backstop refusal does not name its rule — ${backstopped}`);
+}
+if (!backstopped.includes("«redacted»"))
+{
+    failures.push(`a backstop refusal does not show a redacted span preview — ${backstopped}`);
+}
+if (backstopped.includes(GENERATED.slice(0, 8)))
+{
+    failures.push("a backstop refusal printed the head of the value it refused");
+}
+assertKeepsNothingOf("a backstop refusal", backstopped, GENERATED);
+
+const prefixed = refusal({ text: `rotate ${KEY} tomorrow` }) ?? "";
+if (!prefixed.includes("sk-«redacted»"))
+{
+    failures.push(`a vendor-prefixed refusal does not show its prefix and nothing else — ${prefixed}`);
+}
+assertKeepsNothingOf("a vendor-prefixed refusal", prefixed, KEY);
+
+const armoured = refusal({ text: "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----" }) ?? "";
+if (!armoured.includes("-----BEGIN OPENSSH PRIVATE KEY-----"))
+{
+    failures.push(`a key block refusal does not show the armour it matched — ${armoured}`);
+}
+assertKeepsNothingOf("a key block refusal", armoured, "b3BlbnNzaC1rZXktdjEAAAAA");
 
 // A name that merely contains a forbidden word is a different field, so the
 // word rule is a word rule and not a substring one.

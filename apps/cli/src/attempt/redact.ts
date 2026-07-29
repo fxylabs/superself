@@ -30,28 +30,47 @@ const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|password|passwd|token|ap
 // caller that refuses a payload instead of rewriting it has to tell the two
 // kinds apart — the rest of these are encodings nothing but a credential
 // produces, at whatever entropy the value happens to have.
+//
+// The name is what a refusal says matched. It is the one part of a refusal an
+// operator can act on — the value cannot be printed — so it stays short,
+// stable, and about the encoding rather than the vendor's marketing name.
+// `lead` is the part of a match the pattern itself fixed — a vendor prefix, an
+// armour line — as opposed to the part the value chose. A rule that blanks its
+// whole span has nothing left to show a refusal, and this is the only piece of
+// the span that can be shown: every character outside it came from the secret.
 interface Rule
 {
+    name: string;
     pattern: RegExp;
     replacement: string;
     eager?: boolean;
+    lead?: RegExp;
 }
 
 const PATTERNS: Rule[] = [
-    { pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, eager: true },
-    { pattern: /\b(set-cookie|cookie|authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
+    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, eager: true },
+    { name: "auth-header", pattern: /\b(set-cookie|cookie|authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
     // JSON is the encoding the spool itself writes — the plan, the status, and
     // every structured line go through JSON.stringify — and the key's own
     // closing quote sits between the name and the colon, where a rule written
     // for `NAME=value` cannot reach it. The replacement stays a quoted string
     // because these files are read back with JSON.parse.
-    { pattern: new RegExp(String.raw`("${SECRET_NAME}"[ \t]*:[ \t]*)"(?:[^"\\\r\n]|\\.)+"`, "gi"), replacement: `$1"${REDACTED}"` },
-    { pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*[:=][ \t]*"?)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
-    { pattern: /\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED },
-    { pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: REDACTED },
-    { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED },
-    { pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, replacement: REDACTED },
-    { pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, replacement: REDACTED }
+    { name: "secret-json-field", pattern: new RegExp(String.raw`("${SECRET_NAME}"[ \t]*:[ \t]*)"(?:[^"\\\r\n]|\\.)+"`, "gi"), replacement: `$1"${REDACTED}"` },
+    { name: "secret-assignment", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*[:=][ \t]*"?)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
+    { name: "provider-key", pattern: /\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED, lead: /^(?:sk|rk|pk)-/ },
+    { name: "github-token", pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: REDACTED, lead: /^gh[pousr]_/ },
+    { name: "aws-key-id", pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED, lead: /^AKIA/ },
+    { name: "slack-token", pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, replacement: REDACTED, lead: /^xox[abposr]-/ },
+    { name: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, replacement: REDACTED, lead: /^eyJ/ },
+    // The armour line names the block a key travels in, so refusing does not
+    // wait on the body's entropy: a private key is refused at its header even
+    // when every base64 line of it reads like ordinary output. Both armour
+    // lines match, so a redacted block cannot read as sanitized while its body
+    // rides along beneath the blanked header. The body itself is left to the
+    // backstops below, which is the only place it can be left — a rule reaching
+    // from one armour line to the other would cross the line boundary the raw
+    // spool cuts on.
+    { name: "pem-key", pattern: /-----(?:BEGIN|END)[ \t]+[A-Z0-9 ]*PRIVATE[ \t]+KEY-----/g, replacement: REDACTED, lead: /^-----(?:BEGIN|END)[ \t]+[A-Z0-9 ]*PRIVATE[ \t]+KEY-----$/ }
 ];
 
 // The backstop for a credential no named pattern knows: long, and varied the
@@ -61,6 +80,22 @@ const PATTERNS: Rule[] = [
 // results the spool exists to preserve.
 const DENSE = /\b(?![0-9a-f]{32,}\b)[A-Za-z0-9_-]{40,}\b/g;
 
+// A line that is nothing but base64 is the encoding a key body travels in, and
+// '+' and '/' break such a line into pieces the span above never sees as one
+// token. So the span is a whole line rather than a wider character class: '/'
+// also joins a path and a URL, and adding it above would make a commit sha
+// inside a link arm the backstop on every link anyone records. A digest is
+// excluded for the same reason it is excluded above — a sha is a name of
+// state, not a secret.
+const BASE64_LINE = /^(?![0-9a-f]{32,}={0,2}(?:\r?$))[A-Za-z0-9+/]{40,}={0,2}(?=\r?$)/gm;
+
+// Both spans are judged rather than replaced outright, and by the same reading,
+// so what the redaction pass blanks is exactly what a refusal refuses.
+const BACKSTOPS: Rule[] = [
+    { name: "high-entropy", pattern: DENSE, replacement: REDACTED },
+    { name: "base64-body", pattern: BASE64_LINE, replacement: REDACTED }
+];
+
 const MIN_DISTINCT = 12;
 
 // Below this a declared literal is not redacted by value: taking two
@@ -69,9 +104,48 @@ const MIN_DISTINCT = 12;
 // short is told at launch rather than silently receiving no coverage.
 export const MIN_LITERAL = 4;
 
+// A generated key is one unbroken run of mixed characters; a name a person
+// assembled is short words joined by separators. Judging the whole token
+// confuses the two — `2026-07-28-superself-pr68-fresh-review-14adc0c` is long
+// and varied as a token, but every unbroken run inside it is a date fragment
+// or a word. So the judgment is per run: only a stretch no separator breaks,
+// long enough and varied enough, says the token was generated.
+//
+// A separator inside the key itself is the other half of the question. base64url
+// puts '-' and '_' wherever the bytes fall, so a generated token whose
+// separators happen to land close together has no long run at all. A second
+// reading catches those: several runs the length of a word, each mixing digits
+// into it the way no word does, is a token that was generated too. The dated
+// name above fails both readings — its runs are a pure-digit date, pure-alpha
+// words, and fragments too short to count.
+//
+// Both readings are accident-grade, and that is all they claim: they catch a
+// credential that arrived verbatim in output nobody meant to write. A writer
+// intent on encoding one past them can break the runs by hand, as cheaply as a
+// single inserted space defeated the whole-token judgment that came before, and
+// no test made at record time can close that.
+const MIN_RUN = 16;
+
+// A run this long that mixes digits into letters is not a word. Two of them in
+// one token is the reading that survives separators; one alone is an ordinary
+// short sha or a versioned word, which names carry all the time.
+const MIN_MIXED_RUN = 8;
+const MIN_MIXED_RUNS = 2;
+
 function looksGenerated(token: string): boolean
 {
-    return /[0-9]/.test(token) && /[A-Za-z]/.test(token) && new Set(token).size >= MIN_DISTINCT;
+    const runs = token.match(/[A-Za-z0-9]+/g) ?? [];
+    return runs.some(generatedRun) || runs.filter(mixedRun).length >= MIN_MIXED_RUNS;
+}
+
+function generatedRun(run: string): boolean
+{
+    return run.length >= MIN_RUN && mixedRun(run) && new Set(run).size >= MIN_DISTINCT;
+}
+
+function mixedRun(run: string): boolean
+{
+    return run.length >= MIN_MIXED_RUN && /[0-9]/.test(run) && /[A-Za-z]/.test(run);
 }
 
 // Everything a spool keeps goes through at least this. A private path is not
@@ -85,7 +159,11 @@ export function redactSecrets(text: string, scope: RedactionScope = { literals: 
     {
         out = out.replace(pattern, replacement);
     }
-    return out.replace(DENSE, (token) => looksGenerated(token) ? REDACTED : token);
+    for (const { pattern } of BACKSTOPS)
+    {
+        out = out.replace(pattern, (span) => looksGenerated(span) ? REDACTED : span);
+    }
+    return out;
 }
 
 // The declared half of redaction on its own. A caller that has to tell a leaked
@@ -192,33 +270,77 @@ export function secretEnvNames(): string[]
 // the short secrets that most need refusing.
 export function carriesCredential(text: string): boolean
 {
-    for (const { pattern, eager } of PATTERNS)
+    return findCredential(text) !== null;
+}
+
+// What a refusal is allowed to say about the match: the rule that fired, and
+// the span as redaction would leave it. Together they let an operator rephrase
+// without guessing, which a bare "shaped like a credential" never did.
+export interface CredentialMatch
+{
+    rule: string;
+    preview: string;
+}
+
+export function findCredential(text: string): CredentialMatch | null
+{
+    for (const rule of PATTERNS)
     {
-        for (const [span] of text.matchAll(pattern))
+        for (const [span] of text.matchAll(rule.pattern))
         {
-            if (eager !== true || carriesKeyMaterial(span))
+            if (rule.eager !== true || carriesKeyMaterial(span))
             {
-                return true;
+                return { rule: rule.name, preview: preview(span, rule) };
             }
         }
     }
-    // The backstop is eager by construction, and holds itself back the same way
-    // the redaction pass does.
-    for (const [span] of text.matchAll(DENSE))
+    // The backstops are eager by construction, and hold themselves back the
+    // same way the redaction pass does.
+    for (const rule of BACKSTOPS)
     {
-        if (looksGenerated(span))
+        for (const [span] of text.matchAll(rule.pattern))
         {
-            return true;
+            if (looksGenerated(span))
+            {
+                return { rule: rule.name, preview: preview(span, rule) };
+            }
         }
     }
-    return false;
+    return null;
 }
 
+// The matched span with its value blanked the way redaction would blank it, so
+// the shape shows and the secret never does.
+//
+// A rule that blanks its whole span leaves nothing to locate the match by, and
+// the head of the span is not available to fill the gap: for the backstop the
+// head is the secret's own first characters, and behind a vendor prefix it is
+// the secret's first characters too. So what is kept is what the pattern
+// itself fixed — `sk-`, `ghp_`, an armour line — and the rest is a count of
+// how long the value was, which the message already implied by refusing it.
+function preview(span: string, rule: Rule): string
+{
+    const redacted = span.replace(rule.pattern, rule.replacement);
+    if (redacted !== REDACTED)
+    {
+        return redacted;
+    }
+    const lead = rule.lead === undefined ? "" : span.match(rule.lead)?.[0] ?? "";
+    return lead === span ? span : `${lead}${REDACTED} (${span.length} chars)`;
+}
+
+// The shape an opaque bearer token takes when it is not a vendor's: a UUID is
+// hex fragments no reading above counts as generated, and `bearer <uuid>` is a
+// credential however its runs measure.
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+
 // Whether a matched span carries a run of characters that looks like generated
-// key material rather than like a word someone wrote.
+// key material rather than like a word someone wrote. The UUID shape is asked
+// only here, inside a span an eager rule already matched: a UUID standing on
+// its own in prose is an identifier, and this product writes them.
 function carriesKeyMaterial(text: string): boolean
 {
-    return (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated);
+    return UUID.test(text) || (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated);
 }
 
 // The names — never the values — of declared secrets too short to be redacted
