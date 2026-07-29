@@ -145,10 +145,15 @@ docs/
 ├─ integration-train.md   how change sets, receipts, leases, and merges gate
 ├─ maintainers/           branch, version, and release policy
 └─ strategy/              problem definition and positioning decisions
+
+ARCHITECTURE.md           layering, subsystem boundaries, single gates, namespaces
+CONTRIBUTING.md           process, code conventions, and the envelope contract
 ```
 
-See [the problem definition](docs/strategy/problem-definition.md) for the state
-architecture the CLI implements.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the structure rules any change to
+`apps/cli/src` is judged by, and [the problem
+definition](docs/strategy/problem-definition.md) for the state architecture the
+CLI implements.
 
 ## Project status
 
@@ -167,7 +172,7 @@ The near-term sequence is:
 ## Community and contributions
 
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
-  request.
+  request, and [ARCHITECTURE.md](ARCHITECTURE.md) before writing code.
 - Use the structured GitHub issue forms for reproducible bugs, concrete feature
   proposals, and maintenance work.
 - Do not open a pull request until a maintainer has accepted the related issue

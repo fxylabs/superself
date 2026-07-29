@@ -1,3 +1,15 @@
+## Design rules
+
+- Read [ARCHITECTURE.md](ARCHITECTURE.md) before writing code: layering,
+  subsystem boundaries, the single gates, the owned event namespaces, and the
+  fixed naming. It also lists the known debt, which is never precedent.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions an implementation
+  is judged by: function size, the four things a new command verb ships,
+  checkout-agnostic proof scripts, and the result-envelope contract
+  (`{name, sha256, bytes}` — `name`, never `path`).
+- A change that adds a flat top-level subsystem, a second path around a single
+  gate, or a sibling event namespace is sent back regardless of how it tests.
+
 <!-- superself:begin -->
 ## Project state (superself)
 
