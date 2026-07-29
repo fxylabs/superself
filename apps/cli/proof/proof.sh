@@ -1553,6 +1553,100 @@ echo "$SHOW" | grep -q "ws-hold  $WHOLD  generation 2" || fail "spec show does n
 echo "$SHOW" | grep -q "model opus-5" || fail "spec show does not name the model the spec asks for"
 echo "$SHOW" | grep -q "$AT_HOLD  generation 1" || fail "spec show does not resolve which generation an attempt ran under"
 
+# a sealed generation that no longer hashes to its own name is refused on the
+# read path: the immutability the contract rests on has already been lost
+GEN2="$(head_digest ws-design)"
+SEALED_BLOB="$SPECS/ws-design/000002-$GEN2.json"
+cp "$SEALED_BLOB" "$ROOT/sealed-backup.json"
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("opus-5","opus-6"))' "$SEALED_BLOB"
+TAMPERED_SHOW="$(SELF spec show ws-design 2>&1 || true)"
+echo "$TAMPERED_SHOW" | grep -q "sealed content was modified" || fail "spec show read a sealed generation whose bytes were modified"
+TAMPERED_DISPATCH="$(SELF spec dispatch ws-design 2>&1 || true)"
+echo "$TAMPERED_DISPATCH" | grep -q "sealed content was modified" || fail "spec dispatch compiled a sealed generation whose bytes were modified"
+cp "$ROOT/sealed-backup.json" "$SEALED_BLOB"
+SELF spec show ws-design > /dev/null || fail "restoring the sealed bytes did not restore the spec"
+
+# a hand-written plan file cannot smuggle a spec pin: the pin says what the
+# spec store admitted, and only dispatch may write it
+plan "$ROOT/p-forged.json" "mode=ok" "dest=$ROOT/dest/forged.md"
+node -e 'const fs=require("fs");const f=process.argv[1];const p=JSON.parse(fs.readFileSync(f,"utf8"));p.spec={workSpec:"ws-design",generation:99,sha256:"deadbeef".repeat(8),requestedModel:"opus-5"};fs.writeFileSync(f,JSON.stringify(p))' "$ROOT/p-forged.json"
+SELF attempt run "$ROOT/p-forged.json" > /dev/null || fail "a plan carrying a forged pin did not run at all"
+AT_FORGED="$(last_attempt)"
+node -e 'if (JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).spec !== undefined) { console.error("the forged pin reached the attempt record"); process.exit(1); }' "$(spool_of "$AT_FORGED")/attempt.json" || fail "a hand-written plan smuggled a spec pin onto the attempt record"
+SELF spec show ws-design | grep -q "$AT_FORGED" && fail "a forged pin surfaced an attempt under spec show"
+
+# two applies racing for one generation number seal exactly one: the loser is
+# refused, and the store still answers instead of being poisoned forever
+WRACE="$(SELF work add "two racing applies seal exactly one generation" | tail -1)"
+SELF work start "$WRACE" > /dev/null
+workspec "$ROOT/ws-race-a.json" "work=$WRACE" "id=ws-race" "dest=$ROOT/dest/race.md"
+workspec "$ROOT/ws-race-b.json" "work=$WRACE" "id=ws-race" "dest=$ROOT/dest/race.md" "model=some-other-model"
+APPLIED_BEFORE="$(count_events spec.applied)"
+SELF spec apply "$ROOT/ws-race-a.json" > "$ROOT/race-a.out" 2>&1 &
+RACE_A=$!
+SELF spec apply "$ROOT/ws-race-b.json" > "$ROOT/race-b.out" 2>&1 &
+RACE_B=$!
+wait "$RACE_A" && RACE_A_OK=yes || RACE_A_OK=no
+wait "$RACE_B" && RACE_B_OK=yes || RACE_B_OK=no
+[ "$RACE_A_OK" = yes ] || [ "$RACE_B_OK" = yes ] || fail "neither racing apply sealed the generation"
+{ [ "$RACE_A_OK" = yes ] && [ "$RACE_B_OK" = yes ]; } && fail "two racing applies of different content both claimed generation 1"
+[ "$(find "$SPECS/ws-race" -name '000001-*.json' | wc -l | tr -d ' ')" -eq 1 ] || fail "racing applies left two sealed blobs for one generation"
+[ "$(count_events spec.applied)" -eq "$((APPLIED_BEFORE + 1))" ] || fail "racing applies recorded more or less than one spec.applied event"
+SELF spec show ws-race > /dev/null || fail "the spec store no longer answers after racing applies"
+
+# a crash between the generation blob and the HEAD advance leaves a store the
+# next apply completes — never one it misreads as already applied and wedges
+WCRASH="$(SELF work add "an interrupted apply is completed, not misread" | tail -1)"
+SELF work start "$WCRASH" > /dev/null
+workspec "$ROOT/ws-crash1.json" "work=$WCRASH" "id=ws-crash" "dest=$ROOT/dest/crash.md"
+SELF spec apply "$ROOT/ws-crash1.json" > /dev/null || fail "the pre-crash generation did not apply"
+workspec "$ROOT/ws-crash2.json" "work=$WCRASH" "id=ws-crash" "generation=2" "dest=$ROOT/dest/crash.md" "summary=the generation the crash interrupted"
+# the crash, simulated exactly: the blob reached the store, the HEAD advance
+# and the spec.applied event did not
+CRASH2="$(node -e '
+import("file://" + process.argv[1] + "/dist/spec/workspec.js").then((m) =>
+{
+    const fs = require("fs");
+    const spec = m.normalizeSpec(JSON.parse(fs.readFileSync(process.argv[2], "utf8")));
+    fs.writeFileSync(process.argv[3] + "/000002-" + m.specDigest(spec) + ".json", m.specBody(spec));
+    process.stdout.write(m.specDigest(spec));
+});' "$CLI_DIR" "$ROOT/ws-crash2.json" "$SPECS/ws-crash")"
+[ "$(head_digest ws-crash)" != "$CRASH2" ] || fail "the simulated crash advanced HEAD on its own"
+APPLIED_BEFORE="$(count_events spec.applied)"
+SELF spec apply "$ROOT/ws-crash2.json" > /dev/null || fail "re-applying across the crash window failed"
+[ "$(head_digest ws-crash)" = "$CRASH2" ] || fail "re-apply left HEAD behind the sealed generation"
+[ "$(count_events spec.applied)" -eq "$((APPLIED_BEFORE + 1))" ] || fail "completing the interrupted apply did not record its event exactly once"
+SELF spec show ws-crash | grep -q "generation 2" || fail "the completed apply does not read at generation 2"
+workspec "$ROOT/ws-crash3.json" "work=$WCRASH" "id=ws-crash" "generation=3" "dest=$ROOT/dest/crash.md" "summary=the store advances again after the repair"
+SELF spec apply "$ROOT/ws-crash3.json" | grep -q "generation 3 applied" || fail "the spec cannot advance past a repaired crash window"
+
+# two dispatches racing for one work unit materialize exactly one attempt: the
+# claim is atomic, and the loser's refusal spends no spec.dispatched event
+WDUAL="$(SELF work add "two racing dispatches materialize one attempt" | tail -1)"
+SELF work start "$WDUAL" > /dev/null
+workspec "$ROOT/ws-dual.json" "work=$WDUAL" "id=ws-dual" "mode=hold" "gate=$ROOT/dual-gate" "idfile=$ROOT/dual-id"
+SELF spec apply "$ROOT/ws-dual.json" > /dev/null || fail "the dual-dispatch spec did not apply"
+DISPATCHED_BEFORE="$(count_events spec.dispatched)"
+rm -f "$ROOT/dual-id" "$ROOT/dual-gate"
+SELF spec dispatch ws-dual > "$ROOT/dual-a.out" 2>&1 &
+DUAL_A=$!
+SELF spec dispatch ws-dual > "$ROOT/dual-b.out" 2>&1 &
+DUAL_B=$!
+for _ in $(seq 1 200)
+do
+    [ -s "$ROOT/dual-id" ] && break
+    sleep 0.1
+done
+[ -s "$ROOT/dual-id" ] || fail "neither racing dispatch materialized an attempt"
+touch "$ROOT/dual-gate"
+wait "$DUAL_A" && DUAL_A_OK=yes || DUAL_A_OK=no
+wait "$DUAL_B" && DUAL_B_OK=yes || DUAL_B_OK=no
+[ "$DUAL_A_OK" = yes ] || [ "$DUAL_B_OK" = yes ] || fail "neither racing dispatch completed"
+{ [ "$DUAL_A_OK" = yes ] && [ "$DUAL_B_OK" = yes ]; } && fail "two racing dispatches both materialized an attempt on one work unit"
+[ "$(SELF attempt list --work "$WDUAL" | wc -l | tr -d ' ')" -eq 1 ] || fail "racing dispatches left two attempts on one work unit"
+cat "$ROOT/dual-a.out" "$ROOT/dual-b.out" | grep -q "one work unit materializes one attempt at a time" || fail "the losing dispatch was not refused by the one-attempt rule"
+[ "$(count_events spec.dispatched)" -eq "$((DISPATCHED_BEFORE + 1))" ] || fail "racing dispatches spent more than one spec.dispatched event"
+
 # the repository integration controller replays a real three-branch train, so
 # it builds its own git repository under a root of its own
 bash "$CLI_DIR/proof/integration.sh"
