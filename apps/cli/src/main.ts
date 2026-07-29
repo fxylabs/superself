@@ -34,6 +34,16 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { loadVerdicts } from "./reachability.js";
+import {
+    cmdWorkApprovalRequired,
+    cmdWorkApprove,
+    cmdWorkMet,
+    cmdWorkPolicy,
+    cmdWorkRequire,
+    cmdWorkRetire,
+    cmdWorkRevise,
+    doneEvent
+} from "./requirements.js";
 import { cmdReview } from "./reviews.js";
 import { cmdIntegration } from "./train.js";
 import { runSearch } from "./search.js";
@@ -582,12 +592,39 @@ function cmdWork(rest: string[]): void
         cmdProposalDecision(requireProject(process.cwd()), rest.slice(1), sub === "accept");
         return;
     }
+    if (COMPLETION_VERBS.includes(sub as string))
+    {
+        completionVerb(sub as string, rest.slice(1));
+        return;
+    }
     const type = TRANSITIONS[sub as string];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline`);
+        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline|` +
+            COMPLETION_VERBS.join("|"));
     }
     transitionWork(type, rest.slice(1));
+}
+
+// What done means for a unit, written on the unit itself. Routed together so
+// the dispatcher states once that these extend `self work` rather than
+// introducing a noun of their own.
+const COMPLETION_VERBS = ["require", "revise", "retire", "met", "recheck", "approval-required", "approve", "policy"];
+
+function completionVerb(sub: string, args: string[]): void
+{
+    const ctx = requireProject(process.cwd());
+    switch (sub)
+    {
+        case "require": cmdWorkRequire(ctx, args); break;
+        case "revise": cmdWorkRevise(ctx, args); break;
+        case "retire": cmdWorkRetire(ctx, args); break;
+        case "met": cmdWorkMet(ctx, args, false); break;
+        case "recheck": cmdWorkMet(ctx, args, true); break;
+        case "approval-required": cmdWorkApprovalRequired(ctx, args); break;
+        case "approve": cmdWorkApprove(ctx, args); break;
+        default: cmdWorkPolicy(ctx, args); break;
+    }
 }
 
 function cmdWorkList(rest: string[]): void
@@ -672,6 +709,13 @@ function transitionWork(type: string, args: string[]): void
     const { values, positionals } = parseCommand("work", args, { on: { type: "string" }, why: { type: "string" } }, 1);
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
+    // Done is not a transition like the others: it is the claim that the
+    // outcome was reached, and the completion check is what admits it.
+    if (type === "work.done")
+    {
+        recordEvent(ctx, doneEvent(ctx, work, values.why), `${work.id} ${work.outcome}`);
+        return;
+    }
     const payload: Record<string, unknown> = { work: work.id };
     if (type === "work.blocked")
     {

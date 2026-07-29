@@ -421,6 +421,50 @@ function coverageLine(coverage: Coverage): string
         `revision ${coverage.objectiveRevision}/${coverage.milestoneRevision})_`;
 }
 
+// The semantic half of done, on the page a person reads before closing a unit:
+// what it still owes, whether a human has answered, and what its implementation
+// had to be. Every line is derived — none of it is asserted by a transition.
+function completionLines(work: WorkState): string[]
+{
+    const completion = work.completion;
+    const lines: string[] = [];
+    if (completion.approvalRequired !== undefined)
+    {
+        const granted = completion.approvals.find((item) => item.humanConfirmed);
+        lines.push(`- Approval: ${granted === undefined
+            ? `required and not granted${completion.approvalRequired.why === undefined ? "" : ` — ${completion.approvalRequired.why}`}`
+            : `granted ${day(granted.ts)} by ${granted.by} (${granted.method})`}`);
+    }
+    if (completion.policy !== undefined)
+    {
+        const parts = [
+            completion.policy.model === undefined ? "" : `model ${completion.policy.model}`,
+            completion.policy.freshReview ? "fresh-session review" : ""
+        ].filter((part) => part !== "");
+        lines.push(`- Completion policy: ${parts.join(", ")}`);
+    }
+    if (work.owes !== undefined)
+    {
+        lines.push(`- Not done yet: ${work.owes}`);
+    }
+    return lines;
+}
+
+function requirementLines(work: WorkState): string[]
+{
+    const completion = work.completion;
+    return completion.requirements.map((requirement) =>
+    {
+        const covered = completion.coverage.filter((item) => item.requirement === requirement.id);
+        const latest = covered[covered.length - 1];
+        const state = requirement.retired === true ? "retired"
+            : latest === undefined ? "uncovered"
+            : latest.revision === requirement.revision ? `covered ${day(latest.ts)} — ${latest.why}`
+            : `covered at revision ${latest.revision}, now revision ${requirement.revision} — recheck it`;
+        return `${requirement.id} — ${requirement.text} _(${state})_`;
+    });
+}
+
 function contributionLines(work: WorkState, model: ProjectModel): string[]
 {
     return contributionsOf(model.goals, work).map((item) =>
@@ -471,10 +515,17 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     }
     if (work.attempts.length > 0)
     {
-        const attempts = work.attempts.map((a) => `${a.id} (${a.state}${a.failure === undefined ? "" : `: ${a.failure}`})`);
+        const attempts = work.attempts.map((a) =>
+            `${a.id} (${a.state}${a.failure === undefined ? "" : `: ${a.failure}`})${a.model === undefined ? "" : ` model ${a.model}`}`);
         lines.push(`- Attempts: ${attempts.join(", ")}`);
     }
+    lines.push(...completionLines(work));
     lines.push("");
+    const requirements = requirementLines(work);
+    if (requirements.length > 0)
+    {
+        lines.push("## Requirements", "", ...requirements.map((item) => `- ${item}`), "");
+    }
     if (work.reports.length > 0)
     {
         lines.push("## Reports (latest first)", "");

@@ -1,3 +1,13 @@
+import {
+    applyCompletion,
+    applyWorkReview,
+    approvalPending,
+    completionRefusal,
+    CompletionState,
+    deriveCompletion,
+    emptyCompletion,
+    isCompletionEvent
+} from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
 import { applyIntegration, deriveIntegration, emptyIntegration, IntegrationState, isIntegrationEvent } from "./integration.js";
 import { readEvents } from "./logfile.js";
@@ -52,6 +62,10 @@ export interface AttemptSummary
     ts: string;
     failure?: string;
     detail?: string;
+    // The model the generation this attempt was admitted under pinned. Absent
+    // for an attempt no work spec dispatched, which is what makes such an
+    // attempt unable to satisfy a completion policy that names a model class.
+    model?: string;
     artifacts: { name: string; sha256: string; bytes: number }[];
 }
 
@@ -72,6 +86,14 @@ export interface WorkState
     // several units.
     branches: string[];
     attempts: AttemptSummary[];
+    // What this unit has to cover, who has to approve it, and what its
+    // implementation had to be — the semantic half of done, which no attempt
+    // and no transition ever settles on its own.
+    completion: CompletionState;
+    // Why this unit may not be called done yet, or undefined when nothing
+    // stands in the way. One check, derived here so every surface reads the
+    // same answer the `work done` verb is refused by.
+    owes?: string;
     next?: string;
     // The outcomes this unit contributes to. Stated by `self work link`, never
     // inferred: one unit may serve several objectives, and a milestone is
@@ -127,6 +149,14 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (isIntegrationEvent(event.type))
     {
         applyIntegration(model.integration, event);
+        // A receipt bound to a change set that names a work unit is also a
+        // statement about that unit, and the fresh-session policy is judged on
+        // it. The receipt stays the lane's — this only projects it.
+        const reviewed = event.type === "review.received" ? model.works.find((item) => item.id === event.refs?.work) : undefined;
+        if (reviewed !== undefined)
+        {
+            applyWorkReview(reviewed.completion, event);
+        }
         return;
     }
     if (event.type === "goal.set")
@@ -272,7 +302,8 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             branches: branchOf(event),
             objectives: [],
             milestones: [],
-            attempts: []
+            attempts: [],
+            completion: emptyCompletion()
         });
         return;
     }
@@ -283,6 +314,11 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     noteBranch(work, event);
+    if (isCompletionEvent(event.type))
+    {
+        applyCompletion(work.completion, event);
+        return;
+    }
     if (event.type === "work.linked" || event.type === "work.unlinked")
     {
         applyLink(work, event);
@@ -350,6 +386,9 @@ function applyAttempt(model: ProjectModel, event: SelfEvent): void
     const attempt = existing ?? { id, state, ts: event.ts, artifacts: [] };
     attempt.state = state;
     attempt.ts = event.ts;
+    // Stated once, at the start, and kept: the later events of an attempt say
+    // what became of it, never what it ran under.
+    attempt.model = event.payload.model === undefined ? attempt.model : String(event.payload.model);
     attempt.failure = event.payload.failure === undefined ? undefined : String(event.payload.failure);
     attempt.detail = event.payload.detail === undefined ? undefined : String(event.payload.detail);
     if (Array.isArray(event.payload.artifacts))
@@ -399,6 +438,14 @@ function deriveSignals(model: ProjectModel, now: Date): void
     }
     for (const work of model.works)
     {
+        deriveCompletion(work.completion);
+        // Derived for every unit, including the ones already done: a unit
+        // closed before a requirement was revised still says what it owes.
+        work.owes = completionRefusal(work) ?? undefined;
+        if (work.status !== "done" && approvalPending(work))
+        {
+            model.openQuestions.push(`${work.id} is waiting on human approval: ${work.completion.approvalRequired?.why ?? work.outcome}`);
+        }
         if (work.status === "blocked" && work.blockedOn === "decision")
         {
             model.openQuestions.push(`${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`);
