@@ -5,6 +5,11 @@ Thanks for helping build Superself.
 Superself is pre-release software. Issues and design feedback are welcome now.
 Code contributions follow an issue-first, maintainer-approved process.
 
+Read [ARCHITECTURE.md](ARCHITECTURE.md) before writing code. It states the
+layering, the subsystem boundaries, the single gates, and the owned event
+namespaces. This document states the conventions your implementation is judged
+by. Both apply to human and agent implementers alike.
+
 ## Contribution model
 
 Every change intended for `main` starts with an issue, including maintainer,
@@ -80,6 +85,108 @@ pnpm install
 pnpm build
 ```
 
+## Code style
+
+- Functions stay within 20-30 lines and do one thing. A function that routes
+  subcommands routes them; it does not also implement one of them inline.
+- Allman braces: the opening brace of every block goes on its own line.
+- Four spaces, semicolons required.
+- Reuse the helper that exists; do not re-derive it locally. Current shared
+  homes: `trainutil.ts` exports `requireText`; `args.ts` exports `parseCommand`,
+  `subcommand`, `unknownOption`, and `helpHint`; `ids.ts` mints every id;
+  `attempt/spool.ts` owns the machine-local spool. `strip` and the `str`/`list`
+  payload coercers are duplicated today and are unified by #88 — import the
+  survivor rather than adding a fourth copy.
+- Comments explain why a rule exists, not what the next line does. The existing
+  modules set the density; match them.
+- No behavior change smuggled into a move. A refactor pull request leaves the
+  proof assertions untouched.
+
+## Adding a command verb
+
+A new verb ships as a set. A pull request that adds one without all four is
+incomplete:
+
+1. A `parseCommand` guard in the command module, declaring its options and how
+   many positionals it accepts.
+2. A `COMMANDS` entry in `help.ts` with usage and detail — that file is the one
+   place the CLI describes itself, so `self` and `self <cmd> --help` stay in
+   sync.
+3. Every refusal as a one-line `CliError` that says what was refused and why,
+   in the user's terms. A refusal that only names a rule teaches nothing.
+4. Proof coverage under `apps/cli/proof/` for the behavior the verb adds,
+   including the refusal path.
+
+Subcommand dispatch reads through `args.ts` `subcommand`, so `--` means the
+same thing across the whole CLI.
+
+## Proof scripts
+
+Proof scripts run on a contributor's macOS laptop and on the ubuntu CI runner,
+against whatever git the host has. Write them checkout-agnostic:
+
+- Never assume a default branch name. Pin it: `git init -q -b main`, or set
+  `init.defaultBranch` in the scratch home before the first `git init`. A script
+  that assumes `main` passes locally and fails on the runner.
+- Never assume a local `main` exists in the repository under test, and never
+  read the real workspace. Point `HOME` and `XDG_CONFIG_HOME` at a scratch
+  directory per simulated machine, as `proof/proof.sh` does.
+- Never assume user git config. Set `user.name` and `user.email` in each scratch
+  home; Linux leaves the ident empty where macOS silently fills it in.
+- Never use macOS-only tools. `stat -f`, `sed -i ''`, and BSD-only flags do not
+  exist on the runner; keep the script to POSIX shell plus git and node.
+- Pin scratch-repo state explicitly — branch, commits, and config — instead of
+  inheriting it from the environment.
+- Clean up with a `trap ... EXIT` on the temp root.
+
+## Result envelope contract
+
+An agent running under `self attempt run` is judged by the envelope it writes,
+not by its exit code or its summary. This is the durable statement of that
+contract (#63); `attempt/gate.ts` is its implementation.
+
+Stage artifacts under `$SUPERSELF_ATTEMPT_OUT`, then write the envelope as JSON
+to `$SUPERSELF_ATTEMPT_RESULT`:
+
+```json
+{
+  "status": "completed",
+  "summary": "one line describing what the attempt produced",
+  "artifacts": [
+    { "name": "impl-report.json", "sha256": "<64 hex chars>", "bytes": 12051 }
+  ]
+}
+```
+
+Rules the gate enforces:
+
+- The key is `name`, never `path`. It is the declared artifact name from the
+  plan, not a filesystem location.
+- `sha256` and `bytes` are computed over the exact staged file, after the last
+  write to it:
+
+  ```bash
+  ART="$SUPERSELF_ATTEMPT_OUT/impl-report.json"
+  shasum -a 256 "$ART" | cut -d' ' -f1     # sha256
+  stat -f %z "$ART"                        # bytes, macOS
+  stat -c %s "$ART"                        # bytes, Linux
+  wc -c < "$ART"                           # bytes, either
+  ```
+
+  Hand-computing a hash before the final write is the common way to fail this
+  gate. Compute both fields last.
+- `status` must be `completed` for the attempt to pass. Anything else is a
+  failed or blocked attempt, and the gate treats it as one.
+- A missing envelope is a failed attempt. An exit code alone is not a result.
+- Every artifact the plan declares must be claimed in the envelope, exist, hash
+  to what was claimed, and match the claimed byte count. One mismatch refuses the
+  whole attempt. The gate walks the plan, so an extra artifact in the envelope
+  that the plan never declared is ignored rather than verified — do not treat it
+  as a way to publish something.
+
+The same `{name, sha256, bytes}` shape appears in `AttemptSummary.artifacts`
+after the fold. Keep them identical.
+
 ## Branches
 
 `main` is the only long-lived branch. Direct pushes to `main` are not allowed;
@@ -129,6 +236,28 @@ If there is no visual or persistent-data change, say so explicitly.
 
 Pull requests target `main` and are squash merged after all required checks,
 review, and conversations are complete. Delete the source branch after merge.
+
+## Delivery mechanics
+
+How a finished branch is handed over. These apply to agent-executed briefs as
+much as to hand-written work:
+
+- One squashed commit per branch, with a DCO `Signed-off-by` trailer matching
+  the commit author.
+- The pull request title names the issue's outcome, and the body contains
+  `Closes #N` for the single accepted issue.
+- Run `pnpm typecheck` and `pnpm build` locally. The full `pnpm proof` suite is
+  delegated to PR CI — CI runs typecheck, proof, and build on every pull
+  request. Run the targeted proof section locally when you changed the behavior
+  it covers.
+- Do not use `gh pr edit`; it rewrites fields you did not intend to touch. Set
+  the title and body at `gh pr create` time, or PATCH the specific field through
+  the API.
+- Do not merge your own pull request, retarget the branch, or push to any branch
+  but your own.
+- Consult [ARCHITECTURE.md](ARCHITECTURE.md) before the first line of code, not
+  at review time. A pull request that adds a flat top-level subsystem or a
+  second path around a single gate is sent back regardless of how it tests.
 
 ## Developer Certificate of Origin
 
