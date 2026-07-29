@@ -148,7 +148,10 @@ function canonical(value: unknown): unknown
         return value;
     }
     const entries = Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined);
-    entries.sort(([left], [right]) => left.localeCompare(right));
+    // Code-unit order, never collation: `localeCompare` answers with the ICU
+    // collation of the process locale, and this ordering is what the content
+    // address hashes — the same spec must digest identically on every machine.
+    entries.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
     return Object.fromEntries(entries.map(([key, item]) => [key, canonical(item)]));
 }
 
