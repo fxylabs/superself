@@ -56,6 +56,23 @@ export function alive(pid: number): boolean
     }
 }
 
+// Whether the process wearing this pid now is the one that was recorded. A pid
+// is handed out again the moment its process is reaped, so a record that names
+// only the number keeps whoever got it next looking like the process it was
+// written for — a supervisor `stop` would signal a stranger, and a dispatch
+// nobody is running would look in flight for as long as that stranger lives.
+// Where the process table could not be read when the record was written there
+// is nothing to compare against, and liveness alone is the whole of the answer.
+export function sameProcess(pid: number, startedAt: string | null): boolean
+{
+    if (!alive(pid))
+    {
+        return false;
+    }
+    const now = processStartTime(pid);
+    return startedAt === null || now === null || sameInstant(now, startedAt);
+}
+
 export function processStartTime(pid: number): string | null
 {
     const listed = ps(["-p", String(pid), "-o", "lstart="]);

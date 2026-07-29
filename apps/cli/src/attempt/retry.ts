@@ -46,6 +46,11 @@ export interface BreakerPolicy
     cooldownMs: number;
 }
 
+// How many failures in a row open a provider's circuit, and how long it stays
+// open. One policy, so the runner that pushes the breaker and the supervisor
+// that reads it are never judging the same record by different numbers.
+export const BREAKER_DEFAULT: BreakerPolicy = { threshold: 3, cooldownMs: 60_000 };
+
 export interface BreakerRecord
 {
     provider: string;
@@ -58,6 +63,14 @@ export interface BreakerRecord
     // they all go at once — the herd the breaker exists to prevent.
     trialAt?: string;
     trialBy?: string;
+    // The instant a provider that refused this machine on capacity may be
+    // asked again, and the attempt whose refusal set it. A capacity refusal is
+    // not an outage — the provider answered, and it answered "not now" — so it
+    // buys one redispatch after the reset rather than a place in the retry
+    // schedule of a run that already ended. The attempt is kept beside it so
+    // one refusal sets one reset however many times the record is read.
+    retryAt?: string;
+    retryFor?: string;
 }
 
 export type BreakerVerdict = "closed" | "half-open" | "open";
@@ -88,7 +101,7 @@ export function readBreaker(provider: string): BreakerRecord
     }
 }
 
-function writeBreaker(record: BreakerRecord): void
+export function writeBreaker(record: BreakerRecord): void
 {
     writeAtomic(breakerFile(record.provider), JSON.stringify(record, null, 2) + "\n");
 }
