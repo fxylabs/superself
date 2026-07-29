@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { parseCommand } from "../args.js";
 import { bootId } from "./boundary.js";
 import { queueDirective } from "./directive.js";
 import { claimStarted, externalExited, externalHeartbeat, registerAttempt } from "./external.js";
@@ -21,16 +22,16 @@ export async function runAttemptCommand(rest: string[]): Promise<void>
         case "run": await cmdRun(rest.slice(1)); return;
         case "register": await cmdRegister(rest.slice(1)); return;
         case "started": cmdStarted(rest.slice(1)); return;
-        case "heartbeat": cmdHeartbeat(rest[1]); return;
+        case "heartbeat": cmdHeartbeat(rest.slice(1)); return;
         case "exited": await cmdExited(rest.slice(1)); return;
         case "list": cmdList(rest.slice(1)); return;
-        case "show": cmdShow(rest[1]); return;
+        case "show": cmdShow(rest.slice(1)); return;
         case "directive": cmdDirective(rest.slice(1)); return;
-        case "cancel": cmdCancel(rest[1]); return;
-        case "settle": cmdSettle(rest[1]); return;
-        case "recover": await cmdRecover(); return;
+        case "cancel": cmdCancel(rest.slice(1)); return;
+        case "settle": cmdSettle(rest.slice(1)); return;
+        case "recover": await cmdRecover(rest.slice(1)); return;
         case "prune": cmdPrune(rest.slice(1)); return;
-        case "retention": cmdRetention(rest[1]); return;
+        case "retention": cmdRetention(rest.slice(1)); return;
         case "breaker": cmdBreaker(rest.slice(1)); return;
         default: throw new CliError("usage: self attempt run <plan.json> | register <plan.json> | started <id> --pid N | heartbeat <id> | exited <id> [--code N] | list | show <id> | directive <id> \"<text>\" | cancel <id> | settle <id> | recover | prune [--days N] | retention [<days>] | breaker [<provider>] [--reset]");
     }
@@ -38,8 +39,8 @@ export async function runAttemptCommand(rest: string[]): Promise<void>
 
 async function cmdRun(args: string[]): Promise<void>
 {
-    const file = args[0];
-    if (file === undefined || file.startsWith("-"))
+    const [file] = parseCommand("attempt", args, {}, 1).positionals;
+    if (file === undefined)
     {
         throw new CliError("usage: self attempt run <plan.json>");
     }
@@ -57,8 +58,8 @@ async function cmdRun(args: string[]): Promise<void>
 // else to it.
 async function cmdRegister(args: string[]): Promise<void>
 {
-    const file = args[0];
-    if (file === undefined || file.startsWith("-"))
+    const [file] = parseCommand("attempt", args, {}, 1).positionals;
+    if (file === undefined)
     {
         throw new CliError("usage: self attempt register <plan.json>");
     }
@@ -71,7 +72,7 @@ async function cmdRegister(args: string[]): Promise<void>
 
 function cmdStarted(args: string[]): void
 {
-    const { values, positionals } = parseArgs({ args, options: { pid: { type: "string" } }, allowPositionals: true });
+    const { values, positionals } = parseCommand("attempt", args, { pid: { type: "string" } }, 1);
     const pid = Number(values.pid);
     if (positionals[0] === undefined || !Number.isInteger(pid) || pid <= 0)
     {
@@ -81,8 +82,9 @@ function cmdStarted(args: string[]): void
     console.log(`attempt ${status.attempt} is running under an external launcher at fence ${status.fence}`);
 }
 
-function cmdHeartbeat(id: string | undefined): void
+function cmdHeartbeat(args: string[]): void
 {
+    const [id] = parseCommand("attempt", args, {}, 1).positionals;
     if (id === undefined)
     {
         throw new CliError("usage: self attempt heartbeat <attempt-id>");
@@ -92,7 +94,7 @@ function cmdHeartbeat(id: string | undefined): void
 
 async function cmdExited(args: string[]): Promise<void>
 {
-    const { values, positionals } = parseArgs({ args, options: { code: { type: "string" } }, allowPositionals: true });
+    const { values, positionals } = parseCommand("attempt", args, { code: { type: "string" } }, 1);
     const code = values.code === undefined ? 0 : Number(values.code);
     if (positionals[0] === undefined || !Number.isInteger(code))
     {
@@ -152,8 +154,9 @@ function stateColour(state: AttemptStatus["state"]): (text: string) => string
     return dim;
 }
 
-function cmdShow(id: string | undefined): void
+function cmdShow(args: string[]): void
 {
+    const [id] = parseCommand("attempt", args, {}, 1).positionals;
     if (id === undefined)
     {
         throw new CliError("usage: self attempt show <attempt-id>");
@@ -206,7 +209,7 @@ function printReceipt(spool: Spool): void
 
 function cmdDirective(args: string[]): void
 {
-    const [id, text] = args;
+    const [id, text] = parseCommand("attempt", args, {}, 2).positionals;
     if (id === undefined || text === undefined || text.trim() === "")
     {
         throw new CliError('usage: self attempt directive <attempt-id> "<text>"');
@@ -221,8 +224,9 @@ function cmdDirective(args: string[]): void
 // process group its launcher claimed — and only while that group still holds
 // something that launch put there, so a group id handed on after this one
 // emptied never receives this attempt's containment.
-function cmdCancel(id: string | undefined): void
+function cmdCancel(args: string[]): void
 {
+    const [id] = parseCommand("attempt", args, {}, 1).positionals;
     if (id === undefined)
     {
         throw new CliError("usage: self attempt cancel <attempt-id>");
@@ -242,8 +246,9 @@ function cmdCancel(id: string | undefined): void
         : `no process this launch of attempt ${id} started is still running — no signal was sent`);
 }
 
-function cmdSettle(id: string | undefined): void
+function cmdSettle(args: string[]): void
 {
+    const [id] = parseCommand("attempt", args, {}, 1).positionals;
     if (id === undefined)
     {
         throw new CliError("usage: self attempt settle <attempt-id>");
@@ -254,8 +259,9 @@ function cmdSettle(id: string | undefined): void
 // A crash or a restart leaves a spool that still says `running`. Nothing here
 // may promote such an attempt to success: the only honest verdict is that it
 // exited without being reconciled, and that is what the work record shows.
-async function cmdRecover(): Promise<void>
+async function cmdRecover(args: string[]): Promise<void>
 {
+    parseCommand("attempt", args, {}, 0);
     const ctx = requireProject(process.cwd());
     const boot = bootId();
     const now = Date.now();
@@ -341,8 +347,9 @@ function cmdPrune(args: string[]): void
     console.log(removed.length === 0 ? `no attempt spool is older than ${days} day(s)` : `deleted ${removed.length} attempt spool(s) older than ${days} day(s)`);
 }
 
-function cmdRetention(value: string | undefined): void
+function cmdRetention(args: string[]): void
 {
+    const [value] = parseCommand("attempt", args, {}, 1).positionals;
     if (value === undefined)
     {
         console.log(String(readRunnerConfig().retentionDays));
@@ -359,7 +366,7 @@ function cmdRetention(value: string | undefined): void
 
 function cmdBreaker(args: string[]): void
 {
-    const { values, positionals } = parseArgs({ args, options: { reset: { type: "boolean" } }, allowPositionals: true });
+    const { values, positionals } = parseCommand("attempt", args, { reset: { type: "boolean" } }, 1);
     const provider = positionals[0];
     if (provider === undefined)
     {

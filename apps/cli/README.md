@@ -61,7 +61,22 @@ live workspace or project page; `self theme` switches the accent
 
 Run `self` with no arguments for the full verb list: workspaces, projects,
 goals, decisions, work units, reports, artifacts, conventions, sync, views,
-search, and the fold.
+search, and the fold. `self <command> --help` prints one command's syntax and
+flags; help reads state from nowhere and writes none, so it answers in any
+directory.
+
+A flag a command does not take is refused before the command runs — the
+mistake is named, the exit is non-zero, and nothing is recorded and nothing
+is written. A typoed verb (`self reprot`) is refused the same way. Most
+commands also refuse an argument they have no room for; the multi-verb
+families — `objective`, `milestone`, `integration`, `review`, and the `work`
+linking and proposal verbs — still ignore a surplus positional.
+
+To pass text that starts with a dash, put it after `--`:
+`self goal set -- "--help is the goal"`. Before `--`, a `--help` standing
+anywhere a flag could stand answers with that command's help; in an option's
+value position it is handed to the command's parser instead
+(`--why=--help` records the literal text).
 
 ## License
 
