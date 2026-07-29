@@ -13,11 +13,14 @@ const spec = {
     workSpecId: o.id ?? "ws-proof",
     generation: Number(o.generation ?? 1),
     workId: o.work,
-    role: "implementation",
+    role: o.role ?? "implementation",
     summary: o.summary ?? "prove the declarative work spec contract",
     provider: { name: o.providerName ?? "spec-provider", endpoint: o.provider ?? "http://localhost:1/" },
     requestedModel: o.model ?? "opus-5",
-    command: [process.execPath, o.agent],
+    // The invocation the generation materializes. A case that names its own
+    // command is stating what this run will actually do — which the policy
+    // reads as part of the declaration, exactly as it reads the tools.
+    command: o.command === undefined ? [process.execPath, o.agent] : JSON.parse(o.command),
     boundary: {
         wrapper: [],
         cwd: o.cwd,
@@ -29,14 +32,18 @@ const spec = {
             ...(o.gate === undefined ? {} : { AGENT_GATE: o.gate })
         }
     },
+    // What the spec declares it will reach and do. The overnight policy reads
+    // exactly this: the risk class is derived from it, and the forbidden-action
+    // list is matched against the tools.
     capabilities: {
         context: true,
         read: [],
         write: [],
-        domains: [],
-        tools: [],
-        secrets: [],
-        self: false
+        domains: o.domains === undefined ? [] : o.domains.split(","),
+        tools: o.tools === undefined ? [] : o.tools.split(","),
+        secrets: o.secrets === undefined ? [] : o.secrets.split(","),
+        self: o.self === "on",
+        ...(o.budgetUsd === undefined ? {} : { budgetUsd: Number(o.budgetUsd) })
     },
     artifacts: o.dest === undefined ? [] : [{ name: "design.md", dest: o.dest }],
     validation: { responseSchema: { status: "completed", artifacts: o.dest === undefined ? [] : ["design.md"] } },

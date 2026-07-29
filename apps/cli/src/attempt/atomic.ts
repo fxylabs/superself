@@ -34,24 +34,37 @@ const LOCK_TIMEOUT_MS = 5_000;
 // which of them goes first.
 export function withLock<T>(file: string, run: () => T): T
 {
-    const lock = `${file}.lock`;
+    const lock = lockPath(file);
+    return release(waitForLock(lock, LOCK_TIMEOUT_MS), lock, run);
+}
+
+// A section that awaits is not held through this primitive. The wait below is
+// synchronous — it has to be, because everything it serialises is synchronous
+// filesystem work in one process — and a caller that blocked the event loop
+// for the length of somebody else's asynchronous section would be a process
+// that answers no signal while it waits. Those callers take the lock by name
+// with `takeLock` and decide for themselves when a holder counts as abandoned:
+// `attempt/settlement.ts` and `daemon/state.ts` both do, and both ask whether
+// the holder is still alive rather than sitting out a fixed window.
+function waitForLock(lock: string, timeoutMs: number): Held
+{
     mkdirSync(dirname(lock), { recursive: true });
     const first = acquire(lock);
     if (first !== null)
     {
-        return release(first, lock, run);
+        return first;
     }
     // Which holder this process is waiting on. What makes breaking a lock
     // defensible is that one holder sat on it for the whole window, so the
     // identity is read before the wait and checked again after it.
     const waitingOn = tokenOf(lock);
-    for (let waited = 0; waited < LOCK_TIMEOUT_MS; waited += LOCK_POLL_MS)
+    for (let waited = 0; waited < timeoutMs; waited += LOCK_POLL_MS)
     {
         pause(LOCK_POLL_MS);
         const held = acquire(lock);
         if (held !== null)
         {
-            return release(held, lock, run);
+            return held;
         }
     }
     const taken = breakStale(lock, waitingOn);
@@ -65,7 +78,7 @@ export function withLock<T>(file: string, run: () => T): T
         // failure it can retry instead of a silent double write.
         throw new CliError(`could not take ${lock}: another process holds it and it is not stale — nothing was written`);
     }
-    return release(taken, lock, run);
+    return taken;
 }
 
 // A lock still held by the same owner after the whole window belongs to a

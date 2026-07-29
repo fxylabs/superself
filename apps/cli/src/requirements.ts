@@ -5,7 +5,7 @@ import {
     nextRequirementId,
     requirementOf
 } from "./completion.js";
-import { confirmHuman } from "./human.js";
+import { attemptMarker, confirmHuman } from "./human.js";
 import { findEventByPrefix } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { ProjectContext } from "./paths.js";
@@ -20,11 +20,6 @@ import { CliError, EventRefs, SelfEvent } from "./types.js";
 // The shape mirrors `self milestone`: `met --requirement --why` covers,
 // `recheck` re-judges what a revision left stale, and a revision invalidates
 // coverage rather than rewriting it.
-
-// The markers the runner sets on every child it starts. A process carrying one
-// is inside an agent attempt, whatever stdio it was handed, and an attempt is
-// never the interactive session an approval has to come from.
-const ATTEMPT_MARKERS = ["SUPERSELF_SESSION", "SUPERSELF_ATTEMPT_ID"];
 
 export function cmdWorkRequire(ctx: ProjectContext, args: string[]): void
 {
@@ -212,7 +207,7 @@ export function cmdWorkApprove(ctx: ProjectContext, args: string[]): void
     {
         throw new CliError(`${work.id} is already approved`);
     }
-    const marker = ATTEMPT_MARKERS.find((name) => process.env[name] !== undefined);
+    const marker = attemptMarker();
     if (marker !== undefined)
     {
         throw new CliError(`${work.id} cannot be approved from an agent attempt — this process carries the attempt marker ${marker}, and an approval is granted by a person at their own terminal`);

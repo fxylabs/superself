@@ -129,7 +129,7 @@ function tickReport(summary: TickSummary): string
     }
     for (const wake of summary.wakes)
     {
-        lines.push(`  ${wake.workSpec}  ${wake.work}  generation ${wake.generation}  ${wake.outcome}`);
+        lines.push(`  ${wake.workSpec}  ${wake.work}  generation ${wake.generation}  ${wake.outcome}${wake.detail === undefined ? "" : `  ${dim(wake.detail)}`}`);
     }
     return lines.join("\n");
 }
