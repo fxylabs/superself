@@ -38,6 +38,22 @@ const OTHER_PEM = [
     "-----END EC PRIVATE KEY-----"
 ].join("\n");
 
+// The same key with nothing declaring it — an agent that cats a key file, a
+// provider that echoes one back. Nothing here is covered by a literal, so the
+// armour lines and the body have to be taken by the rules alone, and the body
+// is where that is hard: it is base64, so '+' and '/' break it into pieces no
+// single run judgment sees, and a rule spanning from one armour line to the
+// other would break the line boundary this whole file exists to keep. Both
+// bodies are synthetic — the second carries the separators at the spacing that
+// left the body in the log before.
+const UNDECLARED_BODY = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj";
+const BUSY_BODY = "SGVsbG8xMjM0/QUJDRGVGZ0hp+SktMbW5PcFFy/U3RVdld4WXox+MjM0NTY3ODk=";
+
+function undeclared(body)
+{
+    return ["-----BEGIN RSA PRIVATE KEY-----", body, "-----END RSA PRIVATE KEY-----"].join("\n");
+}
+
 // A provider does not stop writing when it has echoed a key; it goes on
 // producing ordinary output, which is what walks the cut back into the key.
 const TRAILING = Array.from({ length: 12 }, (_, index) => `log line ${index} of ordinary provider output`).join("\n");
@@ -60,7 +76,9 @@ const SAMPLES = [
     { name: "multi-line declared literal at the head of the stream", scope: { literals: [PEM] }, secrets: [PEM, ...PEM.split("\n")], text: `${PEM}\n${TRAILING}\n` },
     { name: "multi-line declared literal with no trailing newline", scope: { literals: [PEM] }, secrets: [PEM, ...PEM.split("\n")], text: `head\n${PEM}` },
     { name: "two multi-line declared literals", scope: { literals: [PEM, OTHER_PEM] }, secrets: [PEM, OTHER_PEM, ...PEM.split("\n"), ...OTHER_PEM.split("\n")], text: `head\n${PEM}\n${OTHER_PEM}\nfoot\n` },
-    { name: "the same multi-line literal twice", scope: { literals: [PEM] }, secrets: [PEM, ...PEM.split("\n")], text: `head\n${PEM}\nmiddle\n${PEM}\nfoot\n` }
+    { name: "the same multi-line literal twice", scope: { literals: [PEM] }, secrets: [PEM, ...PEM.split("\n")], text: `head\n${PEM}\nmiddle\n${PEM}\nfoot\n` },
+    { name: "an undeclared key block", scope: { literals: [] }, secrets: [UNDECLARED_BODY, "BEGIN RSA PRIVATE KEY", "END RSA PRIVATE KEY"], text: `cat deploy.key\n${undeclared(UNDECLARED_BODY)}\ndone\n` },
+    { name: "an undeclared key block whose body breaks its own runs", scope: { literals: [] }, secrets: [BUSY_BODY, "BEGIN RSA PRIVATE KEY", "END RSA PRIVATE KEY"], text: `cat deploy.key\n${undeclared(BUSY_BODY)}\n${TRAILING}\n` }
 ];
 
 let failures = 0;
