@@ -10,33 +10,15 @@
 set -euo pipefail
 
 CLI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ROOT="$(mktemp -d)"
+# Nothing this section starts may outlive it.
+PROOF_STOP_DAEMON=1
+. "$CLI_DIR/proof/lib.sh"
 
-SELF_JS="$CLI_DIR/bin/self.mjs"
 AGENT="$CLI_DIR/proof/daemon-agent.mjs"
 VALIDATE="$CLI_DIR/proof/daemon-validate.mjs"
 LAUNCH="$CLI_DIR/proof/daemon-launch.mjs"
 MKPLAN="$CLI_DIR/proof/attempt-plan.mjs"
 MKSPEC="$CLI_DIR/proof/workspec.mjs"
-
-SELF()
-{
-    node "$SELF_JS" "$@"
-}
-
-fail()
-{
-    echo "proof FAILED: $1" >&2
-    exit 1
-}
-
-# Nothing this section starts may outlive it.
-cleanup()
-{
-    node "$SELF_JS" daemon stop > /dev/null 2>&1 || true
-    rm -rf "$ROOT"
-}
-trap cleanup EXIT
 
 export HOME="$ROOT/A/home"
 export XDG_CONFIG_HOME="$ROOT/A/config"
@@ -63,7 +45,7 @@ SELF project add --name demo --desc "overnight policy and digest harness" > /dev
 SELF goal set "prove the daemon's autonomy is bounded by a written policy" > /dev/null
 
 STORE="$ROOT/A/ws/.superself"
-LOG="$STORE/projects/demo/log.jsonl"
+LOG_A="$STORE/projects/demo/log.jsonl"
 DEMO="$ROOT/A/ws/demo"
 RUNNER="$ROOT/A/state/superself/runner"
 
@@ -71,19 +53,11 @@ spool_of()
 {
     echo "$RUNNER/attempts/$1"
 }
-count_events()
-{
-    grep -c "\"type\":\"$1\"" "$LOG" || true
-}
 one_line()
 {
     [ "$(printf '%s' "$1" | grep -c .)" = "1" ] || fail "a refusal was not one line: $1"
     printf '%s' "$1" | grep -q "    at " && fail "a refusal printed a stack trace"
     return 0
-}
-tick_json()
-{
-    SELF daemon tick --json | tail -1
 }
 tick_count()
 {
@@ -93,53 +67,11 @@ wake_outcome()
 {
     node -e 'const s=JSON.parse(require("fs").readFileSync(0,"utf8"));const w=s.wakes.find(w=>w.workSpec===process.argv[1]);process.stdout.write(w===undefined?"none":w.outcome)' "$1"
 }
-attempts_of()
-{
-    SELF attempt list --work "$1" | awk '$1 ~ /^at-/ {print $1}'
-}
-attempt_state()
-{
-    SELF attempt show "$1" | sed -n 's/^state *//p' | awk '{print $1}'
-}
-wake_settled()
-{
-    node -e '
-const fs = require("node:fs");
-const [file, workSpec] = process.argv.slice(1);
-let wakes = [];
-try { wakes = JSON.parse(fs.readFileSync(file, "utf8")); } catch { wakes = []; }
-const running = wakes.filter((wake) => wake.workSpec === workSpec).filter((wake) =>
-{
-    try { process.kill(wake.child, 0); return true; }
-    catch (error) { return error.code === "EPERM"; }
-});
-process.exit(running.length === 0 ? 0 : 1);
-' "$RUNNER/daemon/wakes.json" "$1"
-}
-await()
-{
-    local until="$1" limit="${2:-40}"
-    for _ in $(seq "$limit")
-    do
-        if eval "$until"
-        then
-            return 0
-        fi
-        sleep 0.5
-    done
-    return 1
-}
 plan()
 {
     local file="$1"
     shift
     node "$MKPLAN" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
-}
-workspec()
-{
-    local file="$1"
-    shift
-    node "$MKSPEC" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
 }
 # One command array, written from its parts. A case that states an invocation
 # carrying a prompt has quotes, slashes and sentences in it, and escaping that
@@ -150,24 +82,6 @@ command_json()
     node -e 'process.stdout.write("command=" + JSON.stringify(process.argv.slice(1)))' "$@"
 }
 NODE_BIN="$(node -e 'process.stdout.write(process.execPath)')"
-# Drives one CLI command under a real pseudo-terminal, typing one line. A
-# policy is granted by a person at a terminal, so every case that sets one has
-# to reach the CLI the way that person does: the command sees a tty on stdin
-# and stdout, and the typed line arrives through the terminal.
-pty_self()
-{
-    local typed="$1"
-    shift
-    # The feeder stays open after the line: closing it immediately delivers an
-    # EOF to the terminal before the prompt has read, which is not what a
-    # human's terminal ever does.
-    if script --version > /dev/null 2>&1
-    then
-        { printf '%s\n' "$typed"; sleep 1; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
-    else
-        { printf '%s\n' "$typed"; sleep 1; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
-    fi
-}
 # The challenge `overnight set` asks for is the window being granted, so it is
 # read off the very flags the case passed rather than restated beside them.
 challenge_for()
@@ -623,11 +537,11 @@ process.exit(digest.cost.usd === null && digest.cost.tokens === null && digest.c
 SELF digest --hours 24 | grep -q "cost unknown, tokens unknown" || fail "the rendered digest did not say the cost is unknown"
 
 # reading it writes nothing at all
-BEFORE="$(wc -l < "$LOG")"
+BEFORE="$(wc -l < "$LOG_A")"
 HEAD_BEFORE="$(git -C "$STORE" rev-parse HEAD)"
 SELF digest --hours 24 > /dev/null
 SELF digest --json > /dev/null
-[ "$(wc -l < "$LOG")" = "$BEFORE" ] || fail "running the digest recorded an event"
+[ "$(wc -l < "$LOG_A")" = "$BEFORE" ] || fail "running the digest recorded an event"
 [ "$(git -C "$STORE" rev-parse HEAD)" = "$HEAD_BEFORE" ] || fail "running the digest committed to the store"
 
 # the window is exactly the one asked for: a window that starts after
@@ -715,7 +629,7 @@ SELF overnight show | grep -q "concurrency   at most 16" && fail "a refused gran
 # ---------------------------------------------------------------------------
 # The verbs are parse-guarded and documented like every other verb
 # ---------------------------------------------------------------------------
-BEFORE="$(wc -l < "$LOG")"
+BEFORE="$(wc -l < "$LOG_A")"
 for bad in "overnight set --nonsense" "overnight show --nonsense" "digest --nonsense"
 do
     OUT="$(SELF $bad 2>&1 || true)"
@@ -731,7 +645,7 @@ echo "$BADRISK" | grep -q "is not a risk class" || fail "an unrecognised risk cl
 BADSINCE="$(SELF digest --since yesterday 2>&1 || true)"
 one_line "$BADSINCE"
 echo "$BADSINCE" | grep -q "expects a timestamp" || fail "a digest window that is not a timestamp was accepted"
-[ "$(wc -l < "$LOG")" = "$BEFORE" ] || fail "a refused flag still wrote an event"
+[ "$(wc -l < "$LOG_A")" = "$BEFORE" ] || fail "a refused flag still wrote an event"
 
 SELF overnight --help | grep -q "overnight set" || fail "the overnight verb is missing from the scoped help"
 SELF digest --help | grep -q "digest \[--since" || fail "the digest verb is missing from the scoped help"
@@ -747,11 +661,11 @@ done
 
 # and a policy that would carry this machine's home path into the synced log is
 # refused, costing only the command
-BEFORE="$(wc -l < "$LOG")"
+BEFORE="$(wc -l < "$LOG_A")"
 LEAK="$(SELF attempt propose "$AT_PROP" --action "read $HOME/notes.md" 2>&1 || true)"
 one_line "$LEAK"
 echo "$LEAK" | grep -q "absolute path under this machine's home directory" || fail "a proposal carried a home path into the synced log"
-[ "$(wc -l < "$LOG")" = "$BEFORE" ] || fail "a refused proposal still wrote an event"
+[ "$(wc -l < "$LOG_A")" = "$BEFORE" ] || fail "a refused proposal still wrote an event"
 
 # ---------------------------------------------------------------------------
 # A tick reads the generations it is deciding about, and no others

@@ -80,7 +80,7 @@ writeFileSync(child, [
     `process.stdout.write(String(launchFile({ workspaceDir: ${JSON.stringify(root)} }, ${JSON.stringify(target)})));`
 ].join("\n"));
 
-async function opened(childEnvironment)
+async function opened(childEnvironment, deadlineMs = 1000)
 {
     rmSync(marker, { force: true });
     const outcome = spawnSync(process.execPath, [child], {
@@ -96,7 +96,7 @@ async function opened(childEnvironment)
     }
     // The launch is detached, so its absence is read on a deadline rather than
     // straight after the exit — the same race proof.sh waits out.
-    const deadline = Date.now() + 1000;
+    const deadline = Date.now() + deadlineMs;
     while (Date.now() < deadline && !existsSync(marker))
     {
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -117,7 +117,10 @@ if (marked.said !== "false" || marked.spawned !== "")
 const unmarked = { ...env };
 delete unmarked.SUPERSELF_SESSION;
 delete unmarked.SUPERSELF_ATTEMPT_ID;
-const bare = await opened(unmarked);
+// This row waits for a launch that must happen, so its deadline is generous:
+// on a loaded machine running sibling suites, a detached stub can take well
+// over the second the absence rows above are read on.
+const bare = await opened(unmarked, 10000);
 if (bare.said !== "true" || !bare.spawned.includes(target))
 {
     failures.push(`the control child launched nothing, so the marker proves nothing: ${bare.said} ${bare.spawned}`);

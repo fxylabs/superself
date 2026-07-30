@@ -11,34 +11,16 @@
 set -euo pipefail
 
 CLI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ROOT="$(mktemp -d)"
+# Nothing this section starts may outlive it: a supervisor left running would
+# keep reconciling a workspace that is about to be deleted.
+PROOF_STOP_DAEMON=1
+. "$CLI_DIR/proof/lib.sh"
 
-SELF_JS="$CLI_DIR/bin/self.mjs"
 AGENT="$CLI_DIR/proof/daemon-agent.mjs"
 VALIDATE="$CLI_DIR/proof/daemon-validate.mjs"
 LAUNCH="$CLI_DIR/proof/daemon-launch.mjs"
 MKPLAN="$CLI_DIR/proof/attempt-plan.mjs"
 MKSPEC="$CLI_DIR/proof/workspec.mjs"
-
-SELF()
-{
-    node "$SELF_JS" "$@"
-}
-
-fail()
-{
-    echo "proof FAILED: $1" >&2
-    exit 1
-}
-
-# Nothing this section starts may outlive it: a supervisor left running would
-# keep reconciling a workspace that is about to be deleted.
-cleanup()
-{
-    node "$SELF_JS" daemon stop > /dev/null 2>&1 || true
-    rm -rf "$ROOT"
-}
-trap cleanup EXIT
 
 export HOME="$ROOT/A/home"
 export XDG_CONFIG_HOME="$ROOT/A/config"
@@ -62,21 +44,6 @@ git init -q -b main
 SELF project add --name demo --desc "supervision loop harness" > /dev/null
 SELF goal set "prove the supervision loop" > /dev/null
 
-# A policy is granted by a person at a terminal, so the one this harness runs
-# under is granted the way that person grants it: a real pseudo-terminal, with
-# the window typed back. The gate itself is proven in overnight-digest.sh.
-grant_policy()
-{
-    local typed="$1"
-    shift
-    if script --version > /dev/null 2>&1
-    then
-        { printf '%s\n' "$typed"; sleep 1; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
-    else
-        { printf '%s\n' "$typed"; sleep 1; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
-    fi
-}
-
 # The wake path dispatches on the operator's authority and never on its own, so
 # every case below that expects a dispatch needs a policy in force. This one is
 # deliberately the widest a policy can be — the whole day, a generous cap — so
@@ -90,14 +57,6 @@ LOG_A="$STORE/projects/demo/log.jsonl"
 DEMO="$ROOT/A/ws/demo"
 RUNNER="$ROOT/A/state/superself/runner"
 
-spool_of()
-{
-    echo "$RUNNER/attempts/$1"
-}
-count_events()
-{
-    grep -c "\"type\":\"$1\"" "$LOG_A" || true
-}
 # Events of one type about one attempt. Counted by the fields rather than by a
 # substring: every event an attempt records carries its id, so a grep for the
 # id alone would count the start as a report.
@@ -110,30 +69,15 @@ const events = fs.readFileSync(file, "utf8").split("\n").filter((line) => line.t
 process.stdout.write(String(events.filter((e) => e.type === type && (e.refs?.attempt === attempt || e.payload?.attempt === attempt)).length));
 ' "$LOG_A" "$1" "$2"
 }
-attempt_state()
-{
-    SELF attempt show "$1" | sed -n 's/^state *//p' | awk '{print $1}'
-}
 exit_record()
 {
     SELF attempt show "$1" | sed -n 's/^exit *//p'
 }
 # Attempt ids only: with no match the listing prints the sentence that says so,
 # and a case counting lines would count that.
-attempts_of()
-{
-    SELF attempt list --work "$1" | awk '$1 ~ /^at-/ {print $1}'
-}
 count_attempts()
 {
     attempts_of "$1" | grep -c . || true
-}
-# The summary, which the tick prints on its own last line: settling runs the
-# completion gate, and the gate reports what it published exactly as it does
-# when a person runs it.
-tick_json()
-{
-    SELF daemon tick --json | tail -1
 }
 # One field out of the tick summary, so a case says what it expects rather than
 # grepping a line whose wording is not the contract.
@@ -141,46 +85,10 @@ tick_count()
 {
     node -e 'const s=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(s[process.argv[1]]))' "$1"
 }
-# Whether every dispatch this machine issued for a spec has finished. A wake
-# hands the run to a detached process and the supervisor holds the unit until
-# that process is done, so a case asking what the next tick decides has to wait
-# for the last one to be over first.
-wake_settled()
-{
-    node -e '
-const fs = require("node:fs");
-const [file, workSpec] = process.argv.slice(1);
-let wakes = [];
-try { wakes = JSON.parse(fs.readFileSync(file, "utf8")); } catch { wakes = []; }
-const running = wakes.filter((wake) => wake.workSpec === workSpec).filter((wake) =>
-{
-    try { process.kill(wake.child, 0); return true; }
-    catch (error) { return error.code === "EPERM"; }
-});
-process.exit(running.length === 0 ? 0 : 1);
-' "$RUNNER/daemon/wakes.json" "$1"
-}
 wake_outcome()
 {
     node -e 'const s=JSON.parse(require("fs").readFileSync(0,"utf8"));const w=s.wakes.find(w=>w.workSpec===process.argv[1]);process.stdout.write(w===undefined?"none":w.outcome)' "$1"
 }
-# Waits for state the supervisor put in motion. A dispatch the tick issued runs
-# detached by design, so a case that asserted immediately would be asserting
-# about the spawn rather than about the run.
-await()
-{
-    local until="$1" limit="${2:-40}"
-    for _ in $(seq "$limit")
-    do
-        if eval "$until"
-        then
-            return 0
-        fi
-        sleep 0.5
-    done
-    return 1
-}
-
 # One field off the daemon's own record of its last tick. `status` reads this
 # rather than the log, and a case about a tick that failed asks it the same way
 # a person would.
@@ -249,12 +157,6 @@ plan()
     shift
     node "$MKPLAN" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
 }
-workspec()
-{
-    local file="$1"
-    shift
-    node "$MKSPEC" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
-}
 
 # ---------------------------------------------------------------------------
 # The tick wakes approved ready work, and only that
@@ -275,7 +177,10 @@ TICK1="$(tick_json)"
 [ "$(echo "$TICK1" | wake_outcome ws-hold)" = "awaiting-approval" ] || fail "work blocked on a decision was not held back as awaiting approval"
 [ "$(echo "$TICK1" | tick_count woken)" = "1" ] || fail "the tick woke more than the one ready work unit"
 [ "$(count_events run.woken)" = "1" ] || fail "the wake left no durable record"
-[ "$(count_events spec.dispatched)" = "1" ] || fail "the wake did not go through the spec dispatch path"
+# the dispatch event is written by the woken child, which runs detached — on a
+# loaded machine it lands moments after the tick returns, so it is read on a
+# deadline rather than straight away
+await '[ "$(count_events spec.dispatched)" = "1" ]' || fail "the wake did not go through the spec dispatch path"
 [ -z "$(attempts_of "$WHOLD")" ] || fail "work awaiting approval materialized an attempt"
 
 # the same tick again, immediately: a supervision pass is a function of state

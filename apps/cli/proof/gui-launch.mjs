@@ -13,16 +13,21 @@ import { delimiter, join } from "node:path";
 import { launchFile } from "../dist/view.js";
 
 const root = mkdtempSync(join(tmpdir(), "self-gui-launch-"));
-const marker = join(root, "launched.log");
 const target = join(root, "artifact.txt");
 const failures = [];
 
+// Each case writes to a marker of its own, named through the environment the
+// detached stub inherits: on a loaded machine a spawn from one case can land
+// after the next case has started, and a shared marker file would let that
+// late write fail a refusal case that refused correctly.
+let marker = join(root, "launched-0.log");
+let markerCase = 0;
 writeFileSync(target, "hi");
 mkdirSync(join(root, "bin"));
 for (const name of ["open", "xdg-open", "explorer"])
 {
     const stub = join(root, "bin", name);
-    writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(marker)}\n`);
+    writeFileSync(stub, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"${SELF_PROOF_MARKER:-/dev/null}\"\n");
     chmodSync(stub, 0o755);
 }
 process.env.PATH = join(root, "bin") + delimiter + (process.env.PATH ?? "");
@@ -33,10 +38,11 @@ process.env.PATH = join(root, "bin") + delimiter + (process.env.PATH ?? "");
 // first as the second and pass a broken guard.
 //
 // A launch that happens exits this wait the moment the marker lands, so the
-// case that expects one can afford to wait long. A refusal has nothing to wait
-// for and pays the deadline in full every time, so it is read on the short one
+// case that expects one can afford to wait long — sibling proof suites can
+// hold a detached spawn back for seconds. A refusal has nothing to wait for
+// and pays the deadline in full every time, so it is read on the short one
 // proof.sh uses for the same detached-spawn race.
-const LAUNCH_MS = 5000;
+const LAUNCH_MS = 20000;
 const ABSENCE_MS = 1000;
 
 async function launched(deadlineMs)
@@ -55,7 +61,6 @@ async function launched(deadlineMs)
 
 async function opens(what, context)
 {
-    rmSync(marker, { force: true });
     if (apply(context) !== true)
     {
         failures.push(`${what}: the guard refused a launch a person asked for`);
@@ -70,7 +75,6 @@ async function opens(what, context)
 
 async function suppresses(what, context)
 {
-    rmSync(marker, { force: true });
     if (apply(context) !== false)
     {
         failures.push(`${what}: the guard reported a launch it must not make`);
@@ -84,6 +88,9 @@ async function suppresses(what, context)
 
 function apply({ stdin, stdout, ci, session, attempt })
 {
+    markerCase += 1;
+    marker = join(root, `launched-${markerCase}.log`);
+    set("SELF_PROOF_MARKER", marker);
     process.stdin.isTTY = stdin;
     process.stdout.isTTY = stdout;
     set("CI", ci);

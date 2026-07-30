@@ -14,19 +14,7 @@
 set -euo pipefail
 
 CLI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ROOT="$(mktemp -d)"
-trap 'rm -rf "$ROOT"' EXIT
-
-SELF()
-{
-    node "$CLI_DIR/bin/self.mjs" "$@"
-}
-
-fail()
-{
-    echo "integration proof FAILED: $1" >&2
-    exit 1
-}
+. "$CLI_DIR/proof/lib.sh"
 
 # Reads one field out of a --json surface. The proof asserts against machine
 # output wherever a human line would let a wording change hide a broken gate.
@@ -84,20 +72,6 @@ sha256_of()
 # a human at a terminal reduced to what a proof can hold: the command sees a
 # tty on stdin and stdout, and the typed line arrives through the terminal —
 # there is no pipe here for the CLI to be fooled by.
-pty_self()
-{
-    local typed="$1"
-    shift
-    # The feeder stays open after the line: closing it immediately delivers an
-    # EOF to the terminal before the prompt has read, which is not what a
-    # human's terminal ever does.
-    if script --version > /dev/null 2>&1
-    then
-        { printf '%s\n' "$typed"; sleep 3; } | script -qec "node $CLI_DIR/bin/self.mjs $*" /dev/null > /dev/null 2>&1 || true
-    else
-        { printf '%s\n' "$typed"; sleep 3; } | script -q /dev/null node "$CLI_DIR/bin/self.mjs" "$@" > /dev/null 2>&1 || true
-    fi
-}
 
 # A review result envelope, exactly as a provider-neutral runner would write it:
 # a JSON file beside the artifact bytes it declares.

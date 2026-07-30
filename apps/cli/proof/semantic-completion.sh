@@ -11,30 +11,12 @@
 set -euo pipefail
 
 CLI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ROOT="$(mktemp -d)"
+# Nothing this section starts may outlive it.
+PROOF_STOP_DAEMON=1
+. "$CLI_DIR/proof/lib.sh"
 
-SELF_JS="$CLI_DIR/bin/self.mjs"
 AGENT="$CLI_DIR/proof/daemon-agent.mjs"
 MKSPEC="$CLI_DIR/proof/workspec.mjs"
-
-SELF()
-{
-    node "$SELF_JS" "$@"
-}
-
-fail()
-{
-    echo "proof FAILED: $1" >&2
-    exit 1
-}
-
-# Nothing this section starts may outlive it.
-cleanup()
-{
-    node "$SELF_JS" daemon stop > /dev/null 2>&1 || true
-    rm -rf "$ROOT"
-}
-trap cleanup EXIT
 
 export HOME="$ROOT/A/home"
 export XDG_CONFIG_HOME="$ROOT/A/config"
@@ -61,21 +43,6 @@ MAIN0="$(git rev-parse HEAD)"
 SELF project add --name demo --desc "semantic completion harness" > /dev/null
 SELF goal set "prove semantic completion is separate from physical completion" > /dev/null
 
-# A policy is granted by a person at a terminal, so the one this harness runs
-# under is granted the way that person grants it: a real pseudo-terminal, with
-# the window typed back. The gate itself is proven in overnight-digest.sh.
-grant_policy()
-{
-    local typed="$1"
-    shift
-    if script --version > /dev/null 2>&1
-    then
-        { printf '%s\n' "$typed"; sleep 1; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
-    else
-        { printf '%s\n' "$typed"; sleep 1; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
-    fi
-}
-
 # The wake path dispatches on the operator's authority, so the case below that
 # reads a tick needs a policy in force. It is set as wide as a policy can be:
 # what an approval gate does is what this harness is about, and a narrower one
@@ -84,13 +51,9 @@ grant_policy "00:00-00:00" overnight set --from 00:00 --to 00:00 --auto-dispatch
 SELF overnight show | grep -q "auto-dispatch on" || fail "the harness policy was not granted"
 
 STORE="$ROOT/A/ws/.superself"
-LOG="$STORE/projects/demo/log.jsonl"
+LOG_A="$STORE/projects/demo/log.jsonl"
 DEMO="$ROOT/A/ws/demo"
 
-count_events()
-{
-    grep -c "\"type\":\"$1\"" "$LOG" || true
-}
 # Events of one type about one work unit, counted by the fields rather than by
 # a substring: every event a unit records carries its id.
 count_for()
@@ -100,7 +63,7 @@ const fs = require("node:fs");
 const [file, type, work] = process.argv.slice(1);
 const events = fs.readFileSync(file, "utf8").split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line));
 process.stdout.write(String(events.filter((e) => e.type === type && (e.refs?.work === work || e.payload?.work === work)).length));
-' "$LOG" "$1" "$2"
+' "$LOG_A" "$1" "$2"
 }
 work_status()
 {
@@ -114,26 +77,6 @@ process.stdin.on("end", () => process.stdout.write((text.match(/^- Status: (\S+)
 uncovered()
 {
     SELF work show "$1" | grep -c "_(uncovered)_" || true
-}
-attempts_of()
-{
-    SELF attempt list --work "$1" --json | node -e '
-const s = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-process.stdout.write(s.map((a) => a.attempt).join("\n"));
-'
-}
-attempt_state()
-{
-    SELF attempt list --json | node -e '
-const s = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-process.stdout.write(s.find((a) => a.attempt === process.argv[1])?.state ?? "none");
-' "$1"
-}
-workspec()
-{
-    local file="$1"
-    shift
-    node "$MKSPEC" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
 }
 sha256_of()
 {
@@ -154,29 +97,12 @@ one_line()
 # One supervision pass, machine-readable. A tick that settles an attempt runs
 # the completion gate, and the gate speaks for itself on stdout, so the summary
 # is the last line rather than the whole of it.
-tick_json()
-{
-    SELF daemon tick --json 2>/dev/null | tail -1
-}
 wake_outcome()
 {
     node -e '
 const s = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
 process.stdout.write(s.wakes.find((w) => w.workSpec === process.argv[1])?.outcome ?? "none");
 ' "$1"
-}
-await()
-{
-    local until="$1" limit="${2:-40}"
-    for _ in $(seq "$limit")
-    do
-        if eval "$until"
-        then
-            return 0
-        fi
-        sleep 0.5
-    done
-    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -376,17 +302,6 @@ one_line "$PIPED"
 echo "$PIPED" | grep -q "human_gate_unavailable" || fail "a piped approval was admitted"
 
 # under a real terminal, the typed challenge is what grants it
-pty_self()
-{
-    local typed="$1"
-    shift
-    if script --version > /dev/null 2>&1
-    then
-        { printf '%s\n' "$typed"; sleep 3; } | script -qec "node $SELF_JS $*" /dev/null > /dev/null 2>&1 || true
-    else
-        { printf '%s\n' "$typed"; sleep 3; } | script -q /dev/null node "$SELF_JS" "$@" > /dev/null 2>&1 || true
-    fi
-}
 
 if command -v script > /dev/null 2>&1
 then
@@ -497,7 +412,7 @@ SELF work done "$WPOL" > /dev/null || fail "done was refused with a hard-model a
 # only the command.
 WSAN="$(SELF work add "the guard holds on the completion events too" | tail -1)"
 SELF work start "$WSAN" > /dev/null
-BEFORE="$(wc -l < "$LOG")"
+BEFORE="$(wc -l < "$LOG_A")"
 LEAK="$(SELF work require "$WSAN" "read the notes at $HOME/notes.md" 2>&1 || true)"
 one_line "$LEAK"
 echo "$LEAK" | grep -q "absolute path under this machine's home directory" || fail "a requirement carried a home path into the synced log"
