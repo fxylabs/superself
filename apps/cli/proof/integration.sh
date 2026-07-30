@@ -144,6 +144,12 @@ AT40="$(at 40)"
 AT45="$(at 45)"
 AT50="$(at 50)"
 AT55="$(at 55)"
+AT60="$(at 60)"
+AT65="$(at 65)"
+AT70="$(at 70)"
+AT75="$(at 75)"
+AT80="$(at 80)"
+AT85="$(at 85)"
 
 export HOME="$ROOT/home"
 export XDG_CONFIG_HOME="$ROOT/config"
@@ -757,6 +763,181 @@ SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" -
 DOUBLE="$(SELF integration promote record "$PM" --fence "$FENCE2" --main-before "$MAIN0" --main-after "$PROMMERGE" --json || true)"
 [ "$(echo "$DOUBLE" | field code)" = "promotion_closed" ] || fail "a recorded promotion was recorded twice"
 
+# ── #95: one approval, typed at the feature head, carries to the squash ──
+#
+# A second repository lane, "mainline", with no configured target: every merge
+# lands directly on main and takes the human gate. Until #95 that gate was
+# paid twice per merge — once at the feature head, once more at the squash
+# commit, a commit that cannot exist before the merge. When the squash lands
+# byte-identical feature bytes on a conflict-free base advance, the approval
+# now follows the same carry-over policy receipts already have, as a recorded
+# merge.approval_carried event, never a silent skip.
+LOGFILE="$ROOT/ws/.superself/projects/superself/log.jsonl"
+MB0="$(git rev-parse main)"
+git checkout -q -b f95 "$MB0"
+echo "// #95 feature under approval carry" >> views.ts
+git commit -qam "f95"
+F95="$(git rev-parse HEAD)"
+git checkout -q main
+
+CS95="$(SELF integration register --repo mainline --base "$MB0" --head "$F95" --pr 95 --check ci | tail -1)"
+D95="$(digest_of "$CS95")"
+envelope "$ROOT/rev95" "$CS95" change "$MB0" "$F95" "$D95" approve
+SELF review ingest --file "$ROOT/rev95/envelope.json" > /dev/null
+FENCE95="$(SELF integration lease acquire --repo mainline --holder supervisor | tail -1)"
+SELF integration observe main --repo mainline --head "$MB0" --at "$AT60" > /dev/null
+SELF integration show "$CS95" --json | field blockers | grep -q "approval_missing" \
+    || fail "the mainline lane did not demand the human gate"
+
+# the one deliberate approval, typed at the feature head, binds head and digest
+pty_self "$(printf '%s' "$F95" | cut -c1-12)" integration approve "$CS95" --head "$F95" --by maintainer
+[ "$(SELF integration show "$CS95" --json | field approvals.0.humanConfirmed)" = "true" ] \
+    || fail "the feature-head approval was not counted as human"
+[ "$(SELF integration show "$CS95" --json | field approvals.0.digest)" = "$D95" ] \
+    || fail "the approval did not bind the digest the human approved"
+
+# main advances conflict-free under the approval, for reasons unrelated to #95
+echo "// an unrelated mainline advance" >> gitutil.ts
+git commit -qam "unrelated mainline advance"
+MB1="$(git rev-parse HEAD)"
+SELF integration observe main --repo mainline --head "$MB1" --at "$AT65" > /dev/null
+
+# the squash merge of the exact approved head: byte-identical feature bytes on
+# the advanced base, in a commit that could not exist before the merge
+git merge -q --squash f95 > /dev/null 2>&1
+git commit -qm "squash #95"
+SQ95="$(git rev-parse HEAD)"
+IA95="$(SELF integration attempt start "$CS95" --fence "$FENCE95" --action merge | tail -1)"
+SELF integration attempt finish "$IA95" --outcome completed --head "$SQ95" --base "$MB1" \
+    --command "git merge --squash f95:0" | grep -q "receipts preserved" \
+    || fail "the conflict-free squash did not preserve the receipts"
+SELF integration observe ci --repo mainline --head "$SQ95" --check ci --conclusion success --at "$AT70" > /dev/null
+
+# the merge is admitted on the carried approval — no second human touch
+SELF integration merge "$CS95" --fence "$FENCE95" --merge-commit "$SQ95" \
+    --main-before "$MB1" --main-after "$SQ95" --json > "$ROOT/merge95.json"
+[ "$(phase_of "$CS95")" = "merged" ] || fail "a carried approval did not admit the merge"
+[ "$(grep '"type":"merge.approved"' "$LOGFILE" | grep -c "$CS95")" = "1" ] \
+    || fail "the carried merge still took a second typed approval"
+
+# the carry is an explicit record naming what it carried from, to, and under
+[ "$(SELF integration show "$CS95" --json | field approvals.1.carriedFrom)" = "$(SELF integration show "$CS95" --json | field approvals.0.id)" ] \
+    || fail "the carried approval does not lead back to the typed approval"
+[ "$(SELF integration show "$CS95" --json | field approvals.1.head)" = "$SQ95" ] \
+    || fail "the carried approval does not name the merge commit"
+[ "$(SELF integration show "$CS95" --json | field approvals.1.digest)" = "$D95" ] \
+    || fail "the carried approval does not keep the binding digest"
+[ "$(SELF integration show "$CS95" --json | field merge.approval)" = "$(SELF integration show "$CS95" --json | field approvals.1.id)" ] \
+    || fail "the merge receipt does not name the carried approval that admitted it"
+CARRYLINE="$(grep '"type":"merge.approval_carried"' "$LOGFILE")"
+echo "$CARRYLINE" | grep -q "\"from\":\"$F95\"" || fail "the carried event does not name the approved head"
+echo "$CARRYLINE" | grep -q "\"to\":\"$SQ95\"" || fail "the carried event does not name the merge commit"
+echo "$CARRYLINE" | grep -q "\"digest\":\"$D95\"" || fail "the carried event does not name the binding digest"
+
+# ── a base advance WITH a conflict carries nothing ──────────────────
+git checkout -q -b f96 "$SQ95"
+echo "// #96 feature" >> artifact.ts
+git commit -qam "f96"
+F96="$(git rev-parse HEAD)"
+git checkout -q main
+CS96="$(SELF integration register --repo mainline --base "$SQ95" --head "$F96" --pr 96 --check ci | tail -1)"
+D96="$(digest_of "$CS96")"
+envelope "$ROOT/rev96" "$CS96" change "$SQ95" "$F96" "$D96" approve
+SELF review ingest --file "$ROOT/rev96/envelope.json" > /dev/null
+pty_self "$(printf '%s' "$F96" | cut -c1-12)" integration approve "$CS96" --head "$F96" --by maintainer
+[ "$(SELF integration show "$CS96" --json | field approvals.0.humanConfirmed)" = "true" ] \
+    || fail "the #96 feature-head approval was not counted as human"
+
+# main advances into the same line, so the squash really conflicts and the
+# resolution is bytes the approval never saw
+echo "// a mainline advance into the same file" >> artifact.ts
+git commit -qam "conflicting mainline advance"
+MB2="$(git rev-parse HEAD)"
+SELF integration observe main --repo mainline --head "$MB2" --at "$AT75" > /dev/null
+IA96="$(SELF integration attempt start "$CS96" --fence "$FENCE95" --action resolve | tail -1)"
+if git merge -q --squash f96 > /dev/null 2>&1
+then
+    fail "the fixture no longer reproduces the #96 conflict"
+fi
+printf '// artifact.ts\n// a mainline advance into the same file\n// #96 feature\n// #96 resolved against the advance\n' > artifact.ts
+git add artifact.ts
+git commit -qm "squash #96 resolved"
+SQ96="$(git rev-parse HEAD)"
+SELF integration attempt finish "$IA96" --outcome completed --head "$SQ96" --base "$MB2" \
+    --conflict-path artifact.ts --command "git merge --squash f96:1" --command "git commit:0" \
+    | grep -q "bounded review" || fail "the #96 conflict resolution did not create an integration delta"
+[ "$(digest_of "$CS96")" != "$D96" ] || fail "the fixture conflict did not change the feature digest"
+SELF integration observe ci --repo mainline --head "$SQ96" --check ci --conclusion success --at "$AT80" > /dev/null
+DELTA96="$(SELF integration show "$CS96" --json | field deltas.0.digest)"
+envelope "$ROOT/rev96d" "$CS96" integration_delta "$MB2" "$SQ96" "$DELTA96" approve "the resolution of artifact.ts only"
+SELF review ingest --file "$ROOT/rev96d/envelope.json" > /dev/null
+
+# delta reviewed, CI green — and still shut: the bytes changed after the
+# approval, so nothing carries, and the merge waits for a fresh human
+NOCARRY="$(SELF integration merge "$CS96" --fence "$FENCE95" --merge-commit "$SQ96" --main-before "$MB2" --main-after "$SQ96" --json || true)"
+[ "$(echo "$NOCARRY" | field code)" = "approval_missing" ] || fail "a conflicted squash was merged on a carried approval"
+echo "$NOCARRY" | field detail | grep -q "bytes changed after approval" \
+    || fail "the no-carry refusal did not say why nothing carried"
+grep '"type":"merge.approval_carried"' "$LOGFILE" | grep -q "$CS96" \
+    && fail "a conflicted squash still recorded a carry event"
+
+# a carry forged straight into the log binds to nothing: the fold re-checks
+# the digest binding the emitter proved
+APP96="$(SELF integration show "$CS96" --json | field approvals.0.id)"
+cat >> "$LOGFILE" <<JSON
+{"id":"00000000000000000000000003","ts":"2026-01-01T00:00:02.000Z","type":"merge.approval_carried","origin":{"actor":"agent"},"project":"superself","payload":{"changeSet":"$CS96","approval":"$APP96","from":"$F96","to":"$SQ96","digest":"$D96"}}
+JSON
+SELF integration show "$CS96" --json | field approvals | grep -q "carriedFrom" \
+    && fail "a forged carry event was counted as an approval"
+SELF integration show "$CS96" --json | field blockers | grep -q "approval_missing" \
+    || fail "a forged carry opened the main gate"
+
+# the human gate itself is unchanged: a fresh approval typed for the squash
+# commit still opens it directly
+pty_self "$(printf '%s' "$SQ96" | cut -c1-12)" integration approve "$CS96" --head "$SQ96" --by maintainer
+SELF integration merge "$CS96" --fence "$FENCE95" --merge-commit "$SQ96" \
+    --main-before "$MB2" --main-after "$SQ96" --json > "$ROOT/merge96.json"
+[ "$(phase_of "$CS96")" = "merged" ] || fail "a direct approval of the merge commit no longer admits the merge"
+[ "$(SELF integration show "$CS96" --json | field merge.approval)" = "$(SELF integration show "$CS96" --json | field approvals.1.id)" ] \
+    || fail "the merge receipt does not name the direct approval that admitted it"
+
+# ── an approval the head has outrun carries nothing either ──────────
+git checkout -q -b f97 "$SQ96"
+echo "// #97 feature" >> fold.ts
+git commit -qam "f97"
+F97="$(git rev-parse HEAD)"
+git checkout -q main
+CS97="$(SELF integration register --repo mainline --base "$SQ96" --head "$F97" --pr 97 --check ci | tail -1)"
+D97="$(digest_of "$CS97")"
+pty_self "$(printf '%s' "$F97" | cut -c1-12)" integration approve "$CS97" --head "$F97" --by maintainer
+[ "$(SELF integration show "$CS97" --json | field approvals.0.digest)" = "$D97" ] \
+    || fail "the #97 approval did not bind the digest the human approved"
+
+# the author pushes after the approval: the head and its digest move on
+git checkout -q f97
+echo "// #97 a push after approval" >> fold.ts
+git commit -qam "a push after approval"
+F97B="$(git rev-parse HEAD)"
+git checkout -q main
+SELF integration head "$CS97" --head "$F97B" > /dev/null
+D97B="$(digest_of "$CS97")"
+[ "$D97B" != "$D97" ] || fail "the fixture push did not change the feature digest"
+envelope "$ROOT/rev97" "$CS97" change "$SQ96" "$F97B" "$D97B" approve
+SELF review ingest --file "$ROOT/rev97/envelope.json" > /dev/null
+SELF integration observe ci --repo mainline --head "$F97B" --check ci --conclusion success --at "$AT85" > /dev/null
+OUTRUN="$(SELF integration merge "$CS97" --fence "$FENCE95" --merge-commit "$F97B" --main-before "$SQ96" --main-after "$F97B" --json || true)"
+[ "$(echo "$OUTRUN" | field code)" = "approval_missing" ] || fail "an approval the head outran still admitted a merge"
+echo "$OUTRUN" | field detail | grep -q "bytes changed after approval" \
+    || fail "the outrun refusal did not say why nothing carried"
+grep '"type":"merge.approval_carried"' "$LOGFILE" | grep -q "$CS97" \
+    && fail "an outrun approval still recorded a carry event"
+SELF integration close "$CS97" --as abandoned --why "registered to prove the no-carry boundary" > /dev/null
+
+# the CLI recorded exactly one carry in the whole log — #95's. The second
+# line is the forged one appended above, which the fold counts as nothing.
+[ "$(grep -c '"type":"merge.approval_carried"' "$LOGFILE")" = "2" ] \
+    || fail "the log holds a carry event nobody proved"
+
 # ── a restart derives the same state from the same log ──────────────
 SNAPSHOT="$(SELF integration list --all --json)"
 SELF fold > /dev/null
@@ -775,13 +956,13 @@ node -e '
 
 # ── no receipt without an ingest, and no merge without a receipt ────
 INGESTED="$(grep -c '"type":"review.received"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
-[ "$INGESTED" = "7" ] || fail "review receipts exist that no envelope ingest created (found $INGESTED)"
+[ "$INGESTED" = "11" ] || fail "review receipts exist that no envelope ingest created (found $INGESTED)"
 MERGES="$(grep -c '"type":"merge.recorded"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
-[ "$MERGES" = "2" ] || fail "the log holds a merge nobody gated (found $MERGES)"
+[ "$MERGES" = "4" ] || fail "the log holds a merge nobody gated (found $MERGES)"
 PROMOTED="$(grep -c '"type":"promotion.recorded"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
 [ "$PROMOTED" = "1" ] || fail "the log holds a promotion nobody gated (found $PROMOTED)"
 REBASES="$(grep -c '"type":"attempt.started"' "$ROOT/ws/.superself/projects/superself/log.jsonl" || true)"
-[ "$REBASES" = "6" ] || fail "the train planned a duplicate rebase (found $REBASES attempts)"
+[ "$REBASES" = "8" ] || fail "the train planned a duplicate rebase (found $REBASES attempts)"
 
 # ── the surfaces an agent and a person read ─────────────────────────
 SELF integration | grep -q "superself" || fail "compact status does not name the repository"

@@ -282,7 +282,11 @@ export const COMMANDS: CommandHelp[] = [
             { syntax: "integration attempt finish <attempt> --outcome completed|conflict|failed [--head h]" },
             { syntax: "integration observe ci|main|target --repo r --head h [--check c] [--conclusion x] [--at iso] [--dedupe k]" },
             { syntax: "integration target --repo r [--branch b]", description: ["configure the autonomous integration branch merges land on"] },
-            { syntax: "integration approve <id> --head h", description: ["the human gate on a merge that lands on main (interactive terminal)"] },
+            {
+                syntax: "integration approve <id> --head h",
+                description: ["the human gate on a merge that lands on main (interactive terminal);",
+                    "binds the head and its digest, and carries to the conflict-free squash of those exact bytes"]
+            },
             { syntax: "integration merge <id> --fence N --merge-commit m --main-before a --main-after b" },
             {
                 syntax: "integration promote request|approve|record|show",
