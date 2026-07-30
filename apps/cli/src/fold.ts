@@ -25,7 +25,7 @@ export function foldProject(storeDir: string, slug: string): void
     for (const work of model.works)
     {
         const rel = join("work", `${work.id}.md`);
-        if (work.status === "done")
+        if (work.status === "done" || work.status === "retired")
         {
             drop(dir, hashes, rel);
         }
@@ -484,7 +484,7 @@ function renderWork(work: WorkState, model: ProjectModel, verdicts: Record<strin
     return GENERATED_NOTE + "\n\n" + renderWorkBody(work, model, verdicts);
 }
 
-export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}): string
+export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
 {
     const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
     const contributes = contributionLines(work, model);
@@ -496,6 +496,13 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);
     }
+    if (work.status === "retired")
+    {
+        const successor = work.successor === undefined ? ""
+            : ` — successor ${work.successor.work}${work.successor.project === undefined ? "" : ` (${work.successor.project})`}`;
+        lines.push(`- Retired: ${work.retiredWhy}${successor}`);
+    }
+    lines.push(...supersedes.map((source) => `- Supersedes: ${source}`));
     if (work.next !== undefined)
     {
         lines.push(`- Next action: ${work.next}`);

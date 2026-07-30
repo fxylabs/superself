@@ -201,6 +201,13 @@ export const COMMANDS: CommandHelp[] = [
             { syntax: 'work revise <id> --requirement r1 --statement "<restated>" --why w', description: ["restate one; its coverage goes stale"] },
             { syntax: "work retire <id> --requirement r1 --why w" },
             {
+                syntax: "work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]",
+                description: [
+                    "retire the unit itself: its outcome was given up or moved, not reached",
+                    "history stays inspectable; the unit stops counting as open work"
+                ]
+            },
+            {
                 syntax: "work met <id> --requirement r1 --why w [--evidence c] [--artifact a] [--report e]",
                 description: ["cover a requirement with evidence the unit already carries"]
             },
@@ -222,6 +229,8 @@ export const COMMANDS: CommandHelp[] = [
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
             "  --why <text>          detail recorded with the block, a revision, or the done",
             "  --requirement <id>    the requirement `met`, `recheck`, `revise` or `retire` speaks about",
+            "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
+            "  --successor-project <slug>  the successor's project when its id is ambiguous",
             "  --statement <text>    the restated requirement a revision records",
             "  --evidence <hash>     a commit already attached to the unit that covers it",
             "  --artifact <id>       an artifact already attached to the unit that covers it",

@@ -286,6 +286,10 @@ function requireOpenWork(model: ProjectModel, id: string | undefined): WorkState
     {
         throw new CliError(`${wanted} is already done`);
     }
+    if (work.status === "retired")
+    {
+        throw new CliError(`${wanted} is retired — ${work.retiredWhy ?? "its outcome was given up"}; its completion contract is settled history`);
+    }
     return work;
 }
 

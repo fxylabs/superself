@@ -199,6 +199,68 @@ SELF work retire "$WRET" --requirement "$RT" --why "the outcome no longer covers
 SELF work done "$WRET" > /dev/null || fail "a retired requirement still gated done"
 
 # ---------------------------------------------------------------------------
+# Retiring a unit records an outcome given up or moved, never reached (#74)
+# ---------------------------------------------------------------------------
+cd "$DEMO"
+
+# no --why, no event: a retirement without a reason is refused
+WGONE="$(SELF work add "an initiative that outgrew this project" | tail -1)"
+SELF work start "$WGONE" > /dev/null
+SELF report "$WGONE" "progress made before the move" > /dev/null
+NOWHY="$(SELF work retire "$WGONE" 2>&1 || true)"
+one_line "$NOWHY"
+echo "$NOWHY" | grep -q -- "--why" || fail "a unit retire without a reason was not refused"
+[ "$(count_for work.retired "$WGONE")" = "0" ] || fail "a refused retire still reached the log"
+
+# an invalid successor refuses before anything is written
+BADSUCC="$(SELF work retire "$WGONE" --why "moved" --successor w-nope 2>&1 || true)"
+one_line "$BADSUCC"
+echo "$BADSUCC" | grep -q "unknown successor" || fail "an unknown successor was accepted"
+[ "$(count_for work.retired "$WGONE")" = "0" ] || fail "an unknown successor still wrote the retirement"
+[ "$(work_status "$WGONE")" = "active" ] || fail "a refused retire moved the unit"
+SELFSUCC="$(SELF work retire "$WGONE" --why "moved" --successor "$WGONE" 2>&1 || true)"
+one_line "$SELFSUCC"
+echo "$SELFSUCC" | grep -q "cannot succeed itself" || fail "a unit was accepted as its own successor"
+WFLAG="$(SELF work add "a successor project without a successor is refused" | tail -1)"
+ONLYPROJ="$(SELF work retire "$WFLAG" --why "moved" --successor-project demo 2>&1 || true)"
+one_line "$ONLYPROJ"
+echo "$ONLYPROJ" | grep -q -- "--successor" || fail "--successor-project stood alone and was accepted"
+
+# the outcome moves to another registered project, and both sides can see it
+mkdir -p "$ROOT/A/ws/haven"
+cd "$ROOT/A/ws/haven"
+git init -q -b main
+git commit -q --allow-empty -m "base"
+SELF project add --name haven --desc "where the outcome went" > /dev/null
+WHEIR="$(SELF work add "carry the relocated outcome" | tail -1)"
+cd "$DEMO"
+SELF work retire "$WGONE" --why "relocated to its own project" --successor "$WHEIR" > /dev/null
+[ "$(count_for work.retired "$WGONE")" = "1" ] || fail "the retirement did not reach the log"
+[ "$(work_status "$WGONE")" = "retired" ] || fail "the retired unit does not read as retired"
+SELF work show "$WGONE" | grep -q "Retired: relocated to its own project — successor $WHEIR (haven)" \
+    || fail "the retired unit does not name its reason, successor, and successor project"
+SELF work show "$WGONE" | grep -q "progress made before the move" \
+    || fail "retirement hid the unit's report history"
+SELF work show "$WHEIR" | grep -q "Supersedes: $WGONE (demo)" \
+    || fail "the successor does not show where its outcome came from"
+LIST="$(SELF work)"
+echo "$LIST" | grep -q "$WGONE" && fail "a retired unit is still listed as open work"
+echo "$LIST" | grep -q "1 retired — see log" || fail "the work list does not account for the retired unit"
+
+# retirement is settled history, not a state to move out of
+RSTART="$(SELF work start "$WGONE" 2>&1 || true)"
+echo "$RSTART" | grep -q "retired" || fail "a retired unit could be started again"
+RDONE="$(SELF work done "$WGONE" 2>&1 || true)"
+echo "$RDONE" | grep -q "retired" || fail "a retired unit could still reach done"
+RREP="$(SELF report "$WGONE" "a report after the end" 2>&1 || true)"
+echo "$RREP" | grep -q "retired" || fail "a retired unit still takes reports"
+
+# repeating the transition asks for nothing and records nothing
+AGAIN="$(SELF work retire "$WGONE" --why "different words this time")"
+echo "$AGAIN" | grep -q "already retired" || fail "a second retire did not say the state already holds"
+[ "$(count_for work.retired "$WGONE")" = "1" ] || fail "a second retire wrote a second event"
+
+# ---------------------------------------------------------------------------
 # A passing attempt settles physically and marks nothing done
 # ---------------------------------------------------------------------------
 WATT="$(SELF work add "settlement and done are observably separate events" | tail -1)"
@@ -426,7 +488,7 @@ one_line "$POLICYLEAK"
 [ "$(count_for work.policy-declared "$WSAN")" = "0" ] || fail "a refused policy still reached the log"
 
 # every new event type is in the log, having crossed the guard on the way
-for type in work.required work.requirement-revised work.requirement-retired work.covered \
+for type in work.required work.requirement-revised work.requirement-retired work.retired work.covered \
     work.rechecked work.approval-required work.approved work.policy-declared work.done
 do
     [ "$(count_events "$type")" -ge 1 ] || fail "no $type event ever crossed the sanitization guard"

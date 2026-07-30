@@ -326,6 +326,10 @@ function requireOpenWork(ctx: ProjectContext, id: string): WorkState
     {
         throw new CliError(`${id} is already done — a work spec materializes work that is still open`);
     }
+    if (work.status === "retired")
+    {
+        throw new CliError(`${id} is retired — a work spec materializes work that is still open`);
+    }
     return work;
 }
 
