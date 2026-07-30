@@ -2150,28 +2150,42 @@ echo "$AMBIG" | grep -q "ambiguous" || fail "the parser's own refusal of --help 
 echo "$AMBIG" | grep -q "    at " && fail "the refusal of --help as a value printed a stack trace"
 grep -q "never recorded" "$LOG_A" && fail "a refused --help value still wrote an event"
 
-# the repository integration controller replays a real three-branch train, so
-# it builds its own git repository under a root of its own
-bash "$CLI_DIR/proof/integration.sh"
+# The five suites below each build a machine root or git repository of their
+# own and read nothing of this script's state — integration replays a real
+# three-branch train, tick-mutex contends two ticks, daemon-loop supervises
+# real payloads, semantic completion opens a pseudo terminal for an approval,
+# and overnight folds a whole night's log. Nothing is shared, so they run
+# together and the wall clock pays for the slowest one, not for the sum.
+# Each suite's output is kept apart and replayed in order once it finishes.
+SUITE_LOGS="$ROOT/suite-logs"
+mkdir -p "$SUITE_LOGS"
 
-# the machine's tick mutex, contended by two ticks that start together. Each
-# round is a pair of processes against a machine root of its own, so it needs
-# no store and leaves none.
-node "$CLI_DIR/proof/tick-mutex.mjs" || fail "two ticks were inside the tick mutex together"
+bash "$CLI_DIR/proof/integration.sh" > "$SUITE_LOGS/integration.log" 2>&1 &
+INTEGRATION_PID=$!
+node "$CLI_DIR/proof/tick-mutex.mjs" > "$SUITE_LOGS/tick-mutex.log" 2>&1 &
+TICK_MUTEX_PID=$!
+bash "$CLI_DIR/proof/daemon-loop.sh" > "$SUITE_LOGS/daemon-loop.log" 2>&1 &
+DAEMON_LOOP_PID=$!
+bash "$CLI_DIR/proof/semantic-completion.sh" > "$SUITE_LOGS/semantic-completion.log" 2>&1 &
+SEMANTIC_PID=$!
+bash "$CLI_DIR/proof/overnight-digest.sh" > "$SUITE_LOGS/overnight-digest.log" 2>&1 &
+OVERNIGHT_PID=$!
 
-# the supervision loop kills payloads, crashes launchers in the middle of a
-# settlement, and starts and stops a daemon, so it too runs under a machine
-# root of its own
-bash "$CLI_DIR/proof/daemon-loop.sh"
+suite_done()
+{
+    local name="$1" pid="$2"
+    if ! wait "$pid"
+    then
+        cat "$SUITE_LOGS/$name.log"
+        fail "the $name suite failed"
+    fi
+    cat "$SUITE_LOGS/$name.log"
+}
 
-# semantic completion dispatches real attempts, settles one through a
-# supervision tick, and opens a pseudo terminal for a human approval, so it
-# runs under a machine root of its own as well
-bash "$CLI_DIR/proof/semantic-completion.sh"
-
-# the overnight policy and the digest dispatch real attempts under a window,
-# refuse forbidden actions, and fold a whole night's log, so they run under a
-# machine root of their own too
-bash "$CLI_DIR/proof/overnight-digest.sh"
+suite_done integration "$INTEGRATION_PID"
+suite_done tick-mutex "$TICK_MUTEX_PID"
+suite_done daemon-loop "$DAEMON_LOOP_PID"
+suite_done semantic-completion "$SEMANTIC_PID"
+suite_done overnight-digest "$OVERNIGHT_PID"
 
 echo "proof OK"
