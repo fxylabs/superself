@@ -85,6 +85,7 @@ interface ProjectSummary
     blockedCount: number;
     nextCount: number;
     doneCount: number;
+    retiredCount?: number;
     health: string[];
     openQuestions: string[];
     proposedCount?: number;
@@ -302,6 +303,7 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
         blockedCount: model.works.filter((w) => w.status === "blocked").length,
         nextCount: model.works.filter((w) => w.status === "next").length,
         doneCount: model.works.filter((w) => w.status === "done").length,
+        retiredCount: model.works.filter((w) => w.status === "retired").length,
         health: model.health,
         openQuestions: model.openQuestions,
         proposedCount: model.decisions.filter((d) => d.status === "proposed" && !d.expired).length,
@@ -822,8 +824,9 @@ function projectRow(summary: ProjectSummary): string
         `${summary.active.length} active`,
         `${summary.nextCount} next`,
         `${waiting.length} waiting`,
-        `${summary.doneCount} done`
-    ].join(" · ");
+        `${summary.doneCount} done`,
+        (summary.retiredCount ?? 0) > 0 ? `${summary.retiredCount} retired` : ""
+    ].filter((part) => part !== "").join(" · ");
     const status = waiting.length > 0 ? "blocked" : "next";
     const label = waiting.length > 0 ? "attention" : "quiet";
     return `<tr><td class="n"><a href="${esc(summary.slug)}.html">${esc(summary.slug)}</a></td>` +

@@ -443,7 +443,9 @@ function completionLines(work: WorkState): string[]
         ].filter((part) => part !== "");
         lines.push(`- Completion policy: ${parts.join(", ")}`);
     }
-    if (work.owes !== undefined)
+    // A retired unit owes nothing: its outcome was given up, and the advice
+    // the owes line carries (`work met`, approval) is refused on it anyway.
+    if (work.owes !== undefined && work.status !== "retired")
     {
         lines.push(`- Not done yet: ${work.owes}`);
     }

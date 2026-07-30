@@ -504,6 +504,26 @@ POLICYLEAK="$(SELF work policy "$WSAN" --model opus --why "see $HOME/policy.md" 
 one_line "$POLICYLEAK"
 [ "$(count_for work.policy-declared "$WSAN")" = "0" ] || fail "a refused policy still reached the log"
 
+# ---------------------------------------------------------------------------
+# Retired work is closed to the runtime, and owes nothing
+# ---------------------------------------------------------------------------
+WRUN="$(SELF work add "a retired unit cannot be materialized or dispatched" | tail -1)"
+SELF work start "$WRUN" > /dev/null
+workspec "$ROOT/ws-run.json" "id=ws-run" "generation=1" "work=$WRUN" "dest=$ROOT/dest/never2.md" \
+    "providerName=att-provider" "model=claude-opus-5"
+SELF spec apply "$ROOT/ws-run.json" > /dev/null
+SELF work retire "$WRUN" --why "given up before any attempt" > /dev/null
+RETDISPATCH="$(SELF spec dispatch ws-run 2>&1 || true)"
+one_line "$RETDISPATCH"
+echo "$RETDISPATCH" | grep -q "retired" || fail "a sealed spec dispatched against a retired unit"
+[ "$(count_for run.started "$WRUN")" = "0" ] || fail "a retired unit still reached an attempt"
+
+# retirement ends what the unit owes: no coverage advice survives it
+SELF work retire "$WATT" --why "the settlement question is settled history now" > /dev/null
+SHOWATT="$(SELF work show "$WATT")"
+echo "$SHOWATT" | grep -q "Not done yet" && fail "a retired unit still renders a completion debt"
+echo "$SHOWATT" | grep -q "Retired: the settlement question" || fail "the retired unit lost its reason"
+
 # every new event type is in the log, having crossed the guard on the way
 for type in work.required work.requirement-revised work.requirement-retired work.retired work.covered \
     work.rechecked work.approval-required work.approved work.policy-declared work.done
