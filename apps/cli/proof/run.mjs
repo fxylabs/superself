@@ -11,9 +11,9 @@
 // process group, the group is signalled so the suites' own teardown traps run,
 // and a group that ignores the signal is killed. Letting the siblings run on
 // would spend minutes proving things nobody will read past the failure.
-import { mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkManifest, loadManifest } from "./manifest.mjs";
 
@@ -91,32 +91,59 @@ for (const signal of ["SIGINT", "SIGTERM"])
     });
 }
 
-const settled = Object.entries(manifest.suites).map(([name, suite]) => new Promise((resolve) =>
+// Starting every suite at once starves the timing-sensitive ones on a small
+// runner: the identical tree went green twice and red twice on CI's two
+// cores, each red failing a different suite. Suites sleep as much as they
+// compute, so the pool oversubscribes the cores modestly; suites.json is
+// ordered longest-first so the pool's tail stays short.
+const concurrency = Math.max(1, Number(process.env.PROOF_CONCURRENCY) || 2 * availableParallelism());
+const queue = Object.entries(manifest.suites);
+let active = 0;
+
+await new Promise((drained) =>
 {
-    const [executable, arguments_] = command(suite.entry);
-    const log = openSync(join(logDir, `${name}.log`), "w");
-    const child = spawn(executable, arguments_, { detached: true, stdio: ["ignore", log, log] });
-    running.set(name, child);
-    child.on("close", (code, signal) =>
+    const next = () =>
     {
-        running.delete(name);
-        // Any exit that is not a clean zero fails the sweep — including a
-        // suite killed by a signal nobody here sent. Once one failure is
-        // recorded, the siblings this orchestrator signals stay attributed
-        // to that first failure rather than becoming failures of their own.
-        if ((code !== 0 || signal !== null) && failed === null)
+        while (active < concurrency && queue.length > 0 && failed === null)
         {
-            failed = name;
-            takeDownSiblings();
+            const [name, suite] = queue.shift();
+            const [executable, arguments_] = command(suite.entry);
+            const log = openSync(join(logDir, `${name}.log`), "w");
+            const child = spawn(executable, arguments_, { detached: true, stdio: ["ignore", log, log] });
+            running.set(name, child);
+            active += 1;
+            child.on("close", (code, signal) =>
+            {
+                running.delete(name);
+                active -= 1;
+                // Any exit that is not a clean zero fails the sweep —
+                // including a suite killed by a signal nobody here sent. Once
+                // one failure is recorded, the siblings this orchestrator
+                // signals stay attributed to that first failure rather than
+                // becoming failures of their own, and the queue never starts.
+                if ((code !== 0 || signal !== null) && failed === null)
+                {
+                    failed = name;
+                    takeDownSiblings();
+                }
+                next();
+            });
         }
-        resolve();
-    });
-}));
-await Promise.all(settled);
+        if (active === 0 && (queue.length === 0 || failed !== null))
+        {
+            drained();
+        }
+    };
+    next();
+});
 
 for (const name of Object.keys(manifest.suites))
 {
-    process.stdout.write(readFileSync(join(logDir, `${name}.log`), "utf8"));
+    const log = join(logDir, `${name}.log`);
+    if (existsSync(log))
+    {
+        process.stdout.write(readFileSync(log, "utf8"));
+    }
 }
 rmSync(logDir, { recursive: true, force: true });
 
