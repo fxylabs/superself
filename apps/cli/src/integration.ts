@@ -123,12 +123,20 @@ export interface MergeApproval
     id: string;
     changeSet: string;
     head: string;
+    // The feature digest the change set carried when the human typed the
+    // challenge. This is what a later carry has to prove against: an approval
+    // that never bound its digest can never be stretched to another commit.
+    digest?: string;
     by: string;
     humanConfirmed: boolean;
     // How the human was verified. Only a recognized method makes an approval
     // count: an event asserting `confirmed` with no verified method behind it
     // is an agent's claim, and the gate does not read claims.
     method?: string;
+    // Set when this approval was not typed but carried: the id of the human
+    // approval it extends, kept so the record always leads back to the
+    // terminal where a person actually typed.
+    carriedFrom?: string;
     ts: string;
 }
 
@@ -356,7 +364,7 @@ export function applyIntegration(state: IntegrationState, event: SelfEvent): voi
         applyAttempt(state, event);
         return;
     }
-    if (event.type === "merge.approved" || event.type === "merge.recorded")
+    if (event.type === "merge.approved" || event.type === "merge.approval_carried" || event.type === "merge.recorded")
     {
         applyMerge(state, event);
         return;
@@ -686,11 +694,49 @@ function applyMerge(state: IntegrationState, event: SelfEvent): void
         changeSet.approvals.push(approvalOf(event, changeSet.id, str(event.payload.head)));
         return;
     }
+    if (event.type === "merge.approval_carried")
+    {
+        applyCarriedApproval(changeSet, event);
+        return;
+    }
     if (changeSet.merge !== undefined)
     {
         return;
     }
     changeSet.merge = newMergeReceipt(changeSet, event);
+}
+
+// A carried approval extends a typed human approval to the squash commit that
+// landed its exact bytes. The event is believed only as far as the fold can
+// re-check it: the source approval must be on record and human, the carry must
+// name the head that approval was typed for, and the digest must be both the
+// one the source bound and the one the change set still carries. The git
+// proof — that the merge commit really is that diff applied to main-before —
+// was made where the event was emitted; what is re-checked here is the
+// binding, so a hand-appended carry cannot stretch an approval onto bytes the
+// human never saw.
+function applyCarriedApproval(changeSet: ChangeSet, event: SelfEvent): void
+{
+    const source = changeSet.approvals.find((item) => item.id === str(event.payload.approval));
+    const to = str(event.payload.to);
+    const bound = source !== undefined && source.humanConfirmed && source.digest !== undefined
+        && source.head === str(event.payload.from) && source.digest === str(event.payload.digest)
+        && changeSet.featureDigest === source.digest;
+    if (!bound || source === undefined || to === undefined)
+    {
+        return;
+    }
+    changeSet.approvals.push({
+        id: event.id,
+        changeSet: changeSet.id,
+        head: to,
+        digest: source.digest,
+        by: source.by,
+        humanConfirmed: true,
+        method: source.method,
+        carriedFrom: source.id,
+        ts: event.ts
+    });
 }
 
 // An approval is human only when the event carries the record of how the
@@ -703,6 +749,7 @@ function approvalOf(event: SelfEvent, subject: string, head: string | undefined)
         id: event.id,
         changeSet: subject,
         head: head ?? "",
+        digest: str(event.payload.digest),
         by: String(event.payload.by ?? (event.origin.confirmed ? "human" : "agent")),
         humanConfirmed: event.origin.confirmed && method !== undefined,
         method,
