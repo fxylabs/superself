@@ -32,14 +32,12 @@ function dnsFailure()
     process.exitCode = 1;
 }
 
-function spin(ms)
+// Holds the process open without ever touching stdin, which the runner does
+// not give it. Atomics.wait sleeps the thread instead of burning the core, so
+// parallel proof suites on one machine are not starved.
+function pause(ms)
 {
-    const until = Date.now() + ms;
-    while (Date.now() < until)
-    {
-        // Deliberately busy: this stand-in must hold the process open without
-        // ever touching stdin, which the runner does not give it.
-    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function main()
@@ -92,7 +90,7 @@ function main()
     }
     if (mode === "slow")
     {
-        spin(60_000);
+        pause(60_000);
         return;
     }
     if (mode === "linger")
@@ -147,7 +145,7 @@ function awaitFile(path)
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline && !existsSync(path))
     {
-        spin(50);
+        pause(50);
     }
 }
 
@@ -203,7 +201,7 @@ function awaitDirective()
                 break;
             }
         }
-        spin(50);
+        pause(50);
     }
     finish({ status: "completed", summary: `consumed directive: ${text}`, artifacts: [stage("design.md", `directive=${text}`)] });
 }
