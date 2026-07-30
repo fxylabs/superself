@@ -1,33 +1,5 @@
 {
     "suites": {
-        "sync": {
-            "entry": "suites/sync.sh",
-            "deps": [
-                "lib.sh"
-            ]
-        },
-        "artifacts": {
-            "entry": "suites/artifacts.sh",
-            "deps": [
-                "attempt-boundary-marker.mjs",
-                "gui-launch.mjs",
-                "lib.sh",
-                "rollback-ownership.mjs"
-            ]
-        },
-        "evidence": {
-            "entry": "suites/evidence.sh",
-            "deps": [
-                "event-sanitization.mjs",
-                "lib.sh"
-            ]
-        },
-        "outcomes": {
-            "entry": "suites/outcomes.sh",
-            "deps": [
-                "lib.sh"
-            ]
-        },
         "attempts": {
             "entry": "suites/attempts.sh",
             "deps": [
@@ -39,30 +11,11 @@
                 "spool-chunks.mjs"
             ]
         },
-        "specs": {
-            "entry": "suites/specs.sh",
-            "deps": [
-                "attempt-agent.mjs",
-                "attempt-plan.mjs",
-                "lib.sh",
-                "workspec.mjs"
-            ]
-        },
-        "cli-contract": {
-            "entry": "suites/cli-contract.sh",
-            "deps": [
-                "lib.sh"
-            ]
-        },
         "integration": {
             "entry": "integration.sh",
             "deps": [
                 "lib.sh"
             ]
-        },
-        "tick-mutex": {
-            "entry": "tick-mutex.mjs",
-            "deps": []
         },
         "daemon-loop": {
             "entry": "daemon-loop.sh",
@@ -77,16 +30,6 @@
                 "workspec.mjs"
             ]
         },
-        "semantic-completion": {
-            "entry": "semantic-completion.sh",
-            "deps": [
-                "attempt-plan.mjs",
-                "daemon-agent.mjs",
-                "daemon-launch.mjs",
-                "lib.sh",
-                "workspec.mjs"
-            ]
-        },
         "overnight-digest": {
             "entry": "overnight-digest.sh",
             "deps": [
@@ -98,6 +41,63 @@
                 "spec-double-seal.mjs",
                 "workspec.mjs"
             ]
+        },
+        "semantic-completion": {
+            "entry": "semantic-completion.sh",
+            "deps": [
+                "attempt-plan.mjs",
+                "daemon-agent.mjs",
+                "daemon-launch.mjs",
+                "lib.sh",
+                "workspec.mjs"
+            ]
+        },
+        "specs": {
+            "entry": "suites/specs.sh",
+            "deps": [
+                "attempt-agent.mjs",
+                "attempt-plan.mjs",
+                "lib.sh",
+                "workspec.mjs"
+            ]
+        },
+        "artifacts": {
+            "entry": "suites/artifacts.sh",
+            "deps": [
+                "attempt-boundary-marker.mjs",
+                "gui-launch.mjs",
+                "lib.sh",
+                "rollback-ownership.mjs"
+            ]
+        },
+        "outcomes": {
+            "entry": "suites/outcomes.sh",
+            "deps": [
+                "lib.sh"
+            ]
+        },
+        "cli-contract": {
+            "entry": "suites/cli-contract.sh",
+            "deps": [
+                "lib.sh"
+            ]
+        },
+        "evidence": {
+            "entry": "suites/evidence.sh",
+            "deps": [
+                "event-sanitization.mjs",
+                "lib.sh"
+            ]
+        },
+        "sync": {
+            "entry": "suites/sync.sh",
+            "deps": [
+                "lib.sh"
+            ]
+        },
+        "tick-mutex": {
+            "entry": "tick-mutex.mjs",
+            "deps": []
         }
     }
 }
