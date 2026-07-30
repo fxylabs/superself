@@ -6,7 +6,7 @@ import { ChangeSet, findChangeSet, openChangeSets } from "./integration.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
-import { evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
+import { artifactSignals, evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
 import { writeViews } from "./view.js";
 
@@ -17,7 +17,7 @@ export function foldProject(storeDir: string, slug: string): void
     const model = buildModel(storeDir, slug, new Date());
     const projectDir = resolveProjectPath(storeDir, slug);
     const verdicts = updateVerdicts(storeDir, slug, projectDir, evidenceOf(model.works));
-    model.health.push(...verdictSignals(model.works, verdicts));
+    model.health.push(...verdictSignals(model.works, verdicts), ...artifactSignals(storeDir, model.works));
     const dir = ensureDir(projectStateDir(storeDir, slug));
     ensureDir(join(dir, "work"));
     const hashes = readHashes(dir);
@@ -537,6 +537,10 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     {
         const marked = work.evidence.map((hash) => verdicts[hash] === undefined ? hash : `${hash} (${verdicts[hash]})`);
         lines.push(`- Evidence: ${marked.join(", ")}`);
+    }
+    if (work.notes.length > 0)
+    {
+        lines.push(`- Evidence notes: ${work.notes.join("; ")}`);
     }
     if (work.artifacts.length > 0)
     {
