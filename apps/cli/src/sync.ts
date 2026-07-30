@@ -122,6 +122,6 @@ export function cloneStore(url: string, dir: string | undefined): void
     if (slugs.length > 0)
     {
         console.log(`registered projects: ${slugs.join(", ")}`);
-        console.log("run `self project link <slug> [path]` from each project's checkout to reconnect it");
+        console.log("run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout");
     }
 }

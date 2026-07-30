@@ -69,11 +69,13 @@ export const COMMANDS: CommandHelp[] = [
                 syntax: "project add [path] [--name s] [--desc d] [--no-connect]",
                 description: ["register a project and render its agent block"]
             },
-            { syntax: "project link [slug] [path]", description: ["link this checkout of a registered project on this machine"] }
+            { syntax: "project link [slug] [path]", description: ["attach a registered project's directory on this machine"] }
         ],
         detail: [
-            "register a project with the workspace, or link another checkout of an",
-            "already registered one. `link` with no slug infers it from the repository.",
+            "register a project with the workspace, or attach one registered on another",
+            "machine. Every checkout of a registered git repository — worktrees",
+            "included — resolves on its own; `link` with no slug infers it from the",
+            "repository and only saves the probe.",
             "",
             "  --name <slug>   register under this slug instead of the directory name",
             "  --desc <text>   one-line description shown in the workspace view",

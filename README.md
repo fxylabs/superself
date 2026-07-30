@@ -47,6 +47,10 @@ sits next to git:
 - `self project add` registers a project through a local marker file that never
   enters the code repository; projects live wherever they already are, inside
   or outside the workspace directory, because the pointer decides the store;
+- registration is one act per project, not one per working tree: every checkout
+  of a registered git repository, including a worktree cut for a new branch,
+  resolves from the repository itself, so there is no marker to restore and
+  nothing to link before the first command works;
 - typed event verbs — `goal set`, `decide`, `work add/start/block/unblock/done`,
   `report`, `convention add` — append to a per-project JSONL log;
 - the outcome layer above work — `objective add/revise/close`, `milestone
@@ -89,7 +93,8 @@ sits next to git:
   pulls, refolds, and pushes it, and `self clone` brings a store onto a new
   machine — `self clone` also points the new machine at what it cloned,
   concurrent appends from different machines merge cleanly, and
-  `self project link` reconnects each project checkout to the cloned store;
+  `self project link` reconnects each project to the cloned store, once per
+  repository rather than once per checkout of it;
 - `self view` opens a live, read-only HTML dashboard — a workspace overview,
   one project in detail, any work unit's full report history, and a full page
   of decisions, events, and artifacts each — rendered at fold time as
