@@ -14,7 +14,7 @@ import { SelfEvent } from "./types.js";
 // owes. Nothing here is inferred from a transition.
 //
 // The requirement surface mirrors the milestone exit criterion it is the work
-// layer's counterpart of: declare, revise, retire, `met --requirement --why`,
+// layer's counterpart of: declare, revise, drop, `met --requirement --why`,
 // and `recheck` for what a revision left stale. One vocabulary, two layers.
 
 export interface Requirement

@@ -199,7 +199,14 @@ export const COMMANDS: CommandHelp[] = [
             { syntax: "work accept|decline <proposal-id>", description: ["act on a goal-gap proposal"] },
             { syntax: 'work require <id> "<what the outcome must cover>"', description: ["declare a requirement; prints its id"] },
             { syntax: 'work revise <id> --requirement r1 --statement "<restated>" --why w', description: ["restate one; its coverage goes stale"] },
-            { syntax: "work retire <id> --requirement r1 --why w" },
+            { syntax: "work drop <id> --requirement r1 --why w", description: ["retire one requirement; the unit stays open"] },
+            {
+                syntax: "work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]",
+                description: [
+                    "retire the unit itself: its outcome was given up or moved, not reached",
+                    "history stays inspectable; the unit stops counting as open work"
+                ]
+            },
             {
                 syntax: "work met <id> --requirement r1 --why w [--evidence c] [--artifact a] [--report e]",
                 description: ["cover a requirement with evidence the unit already carries"]
@@ -221,7 +228,9 @@ export const COMMANDS: CommandHelp[] = [
             "  --project <slug>      list or show against this project, from any directory",
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
             "  --why <text>          detail recorded with the block, a revision, or the done",
-            "  --requirement <id>    the requirement `met`, `recheck`, `revise` or `retire` speaks about",
+            "  --requirement <id>    the requirement `met`, `recheck`, `revise` or `drop` speaks about",
+            "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
+            "  --successor-project <slug>  the successor's project when its id is ambiguous",
             "  --statement <text>    the restated requirement a revision records",
             "  --evidence <hash>     a commit already attached to the unit that covers it",
             "  --artifact <id>       an artifact already attached to the unit that covers it",

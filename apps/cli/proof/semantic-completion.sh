@@ -195,8 +195,87 @@ WRET="$(SELF work add "a retired requirement stops gating the unit" | tail -1)"
 SELF work start "$WRET" > /dev/null
 RT="$(SELF work require "$WRET" "an ask that turned out to be wrong" | tail -1)"
 SELF work done "$WRET" > /dev/null 2>&1 && fail "an uncovered requirement did not gate done"
-SELF work retire "$WRET" --requirement "$RT" --why "the outcome no longer covers this" > /dev/null
+SELF work drop "$WRET" --requirement "$RT" --why "the outcome no longer covers this" > /dev/null
 SELF work done "$WRET" > /dev/null || fail "a retired requirement still gated done"
+WRONGVERB="$(SELF work retire "$WRET" --requirement "$RT" --why "old spelling" 2>&1 || true)"
+one_line "$WRONGVERB"
+echo "$WRONGVERB" | grep -q "self work drop" || fail "the old requirement-retire spelling was not pointed at \`work drop\`"
+
+# ---------------------------------------------------------------------------
+# Retiring a unit records an outcome given up or moved, never reached (#74)
+# ---------------------------------------------------------------------------
+cd "$DEMO"
+
+# no --why, no event: a retirement without a reason is refused
+WGONE="$(SELF work add "an initiative that outgrew this project" | tail -1)"
+SELF work start "$WGONE" > /dev/null
+SELF report "$WGONE" "progress made before the move" > /dev/null
+NOWHY="$(SELF work retire "$WGONE" 2>&1 || true)"
+one_line "$NOWHY"
+echo "$NOWHY" | grep -q -- "--why" || fail "a unit retire without a reason was not refused"
+[ "$(count_for work.retired "$WGONE")" = "0" ] || fail "a refused retire still reached the log"
+
+# an invalid successor refuses before anything is written
+BADSUCC="$(SELF work retire "$WGONE" --why "moved" --successor w-nope 2>&1 || true)"
+one_line "$BADSUCC"
+echo "$BADSUCC" | grep -q "unknown successor" || fail "an unknown successor was accepted"
+[ "$(count_for work.retired "$WGONE")" = "0" ] || fail "an unknown successor still wrote the retirement"
+[ "$(work_status "$WGONE")" = "active" ] || fail "a refused retire moved the unit"
+SELFSUCC="$(SELF work retire "$WGONE" --why "moved" --successor "$WGONE" 2>&1 || true)"
+one_line "$SELFSUCC"
+echo "$SELFSUCC" | grep -q "cannot succeed itself" || fail "a unit was accepted as its own successor"
+WFLAG="$(SELF work add "a successor project without a successor is refused" | tail -1)"
+ONLYPROJ="$(SELF work retire "$WFLAG" --why "moved" --successor-project demo 2>&1 || true)"
+one_line "$ONLYPROJ"
+echo "$ONLYPROJ" | grep -q -- "--successor" || fail "--successor-project stood alone and was accepted"
+
+# the outcome moves to another registered project, and both sides can see it
+mkdir -p "$ROOT/A/ws/haven"
+cd "$ROOT/A/ws/haven"
+git init -q -b main
+git commit -q --allow-empty -m "base"
+SELF project add --name haven --desc "where the outcome went" > /dev/null
+WHEIR="$(SELF work add "carry the relocated outcome" | tail -1)"
+cd "$DEMO"
+SELF work retire "$WGONE" --why "relocated to its own project" --successor "$WHEIR" > /dev/null
+[ "$(count_for work.retired "$WGONE")" = "1" ] || fail "the retirement did not reach the log"
+[ "$(work_status "$WGONE")" = "retired" ] || fail "the retired unit does not read as retired"
+SELF work show "$WGONE" | grep -q "Retired: relocated to its own project — successor $WHEIR (haven)" \
+    || fail "the retired unit does not name its reason, successor, and successor project"
+SELF work show "$WGONE" | grep -q "progress made before the move" \
+    || fail "retirement hid the unit's report history"
+SELF work show "$WHEIR" | grep -q "Supersedes: $WGONE (demo)" \
+    || fail "the successor does not show where its outcome came from"
+LIST="$(SELF work)"
+echo "$LIST" | grep -q "$WGONE" && fail "a retired unit is still listed as open work"
+echo "$LIST" | grep -q "1 retired — see log" || fail "the work list does not account for the retired unit"
+
+# retirement is settled history, not a state to move out of
+RSTART="$(SELF work start "$WGONE" 2>&1 || true)"
+echo "$RSTART" | grep -q "retired" || fail "a retired unit could be started again"
+RDONE="$(SELF work done "$WGONE" 2>&1 || true)"
+echo "$RDONE" | grep -q "retired" || fail "a retired unit could still reach done"
+RREP="$(SELF report "$WGONE" "a report after the end" 2>&1 || true)"
+echo "$RREP" | grep -q "retired" || fail "a retired unit still takes reports"
+
+# repeating the transition asks for nothing and records nothing
+AGAIN="$(SELF work retire "$WGONE" --why "different words this time")"
+echo "$AGAIN" | grep -q "already retired" || fail "a second retire did not say the state already holds"
+[ "$(count_for work.retired "$WGONE")" = "1" ] || fail "a second retire wrote a second event"
+
+# a same-project successor's own record shows the provenance at fold time
+WSUCC="$(SELF work add "carry an outcome inside the same project" | tail -1)"
+SELF work retire "$WFLAG" --why "folded into the same-project successor" --successor "$WSUCC" > /dev/null
+SELF work show "$WSUCC" | grep -q "Supersedes: $WFLAG" || fail "a same-project successor does not show its predecessor"
+grep -q "Supersedes: $WFLAG" "$STORE/projects/demo/work/$WSUCC.md" \
+    || fail "the folded successor record does not carry the provenance"
+
+# a retired unit cannot be materialized: a spec naming it refuses to apply
+workspec "$ROOT/ws-retired.json" "id=ws-ret" "generation=1" "work=$WGONE" "dest=$ROOT/dest/never.md" \
+    "providerName=att-provider" "model=claude-opus-5"
+RETSPEC="$(SELF spec apply "$ROOT/ws-retired.json" 2>&1 || true)"
+one_line "$RETSPEC"
+echo "$RETSPEC" | grep -q "retired" || fail "a work spec was applied against a retired unit"
 
 # ---------------------------------------------------------------------------
 # A passing attempt settles physically and marks nothing done
@@ -425,8 +504,28 @@ POLICYLEAK="$(SELF work policy "$WSAN" --model opus --why "see $HOME/policy.md" 
 one_line "$POLICYLEAK"
 [ "$(count_for work.policy-declared "$WSAN")" = "0" ] || fail "a refused policy still reached the log"
 
+# ---------------------------------------------------------------------------
+# Retired work is closed to the runtime, and owes nothing
+# ---------------------------------------------------------------------------
+WRUN="$(SELF work add "a retired unit cannot be materialized or dispatched" | tail -1)"
+SELF work start "$WRUN" > /dev/null
+workspec "$ROOT/ws-run.json" "id=ws-run" "generation=1" "work=$WRUN" "dest=$ROOT/dest/never2.md" \
+    "providerName=att-provider" "model=claude-opus-5"
+SELF spec apply "$ROOT/ws-run.json" > /dev/null
+SELF work retire "$WRUN" --why "given up before any attempt" > /dev/null
+RETDISPATCH="$(SELF spec dispatch ws-run 2>&1 || true)"
+one_line "$RETDISPATCH"
+echo "$RETDISPATCH" | grep -q "retired" || fail "a sealed spec dispatched against a retired unit"
+[ "$(count_for run.started "$WRUN")" = "0" ] || fail "a retired unit still reached an attempt"
+
+# retirement ends what the unit owes: no coverage advice survives it
+SELF work retire "$WATT" --why "the settlement question is settled history now" > /dev/null
+SHOWATT="$(SELF work show "$WATT")"
+echo "$SHOWATT" | grep -q "Not done yet" && fail "a retired unit still renders a completion debt"
+echo "$SHOWATT" | grep -q "Retired: the settlement question" || fail "the retired unit lost its reason"
+
 # every new event type is in the log, having crossed the guard on the way
-for type in work.required work.requirement-revised work.requirement-retired work.covered \
+for type in work.required work.requirement-revised work.requirement-retired work.retired work.covered \
     work.rechecked work.approval-required work.approved work.policy-declared work.done
 do
     [ "$(count_events "$type")" -ge 1 ] || fail "no $type event ever crossed the sanitization guard"
@@ -435,7 +534,7 @@ done
 # ---------------------------------------------------------------------------
 # The verbs are parse-guarded like every other verb
 # ---------------------------------------------------------------------------
-for verb in require revise retire met recheck approval-required approve policy
+for verb in require revise drop retire met recheck approval-required approve policy
 do
     OUT="$(SELF work "$verb" "$WSAN" --nonsense 2>&1 || true)"
     one_line "$OUT"

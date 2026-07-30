@@ -112,7 +112,7 @@ function discarded(projectDir: string, mainRef: string | null, item: Evidence): 
 export function evidenceOf(works: WorkState[]): Evidence[]
 {
     const seen = new Map<string, Evidence>();
-    for (const work of works.filter((item) => item.status !== "done"))
+    for (const work of works.filter((item) => item.status !== "done" && item.status !== "retired"))
     {
         for (const report of work.reports)
         {
@@ -134,7 +134,7 @@ export function evidenceOf(works: WorkState[]): Evidence[]
 export function verdictSignals(works: WorkState[], verdicts: Record<string, Verdict>): string[]
 {
     const signals: string[] = [];
-    for (const work of works.filter((item) => item.status !== "done"))
+    for (const work of works.filter((item) => item.status !== "done" && item.status !== "retired"))
     {
         for (const hash of work.evidence)
         {
