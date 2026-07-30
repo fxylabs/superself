@@ -82,6 +82,12 @@
                 "lib.sh"
             ]
         },
+        "context": {
+            "entry": "suites/context.sh",
+            "deps": [
+                "lib.sh"
+            ]
+        },
         "evidence": {
             "entry": "suites/evidence.sh",
             "deps": [

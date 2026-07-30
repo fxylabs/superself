@@ -210,9 +210,12 @@ state, distinct from one-off work units).
 Dumping-ground guard (proposed): anything an agent "should know" must be
 classified into a typed field; unclassified notes expire by default.
 
-Still open for this section: context size budget (hard cap enforced by the
-command?), per-tool injection path (skill file vs session-start hook vs an
-instruction line), and a work-scoped variant (`context --work <id>`).
+Context is capped at 12,000 characters. Identity, description, goal,
+conventions, waiting items, and every active work outcome claim space first;
+latest reports are bounded excerpts with `self work show` recovery pointers,
+then the newest whole decisions fill the remainder with `self search --type
+decision` as the pull path. A work-scoped context variant is unnecessary while
+`self work show <id>` already provides it.
 
 ## Snapshot derivation (decided 2026-07-25)
 
@@ -375,12 +378,12 @@ Decisions taken while scoping:
   Scope resolution walks up from the current directory: a `.self` marker
   means project context, otherwise a `.superself` directory means workspace
   context.
-- **Context budget.** No hard cap in this slice; the section order is fixed
-  (description and goal → decisions and conventions → work in progress with
-  reports → blocked on the human → next). Measure real sizes first, then
-  decide on a cap. The injection path is the managed block rendered by
-  `self connect`, which instructs agents to run `self context` at session
-  start.
+- **Context budget.** A 12,000-character hard cap is enforced with the fixed
+  section order (description and goal → decisions and conventions → work in
+  progress with reports → blocked on the human → next). Every omission names
+  the command that recovers the full state. The injection path is the managed
+  block rendered by `self connect`, which instructs agents to run `self
+  context` at session start.
 
 ## Next discussion
 

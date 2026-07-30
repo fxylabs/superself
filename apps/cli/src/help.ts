@@ -542,7 +542,11 @@ export const COMMANDS: CommandHelp[] = [
     {
         name: "context",
         usage: [{ syntax: "context", description: ["print derived context for agents"] }],
-        detail: ["print this project's current truth: goal, active decisions, open work, recent reports."]
+        detail: [
+            "print this project's current truth: goal, active decisions, open work, recent reports.",
+            "output is capped at 12,000 characters; every omission names the command",
+            "that recovers the omitted state in full."
+        ]
     },
     {
         name: "status",
@@ -565,9 +569,10 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: "search",
-        usage: [{ syntax: "search <query> [--type t] [--project p]", description: ["grep state across the workspace"] }],
+        usage: [{ syntax: "search [query] [--type t] [--project p]", description: ["grep state (query optional with --type or --project)"] }],
         detail: [
             "search events across every registered project.",
+            "the query may be omitted when --type or --project narrows the pull.",
             "",
             "  --type <type>       only events of this type, such as decision.confirmed",
             "  --project <slug>    only this project"
