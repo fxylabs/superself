@@ -64,6 +64,7 @@
         "artifacts": {
             "entry": "suites/artifacts.sh",
             "deps": [
+                "artifact-health.mjs",
                 "attempt-boundary-marker.mjs",
                 "gui-launch.mjs",
                 "lib.sh",

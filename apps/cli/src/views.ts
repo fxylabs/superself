@@ -4,7 +4,7 @@ import { eventSummary, readEvents } from "./logfile.js";
 import { ATTEMPT_FAILURE_DAYS, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, readRegistry } from "./paths.js";
-import { loadVerdicts, verdictSignals } from "./reachability.js";
+import { artifactSignals, loadVerdicts, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
 
 const CONTEXT_LIMIT = 12_000;
@@ -22,11 +22,13 @@ interface ProjectContextOptions
 }
 
 // Console surfaces reuse the verdicts persisted by the last fold, so they
-// agree with canonical state without re-running git.
+// agree with canonical state without re-running git. Artifacts are re-checked
+// here instead: the store holds the bytes, so the answer never depends on
+// which project checkout this command ran from.
 function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 {
     const model = buildModel(storeDir, slug, new Date());
-    model.health.push(...verdictSignals(model.works, loadVerdicts(storeDir, slug)));
+    model.health.push(...verdictSignals(model.works, loadVerdicts(storeDir, slug)), ...artifactSignals(storeDir, model.works));
     return model;
 }
 

@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parseCommand, subcommand } from "./args.js";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
+import { digestFile } from "./repo.js";
 import { CliContext, readRegistry } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
@@ -61,7 +62,7 @@ export function stageArtifacts(storeDir: string, slug: string, paths: string[] |
         discard();
         throw failure;
     }
-    return { artifacts: planned.map(({ id, name, path }) => ({ id, name, path })), discard };
+    return { artifacts: planned.map(({ id, name, path, digest }) => ({ id, name, path, digest })), discard };
 }
 
 // The line appended to the log is what makes a report true, and that is the
@@ -170,7 +171,13 @@ function copyPlanned(storeDir: string, planned: PlannedArtifact[], staging: Stag
         // Created exclusively: stored bytes the log already points at are never
         // overwritten, and unlike asking first and copying after, this leaves no
         // window between the two. Artifacts are immutable after ingestion.
-        const failure = capture(() => copyFileSync(item.source, target, constants.COPYFILE_EXCL));
+        // Digested from the stored copy rather than the source: what the log
+        // promises is the bytes this store now holds.
+        const failure = capture(() =>
+        {
+            copyFileSync(item.source, target, constants.COPYFILE_EXCL);
+            item.digest = digestFile(target);
+        });
         if (failure === null)
         {
             continue;

@@ -256,15 +256,19 @@ export const COMMANDS: CommandHelp[] = [
         name: "report",
         usage: [
             {
-                syntax: 'report <work-id> "<summary>" [--file path] [--evidence c] [--artifact path] [--next n]'
+                syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]'
             }
         ],
         detail: [
             "attach a report to a work unit. The current HEAD commit is recorded as",
-            "evidence unless --evidence names other commits.",
+            "evidence unless --evidence names other values. The project repository",
+            "decides what each value is: one it resolves is recorded as a Git revision",
+            "and watched, anything else is kept as a descriptive note and never",
+            "resolved again. Force either reading with commit:<v> or note:<v>.",
             "",
             "  --file <path>       read the summary from a file instead of the argument",
-            "  --evidence <hash>   record this commit as evidence, repeatable",
+            "  --evidence <v>      record evidence, repeatable: a revision this repo",
+            "                      resolves, else a note; commit:<v>/note:<v> force it",
             "  --artifact <path>   copy a file into the store and attach it, repeatable",
             "  --next <text>       what the next session should pick up"
         ]

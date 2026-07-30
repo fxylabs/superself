@@ -209,11 +209,15 @@ export function attachReport(ctx: ProjectContext, plan: AttemptPlan, attemptId: 
     const text = redact(envelope.summary?.trim() || `attempt ${attemptId} completed`);
     const refs: EventRefs = { work: plan.work, attempt: attemptId };
     const commits = (envelope.evidence ?? []).filter((item) => item.kind === "commit").map((item) => item.ref);
+    const payload: Record<string, unknown> = { text };
     if (commits.length > 0)
     {
         refs.commits = commits;
+        // The envelope already typed its evidence — `kind: "commit"` is the
+        // agent's declaration, like `commit:` on the report verb — so the fold
+        // must not re-guess these refs by their shape.
+        payload.evidenceTyped = true;
     }
-    const payload: Record<string, unknown> = { text };
     const staged = stageArtifacts(ctx.storeDir, ctx.project, published.map((item) => item.dest));
     if (staged.artifacts.length > 0)
     {
