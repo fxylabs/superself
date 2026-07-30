@@ -6,6 +6,7 @@ import { confirmHuman } from "./human.js";
 import {
     ChangeSet,
     IntegrationState,
+    MergeApproval,
     Repository,
     currentApproval,
     mergeTargetOf,
@@ -545,7 +546,10 @@ export function cmdApprove(ctx: ProjectContext, rest: string[]): void
     {
         return refuse(values.json, confirmation);
     }
-    const payload = { changeSet: changeSet.id, head, by: values.by ?? "maintainer", confirmation };
+    // The approval binds the feature digest as well as the head: the digest is
+    // what a carry to the eventual squash commit has to prove itself against.
+    const payload = { changeSet: changeSet.id, head, digest: changeSet.featureDigest,
+        by: values.by ?? "maintainer", confirmation };
     recordEvent(ctx, makeEvent(ctx.project, "merge.approved", payload, undefined, true), `${changeSet.id} ${short(head)}`);
 }
 
@@ -562,14 +566,32 @@ export function cmdMerge(ctx: ProjectContext, rest: string[]): void
     const state = loadIntegration(ctx);
     const changeSet = requireChangeSet(state, positionals[0]);
     const repository = repositoryOf(state, changeSet.repository);
-    const refusal = mergeRefusal(changeSet, repository, values.fence)
-        ?? driftRefusal(ctx, changeSet)
-        ?? receiptRefusal(ctx, repository, changeSet.head, values);
+    const refusal = admitMerge(ctx, changeSet, repository, values);
     if (refusal !== null)
     {
         return refuse(values.json, refusal);
     }
-    recordMerge(ctx, changeSet, repository, values);
+    // Re-read the lane: a carry admitted above is an event of its own, and the
+    // merge receipt must name the approval the fold actually counts.
+    recordMerge(ctx, requireChangeSet(loadIntegration(ctx), changeSet.id), repository, values);
+}
+
+// The merge admission. One asymmetry with the raw blocker table: a missing
+// approval on the exact head may be satisfied by carrying the human approval
+// of the feature head across a conflict-free squash — but only after the
+// carry itself is verified and recorded, so the gate still reads an approval,
+// never an exception.
+function admitMerge(ctx: ProjectContext, changeSet: ChangeSet, repository: Repository,
+    values: Record<string, unknown>): Refusal | null
+{
+    let gate = mergeRefusal(changeSet, repository, values.fence as string | undefined);
+    if (gate !== null && gate.code === "approval_missing")
+    {
+        gate = carryApproval(ctx, changeSet, values, gate);
+    }
+    return gate
+        ?? driftRefusal(ctx, changeSet)
+        ?? receiptRefusal(ctx, repository, changeSet.head, values);
 }
 
 function mergeRefusal(changeSet: ChangeSet, repository: Repository, fence: string | undefined): Refusal | null
@@ -591,6 +613,91 @@ function mergeRefusal(changeSet: ChangeSet, repository: Repository, fence: strin
             next: `self integration attempt finish ${running.id} --outcome completed|conflict|failed` };
     }
     return changeSet.blockers[0] ?? null;
+}
+
+// The carry-over judgment for the human approval, the same one receipts
+// already get: a conflict-free squash of the exact approved bytes does not
+// invalidate what a human judged, because the bytes are provably the same
+// bytes. The approval carries only when the digest it bound is still the
+// change set's digest and the merge names the head that digest now sits on;
+// a conflict resolution, a head the approval predates, or an approval that
+// never bound a digest keeps the fresh-approval demand exactly as it was.
+function carryApproval(ctx: ProjectContext, changeSet: ChangeSet, values: Record<string, unknown>,
+    missing: Refusal): Refusal | null
+{
+    const source = [...changeSet.approvals].reverse()
+        .find((item) => item.humanConfirmed && item.digest !== undefined);
+    if (source === undefined)
+    {
+        return missing;
+    }
+    if (source.digest !== changeSet.featureDigest)
+    {
+        return { code: "approval_missing",
+            detail: `human approval ${source.id} is bound to digest ${short(source.digest as string)}, and ` +
+                `${changeSet.id} now carries ${short(changeSet.featureDigest)} — ` +
+                "the bytes changed after approval, so nothing carries",
+            next: missing.next };
+    }
+    const mergeCommit = requireText(values["merge-commit"] as string | undefined, "integration merge <id> --merge-commit <sha>");
+    const mainBefore = requireText(values["main-before"] as string | undefined, "integration merge <id> --main-before <sha>");
+    if (mergeCommit !== changeSet.head)
+    {
+        return { code: "approval_missing",
+            detail: `an approval carries only to the change set's own head, and ${changeSet.id} is at ` +
+                `${short(changeSet.head)} while the merge names ${short(mergeCommit)}`,
+            next: missing.next };
+    }
+    return carryProofRefusal(ctx, source, mainBefore, mergeCommit, missing)
+        ?? recordCarry(ctx, changeSet, source, mergeCommit);
+}
+
+// What the git objects must prove before an approval stretches by one commit:
+// every named commit exists, main-before is contained in the merge commit,
+// and the diff main-before...merge-commit hashes to exactly the digest the
+// human approved. Byte-equal diffs subsume the conflict question — a
+// resolution, or any other edit on the way in, changes the bytes and fails
+// the hash. With no reachable checkout nothing is provable, and an unproved
+// carry is no approval at all.
+function carryProofRefusal(ctx: ProjectContext, source: MergeApproval, mainBefore: string,
+    mergeCommit: string, missing: Refusal): Refusal | null
+{
+    const repoDir = repoDirOf(ctx, undefined, false);
+    if (repoDir === null)
+    {
+        return { code: "approval_missing",
+            detail: `no checkout is reachable to prove approval ${source.id} covers ${short(mergeCommit)}, ` +
+                "so the approval does not carry",
+            next: missing.next };
+    }
+    const absent = [source.head, mainBefore, mergeCommit].find((sha) => !commitExists(repoDir, sha));
+    if (absent !== undefined)
+    {
+        return { code: "commit_unknown",
+            detail: `the commit ${short(absent)} named by the approval carry is not in the reachable checkout`,
+            next: "record the merge that really happened, with the commits git reports" };
+    }
+    if (!isAncestor(repoDir, mainBefore, mergeCommit)
+        || featureDigest(repoDir, mainBefore, mergeCommit) !== source.digest)
+    {
+        return { code: "approval_missing",
+            detail: `${short(mergeCommit)} is not approval ${source.id}'s diff applied to ${short(mainBefore)} — ` +
+                "the merge landed bytes the human never saw, so nothing carries",
+            next: missing.next };
+    }
+    return null;
+}
+
+// The carry is a recorded event, never a silent skip: it names the approval
+// it extends, the head the human typed for, the merge commit it now covers,
+// and the digest that binds them. The fold re-checks that binding when it
+// counts the carried approval.
+function recordCarry(ctx: ProjectContext, changeSet: ChangeSet, source: MergeApproval, to: string): null
+{
+    const payload = { changeSet: changeSet.id, approval: source.id, from: source.head, to, digest: source.digest };
+    recordEvent(ctx, makeEvent(ctx.project, "merge.approval_carried", payload),
+        `${changeSet.id} approval ${source.id} carried to ${short(to)}`);
+    return null;
 }
 
 // The last chance to catch a digest that was declared rather than computed.

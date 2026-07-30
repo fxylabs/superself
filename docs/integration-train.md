@@ -136,6 +136,22 @@ verified method — so a piped or scripted invocation gets a typed
 `confirmed: true` (whoever wrote it) never opens a gate. There is no flag,
 environment variable or payload field that substitutes for the terminal.
 
+One deliberate approval per change set is the intended shape: typed at the
+feature head, before the merge pipeline runs. The approval binds that head
+*and* the feature digest it carried, and it follows the same carry-over policy
+receipts already have — a conflict-free base advance does not invalidate a
+judgment about unchanged bytes. When `self integration merge` finds no
+approval on the exact merge commit but a human approval whose bound digest is
+still the change set's digest, and the git objects prove the merge commit is
+precisely that diff applied to `--main-before` (byte-equal diff hashes, which
+a conflict resolution or any edit on the way in fails), the controller records
+a `merge.approval_carried` event — naming the approved head, the merge commit,
+and the binding digest — and admits the merge on the carried approval. Nothing
+carries when the digest changed after approval, when the base advance took a
+conflict resolution, or when no checkout is reachable to prove the carry; each
+of those keeps the fresh-approval demand. The fold re-checks the carry's
+binding before counting it, so a hand-appended carry event stretches nothing.
+
 ## The merge gate
 
 `self integration merge` allows a merge only when all of these hold:
@@ -149,7 +165,7 @@ environment variable or payload field that substitutes for the terminal.
 | `predecessor_open` | an earlier tied train item is not merged |
 | `lease_not_current`, `stale_fence` | the lane is not held, or held at another fence |
 | `ci_checks_undeclared`, `ci_not_green` | the exact head has no green result for a declared check |
-| `approval_missing` | no human approval names this exact head — only when the merge lands on main |
+| `approval_missing` | no human approval names this exact head and none carries to it — only when the merge lands on main |
 | `commit_malformed`, `commit_unknown`, `merge_unrelated` | the receipt names commits that are not full ids, do not exist, or do not contain the reviewed head |
 
 Every refusal carries the code, the exact missing prerequisite and the next
