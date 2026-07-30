@@ -668,9 +668,12 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
                     ? `<a href="${esc(item.id)}.html">${esc(item.id)}</a>` : esc(item.id)} ${esc(item.outcome)}` +
                 `<i class="ob-mark s-${item.state}">${esc(item.state)}</i>` +
                 `${item.criticalPath ? `<i class="ob-mark warn">critical path</i>` : ""}</p></div>`).join("\n")),
-        panel("EVIDENCE", work.evidence.length, "",
-            work.evidence.length === 0 ? empty("no evidence yet")
-                : work.evidence.map((hash) => evidenceRow(hash, verdicts[hash])).join("\n")),
+        panel("EVIDENCE", work.evidence.length + work.notes.length, "",
+            work.evidence.length + work.notes.length === 0 ? empty("no evidence yet")
+                : [
+                    ...work.evidence.map((hash) => evidenceRow(hash, verdicts[hash])),
+                    ...work.notes.map(noteRow)
+                ].join("\n")),
         panel("ARTIFACTS", artifacts.length, "",
             artifacts.length === 0 ? empty("no artifacts yet")
                 : artifacts.map((r) => artifactRow(r, "../..")).join("\n")),
@@ -708,6 +711,13 @@ function evidenceRow(hash: string, verdict: Verdict | undefined): string
     const state = verdict ?? "unchecked";
     return `<div class="dr-evi"><span class="n">${esc(hash)}</span>` +
         `<i class="v-${esc(state)}">${esc(state)}</i></div>`;
+}
+
+// Descriptive evidence carries no verdict by design — nothing resolves it, so
+// the row states what it is rather than how it fared.
+function noteRow(note: string): string
+{
+    return `<div class="dr-evi"><span class="n">${esc(note)}</span><i>note</i></div>`;
 }
 
 /* ── list pages ────────────────────────────────────────────────────── */
@@ -1386,8 +1396,8 @@ td.r { text-align: right; width: 78px; }
 .dr-evi { display: flex; align-items: baseline; gap: 8px; padding: 7px 0;
           border-bottom: 1px solid var(--sv-rule); font: 11.5px var(--sv-mono); }
 .dr-evi:last-child { border-bottom: 0; }
-.dr-evi .n { color: var(--sv-body); }
-.dr-evi i { margin-left: auto; font-style: normal; font-size: 9.5px; color: var(--sv-faint); }
+.dr-evi .n { color: var(--sv-body); min-width: 0; overflow-wrap: anywhere; }
+.dr-evi i { margin-left: auto; flex: none; font-style: normal; font-size: 9.5px; color: var(--sv-faint); }
 .dr-evi .v-settled { color: var(--sv-ok); }
 .dr-evi .v-abandoned, .dr-evi .v-unverifiable { color: var(--sv-warn); }
 .dr-art { display: flex; align-items: center; gap: 10px; padding: 6px 0;

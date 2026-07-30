@@ -11,7 +11,7 @@ import { runOvernightCommand } from "./daemon/overnight.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
-import { commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
+import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
 import { commandUsage, findCommand, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
@@ -863,13 +863,21 @@ function cmdReport(rest: string[]): void
     const text = values.file === undefined
         ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
         : readReportFile(values.file);
-    const commits = values.evidence ?? headEvidence(ctx);
+    const { commits, notes } = classifyEvidence(ctx.projectDir, values.evidence ?? headEvidence(ctx));
     const refs: EventRefs = { work: work.id };
+    const payload: Record<string, unknown> = { text };
     if (commits.length > 0)
     {
         refs.commits = commits;
+        // Says the split already happened, against the repository that could
+        // answer it. A reader of this event must take these as revisions
+        // rather than guess at their shape a second time.
+        payload.evidenceTyped = true;
     }
-    const payload: Record<string, unknown> = { text };
+    if (notes.length > 0)
+    {
+        payload.notes = notes;
+    }
     if (values.next !== undefined)
     {
         payload.next = values.next;

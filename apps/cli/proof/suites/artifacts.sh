@@ -147,6 +147,12 @@ SELF artifact list --work "$WID" | grep -q "second.html" || fail "the first memb
 [ "$(SELF artifact list --work "$WID" | grep -c "launch.html")" -eq 2 ] || fail "the second member of the set was not recorded"
 git -C "$STORE" ls-files | grep -q "second.html" || fail "a set member was not committed with its event"
 [ -z "$(git -C "$STORE" status --porcelain)" ] || fail "a multi-artifact report left the store dirty"
+# and every member of it carries the digest of its own bytes, so the set rolls
+# back as one while each file in it is verified on its own
+SETLINE="$(grep '"type":"report.added"' "$STORE/projects/demo/log.jsonl" | tail -1)"
+[ "$(echo "$SETLINE" | grep -o '"digest":"' | wc -l | tr -d ' ')" -eq 2 ] \
+    || fail "a multi-artifact report did not record a digest for every member"
+SELF status | grep -q "artifact .*second.html" && fail "a stored set member was reported as unhealthy"
 
 # the same filename twice is two artifacts, never one overwriting the other
 SELF report "$WID" "the same name twice" --artifact "$ROOT/launch.html" --artifact "$ROOT/launch.html"
@@ -199,6 +205,9 @@ echo "$MIDCOPY" | grep -q "could not be copied into the store" || fail "a member
 [ -d "$STORE/artifacts" ] || fail "rollback removed the shared artifacts root"
 [ -d "$STORE/artifacts/demo" ] || fail "rollback removed a project directory it did not create"
 [ "$(count_artifacts "*-launch.html")" -eq 4 ] || fail "rollback removed artifacts stored by earlier reports"
+# a rolled-back set wrote no event, so health has nothing half-written to name
+SELF status | grep -qE "is missing from this store|cannot be read in this store" \
+    && fail "a rolled-back set left an artifact health cannot account for"
 node "$CLI_DIR/proof/rollback-ownership.mjs" "$ROOT/rollback-store" || fail "rollback removed paths it did not create"
 
 # the same failure on a project's first set: the directory this command made
@@ -289,5 +298,52 @@ cd "$ROOT/B/ws/demo"
 SELF artifact list | grep -q "$AID" || fail "artifact registry not derived on machine B"
 [ -f "$ROOT/B/ws/.superself/artifacts/demo/$AID-launch.html" ] || fail "artifact bytes did not sync"
 machine A
+cd "$ROOT/A/ws/demo"
+
+# artifacts are verified against the store that holds their bytes: a matching
+# digest is healthy, and a changed or missing file names the artifact
+echo "v1 validated" > "$ROOT/report.txt"
+WART="$(SELF work add "artifact integrity is checked, not guessed" | tail -1)"
+SELF work start "$WART"
+SELF report "$WART" "attached the validated report" --artifact "$ROOT/report.txt"
+ARTID="$(SELF artifact list --work "$WART" | awk '{print $1}')"
+ARTFILE="$STORE/artifacts/demo/$ARTID-report.txt"
+grep -q "\"digest\":\"" "$STORE/projects/demo/log.jsonl" || fail "artifact ingest did not record a digest"
+SELF status | grep -q "$ARTID" && fail "an artifact matching its digest raised a health signal"
+echo "tampered" > "$ARTFILE"
+SELF fold > /dev/null
+SELF status | grep -q "$ARTID .*no longer matches" || fail "a changed artifact raised no signal"
+rm "$ARTFILE"
+SELF fold > /dev/null
+SELF status | grep -q "$ARTID .*is missing from this store" || fail "a missing artifact raised no signal"
+SELF status | grep -q "$ARTID .*rewritten" && fail "an artifact problem was reported as rewritten Git history"
+
+# an artifact the store will not hand over is a health signal, never a crash.
+# A directory in the file's place fails the read the same way for every user,
+# root included, so this holds wherever the proof runs.
+echo "v2 validated" > "$ROOT/report.txt"
+SELF report "$WART" "attached it again after the file went missing" --artifact "$ROOT/report.txt"
+ARTID2="$(SELF artifact list --work "$WART" | tail -1 | awk '{print $1}')"
+rm -rf "$STORE/artifacts/demo/$ARTID2-report.txt"
+mkdir -p "$STORE/artifacts/demo/$ARTID2-report.txt"
+UNREADABLE="$(SELF status)" || fail "status died on an artifact it could not read"
+echo "$UNREADABLE" | grep -q "$ARTID2 .*cannot be read in this store" || fail "an unreadable artifact raised no health signal"
+echo "$UNREADABLE" | grep -q "$STORE" && fail "a health signal printed the store's absolute path"
+echo "$UNREADABLE" | grep -Eq '^[[:space:]]+at |node:internal' && fail "a health signal printed a stack frame"
+SELF context > /dev/null || fail "context died on an artifact it could not read"
+SELF fold > /dev/null || fail "fold died on an artifact it could not read"
+# and state can still be recorded, which is what a fold on every event decides
+SELF report "$WART" "state still records while an artifact is unreadable" > /dev/null \
+    || fail "a report could not be recorded while an artifact was unreadable"
+SELF decide "an unreadable artifact does not stop the log" --why "health degrades, commands do not" > /dev/null \
+    || fail "a decision could not be recorded while an artifact was unreadable"
+grep -q "$ARTID2 .*cannot be read in this store" "$STORE/projects/demo/state.md" \
+    || fail "the folded state lost the unreadable-artifact signal"
+rm -rf "$STORE/artifacts/demo/$ARTID2-report.txt"
+
+# the cases a shell cannot build portably: a file that exists and still cannot
+# be opened, a path the log points at from outside the store, and the unguarded
+# read this replaced
+node "$CLI_DIR/proof/artifact-health.mjs" "$ROOT/health-store" || fail "artifact health did not degrade safely"
 
 echo "artifacts OK"

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 // Digests must not depend on who runs the command. Every option that a user's
 // git config can move — rename detection, prefixes, line endings, external
@@ -103,4 +103,31 @@ export function sha256File(path: string): string | null
         return null;
     }
     return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+// The artifact-store digest, beside sha256File rather than through it: an
+// artifact is an arbitrary file, so the bytes are hashed in chunks instead of
+// loaded whole, and a file that will not open throws with its errno — the
+// caller decides whether that degrades to a health signal or refuses a write.
+// sha256File keeps its own contract (null for a missing file or a directory)
+// for the receipt paths that already read it.
+export function digestFile(file: string): string
+{
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(64 * 1024);
+    const fd = openSync(file, "r");
+    try
+    {
+        let read = readSync(fd, buffer, 0, buffer.length, null);
+        while (read > 0)
+        {
+            hash.update(buffer.subarray(0, read));
+            read = readSync(fd, buffer, 0, buffer.length, null);
+        }
+    }
+    finally
+    {
+        closeSync(fd);
+    }
+    return hash.digest("hex");
 }

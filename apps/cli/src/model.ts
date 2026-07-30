@@ -9,6 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
+import { looksLikeLegacyRevision } from "./gitutil.js";
 import { applyIntegration, deriveIntegration, emptyIntegration, IntegrationState, isIntegrationEvent } from "./integration.js";
 import { readEvents } from "./logfile.js";
 import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
@@ -47,6 +48,9 @@ export interface ReportEntry
     ts: string;
     text: string;
     commits: string[];
+    // Evidence the report offered that is not a Git revision: a checksum, a
+    // validation summary, a reviewer's name. Kept and shown, never resolved.
+    notes: string[];
     artifacts: ArtifactMeta[];
     // The branch these commits were reported from — what lets the fold tell a
     // discarded branch from a squash-merged one.
@@ -86,6 +90,7 @@ export interface WorkState
     successor?: { work: string; project?: string };
     reports: ReportEntry[];
     evidence: string[];
+    notes: string[];
     artifacts: ArtifactMeta[];
     // Every branch this unit was worked on, oldest first. Derived, never
     // asserted: one unit runs on several branches, and one branch carries
@@ -319,6 +324,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             status: "next",
             reports: [],
             evidence: [],
+            notes: [],
             artifacts: [],
             branches: branchOf(event),
             objectives: [],
@@ -445,15 +451,43 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     noteBranch(work, event);
-    const commits = event.refs?.commits ?? [];
+    const { commits, notes } = splitEvidence(event);
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
+    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
+    work.notes.push(...notes.filter((note) => !work.notes.includes(note)));
     work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
     {
         work.next = String(event.payload.next);
     }
+}
+
+// A report that recorded its evidence as typed was split when it was written,
+// by the repository that could answer whether each value resolved; the reader
+// takes that verdict as given. Anything older is split again here on shape
+// alone, so a store written before evidence carried its type folds correctly
+// without a single historical event being rewritten.
+function splitEvidence(event: SelfEvent): { commits: string[]; notes: string[] }
+{
+    const offered = stringList(event.refs?.commits);
+    const declared = stringList(event.payload.notes);
+    if (event.payload.evidenceTyped === true)
+    {
+        return { commits: offered, notes: declared };
+    }
+    return {
+        commits: offered.filter(looksLikeLegacyRevision),
+        notes: [...offered.filter((value) => !looksLikeLegacyRevision(value)), ...declared]
+    };
+}
+
+// Nothing read out of the log is trusted to be the type it is declared as:
+// events arrive from other machines, and a number where a string belongs would
+// reach a renderer that calls string methods on it.
+function stringList(value: unknown): string[]
+{
+    return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
 function deriveSignals(model: ProjectModel, now: Date): void
