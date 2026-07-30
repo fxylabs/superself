@@ -980,7 +980,11 @@ function cmdSearch(rest: string[]): void
         { type: { type: "string" }, project: { type: "string" } },
         1
     );
-    const query = requireText(positionals[0], "search <query>");
+    // Context recovery pointers pull whole categories, so a filter alone is a
+    // complete request: `--type` or `--project` may stand in for the query.
+    const query = positionals[0] ?? (values.type === undefined && values.project === undefined
+        ? requireText(undefined, "search <query>, search --type <type>, or search --project <slug>")
+        : "");
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
 }
 
