@@ -25,7 +25,7 @@ export function foldProject(storeDir: string, slug: string): void
     for (const work of model.works)
     {
         const rel = join("work", `${work.id}.md`);
-        if (work.status === "done")
+        if (work.status === "done" || work.status === "retired")
         {
             drop(dir, hashes, rel);
         }
@@ -443,7 +443,9 @@ function completionLines(work: WorkState): string[]
         ].filter((part) => part !== "");
         lines.push(`- Completion policy: ${parts.join(", ")}`);
     }
-    if (work.owes !== undefined)
+    // A retired unit owes nothing: its outcome was given up, and the advice
+    // the owes line carries (`work met`, approval) is refused on it anyway.
+    if (work.owes !== undefined && work.status !== "retired")
     {
         lines.push(`- Not done yet: ${work.owes}`);
     }
@@ -484,7 +486,33 @@ function renderWork(work: WorkState, model: ProjectModel, verdicts: Record<strin
     return GENERATED_NOTE + "\n\n" + renderWorkBody(work, model, verdicts);
 }
 
-export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}): string
+// What a retirement adds to a unit's record: its own reason and successor,
+// then the provenance of any outcome it carries forward. Same-project
+// predecessors fold deterministically — both units live in this model, so
+// the line can never go stale. Cross-project ones arrive through
+// `supersedes`, derived at read time by the caller that can scan.
+function retirementLines(model: ProjectModel, work: WorkState, supersedes: string[]): string[]
+{
+    const lines: string[] = [];
+    if (work.status === "retired")
+    {
+        const successor = work.successor === undefined ? ""
+            : ` — successor ${work.successor.work}${work.successor.project === undefined ? "" : ` (${work.successor.project})`}`;
+        lines.push(`- Retired: ${work.retiredWhy}${successor}`);
+    }
+    lines.push(...[...supersededIn(model, work), ...supersedes].map((source) => `- Supersedes: ${source}`));
+    return lines;
+}
+
+function supersededIn(model: ProjectModel, work: WorkState): string[]
+{
+    return model.works
+        .filter((item) => item.status === "retired" && item.successor?.work === work.id
+            && (item.successor.project === undefined || item.successor.project === model.slug))
+        .map((item) => `${item.id} — ${item.retiredWhy}`);
+}
+
+export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
 {
     const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
     const contributes = contributionLines(work, model);
@@ -496,6 +524,7 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);
     }
+    lines.push(...retirementLines(model, work, supersedes));
     if (work.next !== undefined)
     {
         lines.push(`- Next action: ${work.next}`);

@@ -553,7 +553,7 @@ function requireNovel(model: ProjectModel, outcome: string, payload: Record<stri
     {
         throw new CliError(`proposal ${clash.id.slice(0, 8)} already proposes this outcome for ${target} — accept or decline it instead`);
     }
-    const existing = model.works.find((work) => work.status !== "done" && normalize(work.outcome) === key
+    const existing = model.works.find((work) => work.status !== "done" && work.status !== "retired" && normalize(work.outcome) === key
         && [...work.objectives, ...work.milestones].includes(target));
     if (existing !== undefined)
     {

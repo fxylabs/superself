@@ -75,9 +75,14 @@ export interface WorkState
     outcome: string;
     ts: string;
     lastEventTs: string;
-    status: "next" | "active" | "blocked" | "done";
+    status: "next" | "active" | "blocked" | "done" | "retired";
     blockedOn?: string;
     blockedWhy?: string;
+    // Why this unit was retired without reaching its outcome, and where the
+    // outcome went when a successor exists. Retirement is not completion: the
+    // outcome was deliberately given up or moved, never achieved here.
+    retiredWhy?: string;
+    successor?: { work: string; project?: string };
     reports: ReportEntry[];
     evidence: string[];
     artifacts: ArtifactMeta[];
@@ -340,6 +345,20 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     {
         work.status = "done";
     }
+    if (event.type === "work.retired")
+    {
+        work.status = "retired";
+        work.blockedOn = undefined;
+        work.blockedWhy = undefined;
+        work.retiredWhy = String(event.payload.why);
+        if (typeof event.payload.successor === "string")
+        {
+            work.successor = {
+                work: event.payload.successor,
+                project: typeof event.payload.successorProject === "string" ? event.payload.successorProject : undefined
+            };
+        }
+    }
 }
 
 // One unit may contribute to more than one outcome, and one outcome may be
@@ -442,7 +461,7 @@ function deriveSignals(model: ProjectModel, now: Date): void
         // Derived for every unit, including the ones already done: a unit
         // closed before a requirement was revised still says what it owes.
         work.owes = completionRefusal(work) ?? undefined;
-        if (work.status !== "done" && approvalPending(work))
+        if (work.status !== "done" && work.status !== "retired" && approvalPending(work))
         {
             model.openQuestions.push(`${work.id} is waiting on human approval: ${work.completion.approvalRequired?.why ?? work.outcome}`);
         }
@@ -471,7 +490,7 @@ function deriveSignals(model: ProjectModel, now: Date): void
 // without this these two would be the only ones that can only grow.
 function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): void
 {
-    const latest = work.status === "done" ? undefined : newestAttempt(work);
+    const latest = work.status === "done" || work.status === "retired" ? undefined : newestAttempt(work);
     if (latest === undefined)
     {
         return;

@@ -42,7 +42,7 @@ import {
     cmdWorkMet,
     cmdWorkPolicy,
     cmdWorkRequire,
-    cmdWorkRetire,
+    cmdWorkDrop,
     cmdWorkRevise,
     doneEvent
 } from "./requirements.js";
@@ -596,6 +596,11 @@ function cmdWork(rest: string[]): void
         cmdProposalDecision(requireProject(process.cwd()), rest.slice(1), sub === "accept");
         return;
     }
+    if (sub === "retire")
+    {
+        cmdWorkRetireUnit(rest.slice(1));
+        return;
+    }
     if (COMPLETION_VERBS.includes(sub as string))
     {
         completionVerb(sub as string, rest.slice(1));
@@ -604,7 +609,7 @@ function cmdWork(rest: string[]): void
     const type = TRANSITIONS[sub as string];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline|` +
+        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|retire|link|unlink|propose|accept|decline|` +
             COMPLETION_VERBS.join("|"));
     }
     transitionWork(type, rest.slice(1));
@@ -613,7 +618,7 @@ function cmdWork(rest: string[]): void
 // What done means for a unit, written on the unit itself. Routed together so
 // the dispatcher states once that these extend `self work` rather than
 // introducing a noun of their own.
-const COMPLETION_VERBS = ["require", "revise", "retire", "met", "recheck", "approval-required", "approve", "policy"];
+const COMPLETION_VERBS = ["require", "revise", "drop", "met", "recheck", "approval-required", "approve", "policy"];
 
 function completionVerb(sub: string, args: string[]): void
 {
@@ -622,7 +627,7 @@ function completionVerb(sub: string, args: string[]): void
     {
         case "require": cmdWorkRequire(ctx, args); break;
         case "revise": cmdWorkRevise(ctx, args); break;
-        case "retire": cmdWorkRetire(ctx, args); break;
+        case "drop": cmdWorkDrop(ctx, args); break;
         case "met": cmdWorkMet(ctx, args, false); break;
         case "recheck": cmdWorkMet(ctx, args, true); break;
         case "approval-required": cmdWorkApprovalRequired(ctx, args); break;
@@ -653,7 +658,29 @@ function cmdWorkShow(args: string[]): void
     {
         throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
     }
-    console.log(markdownHeadings(renderWorkBody(found.work, found.model, loadVerdicts(ctx.storeDir, found.slug)).trimEnd()));
+    console.log(markdownHeadings(renderWorkBody(found.work, found.model, loadVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
+}
+
+// Read-time reverse provenance for the cross-project case: a retire event
+// lives in the source project's log, so the successor's page derives this by
+// scanning the workspace instead of asserting state it does not own. The
+// same-project case folds inside renderWorkBody, where it can never go stale.
+function supersededSources(ctx: CliContext, found: FoundWork): string[]
+{
+    const lines: string[] = [];
+    for (const slug of orderedSlugs(ctx).filter((item) => item !== found.slug))
+    {
+        const model = buildModel(ctx.storeDir, slug, new Date());
+        for (const work of model.works)
+        {
+            if (work.status === "retired" && work.successor?.work === found.work.id
+                && work.successor.project === found.slug)
+            {
+                lines.push(`${work.id} (${slug}) — ${work.retiredWhy}`);
+            }
+        }
+    }
+    return lines;
 }
 
 interface FoundWork
@@ -664,8 +691,10 @@ interface FoundWork
 }
 
 // A bare id resolves across the whole workspace: the linked checkout's own
-// project wins outright, and a cross-project id collision demands --project.
-function findWorkAcross(ctx: CliContext, wanted: string, project: string | undefined): FoundWork | null
+// project wins outright, and a cross-project id collision demands the
+// caller's project flag — named by each caller, because `work show` and
+// `work retire --successor` spell it differently.
+function findWorkAcross(ctx: CliContext, wanted: string, project: string | undefined, projectFlag = "--project"): FoundWork | null
 {
     const slugs = project === undefined
         ? orderedSlugs(ctx)
@@ -686,7 +715,7 @@ function findWorkAcross(ctx: CliContext, wanted: string, project: string | undef
     }
     if (matches.length > 1)
     {
-        throw new CliError(`work id "${wanted}" exists in more than one project (${matches.map((m) => m.slug).join(", ")}) — pass --project <slug>`);
+        throw new CliError(`work id "${wanted}" exists in more than one project (${matches.map((m) => m.slug).join(", ")}) — pass ${projectFlag} <slug>`);
     }
     return matches[0] ?? null;
 }
@@ -706,6 +735,84 @@ function requireRegistered(storeDir: string, slug: string): string
         throw new CliError(`unknown project "${slug}" — registered: ${readRegistry(storeDir).map((e) => e.slug).join(", ")}`);
     }
     return slug;
+}
+
+// Retiring a unit records that its outcome was deliberately given up or moved
+// — never achieved. The unit keeps every report, evidence hash, and artifact,
+// and stops counting as live work everywhere the status is read.
+function cmdWorkRetireUnit(args: string[]): void
+{
+    const { values, positionals } = parseCommand(
+        "work",
+        args,
+        { why: { type: "string" }, successor: { type: "string" }, "successor-project": { type: "string" }, requirement: { type: "string" } },
+        1
+    );
+    if (values.requirement !== undefined)
+    {
+        // The verb that used to carry this moved: one verb per scope, so a
+        // requirement can never be dropped when the caller meant the unit.
+        throw new CliError("`work retire` retires the unit itself — to retire one requirement, use `self work drop <id> --requirement r1 --why w`");
+    }
+    const ctx = requireProject(process.cwd());
+    const work = requireRetirable(ctx, positionals[0]);
+    if (work.status === "retired")
+    {
+        // Idempotent by design: the state the caller asked for already holds,
+        // so repeating the transition records nothing and refuses nothing.
+        console.log(`${work.id} is already retired — ${work.retiredWhy}`);
+        return;
+    }
+    const why = requireText(values.why, 'work retire <work-id> --why "<why the outcome was given up or moved>" [--successor <work-id>]');
+    const payload = { work: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
+    recordEvent(ctx, makeEvent(ctx.project, "work.retired", payload, undefined, true), `${work.id} ${why}`);
+}
+
+// The unit a retirement speaks about: known, and not already closed as done.
+// Already-retired is the caller's case to answer — a no-op, not a refusal.
+function requireRetirable(ctx: ProjectContext, id: string | undefined): WorkState
+{
+    const wanted = requireText(id, "work retire <work-id> — run `self work` to list ids");
+    const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === wanted);
+    if (work === undefined)
+    {
+        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+    }
+    if (work.status === "done")
+    {
+        throw new CliError(`${work.id} is already done — retirement records an outcome that was given up, not one that was reached`);
+    }
+    return work;
+}
+
+// The successor is validated before anything is written: an unknown reference
+// refuses the retirement instead of recording a pointer nothing can follow.
+function successorRef(ctx: ProjectContext, source: string, successor: string | undefined, project: string | undefined): Record<string, unknown>
+{
+    if (successor === undefined)
+    {
+        if (project !== undefined)
+        {
+            throw new CliError("work retire --successor-project needs --successor <work-id> to point at");
+        }
+        return {};
+    }
+    const found = findWorkAcross(ctx, successor, project, "--successor-project");
+    if (found === null)
+    {
+        throw new CliError(`unknown successor "${successor}" — the unit that carries the outcome must exist before ${source} is retired`);
+    }
+    // Identity, not spelling: the same id may exist in another project, so
+    // self-succession is judged only after the reference has resolved.
+    if (found.slug === ctx.project && found.work.id === source)
+    {
+        throw new CliError(`${source} cannot succeed itself — name the unit that carries the outcome now`);
+    }
+    if (found.work.status === "retired")
+    {
+        throw new CliError(`successor ${found.work.id} is itself retired — the outcome cannot move to a unit that gave it up`);
+    }
+    return { successor: found.work.id, successorProject: found.slug };
 }
 
 function transitionWork(type: string, args: string[]): void
@@ -799,6 +906,10 @@ function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
     if (work.status === "done")
     {
         throw new CliError(`${wanted} is already done`);
+    }
+    if (work.status === "retired")
+    {
+        throw new CliError(`${wanted} is retired — ${work.retiredWhy ?? "its outcome was given up"}; see \`self work show ${wanted}\``);
     }
     return work;
 }

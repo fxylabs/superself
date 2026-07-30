@@ -251,7 +251,8 @@ const STATUS_GLYPHS: [string, string][] = [
     ["active", blue("●")],
     ["blocked", red("■")],
     ["next", "○"],
-    ["done", green("✓")]
+    ["done", green("✓")],
+    ["retired", dim("⊘")]
 ];
 
 function countGlyphs(works: WorkState[]): string
@@ -296,13 +297,15 @@ function overviewBlock(model: ProjectModel, width: number): string
 function countLine(works: WorkState[]): string
 {
     const count = (status: string): number => works.filter((w) => w.status === status).length;
-    return `${count("active")} active, ${count("blocked")} blocked, ${count("next")} next, ${count("done")} done`;
+    const retired = count("retired");
+    return `${count("active")} active, ${count("blocked")} blocked, ${count("next")} next, ${count("done")} done`
+        + (retired > 0 ? `, ${retired} retired` : "");
 }
 
 export function printWorkList(ctx: CliContext & { project: string }): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const open = model.works.filter((w) => w.status !== "done");
+    const open = model.works.filter((w) => w.status !== "done" && w.status !== "retired");
     if (open.length === 0)
     {
         console.log("no open work");
@@ -312,10 +315,15 @@ export function printWorkList(ctx: CliContext & { project: string }): void
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
         console.log(styled ? workLines(work, toward) : plainWorkLine(work, toward));
     }
-    const done = model.works.length - open.length;
+    const done = model.works.filter((w) => w.status === "done").length;
     if (done > 0)
     {
         console.log(styled ? `${green("✓")} ${dim(`${done} done — see log`)}` : `(${done} done — see log)`);
+    }
+    const retired = model.works.filter((w) => w.status === "retired").length;
+    if (retired > 0)
+    {
+        console.log(styled ? `${dim(`⊘ ${retired} retired — see log`)}` : `(${retired} retired — see log)`);
     }
 }
 

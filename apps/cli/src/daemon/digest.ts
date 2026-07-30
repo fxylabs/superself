@@ -158,7 +158,7 @@ export function buildDigest(ctx: ProjectContext, since: Date, now: Date): Digest
     // could not touch, and a window that dropped it would be an account of the
     // night with its main fact missing. Everything else here is what happened
     // inside the window; this is what is still true when it ends.
-    const waiting = works.filter((work) => work.status !== "done" && approvalPending(work));
+    const waiting = works.filter((work) => work.status !== "done" && work.status !== "retired" && approvalPending(work));
     // A provider that answered "not now" is not a failure — it answered, and it
     // said the machine may ask again. So it is counted once, under capacity,
     // and never also under failed.
@@ -279,7 +279,7 @@ function nextActions(works: WorkState[], waiting: WorkState[], capacity: DigestA
     {
         actions.push(`${provider} refused this machine on capacity — \`self daemon circuits\` says when it may be asked again`);
     }
-    for (const work of works.filter((item) => item.status !== "done" && item.owes !== undefined))
+    for (const work of works.filter((item) => item.status !== "done" && item.status !== "retired" && item.owes !== undefined))
     {
         actions.push(`${work.id} — ${work.owes}`);
     }

@@ -127,7 +127,7 @@ function decide(ctx: ProjectContext, head: SpecHead, sealed: Sealed, work: WorkS
     const at = { work: head.work, workSpec: head.workSpec, generation: head.generation };
     // Before anything is read: work that is finished or gone is not a
     // candidate, and saying so costs a lookup in a model that is already built.
-    if (work === undefined || work.status === "done")
+    if (work === undefined || work.status === "done" || work.status === "retired")
     {
         return { ...at, outcome: "not-ready" };
     }

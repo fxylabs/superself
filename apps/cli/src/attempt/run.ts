@@ -270,18 +270,18 @@ export function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool:
 // exists, or whether anyone granted it a budget.
 export function localChecks(ctx: ProjectContext, plan: AttemptPlan): PreflightCheck[]
 {
-    const checks: PreflightCheck[] = [];
-    if (plan.capabilities.context)
-    {
-        const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === plan.work);
-        const ok = work !== undefined && work.status !== "done";
-        checks.push({
-            capability: "context",
-            target: plan.work,
-            ok,
-            detail: work === undefined ? `no work unit "${plan.work}" in project ${ctx.project}` : work.status === "done" ? "already done" : work.outcome
-        });
-    }
+    // The named unit's existence and openness are not a capability the plan
+    // opts into: an attempt materializes work that is still open, whether or
+    // not the agent reads workspace context.
+    const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === plan.work);
+    const checks: PreflightCheck[] = [{
+        capability: "context",
+        target: plan.work,
+        ok: work !== undefined && work.status !== "done" && work.status !== "retired",
+        detail: work === undefined ? `no work unit "${plan.work}" in project ${ctx.project}`
+            : work.status === "done" ? "already done"
+            : work.status === "retired" ? "retired — its outcome was given up or moved" : work.outcome
+    }];
     const budget = plan.capabilities.budgetUsd;
     if (budget !== undefined)
     {
@@ -878,7 +878,7 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
 function reportOutstanding(ctx: ProjectContext, id: string): void
 {
     const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === id);
-    if (work === undefined || work.status === "done")
+    if (work === undefined || work.status === "done" || work.status === "retired")
     {
         return;
     }

@@ -85,6 +85,7 @@ interface ProjectSummary
     blockedCount: number;
     nextCount: number;
     doneCount: number;
+    retiredCount?: number;
     health: string[];
     openQuestions: string[];
     proposedCount?: number;
@@ -302,6 +303,7 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
         blockedCount: model.works.filter((w) => w.status === "blocked").length,
         nextCount: model.works.filter((w) => w.status === "next").length,
         doneCount: model.works.filter((w) => w.status === "done").length,
+        retiredCount: model.works.filter((w) => w.status === "retired").length,
         health: model.health,
         openQuestions: model.openQuestions,
         proposedCount: model.decisions.filter((d) => d.status === "proposed" && !d.expired).length,
@@ -392,6 +394,7 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
     const active = model.works.filter((w) => w.status === "active");
     const next = model.works.filter((w) => w.status === "next");
     const done = model.works.filter((w) => w.status === "done");
+    const retired = model.works.filter((w) => w.status === "retired");
     const waiting = waitingRows(model);
     const decisions = decisionOrder(model.decisions);
     const artifacts = artifactRows(model);
@@ -417,7 +420,9 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
             more(decisions.length, CAP_DECISIONS, `${model.slug}/decisions.html`, "all decisions")),
         eventPanel(events.slice(0, CAP_EVENTS), events.length, `${model.slug}/events.html`),
         foldPanel("CONVENTIONS", model.conventions.map((c) => `<div class="dr-dec"><time>${day(c.ts)}</time><p>${esc(c.text)}</p></div>`)),
-        foldPanel("DONE", done.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}</p></div>`))
+        foldPanel("DONE", done.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}</p></div>`)),
+        foldPanel("RETIRED", retired.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}` +
+            `${w.retiredWhy === undefined ? "" : ` <i class="dr-prop">${esc(w.retiredWhy)}</i>`}</p></div>`))
     ].filter((part) => part !== "").join("\n");
     // With decisions moved into the main column the record column carries
     // artifacts alone, so a project that has none gets the width back instead
@@ -631,6 +636,14 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
     const blocked = work.status === "blocked"
         ? `<p class="wd-note">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`
         : "";
+    const retired = work.status === "retired"
+        ? `<p class="wd-note">retired: ${esc(work.retiredWhy ?? "")}${successorLink(model.slug, work)}</p>`
+        : "";
+    const supersedes = model.works
+        .filter((w2) => w2.status === "retired" && w2.successor?.work === work.id
+            && (w2.successor.project === undefined || w2.successor.project === model.slug))
+        .map((w2) => `<p class="wd-note">supersedes <a href="${esc(w2.id)}.html">${esc(w2.id)}</a>: ${esc(w2.retiredWhy ?? "")}</p>`)
+        .join("");
     const reports = [...work.reports].reverse().map((report, index) =>
         `<section class="wd-report${index === 0 ? "" : " is-past"}" aria-label="report">` +
         `<div class="wd-report-head"><time>${day(report.ts)}</time>` +
@@ -642,6 +655,8 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
         `<h1 class="wd-title">${esc(work.outcome)}</h1>`,
         chips === "" ? "" : `<div class="wd-meta">${chips}</div>`,
         blocked,
+        retired,
+        supersedes,
         reports.length === 0 ? `<p class="c2-empty">no reports yet</p>` : reports.join("\n")
     ].filter((part) => part !== "").join("\n");
     const artifacts = workArtifactRows(work);
@@ -671,6 +686,21 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
         back: `../${model.slug}.html`,
         doc: true
     });
+}
+
+// The successor page sits beside this one in the same project, or one level
+// up in another project's directory — both are rendered by every fold.
+function successorLink(slug: string, work: WorkState): string
+{
+    if (work.successor === undefined)
+    {
+        return "";
+    }
+    const target = work.successor.project === undefined || work.successor.project === slug
+        ? `${esc(work.successor.work)}.html`
+        : `../${esc(work.successor.project)}/${esc(work.successor.work)}.html`;
+    return ` → <a href="${target}">${esc(work.successor.work)}</a>` +
+        (work.successor.project === undefined || work.successor.project === slug ? "" : ` (${esc(work.successor.project)})`);
 }
 
 function evidenceRow(hash: string, verdict: Verdict | undefined): string
@@ -794,8 +824,9 @@ function projectRow(summary: ProjectSummary): string
         `${summary.active.length} active`,
         `${summary.nextCount} next`,
         `${waiting.length} waiting`,
-        `${summary.doneCount} done`
-    ].join(" · ");
+        `${summary.doneCount} done`,
+        (summary.retiredCount ?? 0) > 0 ? `${summary.retiredCount} retired` : ""
+    ].filter((part) => part !== "").join(" · ");
     const status = waiting.length > 0 ? "blocked" : "next";
     const label = waiting.length > 0 ? "attention" : "quiet";
     return `<tr><td class="n"><a href="${esc(summary.slug)}.html">${esc(summary.slug)}</a></td>` +
@@ -1297,6 +1328,7 @@ td.r { text-align: right; width: 78px; }
 .p-done { color: var(--sv-ok); border-color: var(--sv-ok-line); }
 .p-blocked { color: var(--sv-warn); border-color: var(--sv-warn-line); }
 .p-next { color: var(--sv-faint); border-color: var(--sv-border-panel); }
+.p-retired { color: var(--sv-faint); border-color: var(--sv-border-panel); text-decoration: line-through; }
 /* target states: reached is final, missed and at-risk ask for a decision */
 .s-reached { color: var(--sv-ok); border-color: var(--sv-ok-line); }
 .s-missed, .s-at-risk, .s-blocked { color: var(--sv-warn); border-color: var(--sv-warn-line); }
