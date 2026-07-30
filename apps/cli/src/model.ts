@@ -43,6 +43,7 @@ export interface DecisionState
 
 export interface ReportEntry
 {
+    id: string;
     ts: string;
     text: string;
     commits: string[];
@@ -107,6 +108,16 @@ export interface WorkState
     milestones: string[];
 }
 
+// One thing that waits on the human. `full` is the sentence shown while space
+// allows; when the context budget forces the short form, `identity` still
+// names the item and `recovery` is the command that prints its full state.
+export interface WaitingItem
+{
+    full: string;
+    identity: string;
+    recovery: string;
+}
+
 export interface ProjectModel
 {
     slug: string;
@@ -123,6 +134,10 @@ export interface ProjectModel
     // order it reaches main in is recorded here.
     integration: IntegrationState;
     openQuestions: string[];
+    // The same items as openQuestions, with the identity and recovery command
+    // each renderer needs when it cannot afford the full sentence. Derived at
+    // one site so the two lists can never disagree.
+    waiting: WaitingItem[];
     health: string[];
 }
 
@@ -139,6 +154,7 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         works: [],
         integration: emptyIntegration(),
         openQuestions: [],
+        waiting: [],
         health: []
     };
     for (const event of readEvents(storeDir, slug))
@@ -431,7 +447,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     noteBranch(work, event);
     const commits = event.refs?.commits ?? [];
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
+    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, artifacts, branch: event.refs?.branch });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
     work.artifacts.push(...artifacts);
     if (event.payload.next !== undefined)
@@ -446,7 +462,11 @@ function deriveSignals(model: ProjectModel, now: Date): void
     model.health.push(...deriveIntegration(model.integration, now));
     for (const objective of model.goals.objectives.filter((item) => item.status === "proposed"))
     {
-        model.openQuestions.push(`objective ${objective.id} is proposed and not confirmed: ${objective.outcome}`);
+        noteWaiting(model, {
+            full: `objective ${objective.id} is proposed and not confirmed: ${objective.outcome}`,
+            identity: `proposed objective ${objective.id}`,
+            recovery: "self objective"
+        });
     }
     for (const decision of model.decisions)
     {
@@ -463,11 +483,19 @@ function deriveSignals(model: ProjectModel, now: Date): void
         work.owes = completionRefusal(work) ?? undefined;
         if (work.status !== "done" && work.status !== "retired" && approvalPending(work))
         {
-            model.openQuestions.push(`${work.id} is waiting on human approval: ${work.completion.approvalRequired?.why ?? work.outcome}`);
+            noteWaiting(model, {
+                full: `${work.id} is waiting on human approval: ${work.completion.approvalRequired?.why ?? work.outcome}`,
+                identity: `approval wait on ${work.id}`,
+                recovery: `self work show ${work.id}`
+            });
         }
         if (work.status === "blocked" && work.blockedOn === "decision")
         {
-            model.openQuestions.push(`${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`);
+            noteWaiting(model, {
+                full: `${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`,
+                identity: `blocked work ${work.id}`,
+                recovery: `self work show ${work.id}`
+            });
         }
         if (work.status === "active" && ageDays(work.lastEventTs, now) > STALL_DAYS)
         {
@@ -497,12 +525,24 @@ function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): 
     }
     if (latest.state === "blocked")
     {
-        model.openQuestions.push(`${work.id} attempt ${latest.id} is waiting on a capability grant: ${latest.detail ?? "see `self attempt show`"}`);
+        noteWaiting(model, {
+            full: `${work.id} attempt ${latest.id} is waiting on a capability grant: ${latest.detail ?? "see `self attempt show`"}`,
+            identity: `blocked attempt ${latest.id} on ${work.id}`,
+            recovery: `self attempt show ${latest.id}`
+        });
     }
     if (latest.state === "failed" && ageDays(latest.ts, now) <= ATTEMPT_FAILURE_DAYS)
     {
         model.health.push(`${work.id} attempt ${latest.id} failed (${latest.failure ?? "unknown"})${latest.detail === undefined ? "" : ` — ${latest.detail}`}`);
     }
+}
+
+// The single site that answers "what waits on a person": every renderer reads
+// either list, so an item can never appear in one and be missing from the other.
+function noteWaiting(model: ProjectModel, item: WaitingItem): void
+{
+    model.openQuestions.push(item.full);
+    model.waiting.push(item);
 }
 
 function newestAttempt(work: WorkState): AttemptSummary | undefined
