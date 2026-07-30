@@ -490,7 +490,7 @@ function deriveSignals(model: ProjectModel, now: Date): void
 // without this these two would be the only ones that can only grow.
 function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): void
 {
-    const latest = work.status === "done" ? undefined : newestAttempt(work);
+    const latest = work.status === "done" || work.status === "retired" ? undefined : newestAttempt(work);
     if (latest === undefined)
     {
         return;

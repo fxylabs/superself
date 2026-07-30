@@ -263,6 +263,20 @@ AGAIN="$(SELF work retire "$WGONE" --why "different words this time")"
 echo "$AGAIN" | grep -q "already retired" || fail "a second retire did not say the state already holds"
 [ "$(count_for work.retired "$WGONE")" = "1" ] || fail "a second retire wrote a second event"
 
+# a same-project successor's own record shows the provenance at fold time
+WSUCC="$(SELF work add "carry an outcome inside the same project" | tail -1)"
+SELF work retire "$WFLAG" --why "folded into the same-project successor" --successor "$WSUCC" > /dev/null
+SELF work show "$WSUCC" | grep -q "Supersedes: $WFLAG" || fail "a same-project successor does not show its predecessor"
+grep -q "Supersedes: $WFLAG" "$STORE/projects/demo/work/$WSUCC.md" \
+    || fail "the folded successor record does not carry the provenance"
+
+# a retired unit cannot be materialized: a spec naming it refuses to apply
+workspec "$ROOT/ws-retired.json" "id=ws-ret" "generation=1" "work=$WGONE" "dest=$ROOT/dest/never.md" \
+    "providerName=att-provider" "model=claude-opus-5"
+RETSPEC="$(SELF spec apply "$ROOT/ws-retired.json" 2>&1 || true)"
+one_line "$RETSPEC"
+echo "$RETSPEC" | grep -q "retired" || fail "a work spec was applied against a retired unit"
+
 # ---------------------------------------------------------------------------
 # A passing attempt settles physically and marks nothing done
 # ---------------------------------------------------------------------------

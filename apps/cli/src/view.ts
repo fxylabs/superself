@@ -637,6 +637,11 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
     const retired = work.status === "retired"
         ? `<p class="wd-note">retired: ${esc(work.retiredWhy ?? "")}${successorLink(model.slug, work)}</p>`
         : "";
+    const supersedes = model.works
+        .filter((w2) => w2.status === "retired" && w2.successor?.work === work.id
+            && (w2.successor.project === undefined || w2.successor.project === model.slug))
+        .map((w2) => `<p class="wd-note">supersedes <a href="${esc(w2.id)}.html">${esc(w2.id)}</a>: ${esc(w2.retiredWhy ?? "")}</p>`)
+        .join("");
     const reports = [...work.reports].reverse().map((report, index) =>
         `<section class="wd-report${index === 0 ? "" : " is-past"}" aria-label="report">` +
         `<div class="wd-report-head"><time>${day(report.ts)}</time>` +
@@ -649,6 +654,7 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
         chips === "" ? "" : `<div class="wd-meta">${chips}</div>`,
         blocked,
         retired,
+        supersedes,
         reports.length === 0 ? `<p class="c2-empty">no reports yet</p>` : reports.join("\n")
     ].filter((part) => part !== "").join("\n");
     const artifacts = workArtifactRows(work);

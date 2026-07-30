@@ -274,12 +274,14 @@ export function localChecks(ctx: ProjectContext, plan: AttemptPlan): PreflightCh
     if (plan.capabilities.context)
     {
         const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === plan.work);
-        const ok = work !== undefined && work.status !== "done";
+        const ok = work !== undefined && work.status !== "done" && work.status !== "retired";
         checks.push({
             capability: "context",
             target: plan.work,
             ok,
-            detail: work === undefined ? `no work unit "${plan.work}" in project ${ctx.project}` : work.status === "done" ? "already done" : work.outcome
+            detail: work === undefined ? `no work unit "${plan.work}" in project ${ctx.project}`
+                : work.status === "done" ? "already done"
+                : work.status === "retired" ? "retired — its outcome was given up or moved" : work.outcome
         });
     }
     const budget = plan.capabilities.budgetUsd;
@@ -878,7 +880,7 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
 function reportOutstanding(ctx: ProjectContext, id: string): void
 {
     const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === id);
-    if (work === undefined || work.status === "done")
+    if (work === undefined || work.status === "done" || work.status === "retired")
     {
         return;
     }

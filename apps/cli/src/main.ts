@@ -661,19 +661,20 @@ function cmdWorkShow(args: string[]): void
     console.log(markdownHeadings(renderWorkBody(found.work, found.model, loadVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
 }
 
-// Read-time reverse provenance: a retire event lives in the source project's
-// log, so the successor's page derives this line by scanning the workspace
-// instead of asserting cross-project state it does not own.
+// Read-time reverse provenance for the cross-project case: a retire event
+// lives in the source project's log, so the successor's page derives this by
+// scanning the workspace instead of asserting state it does not own. The
+// same-project case folds inside renderWorkBody, where it can never go stale.
 function supersededSources(ctx: CliContext, found: FoundWork): string[]
 {
     const lines: string[] = [];
-    for (const slug of orderedSlugs(ctx))
+    for (const slug of orderedSlugs(ctx).filter((item) => item !== found.slug))
     {
-        const model = slug === found.slug ? found.model : buildModel(ctx.storeDir, slug, new Date());
+        const model = buildModel(ctx.storeDir, slug, new Date());
         for (const work of model.works)
         {
             if (work.status === "retired" && work.successor?.work === found.work.id
-                && (work.successor.project ?? slug) === found.slug)
+                && work.successor.project === found.slug)
             {
                 lines.push(`${work.id} (${slug}) — ${work.retiredWhy}`);
             }
@@ -754,12 +755,7 @@ function cmdWorkRetireUnit(args: string[]): void
         throw new CliError("`work retire` retires the unit itself — to retire one requirement, use `self work drop <id> --requirement r1 --why w`");
     }
     const ctx = requireProject(process.cwd());
-    const wanted = requireText(positionals[0], "work retire <work-id> — run `self work` to list ids");
-    const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === wanted);
-    if (work === undefined)
-    {
-        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
-    }
+    const work = requireRetirable(ctx, positionals[0]);
     if (work.status === "retired")
     {
         // Idempotent by design: the state the caller asked for already holds,
@@ -767,13 +763,26 @@ function cmdWorkRetireUnit(args: string[]): void
         console.log(`${work.id} is already retired — ${work.retiredWhy}`);
         return;
     }
+    const why = requireText(values.why, 'work retire <work-id> --why "<why the outcome was given up or moved>" [--successor <work-id>]');
+    const payload = { work: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
+    recordEvent(ctx, makeEvent(ctx.project, "work.retired", payload, undefined, true), `${work.id} ${why}`);
+}
+
+// The unit a retirement speaks about: known, and not already closed as done.
+// Already-retired is the caller's case to answer — a no-op, not a refusal.
+function requireRetirable(ctx: ProjectContext, id: string | undefined): WorkState
+{
+    const wanted = requireText(id, "work retire <work-id> — run `self work` to list ids");
+    const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === wanted);
+    if (work === undefined)
+    {
+        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+    }
     if (work.status === "done")
     {
         throw new CliError(`${work.id} is already done — retirement records an outcome that was given up, not one that was reached`);
     }
-    const why = requireText(values.why, 'work retire <work-id> --why "<why the outcome was given up or moved>" [--successor <work-id>]');
-    const payload = { work: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
-    recordEvent(ctx, makeEvent(ctx.project, "work.retired", payload, undefined, true), `${work.id} ${why}`);
+    return work;
 }
 
 // The successor is validated before anything is written: an unknown reference
@@ -788,14 +797,16 @@ function successorRef(ctx: ProjectContext, source: string, successor: string | u
         }
         return {};
     }
-    if (successor === source)
-    {
-        throw new CliError(`${source} cannot succeed itself — name the unit that carries the outcome now`);
-    }
     const found = findWorkAcross(ctx, successor, project, "--successor-project");
     if (found === null)
     {
         throw new CliError(`unknown successor "${successor}" — the unit that carries the outcome must exist before ${source} is retired`);
+    }
+    // Identity, not spelling: the same id may exist in another project, so
+    // self-succession is judged only after the reference has resolved.
+    if (found.slug === ctx.project && found.work.id === source)
+    {
+        throw new CliError(`${source} cannot succeed itself — name the unit that carries the outcome now`);
     }
     if (found.work.status === "retired")
     {
