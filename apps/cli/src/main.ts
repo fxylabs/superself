@@ -42,7 +42,7 @@ import {
     cmdWorkMet,
     cmdWorkPolicy,
     cmdWorkRequire,
-    cmdWorkRetire,
+    cmdWorkDrop,
     cmdWorkRevise,
     doneEvent
 } from "./requirements.js";
@@ -596,10 +596,8 @@ function cmdWork(rest: string[]): void
         cmdProposalDecision(requireProject(process.cwd()), rest.slice(1), sub === "accept");
         return;
     }
-    if (sub === "retire" && !rest.includes("--requirement"))
+    if (sub === "retire")
     {
-        // One verb, two scopes: with --requirement it retires a declared
-        // requirement; bare, it retires the unit itself (#74).
         cmdWorkRetireUnit(rest.slice(1));
         return;
     }
@@ -611,7 +609,7 @@ function cmdWork(rest: string[]): void
     const type = TRANSITIONS[sub as string];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|link|unlink|propose|accept|decline|` +
+        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|retire|link|unlink|propose|accept|decline|` +
             COMPLETION_VERBS.join("|"));
     }
     transitionWork(type, rest.slice(1));
@@ -620,7 +618,7 @@ function cmdWork(rest: string[]): void
 // What done means for a unit, written on the unit itself. Routed together so
 // the dispatcher states once that these extend `self work` rather than
 // introducing a noun of their own.
-const COMPLETION_VERBS = ["require", "revise", "retire", "met", "recheck", "approval-required", "approve", "policy"];
+const COMPLETION_VERBS = ["require", "revise", "drop", "met", "recheck", "approval-required", "approve", "policy"];
 
 function completionVerb(sub: string, args: string[]): void
 {
@@ -629,7 +627,7 @@ function completionVerb(sub: string, args: string[]): void
     {
         case "require": cmdWorkRequire(ctx, args); break;
         case "revise": cmdWorkRevise(ctx, args); break;
-        case "retire": cmdWorkRetire(ctx, args); break;
+        case "drop": cmdWorkDrop(ctx, args); break;
         case "met": cmdWorkMet(ctx, args, false); break;
         case "recheck": cmdWorkMet(ctx, args, true); break;
         case "approval-required": cmdWorkApprovalRequired(ctx, args); break;
@@ -746,9 +744,15 @@ function cmdWorkRetireUnit(args: string[]): void
     const { values, positionals } = parseCommand(
         "work",
         args,
-        { why: { type: "string" }, successor: { type: "string" }, "successor-project": { type: "string" } },
+        { why: { type: "string" }, successor: { type: "string" }, "successor-project": { type: "string" }, requirement: { type: "string" } },
         1
     );
+    if (values.requirement !== undefined)
+    {
+        // The verb that used to carry this moved: one verb per scope, so a
+        // requirement can never be dropped when the caller meant the unit.
+        throw new CliError("`work retire` retires the unit itself — to retire one requirement, use `self work drop <id> --requirement r1 --why w`");
+    }
     const ctx = requireProject(process.cwd());
     const wanted = requireText(positionals[0], "work retire <work-id> — run `self work` to list ids");
     const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === wanted);

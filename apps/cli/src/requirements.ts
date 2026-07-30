@@ -57,13 +57,13 @@ export function cmdWorkRevise(ctx: ProjectContext, args: string[]): void
     recordEvent(ctx, makeEvent(ctx.project, "work.requirement-revised", payload, undefined, true), `${work.id} ${requirement.id} ${why}`);
 }
 
-export function cmdWorkRetire(ctx: ProjectContext, args: string[]): void
+export function cmdWorkDrop(ctx: ProjectContext, args: string[]): void
 {
     const { values, positionals } = parseCommand("work", args, { requirement: { type: "string" }, why: { type: "string" } }, 1);
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireOpenWork(model, positionals[0]);
     const requirement = requireRequirement(work, values.requirement);
-    const why = requireText(values.why, 'work retire <work-id> --requirement r1 --why "<why it is no longer required>"');
+    const why = requireText(values.why, 'work drop <work-id> --requirement r1 --why "<why it is no longer required>"');
     const payload = { work: work.id, requirement: requirement.id, why };
     recordEvent(ctx, makeEvent(ctx.project, "work.requirement-retired", payload, undefined, true), `${work.id} ${requirement.id} ${why}`);
 }

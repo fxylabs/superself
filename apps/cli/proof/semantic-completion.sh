@@ -195,8 +195,11 @@ WRET="$(SELF work add "a retired requirement stops gating the unit" | tail -1)"
 SELF work start "$WRET" > /dev/null
 RT="$(SELF work require "$WRET" "an ask that turned out to be wrong" | tail -1)"
 SELF work done "$WRET" > /dev/null 2>&1 && fail "an uncovered requirement did not gate done"
-SELF work retire "$WRET" --requirement "$RT" --why "the outcome no longer covers this" > /dev/null
+SELF work drop "$WRET" --requirement "$RT" --why "the outcome no longer covers this" > /dev/null
 SELF work done "$WRET" > /dev/null || fail "a retired requirement still gated done"
+WRONGVERB="$(SELF work retire "$WRET" --requirement "$RT" --why "old spelling" 2>&1 || true)"
+one_line "$WRONGVERB"
+echo "$WRONGVERB" | grep -q "self work drop" || fail "the old requirement-retire spelling was not pointed at \`work drop\`"
 
 # ---------------------------------------------------------------------------
 # Retiring a unit records an outcome given up or moved, never reached (#74)
@@ -497,7 +500,7 @@ done
 # ---------------------------------------------------------------------------
 # The verbs are parse-guarded like every other verb
 # ---------------------------------------------------------------------------
-for verb in require revise retire met recheck approval-required approve policy
+for verb in require revise drop retire met recheck approval-required approve policy
 do
     OUT="$(SELF work "$verb" "$WSAN" --nonsense 2>&1 || true)"
     one_line "$OUT"
