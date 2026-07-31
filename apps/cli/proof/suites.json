@@ -89,6 +89,14 @@
                 "lib.sh"
             ]
         },
+        "pretty": {
+            "entry": "suites/pretty.sh",
+            "deps": [
+                "lib.sh",
+                "pretty-terminal.mjs",
+                "pretty-width.mjs"
+            ]
+        },
         "evidence": {
             "entry": "suites/evidence.sh",
             "deps": [

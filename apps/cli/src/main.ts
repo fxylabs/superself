@@ -55,6 +55,7 @@ import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
+import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
 import { printContext, printLog, printStatus, printWorkList } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
@@ -450,14 +451,14 @@ function cmdClone(rest: string[]): void
 
 function cmdContext(rest: string[]): void
 {
-    parseCommand("context", rest, {}, 0);
-    printContext(requireWorkspace(process.cwd()));
+    const { values } = parseCommand("context", rest, RENDER_OPTIONS, 0);
+    printContext(requireWorkspace(process.cwd()), resolveRender(values));
 }
 
 function cmdStatus(rest: string[]): void
 {
-    parseCommand("status", rest, {}, 0);
-    printStatus(requireWorkspace(process.cwd()));
+    const { values } = parseCommand("status", rest, RENDER_OPTIONS, 0);
+    printStatus(requireWorkspace(process.cwd()), resolveRender(values));
 }
 
 function cmdSetup(rest: string[]): void
@@ -663,14 +664,15 @@ function completionVerb(sub: string, args: string[]): void
 
 function cmdWorkList(rest: string[]): void
 {
-    const { values } = parseCommand("work", rest, { project: { type: "string" } }, 0);
+    const { values } = parseCommand("work", rest, { project: { type: "string" }, ...RENDER_OPTIONS }, 0);
+    const render = resolveRender(values);
     if (values.project === undefined)
     {
-        printWorkList(requireProject(process.cwd()));
+        printWorkList(requireProject(process.cwd()), render);
         return;
     }
     const ctx = requireWorkspace(process.cwd());
-    printWorkList({ ...ctx, project: requireRegistered(ctx.storeDir, values.project) });
+    printWorkList({ ...ctx, project: requireRegistered(ctx.storeDir, values.project) }, render);
 }
 
 function cmdWorkShow(args: string[]): void

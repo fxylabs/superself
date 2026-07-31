@@ -4,8 +4,9 @@ import { eventSummary, readEvents } from "./logfile.js";
 import { AttentionGroup, AttentionRow, ATTEMPT_FAILURE_DAYS, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, readRegistry, readVerdicts } from "./paths.js";
+import { AttemptRow, RenderMode, renderContext, renderStatus, renderWorkList, renderWorkspace } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
-import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
+import { blue, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
 
 const CONTEXT_LIMIT = 12_000;
 // The command writes one final newline; the rendered body owns the rest.
@@ -32,14 +33,29 @@ function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
     return model;
 }
 
-export function printContext(ctx: CliContext): void
+// The pretty render is reached before the budget, never through it: the
+// 12,000-character cap exists to fit an agent's context window, and inflating
+// it with box rules and escape sequences would spend the agent's budget on
+// decoration it never receives.
+export function printContext(ctx: CliContext, render: RenderMode): void
 {
     if (ctx.project === undefined)
     {
-        writeContext(renderWorkspaceContext(ctx));
+        const models = readRegistry(ctx.storeDir).map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
+        if (render === "pretty" && models.length > 0)
+        {
+            console.log(renderWorkspace(models).join("\n"));
+            return;
+        }
+        writeContext(renderWorkspaceContext(models));
         return;
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
+    if (render === "pretty")
+    {
+        console.log(renderContext({ model, waiting: unrankedWaitingLines(model) }).join("\n"));
+        return;
+    }
     writeContext(renderProjectContext(model));
 }
 
@@ -359,6 +375,15 @@ function reportExcerpt(text: string, work: string, limit: number): string
     return ` — latest report: ${excerpt}${ellipsis} (full: ${recovery})`;
 }
 
+// What the ruled render takes: the same items the plain render sentences,
+// minus the live proposals. Those are the attention band, which that render
+// groups into its own tables — listing them here as well would print every
+// proposal twice.
+function unrankedWaitingLines(model: ProjectModel): string[]
+{
+    return [...model.waiting, ...workProposalItems(model)].map((item) => item.full);
+}
+
 function waitingItems(model: ProjectModel): WaitingItem[]
 {
     return [...model.waiting, ...proposalItems(model), ...workProposalItems(model)];
@@ -455,9 +480,8 @@ function detail(text: string, limit: number, recovery: string): string
     return `${takeCharacters(text.trim().replace(/\s+/g, " "), limit)}… (full: \`${recovery}\`)`;
 }
 
-function renderWorkspaceContext(ctx: CliContext): string
+function renderWorkspaceContext(models: ProjectModel[]): string
 {
-    const models = readRegistry(ctx.storeDir).map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
     if (models.length === 0)
     {
         return "no projects registered — run `self project add` inside a project directory";
@@ -527,18 +551,23 @@ function shellArgument(value: string): string
     return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-export function printStatus(ctx: CliContext): void
+export function printStatus(ctx: CliContext, render: RenderMode): void
 {
     if (ctx.project === undefined)
     {
-        printWorkspaceOverview(ctx);
+        printWorkspaceOverview(ctx, render);
         return;
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
-    if (styled)
+    if (render === "pretty")
     {
-        printStyledStatus(model);
-        printAttempts(ctx.project);
+        console.log(renderStatus({
+            model,
+            waiting: unrankedWaitingLines(model),
+            objectives: objectiveCountLine(model),
+            integration: integrationCountLine(model),
+            attempts: openAttempts(ctx.project)
+        }).join("\n"));
         return;
     }
     console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
@@ -563,14 +592,19 @@ export function printStatus(ctx: CliContext): void
 // keeps a line here forever — the same slow accumulation the folded model gates
 // on, one surface over, and gated on the same window. `self attempt list`
 // remains the surface that shows every spool.
-function printAttempts(project: string): void
+function openAttempts(project: string): AttemptRow[]
 {
     const cutoff = Date.now() - ATTEMPT_FAILURE_DAYS * 86_400_000;
-    const open = listSpools()
+    return listSpools()
         .map((spool) => spool.status())
         .filter((status): status is AttemptStatus => status !== null && status.project === project && status.state !== "completed")
-        .filter((status) => new Date(status.updated).getTime() > cutoff);
-    for (const status of open)
+        .filter((status) => new Date(status.updated).getTime() > cutoff)
+        .map((status) => ({ attempt: status.attempt, work: status.work, state: status.state, failure: status.failure }));
+}
+
+function printAttempts(project: string): void
+{
+    for (const status of openAttempts(project))
     {
         const failure = status.failure === undefined ? "" : ` (${status.failure})`;
         console.log(`attempt ${status.attempt} ${status.work}: ${status.state}${failure}`);
@@ -611,55 +645,7 @@ function integrationCountLine(model: ProjectModel): string
         `${blocked.length === 0 ? "" : `, blocked_policy: ${blocked.join(", ")}`}`;
 }
 
-function printStyledStatus(model: ProjectModel): void
-{
-    console.log(`${bold(model.slug)} — ${model.goal ?? dim("(goal not set)")}`);
-    console.log(countGlyphs(model.works));
-    if (openObjectives(model.goals).length > 0)
-    {
-        console.log(dim(objectiveCountLine(model)));
-    }
-    if (model.integration.changeSets.length > 0)
-    {
-        console.log(dim(integrationCountLine(model)));
-    }
-    const waiting = waitingCount(model);
-    if (waiting > 0)
-    {
-        console.log(yellow(`⚠ waiting on you: ${waiting}`));
-    }
-    if (attentionRows(model).length > 0)
-    {
-        console.log(dim(attentionLine(model)));
-    }
-    for (const signal of model.health)
-    {
-        console.log(yellow(`⚠ ${signal}`));
-    }
-    if (waiting === 0 && model.health.length === 0)
-    {
-        console.log(`${green("✓")} ${dim("nothing waiting, health ok")}`);
-    }
-}
-
-const STATUS_GLYPHS: [string, string][] = [
-    ["active", blue("●")],
-    ["blocked", red("■")],
-    ["next", "○"],
-    ["done", green("✓")],
-    ["retired", dim("⊘")]
-];
-
-function countGlyphs(works: WorkState[]): string
-{
-    const parts = STATUS_GLYPHS
-        .map(([status, glyph]) => ({ glyph, status, n: works.filter((w) => w.status === status).length }))
-        .filter((part) => part.n > 0)
-        .map((part) => `${part.glyph} ${part.n} ${part.status}`);
-    return parts.length === 0 ? dim("no work yet") : parts.join("   ");
-}
-
-function printWorkspaceOverview(ctx: CliContext): void
+function printWorkspaceOverview(ctx: CliContext, render: RenderMode): void
 {
     const registry = readRegistry(ctx.storeDir);
     if (registry.length === 0)
@@ -668,10 +654,9 @@ function printWorkspaceOverview(ctx: CliContext): void
         return;
     }
     const models = registry.map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
-    if (styled)
+    if (render === "pretty")
     {
-        const width = Math.max(...models.map((model) => model.slug.length));
-        console.log(models.map((model) => overviewBlock(model, width)).join("\n\n"));
+        console.log(renderWorkspace(models).join("\n"));
         return;
     }
     for (const model of models)
@@ -679,14 +664,6 @@ function printWorkspaceOverview(ctx: CliContext): void
         const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
         console.log(`${model.slug} — ${model.goal ?? "(no goal)"} (${countLine(model.works)})${health}`);
     }
-}
-
-function overviewBlock(model: ProjectModel, width: number): string
-{
-    const health = model.health.length === 0 ? "" : `   ${yellow(`⚠ ${model.health.length}`)}`;
-    const indent = " ".repeat(width + 2);
-    const goal = fit(model.goal ?? "(no goal)", termWidth() - indent.length);
-    return `${bold(model.slug.padEnd(width))}  ${countGlyphs(model.works)}${health}\n${indent}${dim(goal)}`;
 }
 
 function countLine(works: WorkState[]): string
@@ -697,9 +674,14 @@ function countLine(works: WorkState[]): string
         + (retired > 0 ? `, ${retired} retired` : "");
 }
 
-export function printWorkList(ctx: CliContext & { project: string }): void
+export function printWorkList(ctx: CliContext & { project: string }, render: RenderMode): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    if (render === "pretty")
+    {
+        console.log(renderWorkList(model).join("\n"));
+        return;
+    }
     const open = model.works.filter((w) => w.status !== "done" && w.status !== "retired");
     if (open.length === 0)
     {
@@ -707,18 +689,17 @@ export function printWorkList(ctx: CliContext & { project: string }): void
     }
     for (const work of open)
     {
-        const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
-        console.log(styled ? workLines(work, toward) : plainWorkLine(work, toward));
+        console.log(plainWorkLine(work, contributionsOf(model.goals, work).map((item) => item.id).join(", ")));
     }
     const done = model.works.filter((w) => w.status === "done").length;
     if (done > 0)
     {
-        console.log(styled ? `${green("✓")} ${dim(`${done} done — see log`)}` : `(${done} done — see log)`);
+        console.log(`(${done} done — see log)`);
     }
     const retired = model.works.filter((w) => w.status === "retired").length;
     if (retired > 0)
     {
-        console.log(styled ? `${dim(`⊘ ${retired} retired — see log`)}` : `(${retired} retired — see log)`);
+        console.log(`(${retired} retired — see log)`);
     }
 }
 
@@ -736,32 +717,6 @@ function plainWorkLine(work: WorkState, toward: string): string
 function gatedNote(work: WorkState): string
 {
     return work.gatedBy.length === 0 ? "" : `  [gated by ${work.gatedBy.join(", ")}]`;
-}
-
-function workLines(work: WorkState, toward: string): string
-{
-    const glyph = work.status === "active" ? blue("●") : work.status === "blocked" ? red("■") : "○";
-    const indent = " ".repeat(work.id.length + 4);
-    const lines = [`${glyph} ${dim(work.id)}  ${work.outcome}`];
-    if (toward !== "")
-    {
-        lines.push(indent + dim(`toward ${toward}`));
-    }
-    if (work.status === "blocked")
-    {
-        lines.push(indent + red(`blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`));
-    }
-    if (work.gatedBy.length > 0)
-    {
-        // Named, not urged: whether confirming one of them is even possible yet
-        // is what the band answers, and this line is not the place to guess.
-        lines.push(indent + yellow(`gated by ${work.gatedBy.join(", ")} · self status`));
-    }
-    if (work.reports.length > 0)
-    {
-        lines.push(indent + dim(`${work.reports.length} report(s) · self work show ${work.id}`));
-    }
-    return lines.join("\n");
 }
 
 export function printLog(ctx: CliContext & { project: string }, limit: number): void
