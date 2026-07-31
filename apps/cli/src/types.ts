@@ -21,6 +21,13 @@ export interface EventRefs
     // The branch the command ran on. History ("this happened here"), never a
     // live pointer: branches get renamed, deleted, and reused.
     branch?: string;
+    // The work units a proposed decision gates. Stated by `decide --blocks`,
+    // never inferred, and inverted by the fold so a unit names what stands in
+    // front of it without having to be started first.
+    blocks?: string[];
+    // The event this decision is sequenced behind: it cannot be decided until
+    // that one settles. Sequencing only — it neither confirms nor supersedes.
+    after?: string;
 }
 
 export interface SelfEvent

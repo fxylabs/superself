@@ -1,10 +1,10 @@
 import { AttemptStatus, listSpools } from "./attempt/spool.js";
 import { ChangeSet, openChangeSets } from "./integration.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { ATTEMPT_FAILURE_DAYS, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
+import { AttentionGroup, AttentionRow, ATTEMPT_FAILURE_DAYS, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
-import { CliContext, readRegistry } from "./paths.js";
-import { artifactSignals, loadVerdicts, verdictSignals } from "./reachability.js";
+import { CliContext, readRegistry, readVerdicts } from "./paths.js";
+import { artifactSignals, verdictSignals } from "./reachability.js";
 import { blue, bold, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
 
 const CONTEXT_LIMIT = 12_000;
@@ -28,7 +28,7 @@ interface ProjectContextOptions
 function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 {
     const model = buildModel(storeDir, slug, new Date());
-    model.health.push(...verdictSignals(model.works, loadVerdicts(storeDir, slug)), ...artifactSignals(storeDir, model.works));
+    model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, slug)), ...artifactSignals(storeDir, model.works));
     return model;
 }
 
@@ -118,8 +118,10 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
         ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan")
         : trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
-    pushList(lines, "Waiting on you", waitingItems(model).map((item) =>
-        `- ${detail(item.full, options.detailLimit, item.recovery)}`));
+    pushList(lines, "Waiting on you", [
+        ...options.compactOptional ? attentionOmission(model) : [],
+        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, item.recovery)}`)
+    ]);
     const next = model.works.filter((work) => work.status === "next");
     pushList(lines, "Next", options.compactOptional
         ? countedOmission(next.length, "next work item", "self work")
@@ -172,8 +174,10 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         .sort((left, right) => left.id.localeCompare(right.id));
     pushList(lines, "Work in progress", progressing.map((work) =>
         `- ${work.status} work ${work.id}; run \`self work show ${work.id}\``));
-    pushList(lines, "Waiting on you", waitingItems(model).map((item) =>
-        `- ${item.identity}; run \`${item.recovery}\``));
+    pushList(lines, "Waiting on you", [
+        ...attentionOmission(model),
+        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${item.recovery}\``)
+    ]);
     pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item", "self work"));
     pushList(lines, "Health", countedOmission(model.health.length, "health signal", "self status"));
     return lines.join("\n").replace(/\n+$/, "");
@@ -189,6 +193,15 @@ function decisionLines(selected: string[], omitted: number, recovery: string): s
         lines.unshift(`- … ${omitted} confirmed decision${omitted === 1 ? "" : "s"} omitted; run \`${recovery}\``);
     }
     return lines;
+}
+
+// Once the budget starts cutting rows short, a row can no longer be trusted to
+// carry its own group, so the band is stated once as counts. Nothing is hidden:
+// every proposal still has its row, and this says where to read the ranking
+// back in full.
+function attentionOmission(model: ProjectModel): string[]
+{
+    return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`self status\``];
 }
 
 // One omission row for a section the budget treats as optional: the count and
@@ -348,16 +361,56 @@ function reportExcerpt(text: string, work: string, limit: number): string
 
 function waitingItems(model: ProjectModel): WaitingItem[]
 {
+    return [...model.waiting, ...proposalItems(model), ...workProposalItems(model)];
+}
+
+// Ranked, not merely listed: the reader takes the first group first. Groups are
+// what to do now, so they stay in this order on every surface.
+const ATTENTION_ORDER: AttentionGroup[] = ["unblocks", "undecidable", "inEffect"];
+
+function attentionRows(model: ProjectModel): AttentionRow[]
+{
+    return ATTENTION_ORDER.flatMap((group) => model.attention[group]);
+}
+
+// The band the model computed, one row per proposal. The group stands ahead of
+// the text because the budget truncates from the end and the truncation carries
+// its own recovery command: what a shortened row must keep is the ranking, not
+// the id a reader can already pull from the pointer beside it.
+function proposalItems(model: ProjectModel): WaitingItem[]
+{
     const project = shellArgument(model.slug);
-    const proposals = [...model.decisions]
-        .filter((d) => d.status === "proposed" && !d.expired)
-        .sort(compareDated)
-        .map((decision): WaitingItem => ({
-            full: `proposal: ${decision.text} (confirm with \`self decide confirm ${decision.id}\`)`,
-            identity: `proposal ${decision.id}`,
-            recovery: `self search ${decision.id} --type decision --project ${project}`
-        }));
-    return [...model.waiting, ...proposals, ...workProposalItems(model)];
+    return attentionRows(model).map((row): WaitingItem => ({
+        full: `proposal [${attentionLabel(row)}]: ${row.text}`
+            + ` (confirm with \`self decide confirm ${row.decision}\`)`,
+        identity: `proposal ${row.decision}`,
+        recovery: `self search ${row.decision} --type decision --project ${project}`
+    }));
+}
+
+function attentionLabel(row: AttentionRow): string
+{
+    if (row.group === "inEffect")
+    {
+        return `already in effect: ${row.blocks.join(", ")} landed`;
+    }
+    if (row.group === "undecidable")
+    {
+        return `cannot be decided yet: ${row.flags.join("; ")}`;
+    }
+    return row.blocks.length === 0
+        ? "no work recorded as gated"
+        : `confirming unblocks ${row.blocks.join(", ")}`;
+}
+
+// The whole band in one line, for the surfaces that report counts rather than
+// rows — and for the compacted context, where it is the honest remainder of a
+// grouping that no longer fits.
+function attentionLine(model: ProjectModel): string
+{
+    return `decisions waiting: ${model.attention.unblocks.length} unblock work, `
+        + `${model.attention.undecidable.length} cannot be decided yet, `
+        + `${model.attention.inEffect.length} already in effect`;
 }
 
 // A proposal is only actionable if the reader can weigh it, so the whole brief
@@ -493,6 +546,10 @@ export function printStatus(ctx: CliContext): void
     console.log(`objectives: ${objectiveCountLine(model)}`);
     console.log(`integration: ${integrationCountLine(model)}`);
     console.log(`waiting on you: ${waitingCount(model)}`);
+    if (attentionRows(model).length > 0)
+    {
+        console.log(attentionLine(model));
+    }
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
     printAttempts(ctx.project);
 }
@@ -534,9 +591,7 @@ function objectiveCountLine(model: ProjectModel): string
 
 export function waitingCount(model: ProjectModel): number
 {
-    return model.openQuestions.length
-        + model.decisions.filter((d) => d.status === "proposed" && !d.expired).length
-        + openProposals(model.goals).length;
+    return model.openQuestions.length + attentionRows(model).length + openProposals(model.goals).length;
 }
 
 // One line for the whole lane: how many change sets are open, which one may
@@ -572,6 +627,10 @@ function printStyledStatus(model: ProjectModel): void
     if (waiting > 0)
     {
         console.log(yellow(`⚠ waiting on you: ${waiting}`));
+    }
+    if (attentionRows(model).length > 0)
+    {
+        console.log(dim(attentionLine(model)));
     }
     for (const signal of model.health)
     {
@@ -667,7 +726,16 @@ function plainWorkLine(work: WorkState, toward: string): string
 {
     const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
     const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
-    return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}${reports}`;
+    return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}`
+        + `${gatedNote(work)}${reports}`;
+}
+
+// A unit that never started can still be gated, which is the whole point of
+// inverting the relation: `blocked on decision` needs the unit to be moving
+// before it can say anything, and a proposal does not wait for that.
+function gatedNote(work: WorkState): string
+{
+    return work.gatedBy.length === 0 ? "" : `  [gated by ${work.gatedBy.join(", ")}]`;
 }
 
 function workLines(work: WorkState, toward: string): string
@@ -682,6 +750,12 @@ function workLines(work: WorkState, toward: string): string
     if (work.status === "blocked")
     {
         lines.push(indent + red(`blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`));
+    }
+    if (work.gatedBy.length > 0)
+    {
+        // Named, not urged: whether confirming one of them is even possible yet
+        // is what the band answers, and this line is not the place to guess.
+        lines.push(indent + yellow(`gated by ${work.gatedBy.join(", ")} · self status`));
     }
     if (work.reports.length > 0)
     {

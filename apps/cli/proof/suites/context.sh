@@ -86,6 +86,10 @@ echo "$PROTECTED_CONTEXT" | grep -q "## Waiting on you" || fail "protected compa
 echo "$PROTECTED_CONTEXT" | grep -q "w-p001" || fail "protected compaction lost its first work identity"
 echo "$PROTECTED_CONTEXT" | grep -q "w-p090" || fail "protected compaction lost its last work identity"
 echo "$PROTECTED_CONTEXT" | grep -q "protected-proposal-020" || fail "protected compaction lost a waiting identity"
+# Once rows are cut short they can no longer carry their own group, so the
+# ranking is restated once as counts beside the command that prints it whole.
+echo "$PROTECTED_CONTEXT" | grep -q "decisions waiting: 21 unblock work, 0 cannot be decided yet, 0 already in effect; run \`self status\`" \
+    || fail "the compacted band lost the ranking without saying how to read it back"
 # The outcome layer and the integration train are whole-state recoverable
 # through one command each, so under pressure they compact to a count and a
 # pointer instead of crowding out the protected sections.
@@ -107,6 +111,16 @@ echo "$AGGREGATE_CONTEXT" | grep -q "self search --project 'demo'" || fail "aggr
 SELF search --project demo | grep -q "budget proof active outcome must survive" || fail "project-only recovery did not expose canonical state"
 cp "$ROOT/demo-log-before-budget-fixture" "$LOG_A"
 SELF fold > /dev/null
+
+# At full size every proposal row carries its own group, ahead of the text, so
+# what confirming it would do survives the truncation that keeps the budget.
+BAND_WID=$(SELF work add "gated by a proposal, never started" | tail -1)
+SELF decide "the band names the work it gates" --proposed --blocks "$BAND_WID" > /dev/null
+BAND_CONTEXT="$(SELF context)"
+BAND_CHARS="$(printf '%s\n' "$BAND_CONTEXT" | wc -m | tr -d ' ')"
+[ "$BAND_CHARS" -le 12000 ] || fail "the attention band pushed context past 12,000 characters ($BAND_CHARS)"
+echo "$BAND_CONTEXT" | grep -q "proposal \[confirming unblocks $BAND_WID\]" || fail "the grouping did not reach self context"
+SELF status | grep -q "decisions waiting: 2 unblock work" || fail "the grouping did not reach self status"
 
 # The workspace overview holds the same cap: whole project summaries drop off
 # the end, the omission is counted, and `self status` recovers them.

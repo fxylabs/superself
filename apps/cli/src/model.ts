@@ -13,7 +13,7 @@ import { looksLikeLegacyRevision } from "./gitutil.js";
 import { applyIntegration, deriveIntegration, emptyIntegration, IntegrationState, isIntegrationEvent } from "./integration.js";
 import { readEvents } from "./logfile.js";
 import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
-import { readRegistry, readStoreConfig } from "./paths.js";
+import { readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
 import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
@@ -40,6 +40,12 @@ export interface DecisionState
     // Never inferred: a decision recorded during one unit's session is not
     // thereby a decision about it.
     work?: string;
+    // The work units this decision gates, as `decide --blocks` stated them.
+    // Empty for every decision recorded before the ref existed, which is what
+    // keeps such a decision unclassified rather than falsely settled.
+    blocks: string[];
+    // The event this decision is sequenced behind.
+    after?: string;
 }
 
 export interface ReportEntry
@@ -111,6 +117,11 @@ export interface WorkState
     // satisfied by evidence, not by a unit reaching done.
     objectives: string[];
     milestones: string[];
+    // The live proposals that name this unit in `decide --blocks`, inverted
+    // from the decisions. This is what lets a unit that was never started say
+    // what stands in front of it — `work block --on decision` needs the unit to
+    // be moving before it can say anything at all.
+    gatedBy: string[];
 }
 
 // One thing that waits on the human. `full` is the sentence shown while space
@@ -122,6 +133,34 @@ export interface WaitingItem
     identity: string;
     recovery: string;
 }
+
+// What confirming a proposal would do, which is the only ranking a reader can
+// act on. Three groups and no more: they answer what to do now, so a reason a
+// row cannot be decided is a flag on the row rather than a fourth group.
+//
+// unblocks    — confirming it lets gated work move. A proposal that gates
+//               nothing recorded lands here too: it is unclassified, and an
+//               unclassified proposal still asks for a decision.
+// undecidable — something else has to settle first; `flags` says what.
+// inEffect    — the work it gated already landed, so it is a live rule and
+//               confirming it only corrects the record.
+export type AttentionGroup = "unblocks" | "undecidable" | "inEffect";
+
+export interface AttentionRow
+{
+    decision: string;
+    text: string;
+    group: AttentionGroup;
+    // The work units the proposal gates, as stated. Never filtered against the
+    // known units: a ref this clone cannot resolve is still what was said.
+    blocks: string[];
+    after?: string;
+    // Why this row cannot be decided yet, in the reader's terms. Empty is the
+    // normal case, and never by itself a reason to promote a row.
+    flags: string[];
+}
+
+export type AttentionBand = Record<AttentionGroup, AttentionRow[]>;
 
 export interface ProjectModel
 {
@@ -143,6 +182,9 @@ export interface ProjectModel
     // each renderer needs when it cannot afford the full sentence. Derived at
     // one site so the two lists can never disagree.
     waiting: WaitingItem[];
+    // The live proposals, ranked by what confirming each one would do. Derived
+    // here rather than in a renderer, so every surface reads one grouping.
+    attention: AttentionBand;
     health: string[];
 }
 
@@ -160,6 +202,7 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         integration: emptyIntegration(),
         openQuestions: [],
         waiting: [],
+        attention: { unblocks: [], undecidable: [], inEffect: [] },
         health: []
     };
     for (const event of readEvents(storeDir, slug))
@@ -167,6 +210,9 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         applyEvent(model, event);
     }
     deriveSignals(model, now);
+    // Read once per fold, not once per row: the verdicts are a file, and a fold
+    // runs on every event.
+    deriveAttention(model, readVerdicts(storeDir, slug));
     return model;
 }
 
@@ -290,7 +336,11 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
         humanConfirmed,
         expired: false,
         supersedes: event.refs?.supersedes ?? [],
-        work: event.refs?.work
+        work: event.refs?.work,
+        // Coerced, never trusted: these refs arrive from clones written by
+        // versions that did not have them and by machines this one never saw.
+        blocks: stringList(event.refs?.blocks),
+        after: event.refs?.after === undefined ? undefined : String(event.refs.after)
     };
 }
 
@@ -329,6 +379,7 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             branches: branchOf(event),
             objectives: [],
             milestones: [],
+            gatedBy: [],
             attempts: [],
             completion: emptyCompletion()
         });
@@ -569,6 +620,120 @@ function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): 
     {
         model.health.push(`${work.id} attempt ${latest.id} failed (${latest.failure ?? "unknown"})${latest.detail === undefined ? "" : ` — ${latest.detail}`}`);
     }
+}
+
+// The band, and the inversion that makes it possible, in one pass over the
+// live proposals. Both sides are indexed first — units by id, superseded ids by
+// the proposals claiming them — so the cost stays linear in decisions plus work
+// rather than the product of the two.
+function deriveAttention(model: ProjectModel, verdicts: Record<string, Verdict>): void
+{
+    const live = model.decisions
+        .filter((decision) => decision.status === "proposed" && !decision.expired)
+        .sort((left, right) => left.ts.localeCompare(right.ts) || left.id.localeCompare(right.id));
+    const band: BandIndex = {
+        works: new Map(model.works.map((work) => [work.id, work])),
+        verdicts,
+        open: new Set(live.map((decision) => decision.id)),
+        claimed: supersessionClaims(live)
+    };
+    for (const decision of live)
+    {
+        gate(band, decision);
+        const row = attentionRow(decision, band);
+        model.attention[row.group].push(row);
+    }
+}
+
+// Everything one pass needs to place a row, indexed once. Built here rather
+// than looked up per row: a decision asks about work, about the proposals still
+// open, and about what they collide over, and each of those is a scan.
+interface BandIndex
+{
+    works: Map<string, WorkState>;
+    verdicts: Record<string, Verdict>;
+    open: Set<string>;
+    claimed: Map<string, string[]>;
+}
+
+function gate(band: BandIndex, decision: DecisionState): void
+{
+    for (const id of decision.blocks)
+    {
+        const gated = band.works.get(id);
+        if (gated !== undefined && !gated.gatedBy.includes(decision.id))
+        {
+            gated.gatedBy.push(decision.id);
+        }
+    }
+}
+
+function attentionRow(decision: DecisionState, band: BandIndex): AttentionRow
+{
+    const flags = attentionFlags(decision, band);
+    // A proposal that gates nothing can never be in effect: there is no landed
+    // work to read the rule off, and silence is not evidence.
+    const inEffect = decision.blocks.length > 0
+        && decision.blocks.every((id) => landed(band.works.get(id), band.verdicts));
+    return {
+        decision: decision.id,
+        text: decision.text,
+        // Being already in force outranks a flag: what still stands between the
+        // rule and the record does not change that the work ran under it.
+        group: inEffect ? "inEffect" : flags.length > 0 ? "undecidable" : "unblocks",
+        blocks: decision.blocks,
+        after: decision.after,
+        flags
+    };
+}
+
+// An event id in the log names something that already happened, so only a
+// proposal still open can hold another one back. Anything else `--after` names
+// — a report, a merge, an event this clone has not pulled — is not a wait.
+function attentionFlags(decision: DecisionState, band: BandIndex): string[]
+{
+    const flags: string[] = [];
+    if (decision.after !== undefined && band.open.has(decision.after))
+    {
+        flags.push(`waiting on ${decision.after}`);
+    }
+    const rival = decision.supersedes
+        .flatMap((id) => band.claimed.get(id) ?? [])
+        .find((id) => id !== decision.id);
+    if (rival !== undefined)
+    {
+        flags.push(`conflict with ${rival}`);
+    }
+    return flags;
+}
+
+// Two live proposals that retire the same decision cannot both be confirmed as
+// written — confirming either one leaves the other describing a rule that is no
+// longer there.
+function supersessionClaims(live: DecisionState[]): Map<string, string[]>
+{
+    const claimed = new Map<string, string[]>();
+    for (const decision of live)
+    {
+        for (const id of decision.supersedes)
+        {
+            claimed.set(id, [...claimed.get(id) ?? [], decision.id]);
+        }
+    }
+    return claimed;
+}
+
+// A gated unit landed only when it is done and every commit it offered is
+// settled — reachable from the default branch. Provisional, unknown and
+// unverifiable each read as not landed, and so does a unit that offered no
+// commits at all: calling a rule live on evidence nobody can reach would retire
+// a decision the person never made.
+function landed(work: WorkState | undefined, verdicts: Record<string, Verdict>): boolean
+{
+    return work !== undefined
+        && work.status === "done"
+        && work.evidence.length > 0
+        && work.evidence.every((hash) => verdicts[hash] === "settled");
 }
 
 // The single site that answers "what waits on a person": every renderer reads

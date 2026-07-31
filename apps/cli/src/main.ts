@@ -29,6 +29,7 @@ import {
     readLinks,
     readRegistry,
     readStoreConfig,
+    readVerdicts,
     requireProject,
     requireWorkspace,
     siblingSlug,
@@ -36,7 +37,6 @@ import {
     StoreConfig
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
-import { loadVerdicts } from "./reachability.js";
 import {
     cmdWorkApprovalRequired,
     cmdWorkApprove,
@@ -509,7 +509,9 @@ function cmdDecide(rest: string[]): void
             proposed: { type: "boolean" },
             why: { type: "string" },
             supersedes: { type: "string", multiple: true },
-            work: { type: "string" }
+            work: { type: "string" },
+            blocks: { type: "string", multiple: true },
+            after: { type: "string" }
         },
         1
     );
@@ -522,7 +524,7 @@ function cmdDecide(rest: string[]): void
     }
     // The work link is stated, never inferred from what happens to be open:
     // most decisions belong to the project, not to a unit of work.
-    const refs = decisionRefs(ctx, values.supersedes, values.work);
+    const refs = decisionRefs(ctx, values);
     const type = values.proposed === true ? "decision.proposed" : "decision.confirmed";
     recordEvent(ctx, makeEvent(ctx.project, type, payload, refs, values.proposed !== true), text);
 }
@@ -537,16 +539,37 @@ function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
     recordEvent(ctx, makeEvent(ctx.project, "decision.confirmed", {}, { confirms: target.id }, true), String(target.payload.text));
 }
 
-function decisionRefs(ctx: ProjectContext, prefixes: string[] | undefined, work: string | undefined): EventRefs | undefined
+interface DecisionOptions
+{
+    supersedes?: string[];
+    work?: string;
+    blocks?: string[];
+    after?: string;
+}
+
+// Every id a decision names is resolved before the event is written, so a
+// typo is refused here rather than folding into a relation that points at
+// nothing on every machine that pulls it.
+function decisionRefs(ctx: ProjectContext, options: DecisionOptions): EventRefs | undefined
 {
     const refs: EventRefs = {};
-    if (prefixes !== undefined && prefixes.length > 0)
+    if (options.supersedes !== undefined && options.supersedes.length > 0)
     {
-        refs.supersedes = prefixes.map((prefix) => findEventByPrefix(ctx.storeDir, ctx.project, prefix).id);
+        refs.supersedes = options.supersedes.map((prefix) => findEventByPrefix(ctx.storeDir, ctx.project, prefix).id);
     }
-    if (work !== undefined)
+    if (options.work !== undefined)
     {
-        refs.work = requireKnownWork(ctx, work);
+        refs.work = requireKnownWork(ctx, options.work);
+    }
+    if (options.blocks !== undefined && options.blocks.length > 0)
+    {
+        // Any known unit, open or finished: a proposal that gates work which
+        // already landed is exactly what "already in effect" is derived from.
+        refs.blocks = requireKnownWorks(ctx, options.blocks);
+    }
+    if (options.after !== undefined)
+    {
+        refs.after = findEventByPrefix(ctx.storeDir, ctx.project, options.after).id;
     }
     return Object.keys(refs).length === 0 ? undefined : refs;
 }
@@ -660,7 +683,7 @@ function cmdWorkShow(args: string[]): void
     {
         throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
     }
-    console.log(markdownHeadings(renderWorkBody(found.work, found.model, loadVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
+    console.log(markdownHeadings(renderWorkBody(found.work, found.model, readVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
 }
 
 // Read-time reverse provenance for the cross-project case: a retire event
@@ -896,12 +919,21 @@ function cmdReport(rest: string[]): void
 // log knows — unlike requireOpenWork, which gates the verbs that move it.
 function requireKnownWork(ctx: ProjectContext, id: string): string
 {
+    return requireKnownWorks(ctx, [id])[0];
+}
+
+// One fold for the whole list, and each id kept once: a decision may gate
+// several units, and folding the log per id would make naming four of them
+// cost four passes over every event in the project.
+function requireKnownWorks(ctx: ProjectContext, ids: string[]): string[]
+{
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    if (!model.works.some((item) => item.id === id))
+    const unknown = ids.find((id) => !model.works.some((item) => item.id === id));
+    if (unknown !== undefined)
     {
-        throw new CliError(`unknown work id "${id}" — run \`self work\` to list ids`);
+        throw new CliError(`unknown work id "${unknown}" — run \`self work\` to list ids`);
     }
-    return id;
+    return [...new Set(ids)];
 }
 
 function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
