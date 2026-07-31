@@ -183,6 +183,63 @@ SELF decide confirm "$PROP_ID"
 grep -q "old rule stands" "$STATE_A" && fail "confirming the proposal did not supersede the old decision"
 grep -q "new rule replaces it" "$STATE_A" || fail "confirmed proposal missing from state"
 
+# what waits is ranked by what confirming it does. A proposal names the work it
+# gates, the relation inverts onto a unit that was never started, and a rule
+# only reads as already in effect where the gated work landed on the default
+# branch — the evidence decides that, not the fact that the unit is closed.
+cd "$ROOT/A/ws/demo"
+WLANDED="$(SELF work add "the work a live rule already ran under" | tail -1)"
+SELF work start "$WLANDED"
+SELF report "$WLANDED" "landed on the default branch" --evidence "$MERGED"
+SELF work done "$WLANDED"
+WGATED="$(SELF work add "waits on a decision without ever starting" | tail -1)"
+WOPEN="$(SELF work add "gated work whose evidence has not merged" | tail -1)"
+SELF work start "$WOPEN"
+SELF report "$WOPEN" "still on a live branch" --evidence "$LIVE"
+SELF decide "the rule the landed work ran under" --proposed --blocks "$WLANDED"
+SELF decide "the rule the unstarted work waits for" --proposed --blocks "$WGATED"
+GATE_ID="$(SELF log -n 1 | sed -E 's/.*\[([^]]+)\].*/\1/')"
+SELF decide "the rule whose work has not merged" --proposed --blocks "$WOPEN"
+SELF decide "a proposal that names no work at all" --proposed
+SELF decide "decided only after the gate above" --proposed --after "$GATE_ID"
+BAND_CONTEXT="$(SELF context)"
+SELF status | grep -q "decisions waiting: 3 unblock work, 1 cannot be decided yet, 1 already in effect" \
+    || fail "the attention band did not rank the proposals by what confirming them does"
+echo "$BAND_CONTEXT" | grep -q "already in effect: $WLANDED landed" || fail "a proposal whose gated work landed did not read as a live rule"
+echo "$BAND_CONTEXT" | grep -q "confirming unblocks $WGATED" || fail "a proposal gating unstarted work did not read as unblocking it"
+echo "$BAND_CONTEXT" | grep -q "confirming unblocks $WOPEN" || fail "unmerged evidence was read as a rule already in effect"
+echo "$BAND_CONTEXT" | grep -q "no work recorded as gated" || fail "a proposal naming no work was not left asking for a decision"
+echo "$BAND_CONTEXT" | grep -q "cannot be decided yet: waiting on $GATE_ID" || fail "a sequenced proposal was not held behind the one it names"
+SELF work | grep -q "$WGATED.*gated by $GATE_ID" || fail "refs.blocks did not invert onto a work unit that was never started"
+
+# every id a proposal names is resolved before the event is written
+BADBLOCK="$(SELF decide "gates a unit that is not there" --proposed --blocks w-nope 2>&1 || true)"
+echo "$BADBLOCK" | grep -q "unknown work id" || fail "a proposal was allowed to gate a work id that does not exist"
+BADAFTER="$(SELF decide "sequenced behind nothing" --proposed --after ev-nope 2>&1 || true)"
+echo "$BADAFTER" | grep -q "no event matches id prefix" || fail "a proposal was allowed to sequence behind an event that does not exist"
+SELF status | grep -q "decisions waiting: 3 unblock work" || fail "a refused proposal still reached the log"
+
+# a store written before the relation existed folds unchanged: a proposal that
+# names nothing is unclassified, which still asks for a decision, and is never
+# read as a rule already in force
+LEGACYDEC="{\"id\":\"01legacydecisioneventaaaaa\",\"ts\":\"2099-01-01T00:00:00.000Z\",\"type\":\"decision.proposed\",\"origin\":{\"actor\":\"agent\",\"confirmed\":false},\"project\":\"demo\",\"payload\":{\"text\":\"a proposal recorded before refs.blocks existed\"}}"
+printf '%s\n' "$LEGACYDEC" >> "$LOG_A"
+SELF fold > /dev/null
+grep -qF "$LEGACYDEC" "$LOG_A" || fail "the fold rewrote a historical decision"
+SELF status | grep -q "decisions waiting: 4 unblock work, 1 cannot be decided yet, 1 already in effect" \
+    || fail "a decision recorded without the new refs did not fold into the group that still asks for a decision"
+
+# closing the gated unit is not what makes its rule live — the evidence
+# reaching the default branch is. The verdict keeps being rechecked while a
+# proposal gates the unit, so the merge is what moves the row.
+SELF work done "$WOPEN"
+SELF context | grep -q "confirming unblocks $WOPEN" || fail "a unit that closed on an unmerged branch was read as a rule already in force"
+git merge -q live
+SELF fold > /dev/null
+SELF context | grep -q "already in effect: $WOPEN landed" || fail "the gated work merging did not make its rule read as already in effect"
+SELF status | grep -q "decisions waiting: 3 unblock work, 1 cannot be decided yet, 2 already in effect" \
+    || fail "the band did not move the row when its gated work landed"
+
 # a decision belongs to a work unit only when the command says so
 cd "$ROOT/A/ws/demo"
 SELF decide "this one came out of the work" --work "$WID3"

@@ -7,8 +7,7 @@ import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { DecisionState, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
-import { CliContext, ensureDir, StoreConfig } from "./paths.js";
-import { Verdict } from "./reachability.js";
+import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";

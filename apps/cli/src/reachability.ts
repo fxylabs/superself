@@ -1,22 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { git } from "./gitutil.js";
-import { projectStateDir } from "./paths.js";
+import { projectStateDir, readVerdicts, Verdict } from "./paths.js";
 import { WorkState } from "./model.js";
 import { digestFile } from "./repo.js";
 import { ArtifactMeta } from "./types.js";
-
-// settled: reachable from the default branch — counts as progress, final.
-// provisional: exists on a live branch that has not merged yet.
-// abandoned: the branch that carried it still exists and no longer reaches it —
-// the commit was reset or force-pushed away. Asserted only on that positive
-// evidence, because it drops the work from progress and records the direction
-// as a dead end.
-// unknown: unreachable, and nothing says why. A squash- or rebase-merged branch
-// that was deleted leaves exactly this trace, so it is never called abandoned.
-// unverifiable: the hash resolves to nothing — history was rewritten or the
-// evidence predates this clone.
-export type Verdict = "settled" | "provisional" | "abandoned" | "unknown" | "unverifiable";
 
 export interface Evidence
 {
@@ -24,18 +12,12 @@ export interface Evidence
     branch?: string;
 }
 
-export function loadVerdicts(storeDir: string, slug: string): Record<string, Verdict>
-{
-    const file = join(projectStateDir(storeDir, slug), "evidence.json");
-    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-}
-
 // Recomputes verdicts where the project repo is available; anywhere else the
 // stored verdicts pass through untouched, so an unlinked machine never
 // demotes evidence it cannot check.
 export function updateVerdicts(storeDir: string, slug: string, projectDir: string | null, evidence: Evidence[]): Record<string, Verdict>
 {
-    const verdicts = loadVerdicts(storeDir, slug);
+    const verdicts = readVerdicts(storeDir, slug);
     if (projectDir === null || !existsSync(projectDir) || !git(projectDir, "rev-parse", "--git-dir").ok)
     {
         return verdicts;
@@ -111,10 +93,20 @@ function discarded(projectDir: string, mainRef: string | null, item: Evidence): 
         && git(projectDir, "show-ref", "--verify", "-q", `refs/heads/${item.branch}`).ok;
 }
 
+// Open work, plus any unit a live proposal gates. A closed unit is normally
+// left alone — its verdicts stop moving and rechecking the whole archive on
+// every event would make recording state cost more the longer a project lives.
+// A gated unit is the exception the band needs: its evidence usually merges
+// after the unit closed, and a verdict frozen at "provisional" would leave a
+// rule the work already landed under reading as one still waiting to be made.
+// The exception stays bounded — it is the work named by proposals nobody has
+// confirmed yet, not the archive.
 export function evidenceOf(works: WorkState[]): Evidence[]
 {
     const seen = new Map<string, Evidence>();
-    for (const work of works.filter((item) => item.status !== "done" && item.status !== "retired"))
+    const tracked = works.filter((item) =>
+        (item.status !== "done" && item.status !== "retired") || item.gatedBy.length > 0);
+    for (const work of tracked)
     {
         for (const report of work.reports)
         {

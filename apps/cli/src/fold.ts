@@ -5,8 +5,8 @@ import { refreshBlocks } from "./connect.js";
 import { ChangeSet, findChangeSet, openChangeSets } from "./integration.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
-import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath } from "./paths.js";
-import { artifactSignals, evidenceOf, updateVerdicts, Verdict, verdictSignals } from "./reachability.js";
+import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
+import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
 import { writeViews } from "./view.js";
 

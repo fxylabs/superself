@@ -19,7 +19,7 @@ it. The layers, lowest first:
 | Types | `types.ts` | the event and context shapes; imports nothing local |
 | CLI surface | `args.ts`, `help.ts`, `human.ts` | how a command reads its arguments, describes itself, and confirms a human; `help.ts` and `human.ts` import nothing local |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling |
-| Storage | `paths.ts`, `logfile.ts` | where the store lives and how the log is read |
+| Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`) |
 | Domain | `completion.ts`, `objectives.ts`, `integration.ts`, `dates.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
 | Render | `view.ts`, `views.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |

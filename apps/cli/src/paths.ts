@@ -157,6 +157,44 @@ export function readStoreConfig(storeDir: string): StoreConfig
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 }
 
+// settled: reachable from the default branch — counts as progress, final.
+// provisional: exists on a live branch that has not merged yet.
+// abandoned: the branch that carried it still exists and no longer reaches it —
+// the commit was reset or force-pushed away. Asserted only on that positive
+// evidence, because it drops the work from progress and records the direction
+// as a dead end.
+// unknown: unreachable, and nothing says why. A squash- or rebase-merged branch
+// that was deleted leaves exactly this trace, so it is never called abandoned.
+// unverifiable: the hash resolves to nothing — history was rewritten or the
+// evidence predates this clone.
+//
+// The verdicts are read here, beside the store's other state files, and decided
+// against git in `reachability.ts`. The fold folds them into the model, so the
+// reader has to sit below it.
+export type Verdict = "settled" | "provisional" | "abandoned" | "unknown" | "unverifiable";
+
+// Every fold, context and status read runs through this, so a store whose
+// evidence file was truncated by an interrupted write degrades to "nothing is
+// classified" instead of taking every command down with it. Absence and
+// damage say the same thing here: no verdict, and nothing may be called landed.
+export function readVerdicts(storeDir: string, slug: string): Record<string, Verdict>
+{
+    const file = join(projectStateDir(storeDir, slug), "evidence.json");
+    if (!existsSync(file))
+    {
+        return {};
+    }
+    try
+    {
+        const parsed = JSON.parse(readFileSync(file, "utf8"));
+        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch
+    {
+        return {};
+    }
+}
+
 // One slug holds every checkout linked on this machine, not just the newest:
 // parallel worktrees of one repository are normal, and last-wins repointing
 // silently moved where a fold refreshes the managed block.

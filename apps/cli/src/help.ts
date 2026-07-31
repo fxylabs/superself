@@ -164,7 +164,7 @@ export const COMMANDS: CommandHelp[] = [
     {
         name: "decide",
         usage: [
-            { syntax: 'decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id]' },
+            { syntax: 'decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id] [--blocks id] [--after id]' },
             { syntax: "decide confirm <event-id>", description: ["confirm a proposed decision"] }
         ],
         detail: [
@@ -174,7 +174,13 @@ export const COMMANDS: CommandHelp[] = [
             "  --why <text>          the reason the decision was made",
             "  --proposed            record as a proposal, which never displaces a confirmed decision",
             "  --supersedes <id>     retire an earlier decision, repeatable",
-            "  --work <work-id>      attach the decision to a work unit"
+            "  --work <work-id>      attach the decision to a work unit",
+            "  --blocks <work-id>    the work confirming it would unblock, repeatable",
+            "  --after <event-id>    the event it cannot be decided before",
+            "",
+            "--blocks is what ranks a proposal: `self context` and `self status` say",
+            "whether confirming it unblocks work, cannot be decided yet, or only",
+            "records a rule the gated work already landed under."
         ]
     },
     {
