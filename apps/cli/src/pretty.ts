@@ -9,9 +9,9 @@
 // fourth meaning, and none of these surfaces has one.
 
 import { openChangeSets } from "./integration.js";
-import { AttentionGroup, AttentionRow, ProjectModel, WorkState } from "./model.js";
+import { AttentionGroup, ATTENTION_ORDER, AttentionRow, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
-import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, padDisplay, red, termColumns, yellow } from "./style.js";
+import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, oneLine, padDisplay, red, termColumns, yellow } from "./style.js";
 import { CliError } from "./types.js";
 
 // A terminal narrower than this cannot hold four ruled columns and still show
@@ -107,11 +107,20 @@ function rule(widths: number[], left: string, join: string, right: string): stri
     return left + widths.map((width) => "─".repeat(width + 2)).join(join) + right;
 }
 
+// Every value reaches a bordered row through here, folded to one line. A
+// stored outcome may contain a newline or a tab — `self work add` accepts one
+// and the event guard is a secret filter, not a text normalizer — and a cell
+// that moves the cursor down or across shatters every border below it.
+function cellValue(cell: Cell | undefined): string
+{
+    return oneLine(cell?.text ?? "");
+}
+
 // The padding is measured on the unpainted text and appended after it, so an
 // escape sequence never counts toward a column's width.
 function cellText(cell: Cell | undefined, width: number): string
 {
-    const text = fitDisplay(cell?.text ?? "", width);
+    const text = fitDisplay(cellValue(cell), width);
     return (cell?.paint ?? plain)(text) + padDisplay(text, width).slice(text.length);
 }
 
@@ -121,27 +130,65 @@ function rowLine(cells: (Cell | undefined)[], widths: number[]): string
 }
 
 // Natural width first — the widest header or value in each column — and then
-// the flex column takes up the difference in either direction, so every table
-// on a surface ends at the same right edge whatever it holds. Notes never
-// widen a column: they qualify a value, and a long one truncates rather than
-// pushing the value it qualifies out of view.
-function columnWidths(spec: Column[], rows: Row[], available: number): number[]
+// the flex column takes up any width left over, so every table on a surface
+// ends at the same right edge whatever it holds. When the natural widths are
+// already too wide, `shrinkToFit` decides; `null` means not even the minimums
+// fit and the caller must not draw a border. Notes never widen a column: they
+// qualify a value, and a long one truncates rather than pushing the value it
+// qualifies out of view.
+function columnWidths(spec: Column[], rows: Row[], available: number): number[] | null
 {
     // Folded rather than spread into Math.max: a project with tens of
     // thousands of open units would otherwise overflow the argument list, and
     // a wide list is exactly when a person reaches for this render.
     const widths = spec.map((column, index) => rows.reduce(
-        (widest, row) => Math.max(widest, displayWidth(row.cells[index]?.text ?? "")),
+        (widest, row) => Math.max(widest, displayWidth(cellValue(row.cells[index]))),
         Math.max(displayWidth(column.header), column.min)
     ));
     const target = Math.min(available, MAX_TABLE_COLUMNS);
     const slack = target - widths.reduce((sum, width) => sum + width, 0) - spec.length * 3 - 1;
     const flex = spec.findIndex((column) => column.flex === true);
-    if (flex >= 0)
+    if (slack >= 0)
     {
-        widths[flex] = Math.max(spec[flex].min, widths[flex] + slack);
+        if (flex >= 0)
+        {
+            widths[flex] += slack;
+        }
+        return widths;
     }
-    return widths;
+    return shrinkToFit(spec, widths, -slack) ? widths : null;
+}
+
+// Every column gives width back, not only the flex one. A non-flex column can
+// hold a list the model does not bound — the work units one proposal gates —
+// and letting the flex column alone shrink pushed the border past the terminal
+// and past MAX_TABLE_COLUMNS. The deficit is shared in proportion to what each
+// column holds above its minimum, so no column collapses to nothing while
+// another keeps room it does not need.
+function shrinkToFit(spec: Column[], widths: number[], deficit: number): boolean
+{
+    const excess = widths.map((width, index) => width - spec[index].min);
+    const total = excess.reduce((sum, value) => sum + value, 0);
+    if (total < deficit)
+    {
+        return false;
+    }
+    let remaining = deficit;
+    widths.forEach((_, index) =>
+    {
+        const give = Math.floor(deficit * excess[index] / total);
+        widths[index] -= give;
+        remaining -= give;
+    });
+    // Flooring leaves under one cell per column unclaimed; it is taken from
+    // whichever columns still stand above their minimum.
+    for (let index = 0; remaining > 0 && index < widths.length; index++)
+    {
+        const give = Math.min(remaining, widths[index] - spec[index].min);
+        widths[index] -= give;
+        remaining -= give;
+    }
+    return true;
 }
 
 // A note starts under the flex column and runs to the end of the row rather
@@ -153,14 +200,32 @@ function noteLine(spec: Column[], widths: number[], note: Cell): string
     const flex = Math.max(0, spec.findIndex((column) => column.flex === true));
     const span = widths.slice(flex).reduce((sum, width) => sum + width, 0) + (widths.length - flex - 1) * 3;
     const lead = widths.slice(0, flex).map((width) => " ".repeat(width));
-    const text = fitDisplay(`↳ ${note.text}`, span);
+    const text = fitDisplay(`↳ ${oneLine(note.text)}`, span);
     const painted = (note.paint ?? plain)(text) + padDisplay(text, span).slice(text.length);
     return (lead.length === 0 ? "│ " : `│ ${lead.join(" │ ")} │ `) + painted + " │";
+}
+
+// Not even every column's minimum fits, so no border is drawn: a rule that
+// wraps says less than the plain lines it replaced. This is the same answer
+// the narrow-terminal rule gives one table further down.
+function unruledLines(spec: Column[], rows: Row[]): string[]
+{
+    const lines = [dim("  " + spec.map((column) => column.header).join("  "))];
+    for (const row of rows)
+    {
+        lines.push("  " + row.cells.map((cell) => (cell.paint ?? plain)(cellValue(cell))).join("  "));
+        lines.push(...(row.notes ?? []).map((note) => "    " + (note.paint ?? plain)(`↳ ${oneLine(note.text)}`)));
+    }
+    return lines;
 }
 
 function tableLines(spec: Column[], rows: Row[], available: number): string[]
 {
     const widths = columnWidths(spec, rows, available);
+    if (widths === null)
+    {
+        return unruledLines(spec, rows);
+    }
     const header = spec.map((column): Cell => ({ text: column.header, paint: bold }));
     const lines = [rule(widths, "┌", "┬", "┐"), rowLine(header, widths), rule(widths, "├", "┼", "┤")];
     for (const row of rows)
@@ -210,7 +275,7 @@ function listSection(title: string, items: string[], recover: string, paint: Pai
     }
     return [
         heading(title, String(items.length)),
-        ...items.slice(0, CONTEXT_ROWS).map((item) => "  " + paint(fitDisplay(item, columns() - 2))),
+        ...items.slice(0, CONTEXT_ROWS).map((item) => "  " + paint(fitDisplay(oneLine(item), columns() - 2))),
         ...moreLine(items.length - CONTEXT_ROWS, recover)
     ];
 }
@@ -283,11 +348,9 @@ export function renderWorkList(model: ProjectModel): string[]
 
 /* ── attention ─────────────────────────────────────────────────────── */
 
-// Ranked, not merely listed: the reader takes the first group first, so the
-// groups keep this order and each one keeps its own table. The band itself is
-// the model's; nothing here re-decides which row belongs where.
-const ATTENTION_ORDER: AttentionGroup[] = ["unblocks", "undecidable", "inEffect"];
-
+// The band and its ranking are the model's — `ATTENTION_ORDER` is imported,
+// not restated — and nothing here re-decides which row belongs where. This
+// file only gives each group a title, a column name and a table.
 const ATTENTION_TITLES: Record<AttentionGroup, string> = {
     unblocks: "CONFIRMING UNBLOCKS WORK",
     undecidable: "CANNOT BE DECIDED YET",
@@ -483,7 +546,7 @@ export interface StatusInput extends SurfaceInput
 export function renderStatus(input: StatusInput): string[]
 {
     const { model } = input;
-    const lines = [`${bold(model.slug)} — ${model.goal ?? dim("(goal not set)")}`, ""];
+    const lines = [`${bold(model.slug)} — ${model.goal === undefined ? dim("(goal not set)") : oneLine(model.goal)}`, ""];
     lines.push(heading("WORK", workCounts(model)));
     if (openObjectives(model.goals).length > 0)
     {
@@ -521,9 +584,9 @@ export function renderContext(input: SurfaceInput): string[]
     const lines = [bold(model.slug)];
     if (model.description !== undefined)
     {
-        lines.push(dim(fitDisplay(model.description, columns())));
+        lines.push(dim(fitDisplay(oneLine(model.description), columns())));
     }
-    lines.push(`Goal: ${fitDisplay(model.goal ?? "(not set)", columns() - 6)}`, "");
+    lines.push(`Goal: ${fitDisplay(oneLine(model.goal ?? "(not set)"), columns() - 6)}`, "");
     const open = model.works
         .filter((work) => work.status !== "done" && work.status !== "retired")
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));

@@ -1,7 +1,7 @@
 import { AttemptStatus, listSpools } from "./attempt/spool.js";
 import { ChangeSet, openChangeSets } from "./integration.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { AttentionGroup, AttentionRow, ATTEMPT_FAILURE_DAYS, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
+import { AttentionRow, ATTEMPT_FAILURE_DAYS, ATTENTION_ORDER, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, readRegistry, readVerdicts } from "./paths.js";
 import { AttemptRow, RenderMode, renderContext, renderStatus, renderWorkList, renderWorkspace } from "./pretty.js";
@@ -388,10 +388,6 @@ function waitingItems(model: ProjectModel): WaitingItem[]
 {
     return [...model.waiting, ...proposalItems(model), ...workProposalItems(model)];
 }
-
-// Ranked, not merely listed: the reader takes the first group first. Groups are
-// what to do now, so they stay in this order on every surface.
-const ATTENTION_ORDER: AttentionGroup[] = ["unblocks", "undecidable", "inEffect"];
 
 function attentionRows(model: ProjectModel): AttentionRow[]
 {

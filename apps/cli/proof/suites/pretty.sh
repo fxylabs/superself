@@ -129,6 +129,42 @@ SELF context --pretty | grep -q "… +[0-9]* more · self work" || fail "an over
 SELF context --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
     || fail "a truncated table does not align on cell width"
 
+# ── content the geometry has to survive ───────────────────────────────────
+# A stored newline or tab is charged no cells by the width table and still
+# moves the terminal cursor, so a cell that carries one has to be folded to a
+# single line before the border is drawn around it.
+W_MULTI="$(SELF work add "$(printf 'first line\nsecond line of the same outcome')" | tail -1)"
+W_TAB="$(SELF work add "$(printf 'tabbed\toutcome\there')" | tail -1)"
+W_EMOJI="$(SELF work add "$(printf 'joined \360\237\221\250\342\200\215\360\237\221\251\342\200\215\360\237\221\247 and toned \360\237\221\215\360\237\217\275')" | tail -1)"
+ODD_WORK="$(SELF work --pretty)"
+echo "$ODD_WORK" | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
+    || fail "a stored newline, tab or joined emoji broke the table geometry"
+echo "$ODD_WORK" | grep -q "first line second line of the same outcome" \
+    || fail "a multi-line outcome was not folded onto one row"
+[ "$(echo "$ODD_WORK" | grep -c "second line of the same outcome")" = 1 ] \
+    || fail "a multi-line outcome still occupies more than its own row"
+SELF context --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
+    || fail "odd cell content broke the context table geometry"
+SELF work retire "$W_MULTI" --why "geometry fixture only" > /dev/null
+SELF work retire "$W_TAB" --why "geometry fixture only" > /dev/null
+SELF work retire "$W_EMOJI" --why "geometry fixture only" > /dev/null
+
+# A column the model does not bound — the work units one proposal gates — must
+# not push the border past the terminal. Only the flex column used to give
+# width back, which rendered this state 143 cells wide on an 80-column screen.
+GATED=""
+for INDEX in 1 2 3 4 5 6 7 8 9 10 11 12 13 14
+do
+    GATED="$GATED --blocks $(SELF work add "gated unit $INDEX" | tail -1)"
+done
+# shellcheck disable=SC2086
+SELF decide "a proposal that gates a dozen units" --proposed $GATED > /dev/null
+WIDE_BAND="$(SELF context --pretty)"
+echo "$WIDE_BAND" | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
+    || fail "a proposal gating fourteen units overflowed the ruled table"
+BAND_CELLS="$(echo "$WIDE_BAND" | node "$CLI_DIR/proof/pretty-width.mjs" | sed -E 's/.* at ([0-9]+) cells.*/\1/')"
+[ "$BAND_CELLS" -le 80 ] || fail "the attention table drew $BAND_CELLS cells into an 80-column render"
+
 # ── attempts roll up per work unit on a terminal only ─────────────────────
 SPOOL="$HOME/.local/state/superself/runner/attempts"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
@@ -200,6 +236,12 @@ case "$NARROW_PROBE" in
         # ellipsis is worse than the lines it replaced.
         NARROW="$(pty_run 40 "node $SELF_JS work")"
         printf '%s\n' "$NARROW" | grep -q "$BOX" && fail "a 40-column terminal was still given a ruled table"
+
+        # Forced past that rule, the table itself still refuses to draw a
+        # border it cannot close: the columns' minimums need 47 cells.
+        FORCED="$(pty_run 40 "node $SELF_JS work --pretty")"
+        printf '%s\n' "$FORCED" | grep -q "$BOX" && fail "--pretty at 40 columns drew a border wider than the terminal"
+        printf '%s\n' "$FORCED" | grep -q "OUTCOME" || fail "the unruled fallback dropped the columns it was standing in for"
         ;;
     *)
         echo "pretty: no resizable pseudo-terminal ($NARROW_PROBE); the narrow fallback not exercised"

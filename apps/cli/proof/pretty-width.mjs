@@ -24,7 +24,15 @@ const EXPECTED = [
     ["combining e-acute", text(0x65, 0x301), 1],
     ["zero-width space", text(0x200b), 0],
     ["unassigned code point", text(0x378), 1],
-    ["mixed script", text(0xac00, 0xb098, 0x41, 0x42, 0x43), 7]
+    ["mixed script", text(0xac00, 0xb098, 0x41, 0x42, 0x43), 7],
+    // One grapheme cluster is one advance of the terminal cursor however many
+    // code points it is written with. Summing the code points charged the
+    // family six cells and shifted every border under it.
+    ["zwj family", text(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467), 2],
+    ["skin-tone modifier", text(0x1f44d, 0x1f3fd), 2],
+    ["keycap", text(0x31, 0xfe0f, 0x20e3), 2],
+    ["emoji presentation selector", text(0x2764, 0xfe0f), 2],
+    ["regional indicator flag", text(0x1f1f0, 0x1f1f7), 2]
 ];
 
 function fail(message)

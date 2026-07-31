@@ -71,7 +71,8 @@ const WIDE_RANGES: [number, number][] = [
     [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf],
     [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xa960, 0xa97f], [0xac00, 0xd7a3],
     [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f], [0xff00, 0xff60],
-    [0xffe0, 0xffe6], [0x1f300, 0x1f64f], [0x1f680, 0x1f6ff], [0x1f900, 0x1f9ff],
+    [0xffe0, 0xffe6], [0x1f1e6, 0x1f1ff], [0x1f300, 0x1f64f], [0x1f680, 0x1f6ff],
+    [0x1f7e0, 0x1f7eb], [0x1f900, 0x1f9ff], [0x1fa70, 0x1faff],
     [0x20000, 0x2fffd], [0x30000, 0x3fffd]
 ];
 
@@ -98,19 +99,64 @@ function charWidth(code: number): number
     return inRanges(code, WIDE_RANGES) ? 2 : 1;
 }
 
+// The emoji presentation selector and the combining enclosing keycap each turn
+// a cluster that would otherwise be narrow into a two-cell emoji: `1` is one
+// cell, `1️⃣` is two.
+const EMOJI_PRESENTATION = [0xfe0f, 0x20e3];
+
+// A terminal advances its cursor by grapheme cluster, so that is the unit that
+// gets measured. A ZWJ family, a skin-tone modifier and a keycap are each one
+// cluster occupying two cells however many code points they are written with —
+// summing the code points charges the family six.
+function clusterWidth(cluster: string): number
+{
+    for (const character of cluster)
+    {
+        const code = character.codePointAt(0) ?? 0;
+        if (EMOJI_PRESENTATION.includes(code) || inRanges(code, WIDE_RANGES))
+        {
+            return 2;
+        }
+    }
+    return charWidth(cluster.codePointAt(0) ?? 0);
+}
+
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+// Printable ASCII is one cell per character and is what almost every value in
+// a table holds, so it skips segmentation entirely; anything above it takes
+// the cluster path.
+const PLAIN_ASCII = /^[\x20-\x7e]*$/;
+
 export function displayWidth(text: string): number
 {
-    let width = 0;
-    for (const character of text)
+    if (PLAIN_ASCII.test(text))
     {
-        width += charWidth(character.codePointAt(0) ?? 0);
+        return text.length;
+    }
+    let width = 0;
+    for (const { segment } of graphemes.segment(text))
+    {
+        width += clusterWidth(segment);
     }
     return width;
 }
 
-// Truncate to a cell budget, taking whole code points: a double-width glyph is
-// dropped rather than halved, so the ellipsis can never land mid-character and
-// push the border one cell right.
+const CONTROL_RUN = new RegExp("[\\x00-\\x1f\\x7f]+", "g");
+
+// Text on its way into a bordered row, folded to one line. A stored newline or
+// tab is charged no cells by the measurement above and yet moves the cursor on
+// the terminal, which breaks every border below it; the run becomes one space
+// so the row keeps its content and its geometry at once.
+export function oneLine(text: string): string
+{
+    return text.replace(CONTROL_RUN, " ");
+}
+
+// Truncate to a cell budget, taking whole grapheme clusters — the same unit
+// the width above counts. A double-width glyph is dropped rather than halved
+// and a joined emoji never loses half its sequence, so the ellipsis can never
+// land mid-character and push the border one cell right.
 export function fitDisplay(text: string, width: number): string
 {
     if (width <= 0)
@@ -124,15 +170,15 @@ export function fitDisplay(text: string, width: number): string
     const budget = width - 1;
     let used = 0;
     let kept = "";
-    for (const character of text)
+    for (const { segment } of graphemes.segment(text))
     {
-        const cell = charWidth(character.codePointAt(0) ?? 0);
+        const cell = clusterWidth(segment);
         if (used + cell > budget)
         {
             break;
         }
         used += cell;
-        kept += character;
+        kept += segment;
     }
     return kept + "…";
 }
