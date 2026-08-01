@@ -9,9 +9,18 @@
 // fourth meaning, and none of these surfaces has one.
 
 import { openChangeSets } from "./integration.js";
-import { AttentionGroup, ATTENTION_ORDER, AttentionRow, ProjectModel, WorkState } from "./model.js";
+import {
+    AttentionGroup,
+    ATTENTION_ORDER,
+    AttentionRow,
+    branchLabel,
+    BranchUnshipped,
+    branchTotals,
+    ProjectModel,
+    WorkState
+} from "./model.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
-import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, oneLine, padDisplay, red, termColumns, yellow } from "./style.js";
+import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, oneLine, padDisplay, plural, red, termColumns, yellow } from "./style.js";
 import { CliError } from "./types.js";
 
 // A terminal narrower than this cannot hold four ruled columns and still show
@@ -419,6 +428,53 @@ function attentionSections(model: ProjectModel): string[]
     return lines;
 }
 
+/* ── unshipped ─────────────────────────────────────────────────────── */
+
+const UNSHIPPED_COLUMNS: Column[] = [
+    { header: "BRANCH", min: 10 },
+    { header: "UNSHIPPED", min: 14, flex: true }
+];
+
+// One row per branch, its units on the row's own lines. Commits are counted
+// rather than listed: a hash truncated at a column boundary cannot be pasted,
+// and the thing a reader acts on here is the branch.
+function unshippedRow(branch: BranchUnshipped): Row
+{
+    const totals = branchTotals(branch);
+    const shown = branch.unshipped.slice(0, CONTEXT_ROWS);
+    const notes: Cell[] = shown.map((item): Cell => ({
+        text: `${item.work} — ${item.unsettled} of ${plural(item.evidence, "commit")} unsettled (${item.status})`,
+        paint: dim
+    }));
+    if (branch.unshipped.length > shown.length)
+    {
+        notes.push({ text: `+${branch.unshipped.length - shown.length} more · self work`, paint: dim });
+    }
+    return {
+        cells: [
+            { text: branchLabel(branch) },
+            { text: `${plural(totals.units, "open work unit")} · ${totals.unsettled} of ${plural(totals.evidence, "commit")} unsettled`, paint: yellow }
+        ],
+        notes
+    };
+}
+
+function unshippedCounts(model: ProjectModel): string
+{
+    if (model.unshipped.length === 0)
+    {
+        return "0";
+    }
+    const units = model.unshipped.reduce((sum, branch) => sum + branchTotals(branch).units, 0);
+    return `${plural(model.unshipped.length, "branch", "branches")} · ${plural(units, "open work unit")}`;
+}
+
+function unshippedSection(model: ProjectModel): string[]
+{
+    return tableSection("UNSHIPPED BY BRANCH", unshippedCounts(model), UNSHIPPED_COLUMNS,
+        model.unshipped.map(unshippedRow), "self work");
+}
+
 /* ── status ────────────────────────────────────────────────────────── */
 
 // What this machine is running right now, as the spool reports it. Kept to the
@@ -557,6 +613,7 @@ export function renderStatus(input: StatusInput): string[]
         lines.push(heading("INTEGRATION", input.integration));
     }
     lines.push(heading("DECISIONS WAITING", attentionCounts(model)));
+    lines.push("", ...unshippedSection(model));
     lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), "self context", yellow));
     lines.push("", ...listSection("HEALTH", model.health, "self status", red));
     const tallies = tallyAttempts(input.attempts);
@@ -591,6 +648,7 @@ export function renderContext(input: SurfaceInput): string[]
         .filter((work) => work.status !== "done" && work.status !== "retired")
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));
     lines.push(...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)), "self work"));
+    lines.push("", ...unshippedSection(model));
     lines.push("", ...attentionSections(model));
     lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), "self context", yellow));
     lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), "self objective"));

@@ -165,6 +165,52 @@ echo "$WIDE_BAND" | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
 BAND_CELLS="$(echo "$WIDE_BAND" | node "$CLI_DIR/proof/pretty-width.mjs" | sed -E 's/.* at ([0-9]+) cells.*/\1/')"
 [ "$BAND_CELLS" -le 80 ] || fail "the attention table drew $BAND_CELLS cells into an 80-column render"
 
+# ── what has not shipped, per branch ──────────────────────────────────────
+# A branch name is recorded content, not a label this render writes, so it
+# arrives with the same two-cell glyphs every other cell carries. The
+# characters used here have no decomposed form, which keeps the fixture
+# identical on a filesystem that normalizes a ref name and one that does not.
+echo base > base.txt && git add . && git commit -qm "base commit"
+BRANCH_WIDE="feat/日本語-😀"
+git checkout -q -b "$BRANCH_WIDE"
+echo one > one.txt && git add . && git commit -qm "a commit that never merges"
+W_BRANCH="$(SELF work add "reported from a branch whose name spends two cells a glyph" | tail -1)"
+SELF work start "$W_BRANCH" > /dev/null
+SELF report "$W_BRANCH" "held on a branch that never merged" > /dev/null
+git checkout -q main
+SELF fold > /dev/null
+
+UNSHIPPED_PRETTY="$(SELF context --pretty)"
+echo "$UNSHIPPED_PRETTY" | grep -q "^UNSHIPPED BY BRANCH (1 branch · 1 open work unit)$" \
+    || fail "the ruled context has no counted per-branch heading"
+echo "$UNSHIPPED_PRETTY" | grep -q "│ BRANCH" || fail "the unshipped table has no BRANCH column"
+echo "$UNSHIPPED_PRETTY" | grep -q "$BRANCH_WIDE" || fail "a branch name of two-cell glyphs did not survive the render"
+echo "$UNSHIPPED_PRETTY" | grep -q "↳ $W_BRANCH — 1 of 1 commit unsettled (active)" \
+    || fail "the branch row did not name the unit it carries on its own line"
+SELF context --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
+    || fail "the unshipped table does not align on cell width"
+SELF status --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
+    || fail "the unshipped table on status does not align on cell width"
+SELF status --pretty | grep -q "^UNSHIPPED BY BRANCH (1 branch · 1 open work unit)$" \
+    || fail "the per-branch statement did not reach the ruled status render"
+
+# The same statement, and not one decoration byte of it, reaches a pipe.
+for CMD in "status" "context"
+do
+    PIPED="$(SELF $CMD)"
+    printf '%s\n' "$PIPED" | grep -q "$BRANCH_WIDE" || fail "piped self $CMD lost the per-branch statement"
+    case "$PIPED" in
+        *"$ESC"*) fail "self $CMD leaked an escape sequence once a branch carried unshipped work" ;;
+    esac
+    printf '%s\n' "$PIPED" | grep -q "$BOX" && fail "self $CMD leaked a box character once a branch carried unshipped work"
+done
+SHOW_PIPED="$(SELF work show "$W_BRANCH")"
+printf '%s\n' "$SHOW_PIPED" | grep -q "Unshipped commits by branch: $BRANCH_WIDE" \
+    || fail "piped self work show lost the branch still carrying this unit"
+case "$SHOW_PIPED" in
+    *"$ESC"*) fail "self work show leaked an escape sequence into piped output" ;;
+esac
+
 # ── attempts roll up per work unit on a terminal only ─────────────────────
 SPOOL="$HOME/.local/state/superself/runner/attempts"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
