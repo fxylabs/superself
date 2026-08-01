@@ -129,12 +129,12 @@ UNSHIPPED_CONTEXT="$(SELF context)"
 UNSHIPPED_CHARS="$(printf '%s\n' "$UNSHIPPED_CONTEXT" | wc -m | tr -d ' ')"
 [ "$UNSHIPPED_CHARS" -le 12000 ] || fail "the per-branch statement pushed context past 12,000 characters ($UNSHIPPED_CHARS)"
 echo "$UNSHIPPED_CONTEXT" | grep -q "## Unshipped by branch" || fail "the budget dropped the per-branch statement entirely"
-echo "$UNSHIPPED_CONTEXT" | grep -q "^- feat/unshipped-001 — 1 work unit unshipped; run \`self work\`$" \
+echo "$UNSHIPPED_CONTEXT" | grep -q "^- feat/unshipped-001 — 1 open work unit unshipped; run \`self work\`$" \
     || fail "the compacted statement lost its per-branch count or the command that reads the units back"
 echo "$UNSHIPPED_CONTEXT" | grep -q "feat/unshipped-040" || fail "the compacted statement dropped a branch instead of counting it"
 # The one-line form is bounded rather than joined: this list only leaves by
 # settling, so a project a year in would otherwise print a paragraph here.
-SELF status | grep -q '^unshipped: feat/unshipped-001 1 work unit, .*, +36 more; run `self context`$' \
+SELF status | grep -q '^unshipped: feat/unshipped-001 1 open work unit, .*, +36 more; run `self context`$' \
     || fail "the one-line statement joined every branch instead of counting the remainder"
 cp "$ROOT/demo-log-before-unshipped-fixture" "$LOG_A"
 SELF fold > /dev/null

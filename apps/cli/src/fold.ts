@@ -514,12 +514,13 @@ function supersededIn(model: ProjectModel, work: WorkState): string[]
 
 // Which branches still carry this unit's evidence — the same per-branch
 // statement `self context` and `self status` make, derived at the same site
-// and scoped to one unit. Absent when every commit it reported is settled.
+// and scoped to one unit. Absent when every commit it reported is settled, and
+// absent on a closed unit, whose verdicts no fold rechecks.
 //
 // Derived rather than read off `model.unshipped`, because the fold refreshes
 // the verdicts after it folds the model: this body renders against the
 // verdicts this run just recomputed, and the model's copy is the run before.
-function unshippedLines(work: WorkState, verdicts: Record<string, Verdict>): string[]
+function workUnshippedLines(work: WorkState, verdicts: Record<string, Verdict>): string[]
 {
     const branches = unshippedBranches([work], verdicts);
     if (branches.length === 0)
@@ -555,7 +556,7 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     {
         lines.push(`- Branches: ${work.branches.join(", ")}`);
     }
-    lines.push(...unshippedLines(work, verdicts));
+    lines.push(...workUnshippedLines(work, verdicts));
     if (work.evidence.length > 0)
     {
         const marked = work.evidence.map((hash) => verdicts[hash] === undefined ? hash : `${hash} (${verdicts[hash]})`);

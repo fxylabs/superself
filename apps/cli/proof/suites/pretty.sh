@@ -181,7 +181,7 @@ git checkout -q main
 SELF fold > /dev/null
 
 UNSHIPPED_PRETTY="$(SELF context --pretty)"
-echo "$UNSHIPPED_PRETTY" | grep -q "^UNSHIPPED BY BRANCH (1 branch · 1 work unit)$" \
+echo "$UNSHIPPED_PRETTY" | grep -q "^UNSHIPPED BY BRANCH (1 branch · 1 open work unit)$" \
     || fail "the ruled context has no counted per-branch heading"
 echo "$UNSHIPPED_PRETTY" | grep -q "│ BRANCH" || fail "the unshipped table has no BRANCH column"
 echo "$UNSHIPPED_PRETTY" | grep -q "$BRANCH_WIDE" || fail "a branch name of two-cell glyphs did not survive the render"
@@ -191,7 +191,7 @@ SELF context --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
     || fail "the unshipped table does not align on cell width"
 SELF status --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
     || fail "the unshipped table on status does not align on cell width"
-SELF status --pretty | grep -q "^UNSHIPPED BY BRANCH (1 branch · 1 work unit)$" \
+SELF status --pretty | grep -q "^UNSHIPPED BY BRANCH (1 branch · 1 open work unit)$" \
     || fail "the per-branch statement did not reach the ruled status render"
 
 # The same statement, and not one decoration byte of it, reaches a pipe.

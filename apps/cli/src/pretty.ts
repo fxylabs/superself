@@ -453,7 +453,7 @@ function unshippedRow(branch: BranchUnshipped): Row
     return {
         cells: [
             { text: branchLabel(branch) },
-            { text: `${plural(totals.units, "work unit")} · ${totals.unsettled} of ${plural(totals.evidence, "commit")} unsettled`, paint: yellow }
+            { text: `${plural(totals.units, "open work unit")} · ${totals.unsettled} of ${plural(totals.evidence, "commit")} unsettled`, paint: yellow }
         ],
         notes
     };
@@ -466,7 +466,7 @@ function unshippedCounts(model: ProjectModel): string
         return "0";
     }
     const units = model.unshipped.reduce((sum, branch) => sum + branchTotals(branch).units, 0);
-    return `${plural(model.unshipped.length, "branch", "branches")} · ${plural(units, "work unit")}`;
+    return `${plural(model.unshipped.length, "branch", "branches")} · ${plural(units, "open work unit")}`;
 }
 
 function unshippedSection(model: ProjectModel): string[]

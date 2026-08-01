@@ -368,17 +368,17 @@ SELF fold > /dev/null
 grep -qF "$LEGACYSHIP" "$SHIP_LOG" || fail "the fold rewrote a historical report"
 
 SHIP_STATUS="$(SELF status)"
-echo "$SHIP_STATUS" | grep -q "^unshipped: feature-a 2 work units, feature-b 1 work unit, (branch not recorded) 2 work units$" \
+echo "$SHIP_STATUS" | grep -q "^unshipped: feature-a 1 open work unit, feature-b 1 open work unit, (branch not recorded) 2 open work units$" \
     || fail "self status did not state what has not shipped, per branch, named branches first"
 SHIP_CONTEXT="$(SELF context)"
 SHIP_SECTION="$(echo "$SHIP_CONTEXT" | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found')"
 [ -n "$SHIP_SECTION" ] || fail "the per-branch statement did not reach self context"
 FEATURE_A="$(echo "$SHIP_SECTION" | grep '^- feature-a — ')"
-echo "$FEATURE_A" | grep -q "2 work units unshipped" || fail "the feature-a line did not count the units it carries"
+echo "$FEATURE_A" | grep -q "1 open work unit unshipped" || fail "the feature-a line did not count the units it carries"
 echo "$FEATURE_A" | grep -q "$WBOTH" || fail "a unit whose evidence on a branch is unsettled was left off that branch"
-echo "$FEATURE_A" | grep -q "$WCLOSED (1 of 1 commit unsettled, done)" \
-    || fail "a unit that closed on an unmerged branch was not reported as unshipped"
-echo "$SHIP_SECTION" | grep -q "^- (branch not recorded) — 2 work units unshipped" \
+echo "$FEATURE_A" | grep -q "$WCLOSED" \
+    && fail "a closed unit, whose verdicts nothing rechecks, was stated as unshipped"
+echo "$SHIP_SECTION" | grep -q "^- (branch not recorded) — 2 open work units unshipped" \
     || fail "evidence whose event carried no branch was not grouped under one unrecorded line"
 echo "$SHIP_SECTION" | grep -q "$WDETACHED" || fail "a report from a detached HEAD was not grouped as branch-unknown"
 echo "$SHIP_SECTION" | grep -q "$WLEGACY" || fail "a legacy report with no branch ref was not grouped as branch-unknown"
@@ -395,20 +395,114 @@ SELF work show "$WDETACHED" | grep -q "Unshipped commits by branch: (branch not 
     || fail "self work show did not name the unrecorded branch for a detached-HEAD report"
 SELF work show "$WSETTLED" | grep -q "Unshipped commits by branch" \
     && fail "a unit with nothing unsettled still carried an unshipped line"
+SELF work show "$WCLOSED" | grep -q "Unshipped commits by branch" \
+    && fail "a closed unit carried an unshipped line in its own body"
 
 # The statement follows the evidence: once the commits reported from a branch
 # settle, the branch has nothing left to state and its line goes.
 git merge -q feature-a
 SELF fold > /dev/null
-SELF status | grep -q "^unshipped: feature-b 1 work unit, (branch not recorded) 2 work units$" \
+SELF status | grep -q "^unshipped: feature-b 1 open work unit, (branch not recorded) 2 open work units$" \
     || fail "merging a branch did not take what it carried off the unshipped statement"
 # Deleting the branch changes nothing: nothing here asks git which branches
 # still exist, so a branch that was merged and pruned still says what was
 # reported on it.
 git branch -q -D feature-b
 SELF fold > /dev/null
-SELF context | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found' | grep -q "^- feature-b — 1 work unit unshipped" \
+SELF context | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found' | grep -q "^- feature-b — 1 open work unit unshipped" \
     || fail "a branch this checkout no longer has stopped stating what was reported on it"
+
+# ── closing a unit before or after its branch merged reads the same ───────
+# A closed unit's verdicts stop being recomputed, so a statement that spoke
+# for one would freeze whatever was true the day it closed: the unit below
+# that closed while feature-c was unmerged would claim that branch for good,
+# long after the merge, and no action would clear it. Each unit reports its
+# own commit, so neither borrows the other's verdict and the asymmetry is
+# visible if it exists.
+git checkout -q -b feature-c
+echo c1 > c1.txt && git add . && git commit -qm "reported, then closed before the merge"
+WBEFORE="$(SELF work add "closed while its branch was unmerged" | tail -1)"
+SELF work start "$WBEFORE" > /dev/null
+SELF report "$WBEFORE" "reported from feature-c" > /dev/null
+SELF work done "$WBEFORE" > /dev/null
+echo c2 > c2.txt && git add . && git commit -qm "reported, then closed after the merge"
+WAFTER="$(SELF work add "closed once its branch had merged" | tail -1)"
+SELF work start "$WAFTER" > /dev/null
+SELF report "$WAFTER" "reported from feature-c" > /dev/null
+git checkout -q main
+git merge -q feature-c
+SELF fold > /dev/null
+SELF work done "$WAFTER" > /dev/null
+SHIP_CLOSED="$(SELF context | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found')"
+echo "$SHIP_CLOSED" | grep -q "$WBEFORE" \
+    && fail "a unit closed before its branch merged still claimed that branch, on a verdict no fold rechecks"
+echo "$SHIP_CLOSED" | grep -q "$WAFTER" \
+    && fail "a unit closed after its branch merged was stated as unshipped"
+echo "$SHIP_CLOSED" | grep -q "^- feature-c —" \
+    && fail "a branch carrying nothing but closed work still had a line"
+
+# ── retired work says outright that it will not be delivered here ─────────
+# It leaves the statement the same way it leaves `self work`, and the branch
+# it was reported from keeps counting the unit still open on it.
+git checkout -q -b feature-d
+echo d1 > d1.txt && git add . && git commit -qm "still moving on feature-d"
+WKEEP="$(SELF work add "still open on feature-d" | tail -1)"
+SELF work start "$WKEEP" > /dev/null
+SELF report "$WKEEP" "reported from feature-d" > /dev/null
+echo d2 > d2.txt && git add . && git commit -qm "a direction that was retired"
+WRETIRED="$(SELF work add "retired on feature-d" | tail -1)"
+SELF work start "$WRETIRED" > /dev/null
+SELF report "$WRETIRED" "reported from feature-d" > /dev/null
+SELF work retire "$WRETIRED" --why "the direction moved to another unit" > /dev/null
+git checkout -q main
+SELF fold > /dev/null
+FEATURE_D="$(SELF context | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found' | grep '^- feature-d — ')"
+echo "$FEATURE_D" | grep -q "$WKEEP" || fail "the unit still open on feature-d left the statement"
+echo "$FEATURE_D" | grep -q "1 open work unit unshipped" \
+    || fail "the feature-d line counted retired work among what the branch is carrying"
+echo "$FEATURE_D" | grep -q "$WRETIRED" \
+    && fail "retired work, which states it will not be delivered here, was stated as unshipped"
+SELF work show "$WRETIRED" | grep -q "Unshipped commits by branch" \
+    && fail "a retired unit carried an unshipped line in its own body"
+
+# ── the order of these lines is the store's bytes, not the environment ────
+# `localeCompare` builds its collator from LC_ALL and LANG, so one store
+# folded on two machines — or on one machine whose environment changed — would
+# order the lines differently and the canonical files would differ by nothing
+# but who ran the fold. These two names are ordered one way by every locale
+# ICU knows and the other way by UTF-8 bytes. Nothing here touches git: the
+# recorded event is the fixture, not a ref a filesystem might normalize.
+mkdir -p "$ROOT/collation/app"
+cd "$ROOT/collation/app"
+git init -q -b main
+SELF project add --name collation --desc "ordering that no locale can move" --no-connect > /dev/null
+SELF goal set "prove the statement orders by bytes" > /dev/null
+echo base > base.txt && git add . && git commit -qm "base on main"
+COLLATION_LOG="$ROOT/A/ws/.superself/projects/collation/log.jsonl"
+COLLATION_STATE="$ROOT/A/ws/.superself/projects/collation"
+printf '{"id":"01collationcreatedzaaaaaa","ts":"2026-02-01T00:00:01.000Z","type":"work.created","origin":{"actor":"agent","confirmed":false},"project":"collation","payload":{"work":"w-colz1","outcome":"held on a branch whose name starts with z"}}\n' >> "$COLLATION_LOG"
+printf '{"id":"01collationstartedzaaaaaa","ts":"2026-02-01T00:00:02.000Z","type":"work.started","origin":{"actor":"agent","confirmed":false},"project":"collation","payload":{"work":"w-colz1"}}\n' >> "$COLLATION_LOG"
+printf '{"id":"01collationreportzaaaaaaa","ts":"2026-02-01T00:00:03.000Z","type":"report.added","origin":{"actor":"agent","confirmed":false},"project":"collation","payload":{"text":"never merged"},"refs":{"work":"w-colz1","commits":["cccccccccc01"],"branch":"feat/z-collate"}}\n' >> "$COLLATION_LOG"
+printf '{"id":"01collationcreateduaaaaaa","ts":"2026-02-01T00:00:04.000Z","type":"work.created","origin":{"actor":"agent","confirmed":false},"project":"collation","payload":{"work":"w-colu1","outcome":"held on a branch whose name starts with a diaeresis"}}\n' >> "$COLLATION_LOG"
+printf '{"id":"01collationstarteduaaaaaa","ts":"2026-02-01T00:00:05.000Z","type":"work.started","origin":{"actor":"agent","confirmed":false},"project":"collation","payload":{"work":"w-colu1"}}\n' >> "$COLLATION_LOG"
+printf '{"id":"01collationreportuaaaaaaa","ts":"2026-02-01T00:00:06.000Z","type":"report.added","origin":{"actor":"agent","confirmed":false},"project":"collation","payload":{"text":"never merged"},"refs":{"work":"w-colu1","commits":["cccccccccc02"],"branch":"feat/ä-collate"}}\n' >> "$COLLATION_LOG"
+SELF fold > /dev/null
+COLL_SECTION="$(SELF context | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found')"
+COLL_Z="$(printf '%s\n' "$COLL_SECTION" | grep -nF "feat/z-collate" | cut -d: -f1)"
+COLL_U="$(printf '%s\n' "$COLL_SECTION" | grep -nF "feat/ä-collate" | cut -d: -f1)"
+[ "$COLL_Z" -lt "$COLL_U" ] \
+    || fail "the branch lines were ordered by a collator rather than by the bytes the store recorded"
+# The same store folded under a second locale, byte for byte. A host whose ICU
+# cannot resolve the second locale collates both runs the same way and this
+# passes without discriminating; the order check above holds on every host.
+( export LC_ALL=en_US.UTF-8; SELF fold > /dev/null )
+cp -R "$COLLATION_STATE" "$ROOT/collation-en"
+COLL_EN="$( export LC_ALL=en_US.UTF-8; SELF context )"
+( export LC_ALL=sv_SE.UTF-8; SELF fold > /dev/null )
+COLL_SV="$( export LC_ALL=sv_SE.UTF-8; SELF context )"
+diff -r "$ROOT/collation-en" "$COLLATION_STATE" > /dev/null \
+    || fail "folding one unchanged store under a second locale wrote different bytes"
+[ "$COLL_EN" = "$COLL_SV" ] || fail "the per-branch statement read differently under a second locale"
 cd "$ROOT/A/ws/demo"
 
 # an event carries what happened, never what the machine that wrote it could

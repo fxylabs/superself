@@ -262,7 +262,7 @@ function renderAggregateProject(model: ProjectModel): string
         `- description/goal: run \`${recovery}\``,
         `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
         `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`self work\``,
-        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped work: run \`self work\``,
+        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`self work\``,
         `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
         `- decisions: run \`self search --type decision --project ${project}\``
     ].join("\n");
@@ -489,9 +489,12 @@ function unshippedLine(model: ProjectModel): string
         : `${named.join(", ")}, +${hidden} more; run \`self context\``;
 }
 
+// Counted as open work wherever it is printed, because that is the scope the
+// model derives: the units whose verdicts every fold rechecks. A reader who
+// sees "1 open work unit" is not told a branch holds nothing else.
 function unitCount(branch: BranchUnshipped): string
 {
-    return plural(branchTotals(branch).units, "work unit");
+    return plural(branchTotals(branch).units, "open work unit");
 }
 
 // A proposal is only actionable if the reader can weigh it, so the whole brief

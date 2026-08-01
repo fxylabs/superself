@@ -400,11 +400,14 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
 }
 
 // Events written before branches were recorded carry none; absence reads as
-// unknown, so the whole log stays foldable. Coerced like every other value
-// read out of the log: a ruled table calls string methods on a branch name.
+// unknown, so the whole log stays foldable. Anything that is not a non-empty
+// string reads as absent too: the log is append-only and hand-appended lines
+// exist, and `String(...)` would put "[object Object]" or "null" on four
+// surfaces as the name of a branch to check out.
 function branchRef(event: SelfEvent): string | undefined
 {
-    return event.refs?.branch === undefined ? undefined : String(event.refs.branch);
+    const branch = event.refs?.branch;
+    return typeof branch === "string" && branch !== "" ? branch : undefined;
 }
 
 function branchOf(event: SelfEvent): string[]
@@ -821,16 +824,36 @@ function evidenceByBranch(work: WorkState): Map<string, Set<string>>
     return perBranch;
 }
 
+// Open work only, and every surface says so in the words it counts with.
+// A closed unit's verdicts stop being recomputed — `evidenceOf` in
+// `reachability.ts` leaves the archive alone so that recording state does not
+// cost more the longer a project lives — so its commits keep whatever verdict
+// they held the day it closed. Stating one here would mean a unit marked done
+// while its branch was unmerged claims that branch as unshipped for good,
+// including long after the merge, and no action a reader takes clears it. The
+// statement is worth having only where it is checked on every fold, so it
+// covers exactly the work that is: an omission under a stated scope is honest,
+// a frozen claim is not. Retired work is excluded by the same filter and would
+// be anyway, having already said it will not be delivered here.
+//
+// The other side — refreshing the archive so closed units could be stated — is
+// the cost #128 exists to keep out: unsettled evidence never settles after a
+// squash merge, so the recheck set would grow with the project and every event
+// append would pay for it.
+function stated(works: WorkState[]): WorkState[]
+{
+    return works.filter((work) => work.status !== "done" && work.status !== "retired");
+}
+
 // What has not shipped, per branch. A branch carries a unit when some commit
 // the unit reported from it is not settled — the same conservatism `landed`
 // applies one section up: provisional, unknown, abandoned and unverifiable all
 // read as not shipped, and only settled means reachable from the default
-// branch. A unit that landed has every hash settled, so it can never appear
-// here; a branch with nothing unsettled gets no line at all.
+// branch. A branch with nothing unsettled gets no line at all.
 export function unshippedBranches(works: WorkState[], verdicts: Record<string, Verdict>): BranchUnshipped[]
 {
     const branches = new Map<string, BranchUnshipped>();
-    for (const work of works)
+    for (const work of stated(works))
     {
         for (const [key, hashes] of evidenceByBranch(work))
         {
@@ -849,9 +872,19 @@ export function unshippedBranches(works: WorkState[], verdicts: Record<string, V
     // on either machine.
     for (const state of branches.values())
     {
-        state.unshipped.sort((left, right) => left.work.localeCompare(right.work));
+        state.unshipped.sort((left, right) => compareBytes(left.work, right.work));
     }
     return [...branches.values()].sort(compareBranch);
+}
+
+// UTF-8 byte order, never `localeCompare`: the default collator is built from
+// LC_ALL and LANG, so the same store folded on two machines — or by one
+// machine whose environment changed between runs — would order these lines
+// differently. A branch name is bytes the store recorded; comparing it by
+// those bytes is the only comparison the environment cannot move.
+function compareBytes(left: string, right: string): number
+{
+    return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 // Named branches first and in name order, the unrecorded line last: it is the
@@ -862,7 +895,7 @@ function compareBranch(left: BranchUnshipped, right: BranchUnshipped): number
     {
         return (left.branch === undefined ? 1 : 0) - (right.branch === undefined ? 1 : 0);
     }
-    return left.branch.localeCompare(right.branch);
+    return compareBytes(left.branch, right.branch);
 }
 
 // The single site that answers "what waits on a person": every renderer reads
