@@ -292,6 +292,42 @@ if (!armoured.includes("-----BEGIN OPENSSH PRIVATE KEY-----"))
 }
 assertKeepsNothingOf("a key block refusal", armoured, "b3BlbnNzaC1rZXktdjEAAAAA");
 
+// The ids this store mints read like key material to the entropy backstop —
+// 26 generated characters each — and a note that names recorded events by id
+// is exactly what the evidence surface is for (#133). The exemption is the id
+// grammar and nothing wider: a credential travelling in the same note, and a
+// credential of the same shape that is not an id, are still refused.
+const IDS = "decisions-01kyvzvraamhewfvbk7t586s80-01kyvzvyw7tkjyz8v695a1cbmt";
+const DENSE_KEY = "Zx7Qn4Wv2Lp9Kd3Rt8Yf6Hb1Mj5Cs0Ag4Ue7Nw2Vq";
+
+records("a note naming two recorded events by id", { notes: [IDS] });
+records("an event id in prose", { text: `superseded by 01kyvzvraamhewfvbk7t586s80` });
+refuses("a generated key beside two event ids", { notes: [`${IDS}-${DENSE_KEY}`] }, "payload.notes[0]", DENSE_KEY);
+refuses("a generated key that is not an id", { text: DENSE_KEY }, "payload.text", DENSE_KEY);
+// Two runs of the id alphabet, joined the way the note above joins two real
+// ids, whose leading ten characters decode to no plausible instant. The
+// timestamp is what makes the exemption a recognition of what this store mints
+// rather than a hole in the shape of one.
+const NOT_IDS = "zzzzzzzzzz4wvxq8m2n7rp5tk3-zzzzzzzzzz4wvxq8m2n7rp5tk2";
+refuses("id-shaped runs that no store minted", { text: NOT_IDS }, "payload.text", NOT_IDS);
+
+// Terminal control bytes are a payload class of their own: they carry no
+// state, every renderer obeys them, and the width table charges them nothing —
+// so a stored ESC moves the cell boundaries of every table drawn under it
+// (#138). Refused at ingestion, like everything else this gate judges.
+// Built from code points rather than written as literals: a control byte in
+// a source file is invisible in the editor that has to review this table.
+const ESC = String.fromCharCode(0x1b);
+const BEL = String.fromCharCode(0x07);
+const DEL = String.fromCharCode(0x7f);
+
+refuses("an escape sequence in a work outcome", { outcome: `render ${ESC}[31mred${ESC}[0m rows` }, "payload.outcome");
+refuses("a bell byte in a decision", { text: `decided${BEL}` }, "payload.text");
+refuses("a delete byte in a nested note", { result: { why: `pruned${DEL}` } }, "payload.result.why");
+refuses("a control byte in a ref", {}, "refs.commits[0]", undefined, { refs: { commits: [`3fd418a8${ESC}`] } });
+refuses("a control byte used as a field name", { [`col${ESC}umn`]: "x" }, "payload key #0");
+records("the whitespace a record legitimately carries", { text: "first line\nsecond\tcolumn\r\nthird" });
+
 // A name that merely contains a forbidden word is a different field, so the
 // word rule is a word rule and not a substring one.
 records("a review envelope", { envelope: { id: "e-1", verdict: "approve" } });

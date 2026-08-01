@@ -144,6 +144,22 @@ cd "$ROOT/A/ws/mono-wt"
 ROOTERR="$(SELF work 2>&1 || true)"
 echo "$ROOTERR" | grep -q 'registered project "foo" is at' || fail "the worktree root claimed a project registered below it"
 echo "$ROOTERR" | grep -q "/A/ws/mono-wt/apps/foo" || fail "the message did not name the mapped directory in this checkout"
+# a slugless link at the root of that repository has two answers and no way to
+# choose between them, so it names the candidates instead of inferring one:
+# linking the root to a subdirectory project would make that project claim
+# every checkout of the repository on this machine
+cd "$ROOT/A/ws/mono-wt"
+ROOTLINK="$(SELF project link 2>&1 || true)"
+echo "$ROOTLINK" | grep -q "registered projects sit below it" || fail "a slugless link at the repository root inferred a subdirectory project"
+echo "$ROOTLINK" | grep -q "foo at " || fail "the refusal did not name the candidate it declined to infer"
+[ -f "$ROOT/A/ws/mono-wt/.self" ] && fail "the refused link still wrote a marker at the repository root"
+grep -q '"path":"'"$ROOT"'/A/ws/mono-wt"' "$ROOT/A/ws/.superself/links.jsonl" && fail "the refused link still linked the repository root"
+# naming the slug is still the way to link a checkout of a project that is
+# registered below the root
+cd "$ROOT/A/ws/mono-wt/apps/foo"
+SELF project link foo > /dev/null
+[ -f .self ] || fail "a named link inside the mapped directory was refused"
+
 cd "$ROOT/A/ws/mono"
 SELF project add --name mono --desc "the repository root beside apps/foo" --no-connect > /dev/null
 SELF goal set "prove the repository root is its own project"
@@ -151,6 +167,36 @@ cd "$ROOT/A/ws/mono-wt"
 SELF setup | grep -q "^project    mono" || fail "the worktree root did not resolve to the root project"
 cd "$ROOT/A/ws/mono-wt/apps/foo"
 SELF setup | grep -q "^project    foo" || fail "the shallower project won over the directory the command ran in"
+cd "$ROOT/A/ws/demo"
+
+# a linked path is a claim about a repository, and a path outlives the checkout
+# that was linked at it: a new, unrelated repository created where a linked
+# checkout used to be must not answer as the project that stood there
+mkdir -p "$ROOT/A/ws/replaced"
+cd "$ROOT/A/ws/replaced"
+git init -q -b main
+echo one > one.txt && git add . && git commit -qm "the repository that was linked"
+SELF project add --name replaced --desc "linked, then deleted" --no-connect > /dev/null
+SELF goal set "prove a replaced checkout stops resolving" > /dev/null
+grep -q '"slug":"replaced".*"repository":"' "$ROOT/A/ws/.superself/links.jsonl" \
+    || fail "the link recorded no repository identity to compare against"
+cd "$ROOT/A/ws"
+rm -rf "$ROOT/A/ws/replaced"
+mkdir -p "$ROOT/A/ws/replaced"
+cd "$ROOT/A/ws/replaced"
+git init -q -b main
+echo two > two.txt && git add . && git commit -qm "an unrelated repository at the same path"
+STALE="$(SELF work 2>&1 || true)"
+echo "$STALE" | grep -q "not inside a registered project" \
+    || fail "a new repository at a deleted checkout's path still resolved to the old project"
+echo "$STALE" | grep -q "no longer the repository linked there" \
+    || fail "the stale link was ignored without saying so"
+# the same repository through another of its working trees still resolves: the
+# identity is the repository's, not the path's
+cd "$ROOT/A/ws/demo"
+git worktree add -q "$ROOT/A/ws/demo-identity" -b identity-side
+cd "$ROOT/A/ws/demo-identity"
+SELF setup | grep -q "^project    demo" || fail "a worktree of the linked repository stopped resolving"
 cd "$ROOT/A/ws/demo"
 
 # events record the branch they were made on, and one work unit collects every

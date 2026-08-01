@@ -52,6 +52,19 @@ else if (mode === "prose")
     // prose reads like success and is evidence of nothing.
     finish({ status: "completed", summary: "I wrote the design document.", artifacts: [{ name: "design.md", sha256: "0".repeat(64), bytes: 12 }] });
 }
+else if (mode === "evidence")
+{
+    // An envelope that types its own evidence, the way an implementer that
+    // committed its work does: `kind: "commit"` is the declaration `commit:`
+    // makes on the report verb, so what the gate does with the ref is the
+    // question, never what shape the ref happens to have.
+    finish({
+        status: "completed",
+        summary: "typed commit evidence",
+        artifacts: [stage("design.md", "typed evidence body")],
+        evidence: [{ kind: "commit", ref: process.env.AGENT_EVIDENCE }]
+    });
+}
 else if (mode === "idle")
 {
     // Still running when the case looks at it.

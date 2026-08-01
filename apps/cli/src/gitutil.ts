@@ -104,7 +104,15 @@ function resolvesInRepo(projectDir: string, value: string): boolean
     return HEX.test(value) && git(projectDir, "cat-file", "-e", `${value}^{commit}`).ok;
 }
 
-function requireRevision(value: string): string
+// The one revision guard: a declared commit ref is hex of a length git can
+// resolve — the same width `HEX` states above — or it is not a Git object
+// name, and it is recorded lowercased so one object has one spelling. Every
+// entry point that takes a typed or declared commit ref goes through this —
+// the report verb through `classifyEvidence` above, and the attempt gate with
+// the refs an envelope declared (#132). A second, laxer reading of the same
+// question is what let prose reach `refs.commits` and be reported later as a
+// rewritten history.
+export function requireRevision(value: string): string
 {
     if (!HEX.test(value))
     {
@@ -169,6 +177,28 @@ export function realPath(path: string): string
         real.set(path, existsSync(path) ? realpathSync(path) : path);
     }
     return real.get(path) ?? path;
+}
+
+const identities = new Map<string, string | null>();
+
+// What a repository is, told apart from where it sits. A path outlives the
+// checkout that was linked at it — a checkout is deleted and a new repository
+// is created at the same path — and every other question this module answers
+// about a linked path is about the path (#115).
+//
+// The commit HEAD's first-parent chain starts from is the identity: every
+// working tree of one repository answers the same, a later merge of an
+// unrelated history cannot rename it, and two unrelated repositories never
+// collide. A repository with no commits yet has no identity to record, and
+// says so rather than offering one that would change under it.
+export function repositoryIdentity(dir: string): string | null
+{
+    if (!identities.has(dir))
+    {
+        const result = git(dir, "rev-list", "--max-parents=0", "--first-parent", "HEAD");
+        identities.set(dir, result.ok && result.out !== "" ? result.out.split("\n").pop() ?? null : null);
+    }
+    return identities.get(dir) ?? null;
 }
 
 const worktrees = new Map<string, string[]>();

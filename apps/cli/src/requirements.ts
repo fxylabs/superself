@@ -5,6 +5,7 @@ import {
     nextRequirementId,
     requirementOf
 } from "./completion.js";
+import { requireRevision } from "./gitutil.js";
 import { attemptMarker, confirmHuman } from "./human.js";
 import { findEventByPrefix } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
@@ -21,16 +22,27 @@ import { CliError, EventRefs, SelfEvent } from "./types.js";
 // `recheck` re-judges what a revision left stale, and a revision invalidates
 // coverage rather than rewriting it.
 
+// The id printed here is read back out of the fold, not the one computed
+// before the append: two sessions registering against one unit at the same
+// instant both compute the same next value, and only the log can order them.
+// The computed value still travels in the payload, because a store is read by
+// older binaries than the one that wrote it and that is where they look.
 export function cmdWorkRequire(ctx: ProjectContext, args: string[]): void
 {
     const { positionals } = parseCommand("work", args, {}, 2);
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireOpenWork(model, positionals[0]);
     const text = requireText(positionals[1], 'work require <work-id> "<what the outcome must cover>"');
-    const id = nextRequirementId(work.completion);
-    recordEvent(ctx, makeEvent(ctx.project, "work.required", { work: work.id, requirement: id, text }),
-        `${work.id} ${id} ${text}`);
-    console.log(id);
+    const expected = nextRequirementId(work.completion);
+    const event = makeEvent(ctx.project, "work.required", { work: work.id, requirement: expected, text });
+    recordEvent(ctx, event, `${work.id} ${expected} ${text}`);
+    console.log(registeredId(ctx, work.id, event.id) ?? expected);
+}
+
+function registeredId(ctx: ProjectContext, work: string, event: string): string | undefined
+{
+    const unit = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === work);
+    return unit?.completion.requirements.find((item) => item.event === event)?.id;
 }
 
 // A revision is the record that what the unit has to cover changed, so it
@@ -129,7 +141,11 @@ function coverageStateRefusal(work: WorkState, requirement: string, recheck: boo
 // exactly what this whole check exists to refuse.
 function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRefs
 {
-    const commits = (values.evidence ?? []) as string[];
+    // Normalized where it is typed, through the guard every other commit-ref
+    // entry point reads: what reaches `refs.commits` is the spelling storage
+    // uses, so an uppercase object name is the same evidence rather than a
+    // 40-character mixed-case run the event guard reads as a credential (#132).
+    const commits = ((values.evidence ?? []) as string[]).map(requireRevision);
     const artifacts = (values.artifact ?? []) as string[];
     const report = values.report as string | undefined;
     if (commits.length === 0 && artifacts.length === 0 && report === undefined)
@@ -166,9 +182,15 @@ function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRe
 // used: a report attaches the abbreviated HEAD, and `--evidence` records
 // exactly what was typed. Two ids name the same commit when one is a prefix of
 // the other, which is the only comparison that holds across both.
+//
+// Case is not part of the name. Storage is lowercased at every intake, so a
+// comparison that kept the case refused an uppercase `--evidence` against the
+// very commit the unit carries (#132).
 function sameCommit(attached: string, named: string): boolean
 {
-    return attached.startsWith(named) || named.startsWith(attached);
+    const stored = attached.toLowerCase();
+    const wanted = named.toLowerCase();
+    return stored.startsWith(wanted) || wanted.startsWith(stored);
 }
 
 /* ── approval ──────────────────────────────────────────────────────── */

@@ -25,6 +25,10 @@ export interface Requirement
     // a requirement that changed reads as uncovered until it is judged again.
     revision: number;
     retired?: boolean;
+    // The registration this requirement was folded from. A session that just
+    // recorded one reads its own id back through this rather than trusting the
+    // value it guessed before the append.
+    event: string;
 }
 
 // What a requirement was covered by, and the revision it was judged against.
@@ -124,9 +128,20 @@ export function isCompletionEvent(type: string): boolean
 
 export function applyCompletion(state: CompletionState, event: SelfEvent): void
 {
+    // The id is where this registration sits among the unit's registrations,
+    // not the value the recording session put in the payload. Two sessions
+    // racing `work require` against one unit both read the same next value and
+    // both wrote r1 (#110); the log's order is the one thing that cannot tie,
+    // so it is what names them — and a unit already carrying duplicates is
+    // repaired by the next fold rather than needing to be retired.
     if (event.type === "work.required")
     {
-        state.requirements.push({ id: String(event.payload.requirement), text: String(event.payload.text), revision: 1 });
+        state.requirements.push({
+            id: `r${state.requirements.length + 1}`,
+            text: String(event.payload.text),
+            revision: 1,
+            event: event.id
+        });
         return;
     }
     if (event.type === "work.approval-required")

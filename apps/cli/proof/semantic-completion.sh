@@ -65,6 +65,18 @@ const events = fs.readFileSync(file, "utf8").split("\n").filter((line) => line.t
 process.stdout.write(String(events.filter((e) => e.type === type && (e.refs?.work === work || e.payload?.work === work)).length));
 ' "$LOG_A" "$1" "$2"
 }
+# The commit refs a unit's newest report carries, and whether the writer typed
+# them: the two things the gate decides about an envelope's declared evidence.
+report_refs()
+{
+    node -e '
+const fs = require("node:fs");
+const [file, work] = process.argv.slice(1);
+const events = fs.readFileSync(file, "utf8").split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line));
+const report = events.filter((e) => e.type === "report.added" && e.refs?.work === work).pop();
+process.stdout.write(report === undefined ? "no report" : `${(report.refs.commits ?? []).join(",")} typed=${report.payload.evidenceTyped === true}`);
+' "$LOG_A" "$1"
+}
 work_status()
 {
     SELF work show "$1" | node -e '
@@ -162,6 +174,77 @@ echo "$STILL" | grep -q "$R1 " && fail "the refusal named a requirement that is 
 SELF work met "$WREQ" --requirement "$R2" --why "the evidence is the report attached above" --evidence "$EVID" > /dev/null
 SELF work done "$WREQ" > /dev/null || fail "done was refused with every live requirement covered"
 [ "$(work_status "$WREQ")" = "done" ] || fail "a fully covered unit did not reach done"
+
+# ---------------------------------------------------------------------------
+# Concurrent registration leaves every requirement addressable
+# ---------------------------------------------------------------------------
+# Two sessions registering against one unit both read the same next value
+# before either of them appends, so the value a session computes cannot be what
+# names the registration — four of them raced and all four said r1 (#110).
+# Where the event sits in the log is the one ordering that cannot tie.
+WRACE="$(SELF work add "concurrent registration leaves every requirement addressable" | tail -1)"
+SELF work start "$WRACE" > /dev/null
+for n in 1 2 3 4
+do
+    SELF work require "$WRACE" "statement $n" > "$ROOT/race.$n" 2>&1 &
+done
+wait
+for n in 1 2 3 4
+do
+    tail -1 "$ROOT/race.$n"
+done | sort > "$ROOT/race.ids"
+[ "$(sort -u < "$ROOT/race.ids" | wc -l | tr -d ' ')" = "4" ] \
+    || fail "concurrent work require minted duplicate requirement ids: $(tr '\n' ' ' < "$ROOT/race.ids")"
+[ "$(uncovered "$WRACE")" = "4" ] || fail "four concurrent registrations did not leave four requirements"
+# and each session was told the id its own registration folded to, not the one
+# it computed: a session that covers what it registered has to name the right
+# requirement, and the id it printed is the only thing it has to name it with
+for n in 1 2 3 4
+do
+    SELF work show "$WRACE" | grep -q "^- $(tail -1 "$ROOT/race.$n") — statement $n" \
+        || fail "the id reported to the session that registered statement $n is not the one it folded to"
+done
+
+# a store whose log already carries duplicate ids — what the units damaged
+# before this reads like — is repaired by the next fold rather than having to
+# be retired: the payload value is what those sessions raced on, and the id is
+# no longer read from it
+WDUP="$(SELF work add "a log that already carries duplicate ids reads unambiguously" | tail -1)"
+node -e '
+const fs = require("node:fs");
+const [file, work] = process.argv.slice(1);
+const raced = ["first", "second"].map((which, at) => JSON.stringify({
+    id: ("01kyyd0p" + at).padEnd(26, "0"),
+    ts: `2026-08-01T00:00:0${at}.000Z`,
+    type: "work.required",
+    origin: { actor: "agent", confirmed: false },
+    project: "demo",
+    payload: { work, requirement: "r1", text: `the ${which} of two registrations that raced` }
+}) + "\n");
+fs.appendFileSync(file, raced.join(""));
+' "$LOG_A" "$WDUP"
+DUP="$(SELF work show "$WDUP")"
+echo "$DUP" | grep -q "^- r1 — the first of two registrations that raced" \
+    || fail "the earlier of two raced registrations did not fold to r1"
+echo "$DUP" | grep -q "^- r2 — the second of two registrations that raced" \
+    || fail "a log carrying duplicate requirement ids was not repaired by the fold"
+
+# ---------------------------------------------------------------------------
+# One reading of "is this a commit", at every boundary
+# ---------------------------------------------------------------------------
+# An object name is stored lowercased at every intake, so a coverage comparison
+# that kept the case refused an uppercase --evidence against the very commit
+# the unit carries (#132).
+WCASE="$(SELF work add "a commit is the same commit however it is spelled" | tail -1)"
+SELF work start "$WCASE" > /dev/null
+RC="$(SELF work require "$WCASE" "coverage matches the attached commit whatever its case" | tail -1)"
+git commit -q --allow-empty -m "the commit this unit is judged against"
+CASEVID="$(git rev-parse HEAD)"
+UPPERVID="$(printf %s "$CASEVID" | tr 'a-f' 'A-F')"
+SELF report "$WCASE" "the work this unit did" --evidence "$CASEVID" > /dev/null
+SELF work met "$WCASE" --requirement "$RC" --why "named in the case the terminal offered" --evidence "$UPPERVID" > /dev/null \
+    || fail "an uppercase spelling of the attached commit was refused as evidence"
+[ "$(count_for work.covered "$WCASE")" = "1" ] || fail "the uppercase coverage left no event"
 
 # ---------------------------------------------------------------------------
 # A revision returns a covered requirement to uncovered
@@ -315,6 +398,35 @@ echo "$PASSED" | grep -q "$RA" || fail "settlement did not name what the unit st
 
 AT_PASS="$(attempts_of "$WATT" | tail -1)"
 SELF work show "$WATT" | grep -q "model claude-opus-5" || fail "the attempt did not record the runtime it ran under"
+
+# ---------------------------------------------------------------------------
+# The gate takes an envelope's commit refs through the one revision guard
+# ---------------------------------------------------------------------------
+# `kind: "commit"` in an envelope is the claim `commit:` makes on the report
+# verb, so it is read the same way at the same strength: recorded lowercased,
+# and marked typed so the fold never re-guesses it by shape (#132).
+WGATE="$(SELF work add "an envelope's typed commit evidence is normalized where it enters" | tail -1)"
+SELF work start "$WGATE" > /dev/null
+workspec "$ROOT/ws-evid.json" "id=ws-evid" "work=$WGATE" "dest=$ROOT/dest/evid.md" "mode=evidence" \
+    "evidence=$UPPERVID" "providerName=att-provider" "model=claude-opus-5"
+SELF spec apply "$ROOT/ws-evid.json" > /dev/null
+SELF spec dispatch ws-evid > /dev/null 2>&1 || fail "an envelope declaring typed commit evidence did not pass the gate"
+[ "$(report_refs "$WGATE")" = "$CASEVID typed=true" ] \
+    || fail "the gate recorded the envelope's commit ref as \"$(report_refs "$WGATE")\", not lowercased and typed"
+
+# prose an envelope declared to be a commit is refused where it enters, instead
+# of reaching refs.commits and being folded later into a report that the
+# history it names was rewritten
+WPROSE="$(SELF work add "an envelope cannot declare prose to be a commit" | tail -1)"
+SELF work start "$WPROSE" > /dev/null
+workspec "$ROOT/ws-prose-evid.json" "id=ws-prose-evid" "work=$WPROSE" "dest=$ROOT/dest/prose-evid.md" \
+    "mode=evidence" "evidence=see the design note" "providerName=att-provider" "model=claude-opus-5"
+SELF spec apply "$ROOT/ws-prose-evid.json" > /dev/null
+PROSEEVID="$(SELF spec dispatch ws-prose-evid 2>&1 || true)"
+echo "$PROSEEVID" | grep -q "is not a Git object name" || fail "an envelope declaring prose as a commit was accepted"
+echo "$PROSEEVID" | grep -q 'note:see the design note' || fail "the refusal did not say how to record the value it declined"
+[ "$(count_for report.added "$WPROSE")" = "0" ] || fail "the refused envelope still attached a report"
+[ -f "$ROOT/dest/prose-evid.md" ] && fail "the refused envelope still published an artifact"
 
 # ---------------------------------------------------------------------------
 # A supervision tick settles the same way, and writes nothing beyond it

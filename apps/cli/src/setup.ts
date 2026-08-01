@@ -75,7 +75,7 @@ function workspaceLines(workspaceDir: string | null): string[]
 function projectLine(storeDir: string, slug: string): string
 {
     const active = resolveProjectPath(storeDir, slug) ?? "(not linked on this machine)";
-    const others = (readLinks(storeDir)[slug] ?? []).filter((path) => path !== active).length;
+    const others = (readLinks(storeDir)[slug] ?? []).filter((item) => item.path !== active).length;
     return `${slug} → ${active}${others > 0 ? ` (+${others} more checkout${others > 1 ? "s" : ""})` : ""}`;
 }
 
