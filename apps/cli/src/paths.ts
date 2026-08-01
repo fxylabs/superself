@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { checkoutTops, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -224,6 +224,37 @@ export function readLinks(storeDir: string): Record<string, LinkedCheckout[]>
     return links;
 }
 
+// Linking a path this machine already linked. Appending a second entry for a
+// path would leave the stale one in front of it, so the entry is replaced —
+// and only when what it claimed is no longer what stands there, which is the
+// one case that needs it. Every read skips a path whose recorded identity
+// stopped matching, so without this the remedy the #115 warning names could
+// not clear the state it warns about and the checkout stayed unusable for
+// good (#115).
+//
+// Deliberate is the point: `self project link` is a user act at that path, so
+// the replacement is something a person asked for rather than resolution
+// quietly deciding the claim was wrong.
+export function recordLink(storeDir: string, slug: string, path: string, repository: string | null): boolean
+{
+    const file = join(storeDir, LINKS_FILE);
+    const entries = readJsonl(file);
+    const stale = entries.filter((entry) => entry.path === path
+        && entry.repository !== undefined && repository !== null && String(entry.repository) !== repository);
+    const entry = repository === null ? { slug, path } : { slug, path, repository };
+    if (stale.length > 0)
+    {
+        const kept = entries.filter((item) => item.path !== path).concat([entry]);
+        writeFileSync(file, kept.map((item) => JSON.stringify(item) + "\n").join(""));
+        return true;
+    }
+    if (!entries.some((item) => item.slug === slug && item.path === path))
+    {
+        appendFileSync(file, JSON.stringify(entry) + "\n");
+    }
+    return false;
+}
+
 // Warned about once per process: the resolution path runs on every command,
 // and a stale link would otherwise print the same line in front of every one
 // of them.
@@ -234,9 +265,14 @@ const reported = new Set<string>();
 // the same path used to resolve silently to the old project — every command in
 // the new repository answered as the old one (#115). A link that claimed no
 // identity is left alone, because there is nothing to compare it against.
-function sameRepository(link: LinkedCheckout, path: string): boolean
+//
+// What stands there arrives as a thunk, because deriving it is a git history
+// walk of ~280 ms: a link that claimed nothing never pays for it, and a caller
+// that already knows every candidate is a working tree of one repository
+// passes one answer for all of them (#128).
+function sameRepository(link: LinkedCheckout, path: string, identity: () => string | null): boolean
 {
-    if (link.repository === undefined || repositoryIdentity(path) === link.repository)
+    if (link.repository === undefined || identity() === link.repository)
     {
         return true;
     }
@@ -244,7 +280,7 @@ function sameRepository(link: LinkedCheckout, path: string): boolean
     {
         reported.add(path);
         console.error(`warning: ${path} is no longer the repository linked there — ignoring the link; ` +
-            `run \`self project link <slug>\` there if the project moved`);
+            `run \`self project link <slug>\` in that checkout to link it to what stands there now`);
     }
     return false;
 }
@@ -257,18 +293,23 @@ function sameRepository(link: LinkedCheckout, path: string): boolean
 function standing(link: LinkedCheckout): boolean
 {
     const path = realPath(link.path);
-    return !existsSync(path) || sameRepository(link, path);
+    return !existsSync(path) || sameRepository(link, path, () => repositoryIdentity(path));
 }
 
 // Single-path needs resolve to the checkout the command was run from, so a
 // fold never writes into a worktree another session is holding.
+//
+// Standing is asked of the link that is about to be used, never of every link
+// for the slug: `self setup` resolves once per registered project, and probing
+// each of a project's checkouts there put a read command an order of magnitude
+// over #128's half-second budget.
 export function resolveProjectPath(storeDir: string, slug: string, from: string = process.cwd()): string | null
 {
-    const linked = (readLinks(storeDir)[slug] ?? []).filter(standing).map((item) => item.path);
-    const active = linked.find((path) => contains(path, from));
+    const linked = readLinks(storeDir)[slug] ?? [];
+    const active = linked.find((link) => contains(link.path, from) && standing(link));
     if (active !== undefined)
     {
-        return active;
+        return active.path;
     }
     // An unlinked checkout is still the one the command ran in; only when the
     // command came from somewhere else does another checkout stand in.
@@ -277,8 +318,23 @@ export function resolveProjectPath(storeDir: string, slug: string, from: string 
     {
         return match.dir;
     }
-    const fallback = linked.filter((path) => existsSync(path)).pop();
-    return fallback ?? readRegistry(storeDir).find((item) => item.slug === slug)?.path ?? null;
+    return lastStanding(linked) ?? readRegistry(storeDir).find((item) => item.slug === slug)?.path ?? null;
+}
+
+// The newest linked checkout that is still there and still holds what was
+// linked. Asked newest first and stopped at the first answer, so the common
+// store pays for one probe rather than one per link.
+function lastStanding(linked: LinkedCheckout[]): string | undefined
+{
+    for (let index = linked.length - 1; index >= 0; index -= 1)
+    {
+        const link = linked[index];
+        if (existsSync(link.path) && standing(link))
+        {
+            return link.path;
+        }
+    }
+    return undefined;
 }
 
 export interface CheckoutMatch
@@ -302,13 +358,15 @@ interface RepositoryLink
 function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
 {
     const links = readLinks(storeDir);
+    const identity = repositoryClaim(tops);
     const found: RepositoryLink[] = [];
     for (const entry of readRegistry(storeDir))
     {
         for (const linked of links[entry.slug] ?? [])
         {
             const path = realPath(linked.path);
-            if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path)) || !sameRepository(linked, path))
+            if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path))
+                || !sameRepository(linked, path, identity))
             {
                 continue;
             }
@@ -320,6 +378,23 @@ function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
         }
     }
     return found;
+}
+
+// Every path that survives the `tops` filter above sits inside a working tree
+// of one repository, so what stands at it is the same value for all of them:
+// asked once for the repository rather than once per link, and not at all
+// until a link actually claims an identity to compare against (#128).
+function repositoryClaim(tops: string[]): () => string | null
+{
+    let identity: string | null | undefined;
+    return () =>
+    {
+        if (identity === undefined)
+        {
+            identity = tops.length === 0 ? null : repositoryIdentity(tops[0]);
+        }
+        return identity;
+    };
 }
 
 // Where each project registered in this repository sits inside the checkout

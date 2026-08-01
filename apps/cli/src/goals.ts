@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { validDate } from "./dates.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
+import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { milestoneId, objectiveId, workId } from "./ids.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import {
@@ -303,7 +304,11 @@ function coverageRefs(model: ProjectModel, milestone: MilestoneState, values: { 
     {
         refs.work = requireLinkedWork(model, milestone, values.work).id;
     }
-    const commits = values.evidence ?? [];
+    // The same revision guard every other commit-ref intake reads: this one
+    // wrote what was typed straight into `refs.commits`, so prose was recorded
+    // as a commit and an uppercase object name was refused later by the event
+    // guard as a credential (#132).
+    const commits = (values.evidence ?? []).map((item) => requireRevision(item, bareRevisionRefusal("milestone met")));
     if (commits.length > 0)
     {
         refs.commits = commits;

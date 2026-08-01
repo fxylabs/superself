@@ -205,10 +205,10 @@ do
         || fail "the id reported to the session that registered statement $n is not the one it folded to"
 done
 
-# a store whose log already carries duplicate ids — what the units damaged
-# before this reads like — is repaired by the next fold rather than having to
-# be retired: the payload value is what those sessions raced on, and the id is
-# no longer read from it
+# a store whose log already carries duplicate ids reads unambiguously: the
+# earlier registration keeps the id it was told, and only the one that
+# collided is renamed — into a form outside the r<n> sequence, so no later
+# registration can be handed an id that is already spoken for
 WDUP="$(SELF work add "a log that already carries duplicate ids reads unambiguously" | tail -1)"
 node -e '
 const fs = require("node:fs");
@@ -226,8 +226,47 @@ fs.appendFileSync(file, raced.join(""));
 DUP="$(SELF work show "$WDUP")"
 echo "$DUP" | grep -q "^- r1 — the first of two registrations that raced" \
     || fail "the earlier of two raced registrations did not fold to r1"
-echo "$DUP" | grep -q "^- r2 — the second of two registrations that raced" \
-    || fail "a log carrying duplicate requirement ids was not repaired by the fold"
+echo "$DUP" | grep -q "^- r1-2 — the second of two registrations that raced" \
+    || fail "the colliding registration did not fold to a distinct id"
+echo "$DUP" | grep -q "^- r2 — " && fail "a duplicate renamed a registration into the sequence a later one draws from"
+
+# an id is fixed the moment its line lands: every stored event that names a
+# requirement — coverage, recheck, revision, retirement — carries the value
+# its registering session was told, so a fold that renumbered around an
+# earlier duplicate re-pointed all of them. The retirement below was written
+# against the third statement; read against a renumbered set it retired the
+# second one instead, silently dropping a live requirement its author never
+# gave up and letting `work done` pass over it (#110)
+WPOINT="$(SELF work add "a stored requirement reference keeps naming what it named" | tail -1)"
+SELF work start "$WPOINT" > /dev/null
+node -e '
+const fs = require("node:fs");
+const [file, work] = process.argv.slice(1);
+const line = (at, type, payload) => JSON.stringify({
+    id: ("01kyyd1p" + at).padEnd(26, "0"),
+    ts: `2026-08-01T00:01:0${at}.000Z`,
+    type,
+    origin: { actor: "agent", confirmed: false },
+    project: "demo",
+    payload: { work, ...payload }
+}) + "\n";
+fs.appendFileSync(file, [
+    line(0, "work.required", { requirement: "r1", text: "STATEMENT-A, the first of two that raced" }),
+    line(1, "work.required", { requirement: "r1", text: "STATEMENT-B, the second of two that raced" }),
+    line(2, "work.required", { requirement: "r2", text: "STATEMENT-C, the one the author dropped" }),
+    line(3, "work.requirement-retired", { requirement: "r2", why: "C is out of scope" })
+].join(""));
+' "$LOG_A" "$WPOINT"
+POINT="$(SELF work show "$WPOINT")"
+echo "$POINT" | grep -q "STATEMENT-C, the one the author dropped _(retired)_" \
+    || fail "a stored retirement was re-pointed away from the statement it named"
+echo "$POINT" | grep -q "STATEMENT-B, the second of two that raced _(retired)_" \
+    && fail "the fold retired a live requirement its author never dropped"
+POINTDONE="$(SELF work done "$WPOINT" 2>&1 || true)"
+one_line "$POINTDONE"
+echo "$POINTDONE" | grep -q "STATEMENT-B, the second of two that raced" \
+    || fail "done went fail-open over a live requirement the fold had retired"
+[ "$(count_for work.done "$WPOINT")" = "0" ] || fail "the refused done still reached the log"
 
 # ---------------------------------------------------------------------------
 # One reading of "is this a commit", at every boundary

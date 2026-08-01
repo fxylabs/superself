@@ -191,12 +191,102 @@ echo "$STALE" | grep -q "not inside a registered project" \
     || fail "a new repository at a deleted checkout's path still resolved to the old project"
 echo "$STALE" | grep -q "no longer the repository linked there" \
     || fail "the stale link was ignored without saying so"
+
+# the remedy that warning names has to clear the state it warns about. A link
+# only ever appended, so re-linking a path already in the file reported success
+# and changed nothing: every read went on skipping the path, `self setup` read
+# the project unlinked for good, and the warning printed in front of every
+# command in that checkout forever, with no supported way out. A deliberate
+# re-link at the path replaces the claim the deleted checkout left (#115)
+echo "$STALE" | grep -q "self project link" || fail "the warning named no remedy"
+cd "$ROOT/A/ws/replaced"
+RELINK="$(SELF project link replaced 2>&1)"
+echo "$RELINK" | grep -q "replacing the repository previously linked" \
+    || fail "re-linking a replaced checkout did not say it replaced the stale claim"
+[ "$(grep -c '"path":"[^"]*/A/ws/replaced"' "$ROOT/A/ws/.superself/links.jsonl")" = "1" ] \
+    || fail "the re-link left two entries for one path"
+grep -q '"slug":"replaced","path":"[^"]*/A/ws/replaced","repository":"' "$ROOT/A/ws/.superself/links.jsonl" \
+    || fail "the replaced entry recorded no identity for what stands there now"
+SELF work > /dev/null 2>&1 || fail "the re-linked checkout still did not resolve to its project"
+cd "$ROOT/A/ws"
+FIXED="$(SELF setup 2>&1)"
+echo "$FIXED" | grep -q "no longer the repository linked there" \
+    && fail "the re-linked checkout still warns about an identity it no longer claims"
+echo "$FIXED" | grep -q "replaced → .*/A/ws/replaced" \
+    || fail "the re-linked checkout still read as unlinked on this machine"
+# an honest re-link changes nothing: running it again neither rewrites the
+# file nor claims to have replaced anything
+LINKS_BEFORE="$(cat "$ROOT/A/ws/.superself/links.jsonl")"
+cd "$ROOT/A/ws/replaced"
+SELF project link replaced | grep -q "replacing the repository" \
+    && fail "a re-link at an honest path claimed to replace a stale identity"
+[ "$LINKS_BEFORE" = "$(cat "$ROOT/A/ws/.superself/links.jsonl")" ] \
+    || fail "a re-link at an honest path rewrote the links file"
 # the same repository through another of its working trees still resolves: the
 # identity is the repository's, not the path's
 cd "$ROOT/A/ws/demo"
 git worktree add -q "$ROOT/A/ws/demo-identity" -b identity-side
 cd "$ROOT/A/ws/demo-identity"
 SELF setup | grep -q "^project    demo" || fail "a worktree of the linked repository stopped resolving"
+cd "$ROOT/A/ws/demo"
+
+# what stands at a linked path is a git history walk to the root commit, and
+# asking it once per link put `self setup` an order of magnitude over the
+# half-second a read command gets (#128). The cost arrives one link at a time
+# as checkouts are re-linked, so no before/after on today's store would show
+# it — the bound is relative instead: resolving a project does not ask more
+# often because it has more checkouts. Counted, not timed, so a loaded runner
+# cannot make it flake.
+SHIM="$ROOT/shim"
+mkdir -p "$SHIM"
+REAL_GIT="$(command -v git)"
+cat > "$SHIM/git" <<EOF
+#!/bin/sh
+if [ -n "\$GIT_PROBE_LOG" ]
+then
+    for arg in "\$@"
+    do
+        if [ "\$arg" = "--max-parents=0" ]
+        then
+            echo probe >> "\$GIT_PROBE_LOG"
+            break
+        fi
+    done
+fi
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SHIM/git"
+
+# identity probes spent by one `self setup` from the workspace root
+identity_probes()
+{
+    : > "$ROOT/git-probes"
+    (
+        cd "$ROOT/A/ws"
+        export GIT_PROBE_LOG="$ROOT/git-probes"
+        export PATH="$SHIM:$PATH"
+        SELF setup > /dev/null 2>&1
+    )
+    wc -l < "$ROOT/git-probes" | tr -d ' '
+}
+
+link_worktrees()
+{
+    for n in $1
+    do
+        git -C "$ROOT/A/ws/demo" worktree add -q "$ROOT/A/ws/scale-$n" -b "scale-$n"
+        (cd "$ROOT/A/ws/scale-$n" && SELF project link demo > /dev/null)
+    done
+}
+
+link_worktrees "1 2"
+FEW="$(identity_probes)"
+link_worktrees "3 4 5 6 7 8"
+MANY="$(identity_probes)"
+[ "$MANY" -le "$FEW" ] \
+    || fail "resolution asked what stands at a path more often with more links: $FEW probes at 2 extra checkouts, $MANY at 8"
+grep -c '"slug":"demo"' "$ROOT/A/ws/.superself/links.jsonl" | grep -qv '^[012]$' \
+    || fail "the scale probe did not actually link the checkouts it measures"
 cd "$ROOT/A/ws/demo"
 
 # events record the branch they were made on, and one work unit collects every

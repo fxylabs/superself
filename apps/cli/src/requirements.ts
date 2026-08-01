@@ -1,13 +1,15 @@
 import { parseCommand } from "./args.js";
 import {
+    applyCompletion,
     completionRefusal,
+    emptyCompletion,
     liveRequirements,
     nextRequirementId,
     requirementOf
 } from "./completion.js";
-import { requireRevision } from "./gitutil.js";
+import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { attemptMarker, confirmHuman } from "./human.js";
-import { findEventByPrefix } from "./logfile.js";
+import { findEventByPrefix, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { ProjectContext } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
@@ -39,10 +41,26 @@ export function cmdWorkRequire(ctx: ProjectContext, args: string[]): void
     console.log(registeredId(ctx, work.id, event.id) ?? expected);
 }
 
+// Read back from the log, not from a second fold: the id is a function of this
+// unit's `work.required` lines in order and nothing else, so replaying them
+// through the fold's own helper answers identically for one log read instead of
+// a full second model build on the path #128 measured in minutes.
 function registeredId(ctx: ProjectContext, work: string, event: string): string | undefined
 {
-    const unit = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === work);
-    return unit?.completion.requirements.find((item) => item.event === event)?.id;
+    const state = emptyCompletion();
+    for (const line of readEvents(ctx.storeDir, ctx.project))
+    {
+        if (line.type !== "work.required" || line.payload.work !== work)
+        {
+            continue;
+        }
+        applyCompletion(state, line);
+        if (line.id === event)
+        {
+            return state.requirements[state.requirements.length - 1]?.id;
+        }
+    }
+    return undefined;
 }
 
 // A revision is the record that what the unit has to cover changed, so it
@@ -145,7 +163,11 @@ function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRe
     // entry point reads: what reaches `refs.commits` is the spelling storage
     // uses, so an uppercase object name is the same evidence rather than a
     // 40-character mixed-case run the event guard reads as a credential (#132).
-    const commits = ((values.evidence ?? []) as string[]).map(requireRevision);
+    // The refusal is this surface's own: `--evidence` here is a bare object
+    // name, so the guard's typed `commit:`/`note:` grammar names a form that
+    // would only be refused again.
+    const commits = ((values.evidence ?? []) as string[])
+        .map((item) => requireRevision(item, bareRevisionRefusal("work met")));
     const artifacts = (values.artifact ?? []) as string[];
     const report = values.report as string | undefined;
     if (commits.length === 0 && artifacts.length === 0 && report === undefined)

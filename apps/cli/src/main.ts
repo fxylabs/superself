@@ -27,10 +27,10 @@ import {
     MARKER_FILE,
     ProjectContext,
     projectStateDir,
-    readLinks,
     readRegistry,
     readStoreConfig,
     readVerdicts,
+    recordLink,
     requireProject,
     requireWorkspace,
     siblingSlug,
@@ -459,15 +459,15 @@ function cmdView(rest: string[]): void
 
 // The link records which repository stood here, not the path alone: a path is
 // reused by whatever is created at it next, and resolution has to be able to
-// tell the linked checkout from its replacement.
+// tell the linked checkout from its replacement. Re-linking a path whose
+// recorded repository is gone replaces the claim, so this verb is the remedy
+// the stale-link warning names rather than a no-op that reports success (#115).
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
     excludeLocally(ctx.storeDir, LINKS_FILE);
-    if (!(readLinks(ctx.storeDir)[slug] ?? []).some((item) => item.path === projectDir))
+    if (recordLink(ctx.storeDir, slug, projectDir, repositoryIdentity(projectDir)))
     {
-        const repository = repositoryIdentity(projectDir);
-        const entry = repository === null ? { slug, path: projectDir } : { slug, path: projectDir, repository };
-        appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify(entry) + "\n");
+        console.log(`replacing the repository previously linked at ${projectDir}`);
     }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);

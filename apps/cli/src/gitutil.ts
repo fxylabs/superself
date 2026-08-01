@@ -104,19 +104,38 @@ function resolvesInRepo(projectDir: string, value: string): boolean
     return HEX.test(value) && git(projectDir, "cat-file", "-e", `${value}^{commit}`).ok;
 }
 
+// How a surface words the refusal when the value it took is not an object
+// name. The guard decides; the surface says what to do instead, because the
+// remedy differs: the report verb and the attempt envelope declare a type, so
+// `note:` is a form they read, while `work met` and `milestone met` take a
+// bare object name and have no typed form at all. A shared refusal sent those
+// two to a spelling they reject, which only produced a worse error (#132).
+export type RevisionRefusal = (typed: string) => string;
+
+const typedEvidence: RevisionRefusal = (typed) =>
+    `evidence "commit:${typed}" is not a Git object name — record free-form evidence as "note:${typed}"`;
+
+// The refusal for a surface whose `--evidence` is a bare object name, naming
+// the verb the user actually ran and the one surface that does take prose.
+export function bareRevisionRefusal(verb: string): RevisionRefusal
+{
+    return (typed) => `--evidence "${typed}" is not a Git object name — \`self ${verb}\` names a commit; ` +
+        `free-form evidence is recorded on a report, as \`--evidence "note:${typed}"\``;
+}
+
 // The one revision guard: a declared commit ref is hex of a length git can
 // resolve — the same width `HEX` states above — or it is not a Git object
 // name, and it is recorded lowercased so one object has one spelling. Every
 // entry point that takes a typed or declared commit ref goes through this —
-// the report verb through `classifyEvidence` above, and the attempt gate with
-// the refs an envelope declared (#132). A second, laxer reading of the same
-// question is what let prose reach `refs.commits` and be reported later as a
-// rewritten history.
-export function requireRevision(value: string): string
+// the report verb through `classifyEvidence` above, the attempt gate with the
+// refs an envelope declared, `work met --evidence` and `milestone met
+// --evidence` (#132). A second, laxer reading of the same question is what let
+// prose reach `refs.commits` and be reported later as a rewritten history.
+export function requireRevision(value: string, refusal: RevisionRefusal = typedEvidence): string
 {
     if (!HEX.test(value))
     {
-        throw new CliError(`evidence "commit:${value}" is not a Git object name — record free-form evidence as "note:${value}"`);
+        throw new CliError(refusal(value));
     }
     return value.toLowerCase();
 }
