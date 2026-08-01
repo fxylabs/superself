@@ -119,8 +119,12 @@ delete unmarked.SUPERSELF_SESSION;
 delete unmarked.SUPERSELF_ATTEMPT_ID;
 // This row waits for a launch that must happen, so its deadline is generous:
 // on a loaded machine running sibling suites, a detached stub can take well
-// over the second the absence rows above are read on.
-const bare = await opened(unmarked, 10000);
+// over the second the absence rows above are read on. It is the same wait
+// gui-launch.mjs makes beside it, and it is read on the same deadline for the
+// same reason — the sweep's startup peak held one of these back past twenty
+// seconds on the CI runner, and a row that waits for something that will
+// happen costs nothing by waiting longer.
+const bare = await opened(unmarked, 60000);
 if (bare.said !== "true" || !bare.spawned.includes(target))
 {
     failures.push(`the control child launched nothing, so the marker proves nothing: ${bare.said} ${bare.spawned}`);

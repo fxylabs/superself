@@ -135,6 +135,57 @@ grep -q "\"attempt\":\"$AT_OK\"" "$LOG_A" || fail "the report does not carry the
 SELF work show "$WATT" | grep -q "$AT_OK (completed)" || fail "the work record does not show the attempt that completed"
 SELF status | grep -q "$AT_OK" && fail "a completed attempt still shows as open machine-local state"
 
+# the brief the agent is handed states the contract it will be judged by. An
+# agent that has to read attempt/gate.ts to learn the envelope shape fails the
+# gate on a result it did the work for
+BRIEF_OK="$(spool_of "$AT_OK")/brief.md"
+grep -q 'SUPERSELF_ATTEMPT_OUT' "$BRIEF_OK" || fail "the brief does not say where artifacts are staged"
+grep -q 'SUPERSELF_ATTEMPT_RESULT' "$BRIEF_OK" || fail "the brief does not say where the result envelope is written"
+grep -q '"status": "completed"' "$BRIEF_OK" || fail "the brief does not state the status the gate requires"
+grep -q '"name": "design.md", "sha256": ".*", "bytes": 0' "$BRIEF_OK" || fail "the brief does not state the {name, sha256, bytes} artifact declaration"
+grep -q 'shasum -a 256' "$BRIEF_OK" || fail "the brief does not say how sha256 and bytes are computed"
+grep -q 'exit code alone is not a result' "$BRIEF_OK" || fail "the brief does not say that an exit code is not a result"
+
+# the provider breaker is written under a lock that may legitimately refuse,
+# and it is machine-local advice about a provider — never a reason for the
+# attempt's own settlement not to be written. The agent takes the lock away in
+# a shape nothing can break, so the breaker write throws after the run ended
+LOCKED_BREAKER="$(node -e 'process.stdout.write(process.argv[1] + "/.local/state/superself/runner/breakers/" + require("crypto").createHash("sha256").update("lockedprov").digest("hex").slice(0, 16) + ".json.lock")' "$HOME")"
+FAILED_BEFORE="$(count_events run.failed)"
+plan "$ROOT/p-lockbreaker.json" "mode=lockbreaker" "provider=http://localhost:1/" "providerName=lockedprov" "maxRuns=1" "lockdir=$LOCKED_BREAKER"
+LOCKED="$(SELF attempt run "$ROOT/p-lockbreaker.json" 2>&1 || true)"
+AT_LOCKED="$(last_attempt)"
+[ -d "$LOCKED_BREAKER" ] || fail "the breaker-lock case never took the lock it is about"
+[ "$(attempt_state "$AT_LOCKED")" = "failed" ] || fail "a breaker write that threw left the spool unsettled"
+echo "$LOCKED" | grep -q "transient-network" || fail "the breaker-lock case did not fail on the class that pushes the breaker"
+[ "$(count_events run.failed)" -eq "$((FAILED_BEFORE + 1))" ] || fail "a breaker write that threw cost the attempt its run.failed record"
+grep -q '"event":"breaker.unrecorded"' "$(spool_of "$AT_LOCKED")/events.jsonl" || fail "a breaker that could not be written was not recorded as missing evidence"
+SELF attempt breaker lockedprov | grep -q "closed" || fail "the breaker under an unbreakable lock was somehow written"
+rmdir "$LOCKED_BREAKER"
+
+# the same lock, on the run that succeeded. The breaker is cleared on success
+# under exactly the lock the failure path could not take, and a provider turn
+# that produced a valid envelope must not be lost to that bookkeeping: the
+# attempt settles first and the unwritable breaker is recorded as missing
+# evidence, the same way the failure above does it
+LOCKED_OK="$(node -e 'process.stdout.write(process.argv[1] + "/.local/state/superself/runner/breakers/" + require("crypto").createHash("sha256").update("lockedok").digest("hex").slice(0, 16) + ".json.lock")' "$HOME")"
+REPORTS_BEFORE="$(count_events report.added)"
+plan "$ROOT/p-lockbreaker-ok.json" "mode=lockbreakerok" "dest=$ROOT/dest/lockok.md" "provider=http://localhost:1/" "providerName=lockedok" "maxRuns=1" "lockdir=$LOCKED_OK"
+SELF attempt run "$ROOT/p-lockbreaker-ok.json" > /dev/null || fail "a breaker reset that threw took down an attempt that had already produced its result"
+AT_LOCKED_OK="$(last_attempt)"
+[ -d "$LOCKED_OK" ] || fail "the success-path breaker-lock case never took the lock it is about"
+[ "$(attempt_state "$AT_LOCKED_OK")" = "completed" ] || fail "a breaker reset that threw left a validated attempt unsettled"
+[ -f "$ROOT/dest/lockok.md" ] || fail "a breaker reset that threw cost the attempt its published artifact"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a breaker reset that threw cost the attempt its report"
+grep -q '"event":"breaker.unrecorded"' "$(spool_of "$AT_LOCKED_OK")/events.jsonl" || fail "a breaker reset that could not be written was not recorded as missing evidence"
+rmdir "$LOCKED_OK"
+
+# a plan that declares no artifact is completed by the envelope alone, and the
+# brief states that contract instead of naming a file the plan never asked for
+BRIEF_NONE="$(spool_of "$AT_LOCKED")/brief.md"
+grep -q '"artifacts": \[\] }' "$BRIEF_NONE" || fail "the brief for a plan with no declared artifact did not state the empty artifact list"
+grep -q "result.md" "$BRIEF_NONE" && fail "the brief invented an artifact name for a plan that declares none"
+
 # the same attempt settled twice records nothing twice — neither the report
 # nor the completion beside it
 COMPLETED_BEFORE="$(count_events run.completed)"
@@ -527,10 +578,13 @@ kill -0 "$QUIET_PID" 2>/dev/null && fail "recovery released the work unit while 
 kill -9 "$QUIET_PID" 2>/dev/null || true
 
 # the crash window inside `self attempt exited`: the launcher reported the
-# exit, the status carries it as confirmed, and the process died before the
-# terminal write. What was witnessed must survive recovery — reclassified as
-# a disappearance it would carry a code nobody reported, and a result the
-# gate already published would be forever unsettleable.
+# exit, the status carries it as confirmed, and whatever was cleaning up after
+# the provider died before the terminal write. What was witnessed must survive
+# recovery — reclassified as a disappearance it would carry a code nobody
+# reported — and a run that already produced a result is judged by the
+# completion gate rather than written off as unknown, or a cleanup that failed
+# after the work was done costs a validated attempt.
+REPORTS_BEFORE="$(count_events report.added)"
 plan "$ROOT/p-window.json" "mode=ok" "dest=$ROOT/dest/window.md"
 AT_WINDOW="$(SELF attempt register "$ROOT/p-window.json")"
 launch "$AT_WINDOW" --abandon --pidfile="$ROOT/window-pid" > /dev/null || fail "the crash-window launch was never claimed"
@@ -542,9 +596,31 @@ do
 done
 kill -0 "$WINDOW_PID" 2>/dev/null && fail "the crash-window process never finished"
 node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.exitSource="confirmed";s.exitCode=0;fs.writeFileSync(f,JSON.stringify(s,null,2))' "$(spool_of "$AT_WINDOW")/status.json"
-SELF attempt recover > /dev/null
-[ "$(attempt_state "$AT_WINDOW")" = "exited-unreconciled" ] || fail "a confirmed exit whose settlement crashed was not recovered"
+SELF attempt recover | grep -q "settled through the completion gate" || fail "recovery did not say it settled a confirmed exit through the gate"
+[ "$(attempt_state "$AT_WINDOW")" = "completed" ] || fail "a confirmed exit 0 over a validated result was written off as unknown by recovery"
 [ "$(exit_record "$AT_WINDOW")" = "confirmed (code 0)" ] || fail "recovery rewrote an exit the launcher reported, or dropped the code it carried"
+[ -f "$ROOT/dest/window.md" ] || fail "recovery settled a confirmed exit without publishing the artifact its run produced"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "recovery through the gate did not attach exactly one report"
+[ "$(SELF artifact list --work "$WATT" | grep -c "window.md")" -eq 1 ] || fail "recovery stored the recovered artifact more than once"
+
+# and the gate is still the one that judges it: the same confirmed exit 0 with
+# nothing the gate can read is written off, not promoted. An exit code alone is
+# not a result, whoever reports it.
+plan "$ROOT/p-nores.json" "mode=ok" "dest=$ROOT/dest/nores.md"
+AT_NORES="$(SELF attempt register "$ROOT/p-nores.json")"
+launch "$AT_NORES" --abandon --pidfile="$ROOT/nores-pid" > /dev/null || fail "the no-envelope launch was never claimed"
+NORES_PID="$(cat "$ROOT/nores-pid")"
+for _ in $(seq 1 200)
+do
+    kill -0 "$NORES_PID" 2>/dev/null || break
+    sleep 0.1
+done
+kill -0 "$NORES_PID" 2>/dev/null && fail "the no-envelope process never finished"
+rm -f "$(spool_of "$AT_NORES")/result.json"
+node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.exitSource="confirmed";s.exitCode=0;fs.writeFileSync(f,JSON.stringify(s,null,2))' "$(spool_of "$AT_NORES")/status.json"
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_NORES")" = "exited-unreconciled" ] || fail "a confirmed exit with no result envelope was promoted by recovery"
+[ -f "$ROOT/dest/nores.md" ] && fail "an attempt with no result envelope published an artifact"
 
 # a process group id is only reserved while the group has members, so a group
 # that empties can have its number handed to somebody else. Nothing a launch
@@ -731,6 +807,21 @@ SPOOL_ABANDON="$(spool_of "$AT_ABANDON")"
 node -e 'const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));s.updated="2000-01-01T00:00:00.000Z";fs.writeFileSync(f,JSON.stringify(s,null,2))' "$SPOOL_ABANDON/status.json"
 SELF attempt prune --days 1 | grep -q "deleted 1 attempt spool" || fail "a spool abandoned in running was exempt from retention for ever"
 [ -d "$SPOOL_ABANDON" ] && fail "an abandoned spool survived a prune past its retention window"
+
+# a spool with no readable status is the one spool no reader can make an
+# attempt out of, and skipping it everywhere left retention unable to reach it
+# at all. It is judged by its own age, swept as corrupt, and never resurrected
+CORRUPT_OLD="$RUNNER/attempts/at-corrupt-old"
+CORRUPT_NEW="$RUNNER/attempts/at-corrupt-new"
+mkdir -p "$CORRUPT_OLD/out" "$CORRUPT_NEW/out"
+echo "half a run nobody can read" > "$CORRUPT_OLD/run-1.stdout.log"
+echo "half a run nobody can read" > "$CORRUPT_NEW/run-1.stdout.log"
+touch -t 200001010000 "$CORRUPT_OLD"
+SELF attempt list | grep -q "at-corrupt" && fail "a spool with no status was listed as an attempt"
+SELF attempt prune --days 1 | grep -q "deleted 1 attempt spool" || fail "retention could not reach a spool with no readable status"
+[ -d "$CORRUPT_OLD" ] && fail "a corrupt spool past its retention window is still on disk"
+[ -d "$CORRUPT_NEW" ] || fail "a corrupt spool inside the retention window was swept early"
+rm -rf "$CORRUPT_NEW"
 
 # blocked and failed attempts leave the attention surface once a later attempt
 # on the same unit answers them. An attempt id is never reused, so nothing in
