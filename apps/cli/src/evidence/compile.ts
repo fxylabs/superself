@@ -11,7 +11,7 @@ import { eventSummary, readEvents } from "../logfile.js";
 import { projectStateDir, readRegistry, resolveProjectPath } from "../paths.js";
 import { resolveSha, sha256File } from "../repo.js";
 import { CliError, SelfEvent } from "../types.js";
-import { Canonical, digestOf } from "./canonical.js";
+import { Canonical, compareCodepoints, digestOf } from "./canonical.js";
 import { Exclusion, GitPin, Manifest, MANIFEST_FORMAT, SelfPin, requireSelfPin } from "./manifest.js";
 
 export const BUNDLE_FORMAT = "self.evidence.bundle@1";
@@ -158,10 +158,28 @@ function selectSources(input: CompileInput, events: SelfEvent[]): Source[]
         ...select.milestones.map((id) => subjectSource(events, "milestone", "milestone", id, input.manifest.project)),
         ...select.commits.map((pin) => commitSource(input, pin))
     ];
+    requireOneRowPerRef(sources);
     requireExclusionsUsed(input.manifest.exclude, sources);
     return sources
         .filter((source) => !excluded.has(source.ref))
         .sort((left, right) => order(left.kind, right.kind) || order(left.ref, right.ref));
+}
+
+// Two selectors that resolve to one record are two claims about one thing. The
+// contract is that every source is named outright, so the second naming is a
+// mistake to state rather than a row to duplicate — and a bundle with two rows
+// for one ref cannot be reconciled against its own selection.
+function requireOneRowPerRef(sources: Source[]): void
+{
+    const seen = new Set<string>();
+    for (const source of sources)
+    {
+        if (seen.has(source.ref))
+        {
+            throw new CliError(`the manifest selects ${source.ref} more than once — name each source exactly once, so the bundle carries one row for it`);
+        }
+        seen.add(source.ref);
+    }
 }
 
 // An exclusion nobody applied is a stale line in a reviewed document: the
@@ -245,11 +263,38 @@ function commitSource(input: CompileInput, pin: GitPin): Source
 // and refs — are checked key by key: a key nobody put on this list is content
 // no reviewer of this profile has ever seen, and it refuses rather than being
 // dropped, so the disclosure decision stays with a person.
-const ALLOWED_PAYLOAD: Record<string, string[]> = {
-    decision: ["text", "why"],
-    report: ["text", "next", "notes", "evidenceTyped"],
-    work: ["work", "outcome", "on", "why", "as", "successor", "successorProject", "requirement", "criterion"],
-    milestone: ["milestone", "objective", "outcome", "exit", "target", "after", "supersedes", "criterion", "why"]
+//
+// A key is on exactly one of two lists. `published` reaches the bundle;
+// `excluded` is a field this profile deliberately drops, named here so the
+// decision is visible rather than implied by absence. A key on neither list is
+// content no reviewer of this profile has seen, and that is what refuses.
+//
+// The work list is the whole `work.*` payload surface the CLI emits today —
+// created, started, blocked, unblocked, done, retired, required,
+// requirement-revised, requirement-retired, covered, rechecked,
+// approval-required, approved, policy-declared, linked, unlinked, accepted —
+// because one unlisted key refuses the unit's entire event stream.
+interface ProfileFields
+{
+    published: string[];
+    excluded: string[];
+}
+
+const RESEARCH_PAYLOAD: Record<string, ProfileFields> = {
+    decision: { published: ["text", "why"], excluded: [] },
+    report: { published: ["text", "next", "notes", "evidenceTyped"], excluded: [] },
+    work: {
+        published: ["work", "outcome", "on", "why", "successor", "successorProject", "requirement", "text",
+            "requirementRevision", "report", "by", "freshReview", "model", "objective", "milestone", "proposal"],
+        // The typed challenge and the terminal it was typed at prove the
+        // mechanism of an approval, not what was approved. The approval itself
+        // stays — `by` and the event that carries it are the claim.
+        excluded: ["confirmation"]
+    },
+    milestone: {
+        published: ["milestone", "objective", "outcome", "exit", "target", "after", "supersedes", "criterion", "why"],
+        excluded: []
+    }
 };
 
 // `refs` is a closed type declared in types.ts, so an unlisted key here is not
@@ -264,7 +309,7 @@ function normalize(event: SelfEvent, kind: string): Canonical
     const record: Record<string, Canonical> = {
         confirmed: event.origin.confirmed,
         id: event.id,
-        payload: allowed(event.payload, ALLOWED_PAYLOAD[kind] ?? [], `${event.id}.payload`, kind),
+        payload: allowed(event.payload, RESEARCH_PAYLOAD[kind], `${event.id}.payload`, kind),
         ts: event.ts,
         type: event.type
     };
@@ -289,16 +334,21 @@ function cited(refs: Record<string, unknown> | undefined): Record<string, Canoni
     return kept;
 }
 
-function allowed(map: Record<string, unknown>, fields: string[], at: string, kind: string): Canonical
+function allowed(map: Record<string, unknown>, fields: ProfileFields | undefined, at: string, kind: string): Canonical
 {
+    const published = fields?.published ?? [];
+    const excluded = fields?.excluded ?? [];
     const kept: Record<string, Canonical> = {};
     for (const [key, value] of Object.entries(map))
     {
-        if (!fields.includes(key))
+        if (!published.includes(key) && !excluded.includes(key))
         {
-            throw new CliError(`the research profile does not carry ${at}.${key} — a ${kind} record may hold ${fields.join(", ")}, and an unlisted field is refused rather than dropped`);
+            throw new CliError(`the research profile does not carry ${at}.${key} — a ${kind} record may hold ${published.join(", ")}, and a field the profile never declared is refused rather than dropped`);
         }
-        kept[key] = value as Canonical;
+        if (published.includes(key))
+        {
+            kept[key] = value as Canonical;
+        }
     }
     return kept;
 }
@@ -322,7 +372,13 @@ const OBJECT_NAMES = /\b(?:[0-9a-f]{40}|[0-9a-f]{64})\b/g;
 const VENDOR_SECRET = /sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const ASSIGNED_SECRET = /\b(?:api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret)\b\s*[:=]\s*\S{6,}/i;
 const HIGH_ENTROPY = /[A-Za-z0-9+/_=-]{32,}/g;
-const ABSOLUTE_PATH = /(?:^|[\s"'(=,[])(?:~\/[A-Za-z0-9._+-]|\/[A-Za-z0-9._+-]+\/[A-Za-z0-9._+-]|[A-Za-z]:\\)/;
+// Matched wherever it sits in the value, not only after a space: `output:/Users/…`
+// and `at/Users/…` name the same machine that a bare path does. Web URLs are
+// taken out first — they carry a path that resolves for every reader, which is
+// the opposite of what this rule is about — while `file:///Users/…` keeps its
+// path and is refused with the rest.
+const WEB_URL = /\bhttps?:\/\/\S*/g;
+const ABSOLUTE_PATH = /~\/[A-Za-z0-9._+-]|\/[A-Za-z0-9._+-]+\/[A-Za-z0-9._+-]|[A-Za-z]:\\/;
 
 export function screen(value: Canonical, at: string, profile: string): void
 {
@@ -350,7 +406,7 @@ export function screen(value: Canonical, at: string, profile: string): void
 // wrapped the command, and read over a shoulder.
 function screenText(text: string, at: string, profile: string): void
 {
-    if (ABSOLUTE_PATH.test(text))
+    if (ABSOLUTE_PATH.test(text.replace(WEB_URL, " ")))
     {
         throw new CliError(`${at} holds an absolute filesystem path — it names the machine that produced it and resolves to nothing for a reader, so the ${profile} profile refuses it`);
     }
@@ -460,7 +516,7 @@ function gitPins(manifest: Manifest): Canonical
 // One fact per recorded event, in the order a reader follows time. A commit
 // contributes its own line, so a timeline built from a bundle needs nothing but
 // the bundle.
-function factsOf(sources: Source[]): Fact[]
+export function factsOf(sources: Source[]): Fact[]
 {
     const facts: Fact[] = [];
     for (const source of sources)
@@ -477,6 +533,20 @@ function factsOf(sources: Source[]): Fact[]
     return facts.sort((left, right) => order(left.ts, right.ts) || order(left.ref, right.ref) || order(left.type, right.type));
 }
 
+// The refs a carried record is entitled to put in the timeline: a commit speaks
+// under its own ref, an event under its id, and a work unit or milestone under
+// the ids of the events it carries. A fact naming anything else is a claim the
+// bundle no longer holds the source for.
+export function factRefsOf(record: Record<string, Canonical>, kind: string, ref: string): string[]
+{
+    if (kind === "commit")
+    {
+        return [ref];
+    }
+    const events = Array.isArray(record.events) ? record.events : [record];
+    return events.map((event) => String((event as Record<string, Canonical>).id));
+}
+
 function factOf(event: Record<string, Canonical>): Fact
 {
     const payload = event.payload as Record<string, unknown>;
@@ -484,11 +554,13 @@ function factOf(event: Record<string, Canonical>): Fact
     return { ref: String(event.id), statement, ts: String(event.ts), type: String(event.type) };
 }
 
-// Codepoint order is the bundle's stated order, so every array in it is sorted
-// by the same comparison the serializer uses on keys.
+// Codepoint order is the bundle's stated order, and it is the serializer's own
+// comparison rather than a second one beside it: `<` compares UTF-16 code
+// units, which orders an astral id differently from the way the keys above it
+// are sorted.
 function order(left: string, right: string): number
 {
-    return left < right ? -1 : left > right ? 1 : 0;
+    return compareCodepoints(left, right);
 }
 
 /* ── --pin ─────────────────────────────────────────────────────────── */

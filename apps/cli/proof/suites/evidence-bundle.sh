@@ -20,11 +20,25 @@ git add README.md
 git commit -qm "seed the evidence fixture"
 COMMIT="$(git rev-parse HEAD)"
 DEC="$(SELF decide "compile evidence from pinned state" --why "a reader must be able to recheck the claim" > /dev/null; grep -o '"id":"[0-9a-z]*","ts":"[^"]*","type":"decision.confirmed"' "$LOG_A" | tail -1 | sed 's/"id":"\([0-9a-z]*\)".*/\1/')"
-WID="$(SELF work add "the evidence bundle compiles deterministically" | tail -1)"
-SELF work start "$WID" > /dev/null
-SELF report "$WID" "compiled the first bundle over the pinned store" > /dev/null
 OID="$(SELF objective add "ship the evidence compiler" --horizon week --target 2026-08-31 | tail -1)"
 MID="$(SELF milestone add "a bundle recompiles to the same bytes" --objective "$OID" --exit "two compiles agree" | tail -1)"
+# the cited unit takes the shapes real state has: proposed and accepted, so it
+# carries work.accepted and work.linked; required and covered, so it carries a
+# requirement text and a coverage revision; policy-declared, so it carries the
+# model class and the fresh-review flag. One key the profile has not declared
+# refuses the whole stream, so the fixture has to exercise the whole surface.
+PID="$(SELF work propose "the evidence bundle compiles deterministically" --milestone "$MID" \
+    --value "a reader can recheck which state supported a claim" \
+    --risk "a compile that is not reproducible proves nothing" \
+    --capacity "one change set" --evidence-plan "two compiles agree byte for byte" \
+    --success "two compiles produce one digest" --stop "the digest depends on the machine" \
+    --confidence medium --expires 2026-08-31 | sed -n 's/.*\[\([0-9a-z]*\)\].*/\1/p' | tail -1)"
+WID="$(SELF work accept "$PID" | tail -1)"
+SELF work start "$WID" > /dev/null
+SELF work policy "$WID" --model opus --fresh-review --why "the canonical serializer is the whole claim" > /dev/null
+RID="$(SELF work require "$WID" "the same pinned inputs give the same bytes" | tail -1)"
+REPORT="$(SELF report "$WID" "compiled the first bundle over the pinned store" | sed -n 's/.*\[\([0-9a-z]*\)\].*/\1/p' | tail -1)"
+SELF work met "$WID" --requirement "$RID" --report "$REPORT" --why "two compiles of one manifest agree byte for byte" > /dev/null
 [ -n "$DEC" ] || fail "the fixture decision id was not captured"
 # a second decision, so a prefix that matches more than one record has more than
 # one record to be ambiguous over
@@ -94,6 +108,18 @@ const bundle = require(process.argv[1]);
 const kinds = [...new Set(bundle.sources.map((s) => s.kind))].sort().join(",");
 if (kinds !== "commit,decision,milestone,work") { console.error("kinds: " + kinds); process.exit(1); }
 if (bundle.facts.length < 4) { console.error("facts: " + bundle.facts.length); process.exit(1); }
+// the cited unit really carried the shapes the profile had to be audited for
+const unit = bundle.sources.find((s) => s.kind === "work");
+const types = unit.record.events.map((e) => e.type).join(",");
+for (const wanted of ["work.created", "work.linked", "work.accepted", "work.policy-declared", "work.required", "work.covered"])
+{
+    if (!types.includes(wanted)) { console.error("the fixture unit never recorded " + wanted + " — got " + types); process.exit(1); }
+}
+const keys = [...new Set(unit.record.events.flatMap((e) => Object.keys(e.payload)))].sort().join(",");
+for (const wanted of ["text", "milestone", "freshReview", "model", "requirementRevision", "proposal", "report"])
+{
+    if (!keys.includes(wanted)) { console.error("the fixture unit never carried " + wanted + " — got " + keys); process.exit(1); }
+}
 const ordered = [...bundle.facts].sort((a, b) => a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
 if (JSON.stringify(ordered) !== JSON.stringify(bundle.facts)) { console.error("facts unordered"); process.exit(1); }
 ' "$OUT/first.json" || fail "the research fixture bundle is not the editorial input it claims"
@@ -118,6 +144,85 @@ fs.writeFileSync(process.argv[2], JSON.stringify(bundle) + "\n");
 TAMPER="$(SELF evidence verify "$OUT/tampered.json" 2>&1 || true)"
 echo "$TAMPER" | grep -q "digest" || fail "an edited bundle was not caught by its digest"
 SELF evidence verify "$OUT/tampered.json" > /dev/null 2>&1 && fail "an edited bundle verified"
+
+# a recomputed digest is not integrity: a source row and its facts dropped, then
+# the digest recomputed with this repository's own canonical module, still has
+# to fail — the embedded manifest still selects the row the file no longer holds
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const dropped = bundle.sources.find((s) => s.kind === "decision");
+const carried = new Set([dropped.record.id]);
+bundle.sources = bundle.sources.filter((s) => s !== dropped);
+bundle.facts = bundle.facts.filter((f) => !carried.has(f.ref));
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+console.log(dropped.ref);
+' "$OUT/first.json" "$OUT/dropped.json" "$CLI_DIR/dist/evidence/canonical.js" > "$ROOT/dropped.ref"
+DROPPED_REF="$(cat "$ROOT/dropped.ref")"
+[ -n "$DROPPED_REF" ] || fail "the dropped-source fixture named no ref"
+node -e '
+const bundle = require(process.argv[1]);
+const { digestOf } = require(process.argv[2]);
+const copy = { ...bundle, digest: "" };
+if (digestOf(copy) !== bundle.digest) { console.error("the fixture did not recompute the digest"); process.exit(1); }
+' "$OUT/dropped.json" "$CLI_DIR/dist/evidence/canonical.js" || fail "the dropped-source fixture is not self-consistent"
+DROPPED="$(SELF evidence verify "$OUT/dropped.json" 2>&1 || true)"
+echo "$DROPPED" | grep -q "$DROPPED_REF" || fail "verify did not name the source dropped from the bundle — got: $DROPPED"
+echo "$DROPPED" | grep -q "carries no row for it" || fail "verify did not say the selected row is missing"
+SELF evidence verify "$OUT/dropped.json" > /dev/null 2>&1 && fail "a bundle with a dropped source verified"
+# and a fact dropped on its own, with every row still carried
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+bundle.facts = bundle.facts.slice(1);
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+' "$OUT/first.json" "$OUT/thinned.json" "$CLI_DIR/dist/evidence/canonical.js"
+THINNED="$(SELF evidence verify "$OUT/thinned.json" 2>&1 || true)"
+echo "$THINNED" | grep -q "facts" || fail "a bundle missing one fact still verified"
+# and a fact left pointing at a source that is gone, caught without the store
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+bundle.sources = bundle.sources.filter((s) => s.kind !== "commit");
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+' "$OUT/first.json" "$OUT/orphaned.json" "$CLI_DIR/dist/evidence/canonical.js"
+ORPHANED="$(SELF evidence show "$OUT/orphaned.json" 2>&1 || true)"
+echo "$ORPHANED" | grep -q "does not carry" || fail "show rendered a bundle whose facts outlive their sources"
+SELF evidence show "$OUT/orphaned.json" > /dev/null 2>&1 && fail "show rendered a structurally hollow bundle"
+# an exclusion line quietly deleted from the carried copy is caught too
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+bundle.pins.self.head = "01kyvzvraamhewfvbk7t586s99";
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+' "$OUT/first.json" "$OUT/repinned.json" "$CLI_DIR/dist/evidence/canonical.js"
+REPINNED="$(SELF evidence show "$OUT/repinned.json" 2>&1 || true)"
+echo "$REPINNED" | grep -q "embedded manifest" || fail "a bundle whose carried pins left its manifest behind was rendered"
+# the event count is the one pin the embedded manifest never states, so it is
+# reconciled against the store instead
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+bundle.pins.eventCount = bundle.pins.eventCount + 7;
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+' "$OUT/first.json" "$OUT/miscounted.json" "$CLI_DIR/dist/evidence/canonical.js"
+MISCOUNTED="$(SELF evidence verify "$OUT/miscounted.json" 2>&1 || true)"
+echo "$MISCOUNTED" | grep -q "pins.eventCount" || fail "a bundle claiming a log length the store never had verified"
 
 # fail-closed: a rewritten source event refuses to recompile, and verify on the
 # bundle compiled before the rewrite names the source that moved
@@ -182,6 +287,10 @@ EOF
 refuses 01kyvzvraamhewfvbk7t586s01 '{"text":"rotate AKIA1234567890ABCDEF before publishing"}' "credential"
 refuses 01kyvzvraamhewfvbk7t586s02 '{"text":"the report landed in /Users/example/work/out.json"}' "absolute filesystem path"
 refuses 01kyvzvraamhewfvbk7t586s03 '{"text":"a decision","detail":"a field the profile never declared"}' "research profile does not carry"
+# a path names the machine wherever it sits in the value, not only after a space
+refuses 01kyvzvraamhewfvbk7t586s05 '{"text":"output:/Users/example/work/out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s06 '{"text":"failed at/Users/example/work/out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s07 '{"text":"see file:///Users/example/work/out.json"}' "absolute filesystem path"
 
 # the store's own id grammar is not key material: a note citing joined event ids
 # compiles, which is the false positive the credential rule used to raise (#133)
@@ -195,6 +304,19 @@ cat > "$OUT/ids.json" <<EOF
 EOF
 SELF evidence compile "$OUT/ids.json" --pin --out ids.pinned.json > /dev/null
 SELF evidence compile "$OUT/ids.pinned.json" --out ids.bundle.json > /dev/null || fail "a note citing joined event ids was refused as a credential"
+
+# a web URL carries a path that resolves for every reader, so it is not the
+# machine-naming path the screen is about
+PLANT_ID=01kyvzvraamhewfvbk7t586s08
+export PLANT_ID
+cp "$ROOT/log.before" "$LOG_A"
+plant '{"text":"stated in https://github.com/fxylabs/superself/issues/145"}'
+cat > "$OUT/url.json" <<EOF
+{ "format": "self.evidence.manifest@1", "profile": "research", "project": "demo",
+  "select": { "decisions": ["$PLANT_ID"] }, "pins": {}, "exclude": [] }
+EOF
+SELF evidence compile "$OUT/url.json" --pin --out url.pinned.json > /dev/null
+SELF evidence compile "$OUT/url.pinned.json" --out url.bundle.json > /dev/null || fail "a decision citing an issue URL was refused as a filesystem path"
 cp "$ROOT/log.before" "$LOG_A"
 
 # selectors fail closed in two distinguishable ways
@@ -214,6 +336,18 @@ SELF evidence compile "$OUT/ambiguous.json" --pin --out ambiguous.pinned.json > 
 AMBIG="$(SELF evidence compile "$OUT/ambiguous.pinned.json" --out none.json 2>&1 || true)"
 echo "$AMBIG" | grep -q "matches 2 records" || fail "an ambiguous selector did not count its candidates"
 echo "$AMBIG" | grep -q "$DEC" || fail "an ambiguous selector did not name its candidates"
+
+# naming one source twice is two claims about one record, and it would leave the
+# bundle with two rows for a ref the reconciliation expects once
+cat > "$OUT/duplicate.json" <<EOF
+{ "format": "self.evidence.manifest@1", "profile": "research", "project": "demo",
+  "select": { "decisions": ["$DEC", "$DEC"] }, "pins": {}, "exclude": [] }
+EOF
+SELF evidence compile "$OUT/duplicate.json" --pin --out duplicate.pinned.json > /dev/null
+DUPLICATE="$(SELF evidence compile "$OUT/duplicate.pinned.json" --out duplicate.bundle.json 2>&1 || true)"
+echo "$DUPLICATE" | grep -q "more than once" || fail "a duplicated selector compiled two rows for one ref"
+echo "$DUPLICATE" | grep -q "$DEC" || fail "a duplicated selector was not named"
+[ -e "$OUT/duplicate.bundle.json" ] && fail "a refused compile wrote a bundle"
 
 # an exclusion is visible in the bundle, and one that withholds nothing refuses
 cat > "$OUT/excluded.json" <<EOF
@@ -276,6 +410,12 @@ OUTPATH="$(SELF evidence compile "$OUT/pinned.json" --out "$ROOT/elsewhere.json"
 echo "$OUTPATH" | grep -q "is a path" || fail "--out accepted a path"
 OVERWRITE="$(SELF evidence compile "$OUT/pinned.json" --out first.json 2>&1 || true)"
 echo "$OVERWRITE" | grep -q "already exists" || fail "compile overwrote an existing bundle"
+# a dangling symlink is not an existing file, and asking before writing would
+# follow it out of the working directory
+ln -s "$ROOT/nowhere/escaped.json" "$OUT/dangling.json"
+DANGLING="$(SELF evidence compile "$OUT/pinned.json" --out dangling.json 2>&1 || true)"
+echo "$DANGLING" | grep -q "already exists" || fail "compile followed a dangling symlink out of the working directory"
+[ -e "$ROOT/nowhere/escaped.json" ] && fail "compile wrote through a dangling symlink"
 
 # the whole subsystem writes no project state: no event, no store commit
 LOG_AFTER="$(wc -l < "$LOG_A")"

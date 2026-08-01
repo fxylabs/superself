@@ -81,16 +81,55 @@ No compile-time clock reaches the bytes. Time enters a bundle only as the
 timestamps the sources themselves recorded, so the same pinned inputs give the
 same file and the same digest on any machine.
 
+## What `verify` guarantees
+
+A recomputed digest is not integrity on its own. Whoever deletes a source row
+can hash what is left, so `verify` reconciles the file against itself and then
+against the store, and refuses on any of these:
+
+Without the store — the checks `show` also runs before it renders, so a hollow
+bundle is never displayed as evidence:
+
+- the digest does not recompute over the bundle's own bytes;
+- the embedded manifest does not hash to the recorded `manifestSha256`;
+- the carried `exclusions`, `pins` or `profile` differ from what the embedded
+  manifest states;
+- two source rows carry the same `ref`;
+- a fact names a source the bundle does not carry.
+
+With the store and the pinned repositories:
+
+- the log head or the log hash differs from the pin;
+- a carried source no longer hashes to what the bundle records, or no longer
+  resolves at all;
+- the embedded manifest's selection resolves to a source the bundle carries no
+  row for — this is the direction that catches a deleted row over a recomputed
+  digest;
+- the timeline the carried sources produce differs from the `facts` the bundle
+  holds, which catches a fact removed on its own.
+
+Together: every selector has exactly its row, every row is selected, and every
+fact stands on a source that is still there. What `verify` does not treat as a
+divergence is a *different* bundle — a manifest edited in step with its sources,
+rehashed throughout, is a valid record of a different selection, and the digest
+is what distinguishes the two.
+
+Every divergence is collected before any is reported. Stopping at the first
+would let a reader think the rest still held.
+
 ## Fail-closed behaviour
 
 Compiling refuses, rather than compiling something quieter, when:
 
-- a selector matches nothing, or matches more than one record;
+- a selector matches nothing, or matches more than one record, or two selectors
+  resolve to the same record;
 - the store's log head or log hash differs from the manifest's pin — the two
   are checked together, because a rewritten history keeps its head id while its
   bytes change;
 - a pinned commit does not resolve in the named repository;
-- a record carries a field the profile does not declare;
+- a record carries a field the profile does not declare — a profile lists both
+  the fields it publishes and the fields it deliberately drops, so an unlisted
+  key is content nobody reviewed rather than an omission;
 - a value is shaped like a credential, or holds an absolute filesystem path;
 - either format version is one this build does not implement.
 

@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readEvents } from "../logfile.js";
 import { CliError, SelfEvent } from "../types.js";
 import { Canonical, digestOf } from "./canonical.js";
-import { BUNDLE_FORMATS, Bundle, digestWithout, logDigest, logHead, resolveSources } from "./compile.js";
+import { BUNDLE_FORMATS, Bundle, Source, digestWithout, factRefsOf, factsOf, logDigest, logHead, resolveSources } from "./compile.js";
 import { Manifest, parseManifest } from "./manifest.js";
 
 export interface Divergence
@@ -60,16 +60,20 @@ export function parseBundle(text: string, file: string): Bundle
 
 export function verifyBundle(bundle: Bundle, input: VerifyInput): Divergence[]
 {
-    const found: Divergence[] = [...verifySelfContained(bundle)];
+    const found: Divergence[] = [...verifyStructure(bundle)];
     const manifest = embeddedManifest(bundle);
-    found.push(...verifyPins(manifest, input));
+    found.push(...verifyPins(bundle, manifest, input));
     found.push(...verifySources(bundle, manifest, input));
     return found;
 }
 
-// The checks that need nothing but the file: whoever edited a fact, a source
-// record or an exclusion changed the bytes the digest covers.
-function verifySelfContained(bundle: Bundle): Divergence[]
+// The checks that need nothing but the file, and the ones `show` runs before it
+// renders. A recomputed digest is not integrity on its own: whoever dropped a
+// source row can hash what is left. So the file is also checked against itself
+// — the exclusions and pins it carries against the manifest it embeds, its
+// facts against the sources it still holds, one row per ref — and a bundle that
+// fails any of these describes a state it no longer contains.
+export function verifyStructure(bundle: Bundle): Divergence[]
 {
     const found: Divergence[] = [];
     const digest = digestWithout(bundle);
@@ -83,12 +87,57 @@ function verifySelfContained(bundle: Bundle): Divergence[]
     {
         found.push({ at: "manifest", detail: `the bundle records ${String(embedded.manifestSha256)} and its embedded manifest hashes to ${recomputed}` });
     }
+    found.push(...verifyAgainstEmbedded(bundle, embedded.pinned));
+    found.push(...verifyFactRefs(bundle));
     return found;
 }
 
-function verifyPins(manifest: Manifest, input: VerifyInput): Divergence[]
+// The bundle's own copies of what the manifest already said. They are carried
+// so a reader never has to unwrap the manifest to see what was withheld or what
+// was pinned, and that copy is exactly what an editor can drop a line from.
+function verifyAgainstEmbedded(bundle: Bundle, pinned: Canonical): Divergence[]
 {
+    const manifest = record(pinned);
+    const pins = record(bundle.pins);
+    const checks: [string, Canonical, Canonical][] = [
+        ["exclusions", bundle.exclusions ?? [], manifest.exclude ?? []],
+        ["pins.self", pins.self ?? {}, record(manifest.pins).self ?? {}],
+        ["pins.git", pins.git ?? [], record(manifest.pins).git ?? []],
+        ["profile", bundle.profile ?? "", manifest.profile ?? ""]
+    ];
+    return checks
+        .filter(([, carried, stated]) => digestOf(carried) !== digestOf(stated))
+        .map(([at]) => ({ at, detail: "what the bundle carries here differs from what its embedded manifest states" }));
+}
+
+// A fact is a line about a source. One naming a ref the bundle no longer holds
+// is a claim with its evidence removed, and duplicate rows for one ref make the
+// reconciliation below meaningless.
+function verifyFactRefs(bundle: Bundle): Divergence[]
+{
+    const carried = new Set<string>();
     const found: Divergence[] = [];
+    for (const item of list(bundle.sources))
+    {
+        const source = record(item);
+        const ref = String(source.ref);
+        if (carried.has(ref))
+        {
+            found.push({ at: `sources[${ref}]`, detail: "the bundle carries more than one row for this ref" });
+        }
+        factRefsOf(record(source.record), String(source.kind), ref).forEach((id) => carried.add(id));
+    }
+    const orphan = list(bundle.facts).map(record).find((fact) => !carried.has(String(fact.ref)));
+    if (orphan !== undefined)
+    {
+        found.push({ at: `facts[${String(orphan.ref)}]`, detail: "this fact names a source the bundle does not carry" });
+    }
+    return found;
+}
+
+function verifyPins(bundle: Bundle, manifest: Manifest, input: VerifyInput): Divergence[]
+{
+    const found: Divergence[] = [...verifyEventCount(bundle, input, manifest.project)];
     const pinned = manifest.pins.self ?? {};
     const head = logHead(input.storeDir, manifest.project);
     if (head !== pinned.head)
@@ -103,34 +152,90 @@ function verifyPins(manifest: Manifest, input: VerifyInput): Divergence[]
     return found;
 }
 
+// The one number in `pins` the embedded manifest never states, so the check
+// above cannot reach it. It is what the pinned log held, and while the pin
+// holds, the live log is that log.
+function verifyEventCount(bundle: Bundle, input: VerifyInput, slug: string): Divergence[]
+{
+    const carried = record(bundle.pins).eventCount;
+    const live = readEvents(input.storeDir, slug).length;
+    if (carried === live)
+    {
+        return [];
+    }
+    return [{ at: "pins.eventCount", detail: `the bundle records ${String(carried)} and the store's log holds ${live}` }];
+}
+
 // Every source recompiled from the live store and the pinned repositories, then
 // compared by hash. A record that no longer resolves at all is a divergence
 // under its own ref rather than an error that hides the rest.
 function verifySources(bundle: Bundle, manifest: Manifest, input: VerifyInput): Divergence[]
 {
+    const resolved = liveSources(manifest, input);
+    if (!Array.isArray(resolved))
+    {
+        return [resolved];
+    }
     const declared = declaredSources(bundle);
-    let events: SelfEvent[] = [];
-    let resolved;
+    const live = new Map(resolved.map((source) => [source.ref, source.sha256]));
+    const found = declared
+        .filter(([ref, sha]) => live.get(ref) !== sha)
+        .map(([ref, sha]) => ({ at: `sources[${ref}]`, detail: staleDetail(sha, live.get(ref)) }));
+    found.push(...verifyNothingDropped(declared, resolved));
+    found.push(...verifyFacts(bundle, resolved));
+    return found;
+}
+
+// A selection that no longer resolves at all is one divergence about the
+// selection, not a thrown error that hides every other check.
+function liveSources(manifest: Manifest, input: VerifyInput): Source[] | Divergence
+{
     try
     {
-        events = readEvents(input.storeDir, manifest.project);
-        resolved = resolveSources({ storeDir: input.storeDir, manifest, from: input.from }, events);
+        const events: SelfEvent[] = readEvents(input.storeDir, manifest.project);
+        return resolveSources({ storeDir: input.storeDir, manifest, from: input.from }, events);
     }
     catch (error)
     {
-        return [{ at: "sources", detail: (error as Error).message }];
+        return { at: "sources", detail: (error as Error).message };
     }
-    const live = new Map(resolved.map((source) => [source.ref, source.sha256]));
-    const found: Divergence[] = [];
-    for (const [ref, sha] of declared)
+}
+
+function staleDetail(recorded: string, now: string | undefined): string
+{
+    return now === undefined
+        ? "the embedded manifest selects no source with this ref, so the bundle carries a row nothing it states asked for"
+        : `the bundle records ${recorded} and the source now hashes to ${now}`;
+}
+
+// The other direction. Comparing only what the bundle declares answers whether
+// each row it kept is still true, never whether it kept every row its own
+// selection produces — so a row deleted along with its facts, over a recomputed
+// digest, would pass. This is what closes that: the selection the embedded
+// manifest states must resolve to exactly the rows the bundle carries.
+function verifyNothingDropped(declared: [string, string][], resolved: Source[]): Divergence[]
+{
+    const carried = new Set(declared.map(([ref]) => ref));
+    return resolved
+        .filter((source) => !carried.has(source.ref))
+        .map((source) => ({
+            at: `sources[${source.ref}]`,
+            detail: "the embedded manifest selects this source and the bundle carries no row for it"
+        }));
+}
+
+// The timeline recomputed from the same sources, compared whole. Dropping one
+// fact for a source the bundle still carries leaves every other check intact,
+// and it is exactly how a record is made to say less than it said.
+function verifyFacts(bundle: Bundle, resolved: Source[]): Divergence[]
+{
+    const expected = digestOf(factsOf(resolved));
+    const carried = digestOf(list(bundle.facts));
+    if (expected === carried)
     {
-        const now = live.get(ref);
-        if (now !== sha)
-        {
-            found.push({ at: `sources[${ref}]`, detail: `the bundle records ${sha} and the source now hashes to ${now ?? "nothing — it no longer resolves"}` });
-        }
+        return [];
     }
-    return found;
+    return [{ at: "facts", detail: `the bundle carries ${list(bundle.facts).length} fact(s) and its sources produce ${factsOf(resolved).length}` }];
 }
 
 function declaredSources(bundle: Bundle): [string, string][]
@@ -141,6 +246,18 @@ function declaredSources(bundle: Bundle): [string, string][]
         const source = item as Record<string, Canonical>;
         return [String(source.ref), String(source.sha256)] as [string, string];
     });
+}
+
+function record(value: Canonical | undefined): Record<string, Canonical>
+{
+    return value === null || value === undefined || typeof value !== "object" || Array.isArray(value)
+        ? {}
+        : value as Record<string, Canonical>;
+}
+
+function list(value: Canonical | undefined): Canonical[]
+{
+    return Array.isArray(value) ? value : [];
 }
 
 function manifestSection(bundle: Bundle): { manifestSha256: unknown; pinned: Canonical }

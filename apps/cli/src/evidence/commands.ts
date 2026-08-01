@@ -3,17 +3,17 @@
 // appends an event — compiling evidence is a read of project state, so a bundle
 // that was never wanted leaves the store exactly as it was.
 
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { parseCommand, subcommand } from "../args.js";
 import { requireWorkspace } from "../paths.js";
 import { RENDER_OPTIONS, resolveRender } from "../pretty.js";
 import { sha256 } from "../repo.js";
-import { bold, dim, fitDisplay, oneLine, padDisplay, termWidth } from "../style.js";
+import { bold, dim, displayWidth, fitDisplay, oneLine, padDisplay, termWidth } from "../style.js";
 import { CliError } from "../types.js";
 import { Canonical, canonicalBytes } from "./canonical.js";
 import { Bundle, compileBundle, pinnedManifest } from "./compile.js";
 import { readManifestFile } from "./manifest.js";
-import { divergenceRefusal, readBundleFile, verifyBundle } from "./verify.js";
+import { divergenceRefusal, readBundleFile, verifyBundle, verifyStructure } from "./verify.js";
 
 const USAGE = "usage: self evidence compile <manifest> [--out <name>] [--pin] | verify <bundle> | show <bundle>";
 
@@ -65,6 +65,14 @@ function cmdShow(rest: string[]): void
     const { values, positionals } = parseCommand("evidence", rest, { ...RENDER_OPTIONS }, 2);
     const file = required(positionals[1], "evidence show <bundle>");
     const bundle = readBundleFile(file);
+    // A reader looking at a bundle is deciding whether to believe it, so a file
+    // that no longer describes what it contains is refused rather than rendered
+    // into a page that reads like evidence.
+    const hollow = verifyStructure(bundle);
+    if (hollow.length > 0)
+    {
+        throw new CliError(divergenceRefusal(file, hollow));
+    }
     const pretty = resolveRender(values) === "pretty";
     for (const line of renderBundle(bundle, pretty))
     {
@@ -80,13 +88,32 @@ function cmdShow(rest: string[]): void
 function write(name: string, value: Canonical): void
 {
     requireName(name);
-    if (existsSync(name))
-    {
-        throw new CliError(`"${name}" already exists — evidence output never overwrites, so move it aside or pass a different --out name`);
-    }
     const bytes = canonicalBytes(value);
-    writeFileSync(name, bytes, "utf8");
+    const failure = writeExclusive(name, bytes);
+    if (failure !== null)
+    {
+        throw failure;
+    }
     console.log(JSON.stringify({ name, sha256: sha256(bytes), bytes: Buffer.byteLength(bytes, "utf8") }));
+}
+
+// Exclusive creation, not a check before a write: `existsSync` is false for a
+// dangling symlink, so asking first and writing after would follow that link
+// out of the working directory and overwrite whatever it points at. The kernel
+// decides instead, in the same call that writes.
+function writeExclusive(name: string, bytes: string): CliError | null
+{
+    try
+    {
+        writeFileSync(name, bytes, { encoding: "utf8", flag: "wx" });
+        return null;
+    }
+    catch (error)
+    {
+        return new CliError((error as NodeJS.ErrnoException).code === "EEXIST"
+            ? `"${name}" already exists — evidence output never overwrites, so move it aside or pass a different --out name`
+            : `"${name}" could not be written: ${(error as Error).message}`);
+    }
 }
 
 function requireName(name: string): void
@@ -180,9 +207,11 @@ function pad(text: string, width: number, pretty: boolean): string
     return pretty ? padDisplay(text, width) : text;
 }
 
+// Terminal cells, never string length: a column measured by `String.length`
+// lands one cell short of the border on any text that is not plain ASCII.
 function column(values: string[]): number
 {
-    return values.reduce((widest, value) => Math.max(widest, value.length), 0);
+    return values.reduce((widest, value) => Math.max(widest, displayWidth(value)), 0);
 }
 
 function record(value: Canonical | undefined): Record<string, Canonical>
