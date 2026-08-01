@@ -318,7 +318,6 @@ function writeBrief(spool: Spool, plan: AttemptPlan, id: string): void
 // CONTRIBUTING.md; the two are one statement said in two places.
 function envelopeSection(plan: AttemptPlan): string[]
 {
-    const example = plan.artifacts[0]?.name ?? "result.md";
     return [
         "## How this attempt is judged",
         "",
@@ -328,7 +327,7 @@ function envelopeSection(plan: AttemptPlan): string[]
         "",
         "```json",
         '{ "status": "completed", "summary": "<one line>",',
-        `  "artifacts": [{ "name": "${example}", "sha256": "<64 hex chars>", "bytes": 0 }] }`,
+        artifactsLine(plan),
         "```",
         "",
         "- `status` must be `completed`, and every artifact above must be declared",
@@ -339,6 +338,18 @@ function envelopeSection(plan: AttemptPlan): string[]
         "- One mismatch, or a missing envelope, refuses the whole attempt.",
         ""
     ];
+}
+
+// The example declares what this plan actually asked for, and nothing else. A
+// plan that declares no artifact is completed by the envelope alone, and a
+// stand-in name in that position told the agent to produce and hash a file the
+// plan never wanted — work the gate then ignores.
+function artifactsLine(plan: AttemptPlan): string
+{
+    const declared = plan.artifacts[0]?.name;
+    return declared === undefined
+        ? '  "artifacts": [] }'
+        : `  "artifacts": [{ "name": "${declared}", "sha256": "<64 hex chars>", "bytes": 0 }] }`;
 }
 
 interface RunRecord
@@ -379,11 +390,14 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
         const outcome = await executeRun(plan, spool, id, run);
         if (outcome.failure === null)
         {
-            if (provider !== undefined)
-            {
-                recordProviderSuccess(provider);
-            }
-            return await beating(spool, plan, () => settling(id, () => completeAttempt(ctx, plan, spool, id, outcome.envelope)));
+            // Settled first, for the reason failAttempt states on the other
+            // side: the breaker below is machine-local advice written under a
+            // lock that may legitimately refuse, and in front of the settlement
+            // that refusal took down an attempt whose result envelope was
+            // already on disk and whose provider had already been paid for.
+            const settled = await beating(spool, plan, () => settling(id, () => completeAttempt(ctx, plan, spool, id, outcome.envelope)));
+            noteProviderSuccess(plan, spool);
+            return settled;
         }
         unsupported = outcome.declaredOnly && isTransient(outcome.failure) ? unsupported + 1 : 0;
         const exhausted = unsupported >= UNSUPPORTED_TRANSIENT_RUNS;
@@ -475,6 +489,29 @@ function noteProviderFailure(plan: AttemptPlan, spool: Spool, failure: FailureCl
     {
         const record = recordProviderFailure(provider, BREAKER_DEFAULT, options.now);
         spool.append("events.jsonl", { event: "breaker.failure", provider, failures: record.failures, state: record.state });
+    }
+    catch (error)
+    {
+        spool.append("events.jsonl", { event: "breaker.unrecorded", provider, detail: (error as Error).message });
+        console.error(`the circuit breaker for provider "${provider}" could not be updated: ${(error as Error).message}`);
+    }
+}
+
+// The other half of the same statement: a provider that answered clears its
+// breaker, under the same lock and with the same standing to refuse. A reset
+// that could not be written is one attempt's worth of missing evidence — the
+// next success writes it again — and never a reason to lose a run whose
+// envelope the gate has already accepted.
+function noteProviderSuccess(plan: AttemptPlan, spool: Spool): void
+{
+    const provider = plan.capabilities.provider?.name;
+    if (provider === undefined)
+    {
+        return;
+    }
+    try
+    {
+        recordProviderSuccess(provider);
     }
     catch (error)
     {

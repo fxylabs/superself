@@ -478,17 +478,31 @@ function sweepable(dir: string, boot: string, now: number, cutoff: number): stri
     const status = spool.status();
     if (status === null)
     {
-        // Another prune on the same machine may have taken it between the
-        // listing and this read, and a sweep that crashed on that would leave
-        // the rest of the retention window unswept.
-        const touched = existsSync(dir) ? statSync(dir).mtimeMs : Number.POSITIVE_INFINITY;
-        return touched <= cutoff ? basename(dir) : null;
+        return touchedAt(dir) <= cutoff ? basename(dir) : null;
     }
     if (DRIVEN_STATES.includes(status.state) && deadVerdict(spool, status, boot, now) === null)
     {
         return null;
     }
     return new Date(status.updated).getTime() <= cutoff ? status.attempt : null;
+}
+
+// When the directory itself was last written, asked in the one step the answer
+// is true for. Another prune on the same machine may take it between the
+// listing and this read, and asking whether it exists before reading it leaves
+// that same gap open — a sweep that threw there would leave every spool behind
+// it in the retention window unswept. A directory nothing can stat is not one
+// this sweep may delete, so it reads as forever young.
+function touchedAt(dir: string): number
+{
+    try
+    {
+        return statSync(dir).mtimeMs;
+    }
+    catch
+    {
+        return Number.POSITIVE_INFINITY;
+    }
 }
 
 export function spoolBytes(dir: string): number

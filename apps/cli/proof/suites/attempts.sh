@@ -163,6 +163,29 @@ grep -q '"event":"breaker.unrecorded"' "$(spool_of "$AT_LOCKED")/events.jsonl" |
 SELF attempt breaker lockedprov | grep -q "closed" || fail "the breaker under an unbreakable lock was somehow written"
 rmdir "$LOCKED_BREAKER"
 
+# the same lock, on the run that succeeded. The breaker is cleared on success
+# under exactly the lock the failure path could not take, and a provider turn
+# that produced a valid envelope must not be lost to that bookkeeping: the
+# attempt settles first and the unwritable breaker is recorded as missing
+# evidence, the same way the failure above does it
+LOCKED_OK="$(node -e 'process.stdout.write(process.argv[1] + "/.local/state/superself/runner/breakers/" + require("crypto").createHash("sha256").update("lockedok").digest("hex").slice(0, 16) + ".json.lock")' "$HOME")"
+REPORTS_BEFORE="$(count_events report.added)"
+plan "$ROOT/p-lockbreaker-ok.json" "mode=lockbreakerok" "dest=$ROOT/dest/lockok.md" "provider=http://localhost:1/" "providerName=lockedok" "maxRuns=1" "lockdir=$LOCKED_OK"
+SELF attempt run "$ROOT/p-lockbreaker-ok.json" > /dev/null || fail "a breaker reset that threw took down an attempt that had already produced its result"
+AT_LOCKED_OK="$(last_attempt)"
+[ -d "$LOCKED_OK" ] || fail "the success-path breaker-lock case never took the lock it is about"
+[ "$(attempt_state "$AT_LOCKED_OK")" = "completed" ] || fail "a breaker reset that threw left a validated attempt unsettled"
+[ -f "$ROOT/dest/lockok.md" ] || fail "a breaker reset that threw cost the attempt its published artifact"
+[ "$(count_events report.added)" -eq "$((REPORTS_BEFORE + 1))" ] || fail "a breaker reset that threw cost the attempt its report"
+grep -q '"event":"breaker.unrecorded"' "$(spool_of "$AT_LOCKED_OK")/events.jsonl" || fail "a breaker reset that could not be written was not recorded as missing evidence"
+rmdir "$LOCKED_OK"
+
+# a plan that declares no artifact is completed by the envelope alone, and the
+# brief states that contract instead of naming a file the plan never asked for
+BRIEF_NONE="$(spool_of "$AT_LOCKED")/brief.md"
+grep -q '"artifacts": \[\] }' "$BRIEF_NONE" || fail "the brief for a plan with no declared artifact did not state the empty artifact list"
+grep -q "result.md" "$BRIEF_NONE" && fail "the brief invented an artifact name for a plan that declares none"
+
 # the same attempt settled twice records nothing twice — neither the report
 # nor the completion beside it
 COMPLETED_BEFORE="$(count_events run.completed)"

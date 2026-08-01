@@ -63,6 +63,16 @@ function main()
         dnsFailure();
         return;
     }
+    // The same lock taken away by a run that then does everything right: a
+    // staged artifact, a valid envelope, exit 0. The breaker the runner clears
+    // on success is written under the lock this just made unbreakable, so the
+    // throw lands on a run whose result is already on disk.
+    if (mode === "lockbreakerok")
+    {
+        mkdirSync(process.env.AGENT_LOCKDIR, { recursive: true });
+        finish({ status: "completed", summary: "succeeded under an unbreakable breaker lock", artifacts: [stage("design.md", "design body")] });
+        return;
+    }
     if (mode === "big")
     {
         const line = "x".repeat(1000) + "\n";
