@@ -1,9 +1,7 @@
-import { existsSync, rmSync } from "node:fs";
 import { bootId } from "../attempt/boundary.js";
-import { ResultEnvelope, sha256File } from "../attempt/gate.js";
 import { AttemptPlan } from "../attempt/plan.js";
 import { scopeFor } from "../attempt/redact.js";
-import { completeAttempt, nextFence, recordAttemptEvent } from "../attempt/run.js";
+import { nextFence, recordAttemptEvent, settleConfirmedExit } from "../attempt/run.js";
 import { BUSY, trySettling } from "../attempt/settlement.js";
 import { AttemptStatus, deadVerdict, DeadVerdict, DRIVEN_STATES, listSpools, ownerOf, Spool } from "../attempt/spool.js";
 import { treeAlive, treeContain } from "../attempt/tree.js";
@@ -126,51 +124,23 @@ async function settleConfirmed(ctx: ProjectContext, spool: Spool, status: Attemp
 {
     spool.setScope(scopeFor(plan.capabilities.secrets));
     spool.setStatus({ fence });
-    const envelope = spool.readJson<ResultEnvelope>("result.json");
-    if (envelope === null)
-    {
-        const missing: DeadVerdict = { reason: "the exit was reported and the run left no result envelope", exitSource: "confirmed" };
-        return markUnreconciled(ctx, spool, status, missing, plan, fence);
-    }
-    reclaimInterruptedPublication(plan, spool, envelope);
     // The report is idempotent inside the gate, keyed by the attempt id it
     // already carries, so a second observation of the same exit attaches
     // nothing. What only this call can do is the terminal write the
     // interrupted settlement never reached — without it the attempt is judged
     // dead again on every tick from here on.
-    const result = await completeAttempt(ctx, plan, spool, status.attempt, envelope);
+    const result = await settleConfirmedExit(ctx, plan, spool, status.attempt);
+    if (result === null)
+    {
+        const missing: DeadVerdict = { reason: "the exit was reported and the run left no result envelope", exitSource: "confirmed" };
+        return markUnreconciled(ctx, spool, status, missing, plan, fence);
+    }
     const published = spool.readJson<unknown[]>("published.json") ?? [];
     if (result.state !== "completed")
     {
         return { attempt: status.attempt, work: status.work, disposition: "gate-failed", detail: result.detail };
     }
     return { attempt: status.attempt, work: status.work, disposition: "settled", detail: `${published.length} artifact(s) published` };
-}
-
-// A gate interrupted between publishing an artifact and recording the report
-// leaves the destination holding this attempt's own bytes, and the next run of
-// the gate refuses to overwrite a published artifact — correctly, because it
-// cannot tell whose it is. This can: a destination that hashes to exactly what
-// this attempt staged, and to exactly what its envelope declared, is this
-// attempt's own interrupted publication. Taking it back lets the whole gate —
-// verification, publication, declared validation, report — run again from the
-// start, rather than trusting half of a run that never finished.
-function reclaimInterruptedPublication(plan: AttemptPlan, spool: Spool, envelope: ResultEnvelope): void
-{
-    for (const artifact of plan.artifacts)
-    {
-        const staged = spool.path("out", artifact.name);
-        const claim = (envelope.artifacts ?? []).find((item) => item.name === artifact.name);
-        if (!existsSync(artifact.dest) || !existsSync(staged) || claim === undefined)
-        {
-            continue;
-        }
-        const digest = sha256File(artifact.dest);
-        if (digest === claim.sha256 && digest === sha256File(staged))
-        {
-            rmSync(artifact.dest, { force: true });
-        }
-    }
 }
 
 // Neither an owner that disappeared nor one that went quiet said anything

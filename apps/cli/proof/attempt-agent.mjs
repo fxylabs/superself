@@ -6,7 +6,7 @@
 // Nothing here calls process.exit on a path that has written to stdout: exit
 // discards whatever is still queued on the pipe, and a stand-in that truncates
 // its own output cannot prove that the spool does not.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 
@@ -50,6 +50,27 @@ function main()
     if (mode === "checkpoint")
     {
         checkpointRun();
+        return;
+    }
+    // Takes the provider breaker's lock away in a shape nothing can break: a
+    // directory cannot be opened for exclusive creation and cannot be read for
+    // a holder token, so the runner's own write of the breaker throws after
+    // this run has already ended. It happens here rather than before the
+    // attempt starts, because admission reads the same lock.
+    if (mode === "lockbreaker")
+    {
+        mkdirSync(process.env.AGENT_LOCKDIR, { recursive: true });
+        dnsFailure();
+        return;
+    }
+    // The same lock taken away by a run that then does everything right: a
+    // staged artifact, a valid envelope, exit 0. The breaker the runner clears
+    // on success is written under the lock this just made unbreakable, so the
+    // throw lands on a run whose result is already on disk.
+    if (mode === "lockbreakerok")
+    {
+        mkdirSync(process.env.AGENT_LOCKDIR, { recursive: true });
+        finish({ status: "completed", summary: "succeeded under an unbreakable breaker lock", artifacts: [stage("design.md", "design body")] });
         return;
     }
     if (mode === "big")

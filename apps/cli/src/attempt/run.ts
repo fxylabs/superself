@@ -10,7 +10,7 @@ import { withLock, writeAtomic } from "./atomic.js";
 import { boundaryCommand, identityOf } from "./boundary.js";
 import { classify, FailureClass, FailureSignal, fromDeclaration, isTransient } from "./classify.js";
 import { deliverDirectives, inboxPath } from "./directive.js";
-import { alreadyCompleted, alreadyReported, attachReport, NO_ENVELOPE, publishArtifacts, Published, ResultEnvelope, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
+import { alreadyCompleted, alreadyReported, attachReport, NO_ENVELOPE, publishArtifacts, Published, ResultEnvelope, sha256File, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
 import { CliError } from "../types.js";
 import { AttemptPlan, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
@@ -307,8 +307,49 @@ function writeBrief(spool: Spool, plan: AttemptPlan, id: string): void
     {
         lines.push(`- ${artifact.name} → ${artifact.dest}`);
     }
-    lines.push("", `Attempt: ${id}`, "");
+    lines.push("", ...envelopeSection(plan), `Attempt: ${id}`, "");
     writeFileSync(spool.path("brief.md"), redact(lines.join("\n")));
+}
+
+// The contract the attempt is judged by, said where the agent will actually
+// read it. The gate refuses anything else, and an agent that never saw this
+// section had to read `attempt/gate.ts` to find out — the failure mode #63 was
+// filed for. The wording matches the result-envelope contract in
+// CONTRIBUTING.md; the two are one statement said in two places.
+function envelopeSection(plan: AttemptPlan): string[]
+{
+    return [
+        "## How this attempt is judged",
+        "",
+        "An exit code alone is not a result. Stage every declared artifact under",
+        "`$SUPERSELF_ATTEMPT_OUT` by its declared name, then write this JSON to",
+        "`$SUPERSELF_ATTEMPT_RESULT`:",
+        "",
+        "```json",
+        '{ "status": "completed", "summary": "<one line>",',
+        artifactsLine(plan),
+        "```",
+        "",
+        "- `status` must be `completed`, and every artifact above must be declared",
+        "  as `{name, sha256, bytes}` — `name`, never a path.",
+        "- Compute both fields over the staged file after the last write to it:",
+        '  `shasum -a 256 "$SUPERSELF_ATTEMPT_OUT/<name>"` and',
+        '  `stat -f %z` (macOS) / `stat -c %s` (Linux) / `wc -c <` for the bytes.',
+        "- One mismatch, or a missing envelope, refuses the whole attempt.",
+        ""
+    ];
+}
+
+// The example declares what this plan actually asked for, and nothing else. A
+// plan that declares no artifact is completed by the envelope alone, and a
+// stand-in name in that position told the agent to produce and hash a file the
+// plan never wanted — work the gate then ignores.
+function artifactsLine(plan: AttemptPlan): string
+{
+    const declared = plan.artifacts[0]?.name;
+    return declared === undefined
+        ? '  "artifacts": [] }'
+        : `  "artifacts": [{ "name": "${declared}", "sha256": "<64 hex chars>", "bytes": 0 }] }`;
 }
 
 interface RunRecord
@@ -349,11 +390,14 @@ async function driveRuns(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, i
         const outcome = await executeRun(plan, spool, id, run);
         if (outcome.failure === null)
         {
-            if (provider !== undefined)
-            {
-                recordProviderSuccess(provider);
-            }
-            return await beating(spool, plan, () => settling(id, () => completeAttempt(ctx, plan, spool, id, outcome.envelope)));
+            // Settled first, for the reason failAttempt states on the other
+            // side: the breaker below is machine-local advice written under a
+            // lock that may legitimately refuse, and in front of the settlement
+            // that refusal took down an attempt whose result envelope was
+            // already on disk and whose provider had already been paid for.
+            const settled = await beating(spool, plan, () => settling(id, () => completeAttempt(ctx, plan, spool, id, outcome.envelope)));
+            noteProviderSuccess(plan, spool);
+            return settled;
         }
         unsupported = outcome.declaredOnly && isTransient(outcome.failure) ? unsupported + 1 : 0;
         const exhausted = unsupported >= UNSUPPORTED_TRANSIENT_RUNS;
@@ -415,19 +459,65 @@ async function beating<T>(spool: Spool, plan: AttemptPlan, work: () => Promise<T
 // this machine watched happen.
 export function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, failure: FailureClass, detail: string, observed: boolean, options: RunOptions): AttemptResult
 {
+    const state = failure === "cancelled" ? "cancelled" : "failed";
+    // The attempt's own settlement first. The breaker below is machine-local
+    // advice about a provider, and it is written under a lock that may
+    // legitimately refuse (`atomic.ts` withLock throws when it can neither take
+    // the lock nor prove it stale) — in front of the settlement that refusal
+    // left the spool saying `running` for a run that had already ended, and
+    // recovery then had to declare a runner dead that had simply lost a lock.
+    spool.setStatus({ state, failure, detail, exitSource: "confirmed" });
+    recordAttemptEvent(ctx, plan, failure === "cancelled" ? "run.cancelled" : "run.failed", id, { failure, detail: redact(detail) });
+    noteProviderFailure(plan, spool, failure, observed, options);
+    console.error(`attempt ${id} ${state}: ${failure} — ${detail}`);
+    return { attempt: id, state, failure, detail };
+}
+
+// The shared provider breaker, pushed after this attempt is already settled. A
+// failure only the agent called transient is not evidence about the provider
+// and must not gate unrelated queued work; and a breaker that could not be
+// written is one attempt's worth of missing evidence, recorded as such rather
+// than taking a settled attempt down with it.
+function noteProviderFailure(plan: AttemptPlan, spool: Spool, failure: FailureClass, observed: boolean, options: RunOptions): void
+{
     const provider = plan.capabilities.provider?.name;
-    // A failure only the agent called transient is not evidence about the
-    // provider, and must not push a breaker that gates unrelated queued work.
-    if (provider !== undefined && isTransient(failure) && observed)
+    if (provider === undefined || !isTransient(failure) || !observed)
+    {
+        return;
+    }
+    try
     {
         const record = recordProviderFailure(provider, BREAKER_DEFAULT, options.now);
         spool.append("events.jsonl", { event: "breaker.failure", provider, failures: record.failures, state: record.state });
     }
-    const state = failure === "cancelled" ? "cancelled" : "failed";
-    spool.setStatus({ state, failure, detail, exitSource: "confirmed" });
-    recordAttemptEvent(ctx, plan, failure === "cancelled" ? "run.cancelled" : "run.failed", id, { failure, detail: redact(detail) });
-    console.error(`attempt ${id} ${state}: ${failure} — ${detail}`);
-    return { attempt: id, state, failure, detail };
+    catch (error)
+    {
+        spool.append("events.jsonl", { event: "breaker.unrecorded", provider, detail: (error as Error).message });
+        console.error(`the circuit breaker for provider "${provider}" could not be updated: ${(error as Error).message}`);
+    }
+}
+
+// The other half of the same statement: a provider that answered clears its
+// breaker, under the same lock and with the same standing to refuse. A reset
+// that could not be written is one attempt's worth of missing evidence — the
+// next success writes it again — and never a reason to lose a run whose
+// envelope the gate has already accepted.
+function noteProviderSuccess(plan: AttemptPlan, spool: Spool): void
+{
+    const provider = plan.capabilities.provider?.name;
+    if (provider === undefined)
+    {
+        return;
+    }
+    try
+    {
+        recordProviderSuccess(provider);
+    }
+    catch (error)
+    {
+        spool.append("events.jsonl", { event: "breaker.unrecorded", provider, detail: (error as Error).message });
+        console.error(`the circuit breaker for provider "${provider}" could not be updated: ${(error as Error).message}`);
+    }
 }
 
 interface RunOutcome
@@ -895,6 +985,54 @@ function gateFailed(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: st
     recordAttemptEvent(ctx, plan, "run.failed", id, { failure: "validation", detail });
     console.error(`attempt ${id} failed the completion gate: ${detail}`);
     return { attempt: id, state: "failed", failure: "validation", detail };
+}
+
+// A confirmed exit is the one exit anybody may draw a conclusion from, and the
+// conclusion is the completion gate's rather than the recovering process's.
+// The supervisor's reconciliation and `self attempt recover` both reach the
+// gate through here, so an exit somebody watched happen, over a run that left
+// a result, is never written off as `unknown` by whichever of them arrives
+// first — the failure #83 was filed for, where a cleanup that died after the
+// provider had already produced its result cost a validated attempt.
+//
+// Null means there is nothing for the gate to judge: no envelope, so the
+// caller records the honest unreconciled verdict instead. Every caller reaches
+// this behind the attempt's settlement lock, as `completeAttempt` requires.
+export async function settleConfirmedExit(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string): Promise<AttemptResult | null>
+{
+    const envelope = spool.readJson<ResultEnvelope>("result.json");
+    if (envelope === null)
+    {
+        return null;
+    }
+    reclaimInterruptedPublication(plan, spool, envelope);
+    return await completeAttempt(ctx, plan, spool, id, envelope);
+}
+
+// A gate interrupted between publishing an artifact and recording the report
+// leaves the destination holding this attempt's own bytes, and the next run of
+// the gate refuses to overwrite a published artifact — correctly, because it
+// cannot tell whose it is. This can: a destination that hashes to exactly what
+// this attempt staged, and to exactly what its envelope declared, is this
+// attempt's own interrupted publication. Taking it back lets the whole gate —
+// verification, publication, declared validation, report — run again from the
+// start, rather than trusting half of a run that never finished.
+function reclaimInterruptedPublication(plan: AttemptPlan, spool: Spool, envelope: ResultEnvelope): void
+{
+    for (const artifact of plan.artifacts)
+    {
+        const staged = spool.path("out", artifact.name);
+        const claim = (envelope.artifacts ?? []).find((item) => item.name === artifact.name);
+        if (!existsSync(artifact.dest) || !existsSync(staged) || claim === undefined)
+        {
+            continue;
+        }
+        const digest = sha256File(artifact.dest);
+        if (digest === claim.sha256 && digest === sha256File(staged))
+        {
+            rmSync(artifact.dest, { force: true });
+        }
+    }
 }
 
 // A crash between publishing an artifact and recording the report leaves a

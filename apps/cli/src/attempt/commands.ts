@@ -7,10 +7,11 @@ import { claimStarted, externalExited, externalHeartbeat, registerAttempt } from
 import { forbiddenAction, forbiddenDeclaration, forbiddenRefusal } from "../daemon/forbidden.js";
 import { AttemptPlan, readPlan } from "./plan.js";
 import { PreflightReceipt } from "./preflight.js";
+import { scopeFor } from "./redact.js";
 import { readBreaker, resetBreaker } from "./retry.js";
 import { AttemptStatus, deadVerdict, DeadVerdict, listSpools, openSpool, ownerOf, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
 import { BUSY, trySettling } from "./settlement.js";
-import { nextFence, runAttempt, settleAttempt } from "./run.js";
+import { AttemptResult, nextFence, runAttempt, settleAttempt, settleConfirmedExit } from "./run.js";
 import { treeAlive, treeContain, treeTerminate } from "./tree.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { CliContext, ProjectContext, requireProject } from "../paths.js";
@@ -316,15 +317,18 @@ async function cmdSettle(args: string[]): Promise<void>
 }
 
 // A crash or a restart leaves a spool that still says `running`. Nothing here
-// may promote such an attempt to success: the only honest verdict is that it
-// exited without being reconciled, and that is what the work record shows.
+// decides for itself that such an attempt succeeded: an exit nobody confirmed
+// says nothing about what the run produced, and the honest verdict is that it
+// exited without being reconciled. An exit a launcher did watch happen is the
+// one exception, and it is not this command's judgement either — it goes to
+// the completion gate, the same one the supervisor's reconciliation uses.
 async function cmdRecover(args: string[]): Promise<void>
 {
     parseCommand("attempt", args, {}, 0);
     const ctx = requireProject(process.cwd());
     const boot = bootId();
     const now = Date.now();
-    let recovered = 0;
+    const done: Recovery[] = [];
     for (const spool of listSpools())
     {
         const status = spool.status();
@@ -349,14 +353,45 @@ async function cmdRecover(args: string[]): Promise<void>
             console.error(`attempt ${status.attempt} is being settled by another process right now — it was left alone`);
             continue;
         }
-        recovered += taken ? 1 : 0;
+        done.push(taken);
     }
-    console.log(recovered === 0 ? "no attempt needed recovery" : `recovered ${recovered} attempt(s) as exited-unreconciled`);
+    console.log(recoveryLine(done));
 }
 
-// One attempt, judged again under the lock and written off. Answers whether it
-// was: an attempt whose launch rides out the containment keeps its work unit.
-async function recoverOne(ctx: ProjectContext, spool: Spool, status: AttemptStatus, verdict: DeadVerdict): Promise<boolean>
+// What one pass of recovery did, so the two outcomes are not reported as one.
+// An attempt the gate settled produced a result; one written off did not, and
+// an operator reading "recovered 2" has to be able to tell them apart.
+type Recovery = "settled" | "gate-failed" | "unreconciled" | "held";
+
+function recoveryLine(done: Recovery[]): string
+{
+    const counted = done.filter((item) => item !== "held");
+    if (counted.length === 0)
+    {
+        return "no attempt needed recovery";
+    }
+    const parts = [`recovered ${counted.length} attempt(s)`];
+    for (const [outcome, phrase] of RECOVERY_PHRASES)
+    {
+        const many = counted.filter((item) => item === outcome).length;
+        if (many > 0)
+        {
+            parts.push(`${many} ${phrase}`);
+        }
+    }
+    return parts.join(" — ");
+}
+
+const RECOVERY_PHRASES: [Recovery, string][] = [
+    ["settled", "settled through the completion gate"],
+    ["gate-failed", "refused by the completion gate"],
+    ["unreconciled", "as exited-unreconciled"]
+];
+
+// One attempt, judged again under the lock. An attempt whose launch rides out
+// the containment keeps its work unit; a confirmed exit over a run that left a
+// result goes to the completion gate; everything else is written off.
+async function recoverOne(ctx: ProjectContext, spool: Spool, status: AttemptStatus, verdict: DeadVerdict): Promise<Recovery>
 {
     // The terminal write below releases the work unit, and a dead verdict
     // does not mean a dead group: an owner that went quiet may still be
@@ -372,14 +407,20 @@ async function recoverOne(ctx: ProjectContext, spool: Spool, status: AttemptStat
         if (survivors.length > 0)
         {
             console.error(`attempt ${status.attempt} is not being driven (${verdict.reason}) but ${survivors.length} process(es) its launch started survived containment (pid ${survivors.join(", ")}) — it keeps the work unit until they are gone`);
-            return false;
+            return "held";
         }
     }
     // Taking the attempt over, not just relabelling it: a runner that was
     // wrongly declared dead, or one that comes back between the check and
     // the write, finds a fence newer than its own and stops rather than
     // overwriting this verdict.
-    //
+    const fence = nextFence();
+    spool.claim(fence);
+    const gated = await gateSettled(ctx, spool, status, verdict, fence);
+    if (gated !== null)
+    {
+        return gated.state === "completed" ? "settled" : "gate-failed";
+    }
     // What is recorded beside the verdict is how it was reached. Neither an
     // owner that disappeared nor one that went quiet said anything about
     // what its process produced, and settlement refuses both on that
@@ -392,11 +433,30 @@ async function recoverOne(ctx: ProjectContext, spool: Spool, status: AttemptStat
         detail: verdict.reason,
         exitSource: verdict.exitSource,
         exitCode: verdict.exitSource === "confirmed" ? status.exitCode : undefined,
-        fence: nextFence()
+        fence
     });
     spool.append("events.jsonl", { event: "run.recovered", detail: verdict.reason, exitSource: verdict.exitSource });
     recordRecovery(ctx, status, verdict.reason);
-    return true;
+    return "unreconciled";
+}
+
+// An exit a launcher watched happen, over a run that left a result envelope,
+// is a result the gate can judge — and only the gate may judge it. Recovery
+// used to write `unknown` over exactly this evidence, so an attempt whose
+// settlement died after the provider had already produced its result lost a
+// validated outcome and had to be run again (#83). Whether the gate accepts it
+// is still the gate's answer: a refusal settles the attempt as failed
+// validation, which is a terminal verdict of its own and not a recovery.
+async function gateSettled(ctx: ProjectContext, spool: Spool, status: AttemptStatus, verdict: DeadVerdict, fence: number): Promise<AttemptResult | null>
+{
+    const plan = spool.readJson<AttemptPlan>("plan.json");
+    if (verdict.exitSource !== "confirmed" || plan === null)
+    {
+        return null;
+    }
+    spool.setScope(scopeFor(plan.capabilities.secrets));
+    spool.setStatus({ fence });
+    return await settleConfirmedExit(ctx, plan, spool, status.attempt);
 }
 
 function recordRecovery(ctx: ProjectContext, status: AttemptStatus, reason: string): void
