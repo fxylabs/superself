@@ -34,6 +34,14 @@ function errPaint(code: string): (text: string) => string
 export const errRed = errPaint("31");
 export const errYellow = errPaint("33");
 
+// A counted noun, in the one place both list renders read it from: the plain
+// render and the ruled render count the same things, and two copies of this
+// drift into "1 branchs" on one surface and not the other.
+export function plural(count: number, noun: string, many = `${noun}s`): string
+{
+    return `${count} ${count === 1 ? noun : many}`;
+}
+
 export function markdownHeadings(text: string): string
 {
     return text.split("\n").map((line) => /^#{1,3} /.test(line) ? bold(line) : line).join("\n");
