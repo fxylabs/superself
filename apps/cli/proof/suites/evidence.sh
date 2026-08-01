@@ -317,6 +317,100 @@ SELF fold > /dev/null
 grep -qE "(Evidence: |, )20261231 \(" "$WORKEV" || fail "a typed revision was re-guessed by its shape"
 SELF status | grep -q "20261231 no longer resolves" || fail "a typed revision that resolves to nothing stopped warning"
 
+# ── what has not shipped, per branch ─────────────────────────────────────
+# A branch carries a work unit while some commit reported from it is not
+# settled, and the branch each report was written from is what attributes the
+# evidence. The statement is read in its own project, against a repository
+# nothing else in this suite has merged, reset or squashed.
+mkdir -p "$ROOT/shipping/app"
+cd "$ROOT/shipping/app"
+git init -q -b main
+SELF project add --name shipping --desc "per-branch shipping state" --no-connect > /dev/null
+SELF goal set "prove what has not shipped per branch" > /dev/null
+SELF status | grep -q "^unshipped: nothing waiting to ship$" \
+    || fail "a project with no evidence at all did not say so on the one-line statement"
+echo base > base.txt && git add . && git commit -qm "base on main"
+WSETTLED="$(SELF work add "settles on the default branch and closes" | tail -1)"
+SELF work start "$WSETTLED" > /dev/null
+SELF report "$WSETTLED" "reported from main" > /dev/null
+SELF work done "$WSETTLED" > /dev/null
+WBOTH="$(SELF work add "settled on main, still moving on a branch" | tail -1)"
+SELF work start "$WBOTH" > /dev/null
+SELF report "$WBOTH" "reported from main" > /dev/null
+git checkout -q -b feature-a
+echo a > a.txt && git add . && git commit -qm "feature-a work"
+SELF report "$WBOTH" "continued on feature-a" > /dev/null
+WCLOSED="$(SELF work add "closed on a branch nobody merged" | tail -1)"
+SELF work start "$WCLOSED" > /dev/null
+SELF report "$WCLOSED" "reported from feature-a" > /dev/null
+SELF work done "$WCLOSED" > /dev/null
+git checkout -q -b feature-b
+echo b > b.txt && git add . && git commit -qm "feature-b work"
+WSECOND="$(SELF work add "reported from a second branch" | tail -1)"
+SELF work start "$WSECOND" > /dev/null
+SELF report "$WSECOND" "reported from feature-b" > /dev/null
+# A detached HEAD records no branch, and neither did any event written before
+# events carried one. Both group under a single honest line and neither is
+# charged to a branch somebody could check out.
+git checkout -q --detach
+echo d > d.txt && git add . && git commit -qm "work from a detached HEAD"
+DETACHED="$(git rev-parse --short=12 HEAD)"
+WDETACHED="$(SELF work add "reported from a detached HEAD" | tail -1)"
+SELF work start "$WDETACHED" > /dev/null
+SELF report "$WDETACHED" "no branch on this event" > /dev/null
+git checkout -q main
+WLEGACY="$(SELF work add "recorded before events carried a branch" | tail -1)"
+SELF work start "$WLEGACY" > /dev/null
+SHIP_LOG="$ROOT/A/ws/.superself/projects/shipping/log.jsonl"
+LEGACYSHIP="{\"id\":\"01legacyshippingeventaaaaa\",\"ts\":\"2026-01-01T00:00:00.000Z\",\"type\":\"report.added\",\"origin\":{\"actor\":\"agent\",\"confirmed\":false},\"project\":\"shipping\",\"payload\":{\"text\":\"a report written before events carried a branch\"},\"refs\":{\"work\":\"$WLEGACY\",\"commits\":[\"$DETACHED\"]}}"
+printf '%s\n' "$LEGACYSHIP" >> "$SHIP_LOG"
+SELF fold > /dev/null
+grep -qF "$LEGACYSHIP" "$SHIP_LOG" || fail "the fold rewrote a historical report"
+
+SHIP_STATUS="$(SELF status)"
+echo "$SHIP_STATUS" | grep -q "^unshipped: feature-a 2 work units, feature-b 1 work unit, (branch not recorded) 2 work units$" \
+    || fail "self status did not state what has not shipped, per branch, named branches first"
+SHIP_CONTEXT="$(SELF context)"
+SHIP_SECTION="$(echo "$SHIP_CONTEXT" | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found')"
+[ -n "$SHIP_SECTION" ] || fail "the per-branch statement did not reach self context"
+FEATURE_A="$(echo "$SHIP_SECTION" | grep '^- feature-a — ')"
+echo "$FEATURE_A" | grep -q "2 work units unshipped" || fail "the feature-a line did not count the units it carries"
+echo "$FEATURE_A" | grep -q "$WBOTH" || fail "a unit whose evidence on a branch is unsettled was left off that branch"
+echo "$FEATURE_A" | grep -q "$WCLOSED (1 of 1 commit unsettled, done)" \
+    || fail "a unit that closed on an unmerged branch was not reported as unshipped"
+echo "$SHIP_SECTION" | grep -q "^- (branch not recorded) — 2 work units unshipped" \
+    || fail "evidence whose event carried no branch was not grouped under one unrecorded line"
+echo "$SHIP_SECTION" | grep -q "$WDETACHED" || fail "a report from a detached HEAD was not grouped as branch-unknown"
+echo "$SHIP_SECTION" | grep -q "$WLEGACY" || fail "a legacy report with no branch ref was not grouped as branch-unknown"
+echo "$SHIP_SECTION" | grep -q "^- main —" && fail "a branch whose every commit settled was reported as carrying unshipped work"
+echo "$SHIP_SECTION" | grep -q "$WSETTLED" && fail "a done unit whose evidence all settled was reported as unshipped"
+# Same store, same bytes: nothing here reads the clock or the checkout.
+[ "$(SELF context)" = "$SHIP_CONTEXT" ] || fail "the per-branch statement is not deterministic"
+
+SELF work show "$WBOTH" | grep -q "Unshipped commits by branch: feature-a — 1 of 1 unsettled" \
+    || fail "self work show did not state which branch still carries this unit's evidence"
+SELF work show "$WBOTH" | grep "Unshipped commits by branch" | grep -q "main" \
+    && fail "self work show charged a settled commit to the branch it was reported from"
+SELF work show "$WDETACHED" | grep -q "Unshipped commits by branch: (branch not recorded) — 1 of 1 unsettled" \
+    || fail "self work show did not name the unrecorded branch for a detached-HEAD report"
+SELF work show "$WSETTLED" | grep -q "Unshipped commits by branch" \
+    && fail "a unit with nothing unsettled still carried an unshipped line"
+
+# The statement follows the evidence: once the commits reported from a branch
+# settle, the branch has nothing left to state and its line goes.
+git merge -q feature-a
+SELF fold > /dev/null
+SELF status | grep -q "^unshipped: feature-b 1 work unit, (branch not recorded) 2 work units$" \
+    || fail "merging a branch did not take what it carried off the unshipped statement"
+# Deleting the branch changes nothing: nothing here asks git which branches
+# still exist, so a branch that was merged and pruned still says what was
+# reported on it.
+git branch -q -D feature-b
+SELF fold > /dev/null
+SELF context | awk '/^## Unshipped by branch$/ { found = 1; next } /^## / { found = 0 } found' | grep -q "^- feature-b — 1 work unit unshipped" \
+    || fail "a branch this checkout no longer has stopped stating what was reported on it"
+cd "$ROOT/A/ws/demo"
+
 # an event carries what happened, never what the machine that wrote it could
 # see. The table of shapes the guard must refuse — and the prose it must not —
 # is driven directly; here the same guard is shown to hold at the boundary a

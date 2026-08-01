@@ -112,6 +112,33 @@ SELF search --project demo | grep -q "budget proof active outcome must survive" 
 cp "$ROOT/demo-log-before-budget-fixture" "$LOG_A"
 SELF fold > /dev/null
 
+# The per-branch statement is not something the budget may drop in silence.
+# Under pressure it degrades to one counted line per branch and the command
+# that reads the units back, and it never crosses the cap.
+cp "$LOG_A" "$ROOT/demo-log-before-unshipped-fixture"
+UNSHIPPED_TEXT="$(awk 'BEGIN { for (i = 0; i < 2000; i++) printf "u" }')"
+for index in $(seq 1 40)
+do
+    WID_SHIP="$(printf 'w-u%03d' "$index")"
+    printf '{"id":"unshipped-work-%03d-created","ts":"2099-01-01T00:00:00.000Z","type":"work.created","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"work":"%s","outcome":"unshipped outcome %03d %s"}}\n' "$index" "$WID_SHIP" "$index" "$UNSHIPPED_TEXT" >> "$LOG_A"
+    printf '{"id":"unshipped-work-%03d-started","ts":"2099-01-01T00:00:01.000Z","type":"work.started","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"work":"%s"}}\n' "$index" "$WID_SHIP" >> "$LOG_A"
+    printf '{"id":"unshipped-report-%03d","ts":"2099-01-01T00:00:02.000Z","type":"report.added","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"text":"held on a branch that never merged %s"},"refs":{"work":"%s","commits":["ffffffffff%02d"],"branch":"feat/unshipped-%03d"}}\n' "$index" "$UNSHIPPED_TEXT" "$WID_SHIP" "$index" "$index" >> "$LOG_A"
+done
+SELF fold > /dev/null
+UNSHIPPED_CONTEXT="$(SELF context)"
+UNSHIPPED_CHARS="$(printf '%s\n' "$UNSHIPPED_CONTEXT" | wc -m | tr -d ' ')"
+[ "$UNSHIPPED_CHARS" -le 12000 ] || fail "the per-branch statement pushed context past 12,000 characters ($UNSHIPPED_CHARS)"
+echo "$UNSHIPPED_CONTEXT" | grep -q "## Unshipped by branch" || fail "the budget dropped the per-branch statement entirely"
+echo "$UNSHIPPED_CONTEXT" | grep -q "^- feat/unshipped-001 — 1 work unit unshipped; run \`self work\`$" \
+    || fail "the compacted statement lost its per-branch count or the command that reads the units back"
+echo "$UNSHIPPED_CONTEXT" | grep -q "feat/unshipped-040" || fail "the compacted statement dropped a branch instead of counting it"
+# The one-line form is bounded rather than joined: this list only leaves by
+# settling, so a project a year in would otherwise print a paragraph here.
+SELF status | grep -q '^unshipped: feat/unshipped-001 1 work unit, .*, +36 more; run `self context`$' \
+    || fail "the one-line statement joined every branch instead of counting the remainder"
+cp "$ROOT/demo-log-before-unshipped-fixture" "$LOG_A"
+SELF fold > /dev/null
+
 # At full size every proposal row carries its own group, ahead of the text, so
 # what confirming it would do survives the truncation that keeps the budget.
 BAND_WID=$(SELF work add "gated by a proposal, never started" | tail -1)

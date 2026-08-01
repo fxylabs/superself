@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { ChangeSet, findChangeSet, openChangeSets } from "./integration.js";
-import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, DecisionState, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
 import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
@@ -512,6 +512,28 @@ function supersededIn(model: ProjectModel, work: WorkState): string[]
         .map((item) => `${item.id} — ${item.retiredWhy}`);
 }
 
+// Which branches still carry this unit's evidence — the same per-branch
+// statement `self context` and `self status` make, derived at the same site
+// and scoped to one unit. Absent when every commit it reported is settled.
+//
+// Derived rather than read off `model.unshipped`, because the fold refreshes
+// the verdicts after it folds the model: this body renders against the
+// verdicts this run just recomputed, and the model's copy is the run before.
+function unshippedLines(work: WorkState, verdicts: Record<string, Verdict>): string[]
+{
+    const branches = unshippedBranches([work], verdicts);
+    if (branches.length === 0)
+    {
+        return [];
+    }
+    const stated = branches.map((branch) =>
+    {
+        const totals = branchTotals(branch);
+        return `${branchLabel(branch)} — ${totals.unsettled} of ${totals.evidence} unsettled`;
+    });
+    return [`- Unshipped commits by branch: ${stated.join("; ")}`];
+}
+
 export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
 {
     const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
@@ -533,6 +555,7 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
     {
         lines.push(`- Branches: ${work.branches.join(", ")}`);
     }
+    lines.push(...unshippedLines(work, verdicts));
     if (work.evidence.length > 0)
     {
         const marked = work.evidence.map((hash) => verdicts[hash] === undefined ? hash : `${hash} (${verdicts[hash]})`);

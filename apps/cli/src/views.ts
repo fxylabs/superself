@@ -1,12 +1,23 @@
 import { AttemptStatus, listSpools } from "./attempt/spool.js";
 import { ChangeSet, openChangeSets } from "./integration.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { AttentionRow, ATTEMPT_FAILURE_DAYS, ATTENTION_ORDER, buildModel, ProjectModel, WaitingItem, WorkState } from "./model.js";
+import {
+    AttentionRow,
+    ATTEMPT_FAILURE_DAYS,
+    ATTENTION_ORDER,
+    branchLabel,
+    BranchUnshipped,
+    branchTotals,
+    buildModel,
+    ProjectModel,
+    WaitingItem,
+    WorkState
+} from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, readRegistry, readVerdicts } from "./paths.js";
 import { AttemptRow, RenderMode, renderContext, renderStatus, renderWorkList, renderWorkspace } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
-import { blue, dim, fit, green, red, styled, termWidth, yellow } from "./style.js";
+import { blue, dim, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
 
 const CONTEXT_LIMIT = 12_000;
 // The command writes one final newline; the rendered body owns the rest.
@@ -134,6 +145,7 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
         ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan")
         : trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
+    pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
     pushList(lines, "Waiting on you", [
         ...options.compactOptional ? attentionOmission(model) : [],
         ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, item.recovery)}`)
@@ -190,6 +202,7 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         .sort((left, right) => left.id.localeCompare(right.id));
     pushList(lines, "Work in progress", progressing.map((work) =>
         `- ${work.status} work ${work.id}; run \`self work show ${work.id}\``));
+    pushList(lines, "Unshipped by branch", unshippedCountLines(model));
     pushList(lines, "Waiting on you", [
         ...attentionOmission(model),
         ...waitingItems(model).map((item) => `- ${item.identity}; run \`${item.recovery}\``)
@@ -249,6 +262,7 @@ function renderAggregateProject(model: ProjectModel): string
         `- description/goal: run \`${recovery}\``,
         `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
         `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`self work\``,
+        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped work: run \`self work\``,
         `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
         `- decisions: run \`self search --type decision --project ${project}\``
     ].join("\n");
@@ -434,6 +448,52 @@ function attentionLine(model: ProjectModel): string
         + `${model.attention.inEffect.length} already in effect`;
 }
 
+// What each branch is still carrying, one line per branch. Commits are counted
+// rather than listed: the hashes are what `self work show` prints, and a reader
+// deciding what to push needs the branch and the units on it.
+function unshippedLines(model: ProjectModel): string[]
+{
+    return model.unshipped.map((branch) =>
+    {
+        const units = branch.unshipped.map((item) =>
+            `${item.work} (${item.unsettled} of ${plural(item.evidence, "commit")} unsettled, ${item.status})`);
+        return `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped: ${units.join(", ")}`;
+    });
+}
+
+// The honest remainder once the budget stops paying for whole rows: the same
+// per-branch counts, and the command that reads the units back. Nothing is
+// hidden — the branches themselves are still named.
+function unshippedCountLines(model: ProjectModel): string[]
+{
+    return model.unshipped.map((branch) => `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped; run \`self work\``);
+}
+
+// The whole statement in one line, for the surfaces that report counts rather
+// than rows. Bounded, because this list only ever grows: a branch leaves it by
+// having its evidence settle, and nothing ages a branch out. An unbounded join
+// would turn one status line into a paragraph on a project a year in.
+const STATUS_BRANCHES = 4;
+
+function unshippedLine(model: ProjectModel): string
+{
+    if (model.unshipped.length === 0)
+    {
+        return "nothing waiting to ship";
+    }
+    const named = model.unshipped.slice(0, STATUS_BRANCHES)
+        .map((branch) => `${branchLabel(branch)} ${unitCount(branch)}`);
+    const hidden = model.unshipped.length - named.length;
+    return hidden === 0
+        ? named.join(", ")
+        : `${named.join(", ")}, +${hidden} more; run \`self context\``;
+}
+
+function unitCount(branch: BranchUnshipped): string
+{
+    return plural(branchTotals(branch).units, "work unit");
+}
+
 // A proposal is only actionable if the reader can weigh it, so the whole brief
 // travels with it rather than an outcome line pointing at a page.
 function workProposalItems(model: ProjectModel): WaitingItem[]
@@ -571,6 +631,7 @@ export function printStatus(ctx: CliContext, render: RenderMode): void
     console.log(`objectives: ${objectiveCountLine(model)}`);
     console.log(`integration: ${integrationCountLine(model)}`);
     console.log(`waiting on you: ${waitingCount(model)}`);
+    console.log(`unshipped: ${unshippedLine(model)}`);
     if (attentionRows(model).length > 0)
     {
         console.log(attentionLine(model));

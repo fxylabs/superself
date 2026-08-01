@@ -162,6 +162,48 @@ export interface AttentionRow
 
 export type AttentionBand = Record<AttentionGroup, AttentionRow[]>;
 
+// What one unit reported from one branch, and how much of it no fold has been
+// able to call settled.
+export interface BranchWork
+{
+    work: string;
+    status: WorkState["status"];
+    evidence: number;
+    unsettled: number;
+}
+
+// What a branch is still carrying that has not reached the default branch.
+// Derived from what the store recorded — the branch each report was written
+// from and the verdict each commit was given — never from asking git what
+// exists now: a branch deleted after its merge is gone from the checkout and
+// still has to say what was reported on it.
+export interface BranchUnshipped
+{
+    // Absent where the store recorded no branch: a log written before events
+    // carried one, or a report made from a detached HEAD. That evidence gets
+    // its own line rather than being charged to a named branch.
+    branch?: string;
+    unshipped: BranchWork[];
+}
+
+// How a branch that was never recorded is named. Stated once because four
+// surfaces print it, and two spellings of it would read as two branches.
+const UNRECORDED_BRANCH = "(branch not recorded)";
+
+export function branchLabel(branch: BranchUnshipped): string
+{
+    return branch.branch ?? UNRECORDED_BRANCH;
+}
+
+export function branchTotals(branch: BranchUnshipped): { units: number; evidence: number; unsettled: number }
+{
+    return {
+        units: branch.unshipped.length,
+        evidence: branch.unshipped.reduce((sum, item) => sum + item.evidence, 0),
+        unsettled: branch.unshipped.reduce((sum, item) => sum + item.unsettled, 0)
+    };
+}
+
 // Ranked, not merely listed: the reader takes the first group first. The order
 // is stated here, beside the groups it orders, because every surface that
 // shows the band shows it in this order — a second copy in a renderer would
@@ -191,6 +233,10 @@ export interface ProjectModel
     // The live proposals, ranked by what confirming each one would do. Derived
     // here rather than in a renderer, so every surface reads one grouping.
     attention: AttentionBand;
+    // What each branch is still carrying, branches with nothing unshipped
+    // omitted. Derived here for the same reason the band is: a renderer that
+    // decided it would answer differently from the next renderer.
+    unshipped: BranchUnshipped[];
     health: string[];
 }
 
@@ -209,6 +255,7 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         openQuestions: [],
         waiting: [],
         attention: { unblocks: [], undecidable: [], inEffect: [] },
+        unshipped: [],
         health: []
     };
     for (const event of readEvents(storeDir, slug))
@@ -217,8 +264,10 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     }
     deriveSignals(model, now);
     // Read once per fold, not once per row: the verdicts are a file, and a fold
-    // runs on every event.
-    deriveAttention(model, readVerdicts(storeDir, slug));
+    // runs on every event. Both derivations below read the same copy.
+    const verdicts = readVerdicts(storeDir, slug);
+    deriveAttention(model, verdicts);
+    model.unshipped = unshippedBranches(model.works, verdicts);
     return model;
 }
 
@@ -351,10 +400,17 @@ function newDecision(event: SelfEvent, status: "proposed" | "confirmed", humanCo
 }
 
 // Events written before branches were recorded carry none; absence reads as
-// unknown, so the whole log stays foldable.
+// unknown, so the whole log stays foldable. Coerced like every other value
+// read out of the log: a ruled table calls string methods on a branch name.
+function branchRef(event: SelfEvent): string | undefined
+{
+    return event.refs?.branch === undefined ? undefined : String(event.refs.branch);
+}
+
 function branchOf(event: SelfEvent): string[]
 {
-    return event.refs?.branch === undefined ? [] : [event.refs.branch];
+    const branch = branchRef(event);
+    return branch === undefined ? [] : [branch];
 }
 
 function noteBranch(work: WorkState, event: SelfEvent): void
@@ -510,7 +566,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     noteBranch(work, event);
     const { commits, notes } = splitEvidence(event);
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts, branch: event.refs?.branch });
+    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts, branch: branchRef(event) });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
     work.notes.push(...notes.filter((note) => !work.notes.includes(note)));
     work.artifacts.push(...artifacts);
@@ -740,6 +796,73 @@ function landed(work: WorkState | undefined, verdicts: Record<string, Verdict>):
         && work.status === "done"
         && work.evidence.length > 0
         && work.evidence.every((hash) => verdicts[hash] === "settled");
+}
+
+// The key an unrecorded branch is grouped under. No git branch can be named
+// the empty string, so it can never collide with one that was recorded.
+const NO_BRANCH = "";
+
+// What a unit reported from each branch. Attribution follows the report that
+// carried the commits, because only a report says which commits were produced;
+// `WorkState.branches` is the union of the same ref across every event kind and
+// cannot say which branch a given hash came from.
+function evidenceByBranch(work: WorkState): Map<string, Set<string>>
+{
+    const perBranch = new Map<string, Set<string>>();
+    for (const report of work.reports)
+    {
+        const key = report.branch ?? NO_BRANCH;
+        // A set, not a list scanned per hash: one commit reported twice from
+        // one branch is still one commit, and a fold runs on every event.
+        const hashes = perBranch.get(key) ?? new Set<string>();
+        report.commits.forEach((hash) => hashes.add(hash));
+        perBranch.set(key, hashes);
+    }
+    return perBranch;
+}
+
+// What has not shipped, per branch. A branch carries a unit when some commit
+// the unit reported from it is not settled — the same conservatism `landed`
+// applies one section up: provisional, unknown, abandoned and unverifiable all
+// read as not shipped, and only settled means reachable from the default
+// branch. A unit that landed has every hash settled, so it can never appear
+// here; a branch with nothing unsettled gets no line at all.
+export function unshippedBranches(works: WorkState[], verdicts: Record<string, Verdict>): BranchUnshipped[]
+{
+    const branches = new Map<string, BranchUnshipped>();
+    for (const work of works)
+    {
+        for (const [key, hashes] of evidenceByBranch(work))
+        {
+            const unsettled = [...hashes].filter((hash) => verdicts[hash] !== "settled").length;
+            if (unsettled === 0)
+            {
+                continue;
+            }
+            const state = branches.get(key) ?? { branch: key === NO_BRANCH ? undefined : key, unshipped: [] };
+            state.unshipped.push({ work: work.id, status: work.status, evidence: hashes.size, unsettled });
+            branches.set(key, state);
+        }
+    }
+    // Sorted by id rather than left in log order: a union merge orders two
+    // clones' lines differently, and the same store must render the same bytes
+    // on either machine.
+    for (const state of branches.values())
+    {
+        state.unshipped.sort((left, right) => left.work.localeCompare(right.work));
+    }
+    return [...branches.values()].sort(compareBranch);
+}
+
+// Named branches first and in name order, the unrecorded line last: it is the
+// one group a reader cannot act on by checking out.
+function compareBranch(left: BranchUnshipped, right: BranchUnshipped): number
+{
+    if (left.branch === undefined || right.branch === undefined)
+    {
+        return (left.branch === undefined ? 1 : 0) - (right.branch === undefined ? 1 : 0);
+    }
+    return left.branch.localeCompare(right.branch);
 }
 
 // The single site that answers "what waits on a person": every renderer reads
