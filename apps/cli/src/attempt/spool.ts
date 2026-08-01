@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { runnerStateDir } from "../machine.js";
 import { writeAtomic } from "./atomic.js";
 import { bootId } from "./boundary.js";
@@ -270,17 +270,27 @@ export function openSpool(attemptId: string, scope: RedactionScope = { literals:
 
 export function listSpools(): Spool[]
 {
+    // Oldest first. Attempt ids carry no ordering, so the record decides:
+    // anything reading this list wants the newest attempt at the end.
+    return spoolDirs()
+        .filter((dir) => existsSync(join(dir, "status.json")))
+        .map((dir) => new Spool(dir, { literals: [] }))
+        .sort((left, right) => (left.status()?.created ?? "").localeCompare(right.status()?.created ?? ""));
+}
+
+// Every directory under the spool root, including the ones no reader can make
+// an attempt out of. Only retention wants this: everything else is looking for
+// an attempt, and a directory without a status is not one.
+function spoolDirs(): string[]
+{
     const root = attemptsRoot();
     if (!existsSync(root))
     {
         return [];
     }
-    // Oldest first. Attempt ids carry no ordering, so the record decides:
-    // anything reading this list wants the newest attempt at the end.
-    return readdirSync(root)
-        .filter((name) => existsSync(join(root, name, "status.json")))
-        .map((name) => new Spool(join(root, name), { literals: [] }))
-        .sort((left, right) => (left.status()?.created ?? "").localeCompare(right.status()?.created ?? ""));
+    return readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => join(root, entry.name));
 }
 
 // The states in which a spool claims a runner is still driving it. Only these
@@ -443,21 +453,42 @@ export function pruneSpools(days: number, now: Date): string[]
     const cutoff = now.getTime() - days * 86_400_000;
     const boot = bootId();
     const removed: string[] = [];
-    for (const spool of listSpools())
+    for (const dir of spoolDirs())
     {
-        const status = spool.status();
-        if (status === null || (DRIVEN_STATES.includes(status.state) && deadVerdict(spool, status, boot, now.getTime()) === null))
+        const name = sweepable(dir, boot, now.getTime(), cutoff);
+        if (name === null)
         {
             continue;
         }
-        if (new Date(status.updated).getTime() > cutoff)
-        {
-            continue;
-        }
-        rmSync(spool.dir, { recursive: true, force: true });
-        removed.push(status.attempt);
+        rmSync(dir, { recursive: true, force: true });
+        removed.push(name);
     }
     return removed;
+}
+
+// What retention deletes, and what it deletes it as. A spool with a readable
+// status is judged by that status. One without is corrupt — no attempt id, no
+// state, no owner, nothing to recover it into — and is judged by the age of
+// the directory itself, because there is nothing else left to judge it by.
+// Skipping it, as every reader of an attempt rightly does, left the one spool
+// nobody can use as the one spool retention could never reach.
+function sweepable(dir: string, boot: string, now: number, cutoff: number): string | null
+{
+    const spool = new Spool(dir, { literals: [] });
+    const status = spool.status();
+    if (status === null)
+    {
+        // Another prune on the same machine may have taken it between the
+        // listing and this read, and a sweep that crashed on that would leave
+        // the rest of the retention window unswept.
+        const touched = existsSync(dir) ? statSync(dir).mtimeMs : Number.POSITIVE_INFINITY;
+        return touched <= cutoff ? basename(dir) : null;
+    }
+    if (DRIVEN_STATES.includes(status.state) && deadVerdict(spool, status, boot, now) === null)
+    {
+        return null;
+    }
+    return new Date(status.updated).getTime() <= cutoff ? status.attempt : null;
 }
 
 export function spoolBytes(dir: string): number
