@@ -1,0 +1,117 @@
+# Evidence bundles
+
+An evidence bundle is one canonical JSON file that states which recorded
+project state supported a claim. It is compiled from a manifest the operator
+writes and reviews, over a log and a set of commits that are pinned before
+anything is read, so a later reader can recheck the same claim against the same
+sources instead of trusting a summary of them.
+
+Nothing in `self evidence` writes project state. Compiling a bundle appends no
+event, stages no artifact, and commits nothing to the store.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `self evidence compile <manifest> [--out <name>]` | compiles the bundle the manifest selects and prints `{name, sha256, bytes}` |
+| `self evidence compile <manifest> --pin [--out <name>]` | writes the same manifest with this store's log head and log hash filled in, and compiles nothing |
+| `self evidence verify <bundle>` | rechecks the bundle's digest, its embedded manifest hash, its pins, and every source hash |
+| `self evidence show <bundle>` | prints the pins, sources, facts and exclusions for a person |
+
+`--out` takes a name, not a path: the bundle is written in the working
+directory under the name it is known as, and an existing file is never
+overwritten. `show` follows the piped-output contract — a pipe, a redirect,
+`--plain`, `TERM=dumb`, or a terminal too narrow for the table all get the same
+bytes an agent has always read.
+
+## Manifest — `self.evidence.manifest@1`
+
+```json
+{
+  "format": "self.evidence.manifest@1",
+  "profile": "research",
+  "project": "<slug>",
+  "pins": {
+    "self": { "head": "<event id>", "logSha256": "<64 hex>" },
+    "git": [{ "repo": "<registered slug>", "commit": "<40 hex>" }]
+  },
+  "select": {
+    "decisions": ["<event id>"],
+    "work": ["<work id>"],
+    "reports": ["<event id>"],
+    "milestones": ["<milestone id>"],
+    "commits": [{ "repo": "<registered slug>", "commit": "<40 hex>" }]
+  },
+  "exclude": [{ "ref": "<id>", "why": "<why it is withheld>" }]
+}
+```
+
+Every source is named outright. There is no glob, no "latest", and no date
+range in version 1: a selection that could resolve differently tomorrow is the
+drift a bundle exists to remove. A commit is pinned at its full forty
+characters, because an abbreviation is a different string for the same commit
+and every check downstream is a string comparison.
+
+`exclude` is carried into the bundle verbatim, so what was held back is visible
+rather than missing. An exclusion that withholds nothing the manifest selected
+refuses.
+
+## Bundle — `self.evidence.bundle@1`
+
+| Key | Content |
+| --- | --- |
+| `digest` | sha256 over the bundle's canonical bytes with `digest` set to the empty string |
+| `exclusions` | the manifest's `exclude` list |
+| `facts` | `{ts, type, ref, statement}` rows, sorted by `(ts, ref, type)` |
+| `format` | `self.evidence.bundle@1` |
+| `manifest` | `{manifestSha256, pinned}` — the pinned manifest and the hash over it |
+| `pins` | the resolved self and git pins, plus the pinned log's event count |
+| `profile` | the profile the sources were filtered by |
+| `provenance` | the compiler contract and what it compiled from |
+| `sources` | `{ref, kind, sha256, record}` rows, sorted by `(kind, ref)` |
+
+### Canonical serialization
+
+Serialization is implemented once, in `apps/cli/src/evidence/canonical.ts`:
+UTF-8 with strings NFC-normalized, LF only, compact JSON with object keys sorted
+by Unicode codepoint at every depth, whole numbers only, and exactly one
+trailing newline. Every array carries a stated order.
+
+No compile-time clock reaches the bytes. Time enters a bundle only as the
+timestamps the sources themselves recorded, so the same pinned inputs give the
+same file and the same digest on any machine.
+
+## Fail-closed behaviour
+
+Compiling refuses, rather than compiling something quieter, when:
+
+- a selector matches nothing, or matches more than one record;
+- the store's log head or log hash differs from the manifest's pin — the two
+  are checked together, because a rewritten history keeps its head id while its
+  bytes change;
+- a pinned commit does not resolve in the named repository;
+- a record carries a field the profile does not declare;
+- a value is shaped like a credential, or holds an absolute filesystem path;
+- either format version is one this build does not implement.
+
+The credential screen exempts the store's own id grammar — ULIDs and
+`<type>-<ulid>` ids, including joined sequences — so evidence that cites events
+by id is not mistaken for key material.
+
+Nothing is silently scrubbed. A bundle with a hole nobody declared would read as
+complete evidence, so the refusal keeps the disclosure decision with a person.
+
+## Versioning policy
+
+- `self.evidence.bundle@1` bumps on any change that can alter canonical bytes
+  for the same inputs. `verify` refuses a version it does not implement, naming
+  the version found and the versions supported.
+- `self.evidence.manifest@1` bumps independently — adding range selectors, for
+  instance, changes what a manifest may say without changing what a bundle is.
+- A profile is named data: its allowlist and its fact derivation are versioned
+  inside the profile declaration, not in the format string. `research` ships
+  first.
+- `provenance.compiler.version` names the compiler contract, not the CLI
+  release: two builds that implement `bundle@1` must produce the same bytes for
+  the same inputs, and a version that moved every release would make that claim
+  untestable.

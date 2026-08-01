@@ -7,6 +7,7 @@ import { runAttemptCommand } from "./attempt/commands.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { runDaemonCommand } from "./daemon/commands.js";
 import { runDigestCommand } from "./daemon/digest.js";
+import { runEvidenceCommand } from "./evidence/commands.js";
 import { runOvernightCommand } from "./daemon/overnight.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
@@ -98,6 +99,7 @@ async function main(argv: string[]): Promise<void>
         case "integration": cmdIntegration(requireProject(process.cwd()), rest); break;
         case "review": cmdReview(requireProject(process.cwd()), rest); break;
         case "artifact": cmdArtifact(rest); break;
+        case "evidence": runEvidenceCommand(rest); break;
         case "spec": await runSpecCommand(rest); break;
         case "attempt": await runAttemptCommand(rest); break;
         case "daemon": await runDaemonCommand(rest); break;
