@@ -145,6 +145,41 @@ TAMPER="$(SELF evidence verify "$OUT/tampered.json" 2>&1 || true)"
 echo "$TAMPER" | grep -q "digest" || fail "an edited bundle was not caught by its digest"
 SELF evidence verify "$OUT/tampered.json" > /dev/null 2>&1 && fail "an edited bundle verified"
 
+# the most direct tampering there is: one record rewritten in place, its own
+# declared sha256 left alone, the bundle digest recomputed around it. The row is
+# checkable against itself, so this fails with no store in sight
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const row = bundle.sources.find((s) => s.kind === "decision");
+row.record.payload.text = "a decision text nobody confirmed";
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+console.log(row.ref);
+' "$OUT/first.json" "$OUT/rewritten.json" "$CLI_DIR/dist/evidence/canonical.js" > "$ROOT/rewritten.ref"
+REWRITTEN_REF="$(cat "$ROOT/rewritten.ref")"
+[ -n "$REWRITTEN_REF" ] || fail "the rewritten-record fixture named no ref"
+REWRITTEN="$(SELF evidence verify "$OUT/rewritten.json" 2>&1 || true)"
+echo "$REWRITTEN" | grep -q "$REWRITTEN_REF" || fail "verify did not name the rewritten record — got: $REWRITTEN"
+echo "$REWRITTEN" | grep -q "the record it carries hashes to" || fail "verify did not check a record against its own declared hash"
+SELF evidence show "$OUT/rewritten.json" > /dev/null 2>&1 && fail "show rendered a bundle whose record does not match its declared hash"
+
+# provenance restates pins that are reconciled, so it is reconciled too
+node -e '
+const fs = require("node:fs");
+const { digestOf, canonicalBytes } = require(process.argv[3]);
+const bundle = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+bundle.provenance.compiledFrom.selfHead = "01kyvzvraamhewfvbk7t586s98";
+bundle.provenance.compiler.name = "someone-elses-compiler";
+bundle.digest = "";
+bundle.digest = digestOf(bundle);
+fs.writeFileSync(process.argv[2], canonicalBytes(bundle));
+' "$OUT/first.json" "$OUT/reprovenanced.json" "$CLI_DIR/dist/evidence/canonical.js"
+REPROV="$(SELF evidence show "$OUT/reprovenanced.json" 2>&1 || true)"
+echo "$REPROV" | grep -q "provenance" || fail "a rewritten provenance was rendered as evidence"
+
 # a recomputed digest is not integrity: a source row and its facts dropped, then
 # the digest recomputed with this repository's own canonical module, still has
 # to fail — the embedded manifest still selects the row the file no longer holds
@@ -291,6 +326,12 @@ refuses 01kyvzvraamhewfvbk7t586s03 '{"text":"a decision","detail":"a field the p
 refuses 01kyvzvraamhewfvbk7t586s05 '{"text":"output:/Users/example/work/out.json"}' "absolute filesystem path"
 refuses 01kyvzvraamhewfvbk7t586s06 '{"text":"failed at/Users/example/work/out.json"}' "absolute filesystem path"
 refuses 01kyvzvraamhewfvbk7t586s07 '{"text":"see file:///Users/example/work/out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s0a '{"text":"/Users/example/work/out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s0b '{"text":"cached under /var/folders/t9/scratch"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s0c '{"text":"a slash written as a lookalike still names it: ／Users／example／out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s0d '{"text":"copied to C:\\Users\\example\\out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s0e '{"text":"left in ~/Documents/out.json"}' "absolute filesystem path"
+refuses 01kyvzvraamhewfvbk7t586s0f '{"text":"left in ~example/Documents/out.json"}' "absolute filesystem path"
 
 # the store's own id grammar is not key material: a note citing joined event ids
 # compiles, which is the false positive the credential rule used to raise (#133)
@@ -305,18 +346,31 @@ EOF
 SELF evidence compile "$OUT/ids.json" --pin --out ids.pinned.json > /dev/null
 SELF evidence compile "$OUT/ids.pinned.json" --out ids.bundle.json > /dev/null || fail "a note citing joined event ids was refused as a credential"
 
-# a web URL carries a path that resolves for every reader, so it is not the
-# machine-naming path the screen is about
-PLANT_ID=01kyvzvraamhewfvbk7t586s08
-export PLANT_ID
-cp "$ROOT/log.before" "$LOG_A"
-plant '{"text":"stated in https://github.com/fxylabs/superself/issues/145"}'
-cat > "$OUT/url.json" <<EOF
+# the other side of the path screen: the content a profile whose sources are
+# decisions and reports about code work carries every day has to compile. A
+# repo-relative path, a slashed date and a web URL are not machine locations.
+compiles()
+{
+    PLANT_ID="$1"
+    export PLANT_ID
+    cp "$ROOT/log.before" "$LOG_A"
+    plant "$2"
+    cat > "$OUT/allowed.json" <<EOF
 { "format": "self.evidence.manifest@1", "profile": "research", "project": "demo",
   "select": { "decisions": ["$PLANT_ID"] }, "pins": {}, "exclude": [] }
 EOF
-SELF evidence compile "$OUT/url.json" --pin --out url.pinned.json > /dev/null
-SELF evidence compile "$OUT/url.pinned.json" --out url.bundle.json > /dev/null || fail "a decision citing an issue URL was refused as a filesystem path"
+    rm -f "$OUT/allowed.pinned.json" "$OUT/allowed.bundle.json"
+    SELF evidence compile "$OUT/allowed.json" --pin --out allowed.pinned.json > /dev/null
+    SELF evidence compile "$OUT/allowed.pinned.json" --out allowed.bundle.json > /dev/null \
+        || fail "the path screen refused ordinary content: $3"
+    rm -f "$OUT/allowed.pinned.json" "$OUT/allowed.bundle.json"
+}
+
+compiles 01kyvzvraamhewfvbk7t586s08 '{"text":"stated in https://github.com/fxylabs/superself/issues/145"}' "a web URL"
+compiles 01kyvzvraamhewfvbk7t586s09 '{"text":"the guard lives in apps/cli/src/evidence/compile.ts"}' "a repo-relative path"
+compiles 01kyvzvraamhewfvbk7t586sa0 '{"text":"decided on 2026/08/01 after review"}' "a slashed date"
+compiles 01kyvzvraamhewfvbk7t586sa1 '{"text":"the ratio held at 3/4 of the runs"}' "a slashed fraction"
+compiles 01kyvzvraamhewfvbk7t586sa2 '{"text":"the helper moved to packages/media/src/dev/index.ts"}' "a repo path whose segments read like roots"
 cp "$ROOT/log.before" "$LOG_A"
 
 # selectors fail closed in two distinguishable ways

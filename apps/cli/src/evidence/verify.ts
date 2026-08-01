@@ -9,8 +9,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readEvents } from "../logfile.js";
 import { CliError, SelfEvent } from "../types.js";
-import { Canonical, digestOf } from "./canonical.js";
-import { BUNDLE_FORMATS, Bundle, Source, digestWithout, factRefsOf, factsOf, logDigest, logHead, resolveSources } from "./compile.js";
+import { Canonical, asList, asRecord, digestOf } from "./canonical.js";
+import { BUNDLE_FORMATS, Bundle, COMPILER, Source, digestWithout, factRefsOf, factsOf, logDigest, logHead, resolveSources } from "./compile.js";
 import { Manifest, parseManifest } from "./manifest.js";
 
 export interface Divergence
@@ -87,9 +87,28 @@ export function verifyStructure(bundle: Bundle): Divergence[]
     {
         found.push({ at: "manifest", detail: `the bundle records ${String(embedded.manifestSha256)} and its embedded manifest hashes to ${recomputed}` });
     }
+    found.push(...verifyRecordHashes(bundle));
     found.push(...verifyAgainstEmbedded(bundle, embedded.pinned));
     found.push(...verifyFactRefs(bundle));
     return found;
+}
+
+// `sources[].sha256` is the hash of that row's own record, so the row is
+// checkable against itself. This is the direct form of tampering — a record
+// rewritten in place while its declared hash and the bundle digest are
+// recomputed around it — and it is caught here, offline, before the live store
+// is consulted at all. What the store answers afterwards is a different
+// question: whether the source has since moved.
+function verifyRecordHashes(bundle: Bundle): Divergence[]
+{
+    return asList(bundle.sources)
+        .map(asRecord)
+        .map((source) => ({ source, recomputed: digestOf(source.record) }))
+        .filter(({ source, recomputed }) => recomputed !== source.sha256)
+        .map(({ source, recomputed }) => ({
+            at: `sources[${String(source.ref)}].record`,
+            detail: `the row declares ${String(source.sha256)} and the record it carries hashes to ${recomputed}`
+        }));
 }
 
 // The bundle's own copies of what the manifest already said. They are carried
@@ -97,17 +116,27 @@ export function verifyStructure(bundle: Bundle): Divergence[]
 // was pinned, and that copy is exactly what an editor can drop a line from.
 function verifyAgainstEmbedded(bundle: Bundle, pinned: Canonical): Divergence[]
 {
-    const manifest = record(pinned);
-    const pins = record(bundle.pins);
+    const manifest = asRecord(pinned);
+    const pins = asRecord(bundle.pins);
+    const from = asRecord(asRecord(bundle.provenance).compiledFrom);
     const checks: [string, Canonical, Canonical][] = [
         ["exclusions", bundle.exclusions ?? [], manifest.exclude ?? []],
-        ["pins.self", pins.self ?? {}, record(manifest.pins).self ?? {}],
-        ["pins.git", pins.git ?? [], record(manifest.pins).git ?? []],
-        ["profile", bundle.profile ?? "", manifest.profile ?? ""]
+        ["pins.self", pins.self ?? {}, asRecord(manifest.pins).self ?? {}],
+        ["pins.git", pins.git ?? [], asRecord(manifest.pins).git ?? []],
+        ["profile", bundle.profile ?? "", manifest.profile ?? ""],
+        // Provenance restates pins that are already reconciled, and duplicated
+        // state nobody checks is state that can be rewritten. `compiler` is
+        // checked against the contract this build implements rather than
+        // against the manifest, which never states it.
+        ["provenance.compiledFrom.selfHead", from.selfHead ?? "", asRecord(asRecord(manifest.pins).self).head ?? ""],
+        ["provenance.compiledFrom.gitCommits", from.gitCommits ?? [], asRecord(manifest.pins).git ?? []],
+        ["provenance.compiler", asRecord(bundle.provenance).compiler ?? {}, { name: COMPILER.name, version: COMPILER.version }]
     ];
     return checks
         .filter(([, carried, stated]) => digestOf(carried) !== digestOf(stated))
-        .map(([at]) => ({ at, detail: "what the bundle carries here differs from what its embedded manifest states" }));
+        .map(([at]) => ({ at, detail: at === "provenance.compiler"
+            ? `what the bundle carries here is not the compiler contract ${BUNDLE_FORMATS[0]} is produced by`
+            : "what the bundle carries here differs from what its embedded manifest states" }));
 }
 
 // A fact is a line about a source. One naming a ref the bundle no longer holds
@@ -117,17 +146,17 @@ function verifyFactRefs(bundle: Bundle): Divergence[]
 {
     const carried = new Set<string>();
     const found: Divergence[] = [];
-    for (const item of list(bundle.sources))
+    for (const item of asList(bundle.sources))
     {
-        const source = record(item);
+        const source = asRecord(item);
         const ref = String(source.ref);
         if (carried.has(ref))
         {
             found.push({ at: `sources[${ref}]`, detail: "the bundle carries more than one row for this ref" });
         }
-        factRefsOf(record(source.record), String(source.kind), ref).forEach((id) => carried.add(id));
+        factRefsOf(asRecord(source.record), String(source.kind), ref).forEach((id) => carried.add(id));
     }
-    const orphan = list(bundle.facts).map(record).find((fact) => !carried.has(String(fact.ref)));
+    const orphan = asList(bundle.facts).map(asRecord).find((fact) => !carried.has(String(fact.ref)));
     if (orphan !== undefined)
     {
         found.push({ at: `facts[${String(orphan.ref)}]`, detail: "this fact names a source the bundle does not carry" });
@@ -157,7 +186,7 @@ function verifyPins(bundle: Bundle, manifest: Manifest, input: VerifyInput): Div
 // holds, the live log is that log.
 function verifyEventCount(bundle: Bundle, input: VerifyInput, slug: string): Divergence[]
 {
-    const carried = record(bundle.pins).eventCount;
+    const carried = asRecord(bundle.pins).eventCount;
     const live = readEvents(input.storeDir, slug).length;
     if (carried === live)
     {
@@ -230,12 +259,12 @@ function verifyNothingDropped(declared: [string, string][], resolved: Source[]):
 function verifyFacts(bundle: Bundle, resolved: Source[]): Divergence[]
 {
     const expected = digestOf(factsOf(resolved));
-    const carried = digestOf(list(bundle.facts));
+    const carried = digestOf(asList(bundle.facts));
     if (expected === carried)
     {
         return [];
     }
-    return [{ at: "facts", detail: `the bundle carries ${list(bundle.facts).length} fact(s) and its sources produce ${factsOf(resolved).length}` }];
+    return [{ at: "facts", detail: `the bundle carries ${asList(bundle.facts).length} fact(s) and its sources produce ${factsOf(resolved).length}` }];
 }
 
 function declaredSources(bundle: Bundle): [string, string][]
@@ -246,18 +275,6 @@ function declaredSources(bundle: Bundle): [string, string][]
         const source = item as Record<string, Canonical>;
         return [String(source.ref), String(source.sha256)] as [string, string];
     });
-}
-
-function record(value: Canonical | undefined): Record<string, Canonical>
-{
-    return value === null || value === undefined || typeof value !== "object" || Array.isArray(value)
-        ? {}
-        : value as Record<string, Canonical>;
-}
-
-function list(value: Canonical | undefined): Canonical[]
-{
-    return Array.isArray(value) ? value : [];
 }
 
 function manifestSection(bundle: Bundle): { manifestSha256: unknown; pinned: Canonical }

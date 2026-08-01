@@ -70,6 +70,13 @@ refuses.
 | `provenance` | the compiler contract and what it compiled from |
 | `sources` | `{ref, kind, sha256, record}` rows, sorted by `(kind, ref)` |
 
+`sources[].sha256` has one meaning: the sha256 over the canonical bytes of that
+row's own `record`, and nothing else. It is not a hash of the raw log line the
+record came from. That is what makes a row checkable against itself — `verify`
+recomputes it from the carried record before it consults the store at all — and
+it is why the same field can then be compared against the store to answer
+whether the source has since moved.
+
 ### Canonical serialization
 
 Serialization is implemented once, in `apps/cli/src/evidence/canonical.ts`:
@@ -92,8 +99,11 @@ bundle is never displayed as evidence:
 
 - the digest does not recompute over the bundle's own bytes;
 - the embedded manifest does not hash to the recorded `manifestSha256`;
-- the carried `exclusions`, `pins` or `profile` differ from what the embedded
-  manifest states;
+- a source row's `record` does not hash to the `sha256` that row declares — the
+  direct form of tampering, caught offline;
+- the carried `exclusions`, `pins`, `profile` or `provenance` differ from what
+  the embedded manifest states, or the carried compiler is not the contract
+  this format is produced by;
 - two source rows carry the same `ref`;
 - a fact names a source the bundle does not carry.
 
@@ -130,7 +140,12 @@ Compiling refuses, rather than compiling something quieter, when:
 - a record carries a field the profile does not declare — a profile lists both
   the fields it publishes and the fields it deliberately drops, so an unlisted
   key is content nobody reviewed rather than an omission;
-- a value is shaped like a credential, or holds an absolute filesystem path;
+- a value is shaped like a credential, or holds an absolute filesystem location
+  — a path under a real filesystem root (`/Users/…`, `/home/…`, `/private/…`,
+  `/var/…`, `/tmp/…`, `/etc/…`, `/opt/…`, a `~/` path, a Windows drive or UNC
+  path) or a `file://` URL, wherever it sits in the value. A repo-relative path
+  such as `apps/cli/src/evidence/compile.ts`, a slashed date such as
+  `2026/08/01`, and a web URL are ordinary content and compile;
 - either format version is one this build does not implement.
 
 The credential screen exempts the store's own id grammar — ULIDs and

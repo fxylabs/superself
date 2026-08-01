@@ -108,3 +108,19 @@ export function digestOf(value: Canonical): string
 {
     return sha256(canonicalBytes(value));
 }
+
+// Reading a parsed bundle back is reading someone else's JSON: any field may be
+// missing or be the wrong kind, and every caller inside this subsystem needs
+// the same two answers. They live beside the type they narrow, so the reader
+// and the writer of canonical values stay one module.
+export function asRecord(value: Canonical | undefined): Record<string, Canonical>
+{
+    return value === null || value === undefined || typeof value !== "object" || Array.isArray(value)
+        ? {}
+        : value as Record<string, Canonical>;
+}
+
+export function asList(value: Canonical | undefined): Canonical[]
+{
+    return Array.isArray(value) ? value : [];
+}

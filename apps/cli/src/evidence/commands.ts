@@ -10,7 +10,7 @@ import { RENDER_OPTIONS, resolveRender } from "../pretty.js";
 import { sha256 } from "../repo.js";
 import { bold, dim, displayWidth, fitDisplay, oneLine, padDisplay, termWidth } from "../style.js";
 import { CliError } from "../types.js";
-import { Canonical, canonicalBytes } from "./canonical.js";
+import { Canonical, asList, asRecord, canonicalBytes } from "./canonical.js";
 import { Bundle, compileBundle, pinnedManifest } from "./compile.js";
 import { readManifestFile } from "./manifest.js";
 import { divergenceRefusal, readBundleFile, verifyBundle, verifyStructure } from "./verify.js";
@@ -155,12 +155,12 @@ type Paint = (text: string) => string;
 
 function renderPins(bundle: Bundle, paint: Paint, quiet: Paint): string[]
 {
-    const pins = record(bundle.pins);
-    const self = record(pins.self);
+    const pins = asRecord(bundle.pins);
+    const self = asRecord(pins.self);
     const lines = [`${paint("pins")}  self ${quiet(String(self.head))}  log ${quiet(String(self.logSha256).slice(0, 12))}  events ${String(pins.eventCount)}`];
-    for (const item of list(pins.git))
+    for (const item of asList(pins.git))
     {
-        const pin = record(item);
+        const pin = asRecord(item);
         lines.push(`  ${String(pin.repo)} ${quiet(String(pin.commit).slice(0, 12))}`);
     }
     return lines;
@@ -168,7 +168,7 @@ function renderPins(bundle: Bundle, paint: Paint, quiet: Paint): string[]
 
 function renderSources(bundle: Bundle, paint: Paint, quiet: Paint, pretty: boolean): string[]
 {
-    const sources = list(bundle.sources).map(record);
+    const sources = asList(bundle.sources).map(asRecord);
     const width = column(sources.map((source) => String(source.kind)));
     const lines = [`${paint("sources")} ${sources.length}`];
     for (const source of sources)
@@ -180,7 +180,7 @@ function renderSources(bundle: Bundle, paint: Paint, quiet: Paint, pretty: boole
 
 function renderFacts(bundle: Bundle, paint: Paint, quiet: Paint, pretty: boolean): string[]
 {
-    const facts = list(bundle.facts).map(record);
+    const facts = asList(bundle.facts).map(asRecord);
     const width = column(facts.map((fact) => String(fact.type)));
     const lines = [`${paint("facts")} ${facts.length}`];
     for (const fact of facts)
@@ -193,7 +193,7 @@ function renderFacts(bundle: Bundle, paint: Paint, quiet: Paint, pretty: boolean
 
 function renderExclusions(bundle: Bundle, paint: Paint): string[]
 {
-    const exclusions = list(bundle.exclusions).map(record);
+    const exclusions = asList(bundle.exclusions).map(asRecord);
     return [
         `${paint("exclusions")} ${exclusions.length}`,
         ...exclusions.map((item) => `  ${String(item.ref)}  ${String(item.why)}`)
@@ -214,12 +214,3 @@ function column(values: string[]): number
     return values.reduce((widest, value) => Math.max(widest, displayWidth(value)), 0);
 }
 
-function record(value: Canonical | undefined): Record<string, Canonical>
-{
-    return value === null || typeof value !== "object" || Array.isArray(value) ? {} : value as Record<string, Canonical>;
-}
-
-function list(value: Canonical | undefined): Canonical[]
-{
-    return Array.isArray(value) ? value : [];
-}

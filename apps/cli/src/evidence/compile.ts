@@ -20,7 +20,7 @@ export const BUNDLE_FORMATS = [BUNDLE_FORMAT];
 // The compiler contract, not the CLI release. Two builds that implement
 // bundle@1 must produce the same bytes for the same inputs, so a version string
 // that moved every release would make that claim untestable.
-const COMPILER = { name: "self", version: "1" };
+export const COMPILER = { name: "self", version: "1" };
 
 export interface Source
 {
@@ -372,13 +372,34 @@ const OBJECT_NAMES = /\b(?:[0-9a-f]{40}|[0-9a-f]{64})\b/g;
 const VENDOR_SECRET = /sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const ASSIGNED_SECRET = /\b(?:api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret)\b\s*[:=]\s*\S{6,}/i;
 const HIGH_ENTROPY = /[A-Za-z0-9+/_=-]{32,}/g;
-// Matched wherever it sits in the value, not only after a space: `output:/Users/…`
-// and `at/Users/…` name the same machine that a bare path does. Web URLs are
-// taken out first — they carry a path that resolves for every reader, which is
-// the opposite of what this rule is about — while `file:///Users/…` keeps its
-// path and is refused with the rest.
+// What makes a path worth refusing is its root, not the fact that it has
+// slashes in it. The sources of this profile are decisions and reports about
+// code work, so `apps/cli/src/evidence/compile.ts` and `2026/08/01` are the
+// ordinary content it exists to carry, and a rule that refused any two-slash
+// run would refuse the normal case.
+//
+// So the rule is anchored on the roots a filesystem actually has. It matches
+// wherever it sits in the value — `output:/Users/x` and `at/Users/x` name the
+// same machine a bare path does — and `file://` is included, because that
+// scheme is a local location by definition. Web URLs are taken out first: they
+// carry a path that resolves for every reader, which is the opposite of what
+// this is about.
+// The root list stays short and stays spelled the way a filesystem spells it.
+// Every name added to it is also a directory somebody could have in a
+// repository — `src/dev/`, `packages/media/`, `app/system/` — and because the
+// rule deliberately matches after a word character, it cannot tell those from
+// `at/dev/null`. So the list holds the roots that name a machine or a person
+// and nothing more speculative.
+const ROOTS = "Users|home|private|var|tmp|etc|opt|Volumes";
 const WEB_URL = /\bhttps?:\/\/\S*/g;
-const ABSOLUTE_PATH = /~\/[A-Za-z0-9._+-]|\/[A-Za-z0-9._+-]+\/[A-Za-z0-9._+-]|[A-Za-z]:\\/;
+// `~name/` as well as `~/`: the first spelling is a path that names someone who
+// is not even the person holding the clone.
+const ABSOLUTE_PATH = new RegExp(`file://|~[A-Za-z0-9._-]*/[A-Za-z0-9._+-]|/(?:${ROOTS})/[A-Za-z0-9._+-]|[A-Za-z]:\\\\|\\\\\\\\[A-Za-z0-9._-]+\\\\`);
+
+// A slash written as anything but U+002F still reads as a path to a person and
+// still names the machine, so the lookalikes are folded before the rule runs
+// rather than left as a way around it.
+const SLASH_LOOKALIKES = /[⁄∕／⧸]/g;
 
 export function screen(value: Canonical, at: string, profile: string): void
 {
@@ -406,7 +427,7 @@ export function screen(value: Canonical, at: string, profile: string): void
 // wrapped the command, and read over a shoulder.
 function screenText(text: string, at: string, profile: string): void
 {
-    if (ABSOLUTE_PATH.test(text.replace(WEB_URL, " ")))
+    if (ABSOLUTE_PATH.test(text.replace(SLASH_LOOKALIKES, "/").replace(WEB_URL, " ")))
     {
         throw new CliError(`${at} holds an absolute filesystem path — it names the machine that produced it and resolves to nothing for a reader, so the ${profile} profile refuses it`);
     }
