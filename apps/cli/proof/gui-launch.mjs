@@ -42,7 +42,15 @@ process.env.PATH = join(root, "bin") + delimiter + (process.env.PATH ?? "");
 // hold a detached spawn back for seconds. A refusal has nothing to wait for
 // and pays the deadline in full every time, so it is read on the short one
 // proof.sh uses for the same detached-spawn race.
-const LAUNCH_MS = 20000;
+//
+// Twenty seconds was not enough. This file runs a few seconds into the sweep,
+// which is where run.mjs starts every suite it can at once and where the two
+// cores of the CI runner are most oversubscribed (#99, #129); the detached
+// stub was not scheduled inside the window and the guard was reported broken
+// for a launch it had made correctly. The identical head passed on a rerun,
+// so the number is what failed, not the guard. A deadline this long is only
+// ever paid by a genuine break.
+const LAUNCH_MS = 60000;
 const ABSENCE_MS = 1000;
 
 async function launched(deadlineMs)
