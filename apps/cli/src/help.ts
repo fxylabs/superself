@@ -186,7 +186,10 @@ export const COMMANDS: CommandHelp[] = [
     {
         name: "work",
         usage: [
-            { syntax: "work [--project <slug>]", description: ["list open work, from any directory with --project"] },
+            {
+                syntax: "work [--project <slug>] [--pretty|--plain]",
+                description: ["list open work, from any directory with --project", "(a terminal gets the ruled table; a pipe gets one line per unit)"]
+            },
             { syntax: 'work add "<required outcome>"', description: ["create a work unit"] },
             {
                 syntax: "work show <id> [--project <slug>]",
@@ -555,17 +558,23 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: "context",
-        usage: [{ syntax: "context", description: ["print derived context for agents"] }],
+        usage: [{ syntax: "context [--pretty|--plain]", description: ["print derived context for agents"] }],
         detail: [
             "print this project's current truth: goal, active decisions, open work, recent reports.",
-            "output is capped at 12,000 characters; every omission names the command",
-            "that recovers the omitted state in full."
+            "piped output is capped at 12,000 characters; every omission names the command",
+            "that recovers the omitted state in full.",
+            "a terminal gets the ruled render instead, which carries no cap; --plain forces",
+            "the capped agent output anywhere, --pretty forces the ruled render."
         ]
     },
     {
         name: "status",
-        usage: [{ syntax: "status", description: ["print a short state summary"] }],
-        detail: ["print what waits on you, what is moving, and any health signals."]
+        usage: [{ syntax: "status [--pretty|--plain]", description: ["print a short state summary"] }],
+        detail: [
+            "print what waits on you, what is moving, and any health signals.",
+            "on a terminal this machine's open attempts are rolled up per work unit;",
+            "piped output keeps one line per attempt."
+        ]
     },
     {
         name: "setup",
