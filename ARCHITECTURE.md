@@ -22,7 +22,7 @@ it. The layers, lowest first:
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`) |
 | Domain | `completion.ts`, `objectives.ts`, `integration.ts`, `dates.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
-| Render | `view.ts`, `views.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |
+| Render | `view.ts`, `views.ts`, `pretty.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `envelope.ts`, `trainutil.ts` | what more than one command surface shares: artifact staging (`artifact.ts`, which also holds the `artifact` verb), receipt-envelope validation, change-set and promotion lookup |
@@ -158,6 +158,13 @@ reminders:
   envelope, in `AttemptSummary.artifacts`, and in the gate. `name`, never
   `path`. See the envelope contract in
   [CONTRIBUTING.md](CONTRIBUTING.md#result-envelope-contract).
+- Piped output is a contract. `self context`, `self work` and `self status`
+  render for a person only when stdout is a terminal; a pipe, a redirect,
+  `--plain`, `TERM=dumb`, and a terminal too narrow for a table all get the
+  same bytes an agent has always read. `pretty.ts` `resolveRender` is the one
+  place that answers which render a run gets, and `style.ts` `displayWidth` is
+  the one place that measures a string in terminal cells — a surface that lays
+  text out reads its width from there rather than from `String.length`.
 
 ## Known debt
 

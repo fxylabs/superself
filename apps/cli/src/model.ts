@@ -162,6 +162,12 @@ export interface AttentionRow
 
 export type AttentionBand = Record<AttentionGroup, AttentionRow[]>;
 
+// Ranked, not merely listed: the reader takes the first group first. The order
+// is stated here, beside the groups it orders, because every surface that
+// shows the band shows it in this order — a second copy in a renderer would
+// silently reorder one surface against another with nothing to catch it.
+export const ATTENTION_ORDER: AttentionGroup[] = ["unblocks", "undecidable", "inEffect"];
+
 export interface ProjectModel
 {
     slug: string;
