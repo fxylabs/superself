@@ -309,6 +309,16 @@ POINTS="$(SELF work met "$WREV" --requirement "$RR" --why "x" --evidence "$EVID"
 one_line "$POINTS"
 echo "$POINTS" | grep -q "self work recheck $WREV" || fail "stale coverage was not sent to recheck, the way a milestone's is"
 
+# the revision guard is shared by `met` and `recheck`, and the refusal names
+# the verb the user actually ran: naming `work met` at a recheck sent the
+# reader to a command they had not typed (#132)
+RECHECKPROSE="$(SELF work recheck "$WREV" --requirement "$RR" --why "prose is not a commit" \
+    --evidence "see the design note" 2>&1 || true)"
+one_line "$RECHECKPROSE"
+echo "$RECHECKPROSE" | grep -q "is not a Git object name" || fail "work recheck recorded prose in refs.commits"
+echo "$RECHECKPROSE" | grep -q "self work recheck" || fail "the recheck refusal did not name the verb the user ran"
+echo "$RECHECKPROSE" | grep -q "self work met" && fail "the recheck refusal named a verb the user did not run"
+
 SELF work recheck "$WREV" --requirement "$RR" --why "re-judged against the widened statement" --evidence "$EVID" > /dev/null
 SELF work done "$WREV" > /dev/null || fail "done was refused after the revision was re-covered"
 

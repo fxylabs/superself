@@ -293,11 +293,16 @@ function milestoneMet(ctx: ProjectContext, model: ProjectModel, milestone: Miles
         throw new CliError(`${milestone.id} ${criterion.id} is already covered — revise the milestone if the criterion changed`);
     }
     const payload = { milestone: milestone.id, criterion: criterion.id, why, objectiveRevision: objective.revision, milestoneRevision: milestone.revision };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.covered", payload, coverageRefs(model, milestone, values), true),
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.covered", payload, coverageRefs(model, milestone, values, "milestone met"), true),
         `${milestone.id} ${criterion.id} ${why}`);
 }
 
-function coverageRefs(model: ProjectModel, milestone: MilestoneState, values: { work?: string; evidence?: string[] }): EventRefs
+function coverageRefs(
+    model: ProjectModel,
+    milestone: MilestoneState,
+    values: { work?: string; evidence?: string[] },
+    verb: string
+): EventRefs
 {
     const refs: EventRefs = {};
     if (values.work !== undefined)
@@ -307,8 +312,10 @@ function coverageRefs(model: ProjectModel, milestone: MilestoneState, values: { 
     // The same revision guard every other commit-ref intake reads: this one
     // wrote what was typed straight into `refs.commits`, so prose was recorded
     // as a commit and an uppercase object name was refused later by the event
-    // guard as a credential (#132).
-    const commits = (values.evidence ?? []).map((item) => requireRevision(item, bareRevisionRefusal("milestone met")));
+    // guard as a credential (#132). The verb arrives from the caller because
+    // `met` and `recheck` share this intake, and a refusal naming the command
+    // the user did not run is the same defect one surface smaller.
+    const commits = (values.evidence ?? []).map((item) => requireRevision(item, bareRevisionRefusal(verb)));
     if (commits.length > 0)
     {
         refs.commits = commits;
@@ -362,7 +369,7 @@ function recheckCoverage(
         throw new CliError(currentAlready(`${milestone.id} ${criterion.id} coverage`, objective, milestone));
     }
     const payload = { milestone: milestone.id, criterion: criterion.id, why, objectiveRevision: objective.revision, milestoneRevision: milestone.revision };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.rechecked", payload, coverageRefs(model, milestone, values), true),
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.rechecked", payload, coverageRefs(model, milestone, values, "milestone recheck"), true),
         `${milestone.id} ${criterion.id} ${why}`);
 }
 

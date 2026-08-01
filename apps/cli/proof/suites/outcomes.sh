@@ -133,6 +133,18 @@ SELF milestone met "$MGUARD" --criterion c1 --why "the same commit, in the case 
     || fail "an uppercase object name was refused as milestone evidence"
 grep -q "\"commits\":\[\"$GUARDC\"\]" "$LOG_A" || fail "milestone evidence was not stored as one spelling"
 
+# the guard is shared by `met` and `recheck`, and the refusal names the verb
+# the user actually ran: naming `milestone met` at a recheck sent the reader to
+# a command they had not typed, which is the same defect one surface smaller
+SELF milestone revise "$MGUARD" --why "the ask grew" --exit "the guard runs at a recheck too" > /dev/null
+MRECHECK="$(SELF milestone recheck "$MGUARD" --criterion c1 --why "re-judged at the wider ask" \
+    --evidence "see the design note" 2>&1 || true)"
+echo "$MRECHECK" | grep -q "is not a Git object name" || fail "milestone recheck recorded prose in refs.commits"
+echo "$MRECHECK" | grep -q "self milestone recheck" || fail "the recheck refusal did not name the verb the user ran"
+echo "$MRECHECK" | grep -q "self milestone met" && fail "the recheck refusal named a verb the user did not run"
+grep -q "see the design note" "$LOG_A" && fail "the refused recheck evidence still reached the log"
+SELF milestone recheck "$MGUARD" --criterion c1 --why "the same commit still covers it" --evidence "$GUARDC" > /dev/null
+
 # a target-date boundary is deterministic and closes nothing on its own
 MLATE="$(SELF milestone add "invoices export" --objective "$OID" --target "$PAST" --exit "an export downloads" | tail -1)"
 WLATE="$(SELF work add "build the export" | tail -1)"

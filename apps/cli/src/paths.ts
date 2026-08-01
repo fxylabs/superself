@@ -350,11 +350,31 @@ interface RepositoryLink
     top: string;
 }
 
+// Whether `path` is a working tree of the repository `tops` describes, and
+// which of them it is. The string test rules out the paths that are nowhere
+// near this repository without spending a git call; the top level is what
+// decides, because a path can sit inside the outer working tree and still be
+// a repository of its own.
+function checkoutTop(path: string, tops: string[]): string | null
+{
+    if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path)))
+    {
+        return null;
+    }
+    const top = topOf(path);
+    return top !== null && tops.includes(top) ? top : null;
+}
+
 // Every project this machine has linked inside one of `tops`, the working
-// trees of a single repository. A linked path outside all of them is ruled
-// out on a string comparison; the few that remain are confirmed against their
-// own top level, so a nested repository is never taken for the checkout it
-// sits in.
+// trees of a single repository.
+//
+// The top level decides before the identity does. A repository nested inside
+// another one's working tree passes the path comparison but is not a checkout
+// of it, and judging it against the outer repository's identity called a link
+// that had gone nowhere stale — a warning naming a remedy that recomputes the
+// same identity, finds nothing to replace, and leaves the line printing in
+// front of every command. Not a working tree of this repository is dropped
+// silently: the link says nothing about the repository being resolved.
 function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
 {
     const links = readLinks(storeDir);
@@ -365,13 +385,8 @@ function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
         for (const linked of links[entry.slug] ?? [])
         {
             const path = realPath(linked.path);
-            if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path))
-                || !sameRepository(linked, path, identity))
-            {
-                continue;
-            }
-            const top = topOf(path);
-            if (top !== null && tops.includes(top))
+            const top = checkoutTop(path, tops);
+            if (top !== null && sameRepository(linked, path, identity))
             {
                 found.push({ slug: entry.slug, path, top });
             }
@@ -380,10 +395,10 @@ function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
     return found;
 }
 
-// Every path that survives the `tops` filter above sits inside a working tree
-// of one repository, so what stands at it is the same value for all of them:
-// asked once for the repository rather than once per link, and not at all
-// until a link actually claims an identity to compare against (#128).
+// Every path that reaches this claim is a working tree of one repository, so
+// what stands at it is the same value for all of them: asked once for the
+// repository rather than once per link, and not at all until a link actually
+// claims an identity to compare against (#128).
 function repositoryClaim(tops: string[]): () => string | null
 {
     let identity: string | null | undefined;

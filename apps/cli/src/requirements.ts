@@ -119,7 +119,7 @@ export function cmdWorkMet(ctx: ProjectContext, args: string[], recheck: boolean
         ? 'work recheck <work-id> --requirement r1 --why "<what you re-judged>"'
         : 'work met <work-id> --requirement r1 --why "<how the evidence covers it>"');
     coverageStateRefusal(work, requirement.id, recheck);
-    const refs = coverageRefs(work, values);
+    const refs = coverageRefs(work, values, recheck ? "work recheck" : "work met");
     const payload: Record<string, unknown> = { work: work.id, requirement: requirement.id, why, requirementRevision: requirement.revision };
     if (values.report !== undefined)
     {
@@ -157,7 +157,7 @@ function coverageStateRefusal(work: WorkState, requirement: string, recheck: boo
 // Coverage names evidence the work unit already carries. A coverage event that
 // cited bytes nobody attached would be prose with a reference in it, which is
 // exactly what this whole check exists to refuse.
-function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRefs
+function coverageRefs(work: WorkState, values: Record<string, unknown>, verb: string): EventRefs
 {
     // Normalized where it is typed, through the guard every other commit-ref
     // entry point reads: what reaches `refs.commits` is the spelling storage
@@ -165,9 +165,11 @@ function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRe
     // 40-character mixed-case run the event guard reads as a credential (#132).
     // The refusal is this surface's own: `--evidence` here is a bare object
     // name, so the guard's typed `commit:`/`note:` grammar names a form that
-    // would only be refused again.
+    // would only be refused again. The verb arrives from the caller because
+    // `met` and `recheck` share this intake, and a refusal naming the command
+    // the user did not run is the same defect one surface smaller (#132).
     const commits = ((values.evidence ?? []) as string[])
-        .map((item) => requireRevision(item, bareRevisionRefusal("work met")));
+        .map((item) => requireRevision(item, bareRevisionRefusal(verb)));
     const artifacts = (values.artifact ?? []) as string[];
     const report = values.report as string | undefined;
     if (commits.length === 0 && artifacts.length === 0 && report === undefined)

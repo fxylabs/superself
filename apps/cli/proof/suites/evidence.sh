@@ -222,6 +222,57 @@ SELF project link replaced | grep -q "replacing the repository" \
     && fail "a re-link at an honest path claimed to replace a stale identity"
 [ "$LINKS_BEFORE" = "$(cat "$ROOT/A/ws/.superself/links.jsonl")" ] \
     || fail "a re-link at an honest path rewrote the links file"
+# a repository nested inside another one's working tree is not a checkout of
+# it. Judging the nested link against the outer repository's identity called a
+# link that had gone nowhere stale, and the remedy that warning names is a
+# no-op there — the identity recomputes to the same value, nothing is replaced,
+# and the line prints in front of every command in the outer checkout with no
+# way out. The top level decides before the identity does (#115)
+mkdir -p "$ROOT/A/ws/outer"
+cd "$ROOT/A/ws/outer"
+git init -q -b main
+echo outer > outer.txt && git add . && git commit -qm "the repository a vendored checkout sits in"
+SELF project add --name outer --desc "a working tree with a repository nested in it" --no-connect > /dev/null
+SELF goal set "prove a nested repository is not judged as this one" > /dev/null
+mkdir -p "$ROOT/A/ws/outer/vendorrepo"
+cd "$ROOT/A/ws/outer/vendorrepo"
+git init -q -b main
+echo vendored > vendored.txt && git add . && git commit -qm "a repository of its own, nested in outer"
+SELF project add --name vendorpkg --desc "its own repository, nested in outer" --no-connect > /dev/null
+SELF goal set "prove the nested checkout still answers for itself" > /dev/null
+cd "$ROOT/A/ws/outer"
+NESTED="$(SELF setup 2>&1)"
+echo "$NESTED" | grep -q "no longer the repository linked there" \
+    && fail "a nested repository's own link was reported stale against the repository it sits in"
+echo "$NESTED" | grep -q "^project    outer" || fail "the outer checkout stopped resolving to its own project"
+cd "$ROOT/A/ws/outer/vendorrepo"
+SELF setup | grep -q "^project    vendorpkg" || fail "the nested checkout stopped resolving to its own project"
+# the true positive the ordering must not cost: a checkout genuinely replaced
+# at its own path is still a working tree of the repository being resolved, so
+# it still warns, and the re-link still clears it — proven here in the layout
+# the false warning came from
+cd "$ROOT/A/ws"
+rm -rf "$ROOT/A/ws/outer"
+mkdir -p "$ROOT/A/ws/outer"
+cd "$ROOT/A/ws/outer"
+git init -q -b main
+echo other > other.txt && git add . && git commit -qm "an unrelated repository where outer stood"
+OUTERSTALE="$(SELF work 2>&1 || true)"
+echo "$OUTERSTALE" | grep -q "no longer the repository linked there" \
+    || fail "a checkout replaced at its own path stopped warning once the top level decided first"
+SELF project link outer 2>&1 | grep -q "replacing the repository previously linked" \
+    || fail "re-linking the replaced outer checkout did not replace the stale claim"
+SELF setup | grep -q "^project    outer" || fail "the re-linked outer checkout did not resolve to its project"
+# and the nested repository, restored under it, is still not judged as its host
+mkdir -p "$ROOT/A/ws/outer/vendorrepo"
+cd "$ROOT/A/ws/outer/vendorrepo"
+git init -q -b main
+echo vendored > vendored.txt && git add . && git commit -qm "the vendored repository, restored"
+SELF project link vendorpkg > /dev/null
+cd "$ROOT/A/ws/outer"
+SELF setup 2>&1 | grep -q "no longer the repository linked there" \
+    && fail "a re-linked nested repository was reported stale against the repository it sits in"
+
 # the same repository through another of its working trees still resolves: the
 # identity is the repository's, not the path's
 cd "$ROOT/A/ws/demo"
