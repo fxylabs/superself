@@ -57,6 +57,14 @@ const VERB = [
 const POINTER = new RegExp(`["'\`](self (?:${VERB}))`, "g");
 const CHECKOUT_POINTER = /["'`](self integration plan)/g;
 
+// A run of string literals joined by `+`, and the literals inside one. Only
+// literal halves are reachable this way: a concatenation with a variable in it
+// cannot be joined without evaluating the file, and nothing that would make a
+// pointer that way survives the runtime pass in scope.sh, which reads what a
+// render actually printed.
+const CONCATENATION = /(["'`])(?:[^"'`\\]|\\.)*\1(?:\s*\+\s*(["'`])(?:[^"'`\\]|\\.)*\2)+/g;
+const LITERAL = /(["'`])((?:[^"'`\\]|\\.)*)\1/g;
+
 function stripComments(source)
 {
     return source
@@ -150,13 +158,23 @@ for (const file of FILES)
         seen.push({ text: match[1], index: match.index + 1, checkout: true });
     }
     // The split form of the same defect: a pointer only a concatenation makes
-    // whole. `"self " + "work"` matches nothing above, because neither half is
-    // a pointer, so the prefix is judged on its own. Nothing in a render has a
-    // reason to hold `self ` as a value — a real sentence carries the verb with
-    // it (#165 review round 5).
-    for (const match of source.matchAll(/["'`](self ?)["'`]/g))
+    // whole. Neither half matches above, because neither half is a pointer, so
+    // the halves are joined and the join is judged — `"self " + "work"` and
+    // `"sel" + "f work"` are one defect written two ways. Judging the join is
+    // also what keeps this from rejecting an ordinary `"self"` standing on its
+    // own, which the first version of the rule did (#165 review rounds 5, 6).
+    for (const match of source.matchAll(CONCATENATION))
     {
-        offenders.push(`${file}:${lineOf(source, match.index)} "${match[1]}" — a pointer split across a concatenation`);
+        // Quoted on both sides because that is the shape the halves would have
+        // had written whole: the verb patterns end in a lookahead for the
+        // closing delimiter, so a join tested bare would never match.
+        const joined = `"${[...match[0].matchAll(LITERAL)].map((part) => part[2]).join("")}"`;
+        if (POINTER.test(joined) || CHECKOUT_POINTER.test(joined))
+        {
+            offenders.push(`${file}:${lineOf(source, match.index)} ${joined} — a pointer split across a concatenation`);
+        }
+        POINTER.lastIndex = 0;
+        CHECKOUT_POINTER.lastIndex = 0;
     }
     for (const pointer of seen)
     {

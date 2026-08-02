@@ -124,6 +124,26 @@ export interface WorkState
     gatedBy: string[];
 }
 
+// The commands a render is allowed to point at, spelled as types rather than
+// tested at runtime. `pretty.ts` `scoped()` mints a `Pointer` from a
+// `ScopableVerb` and appends the project; handed anything else it could only
+// return the command unchanged, and a bare pointer that is nonetheless branded
+// is the hole the brand exists to close (#165 review round 6).
+export type ScopableVerb =
+    | "self work"
+    | "self objective"
+    | "self milestone"
+    | "self status"
+    | "self context"
+    | "self log"
+    | `self work show ${string}`
+    | `self search ${string}`;
+
+// Read verbs that answer about this machine rather than about a project: the
+// attempt spool is one store wherever it is read from, so these are correct
+// bare, and promising them a `--project` would be a flag that does not exist.
+export type MachineLocalVerb = `self attempt show ${string}`;
+
 // One thing that waits on the human. `full` is the sentence shown while space
 // allows; when the context budget forces the short form, `identity` still
 // names the item and `recovery` is the command that prints its full state.
@@ -131,7 +151,7 @@ export interface WaitingItem
 {
     full: string;
     identity: string;
-    recovery: string;
+    recovery: ScopableVerb | MachineLocalVerb;
 }
 
 // What confirming a proposal would do, which is the only ranking a reader can

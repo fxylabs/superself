@@ -16,7 +16,9 @@ import {
     branchLabel,
     BranchUnshipped,
     branchTotals,
+    MachineLocalVerb,
     ProjectModel,
+    ScopableVerb,
     WorkState
 } from "./model.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
@@ -338,7 +340,12 @@ export function withCheckout(command: UnscopedVerb, where: Checkout): Pointer
     return `${command}${where}` as Pointer;
 }
 
-export function scoped(command: string, project: string): Pointer
+// The command's type is what makes the mint safe. Given a `ScopableVerb` this
+// appends the project; given a `MachineLocalVerb` it returns the command as it
+// stands, which is correct because the spool is one store wherever it is read.
+// Nothing else has a road in — a `string` here would let a verb with no scope
+// form leave as a branded pointer that names no project at all.
+export function scoped(command: ScopableVerb | MachineLocalVerb, project: string): Pointer
 {
     if (command.includes("--project "))
     {
