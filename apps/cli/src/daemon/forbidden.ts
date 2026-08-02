@@ -196,13 +196,29 @@ const SHELL_C = /^-[a-z]*c$/;
 
 // Where the script sits in the argument vector, or -1 when this command is not
 // a shell being handed one.
+//
+// The shell is looked for anywhere in the vector rather than at argv[0]. A
+// launcher in front of it — `env FOO=bar sh -c …`, `nice -n 10 bash -lc …`,
+// `timeout 30 sh -c …`, `nohup`, `setsid`, `stdbuf`, a container shim — moves
+// the shell one or several places along, and reading only the first token made
+// the whole -c script a payload again: `["env", "FOO=bar", "sh", "-c", "npm
+// publish"]` matched nothing at all, while the identical command without `env`
+// was refused.
+//
+// Searching instead of enumerating launchers is the point. A list of launcher
+// names is a list somebody has to keep complete, and the one that is missing
+// from it is the one an author reaches for; a shell handed a -c script is what
+// actually has to be read, wherever it sits. The cost is erring closed on a
+// vector that merely contains a shell's name and a -c-shaped flag after it,
+// which is the direction this whole list already errs in.
 function shellScript(argv: string[]): number
 {
-    if (argv.length === 0 || !SHELLS.includes(judged(argv[0])))
+    const shell = argv.findIndex((token) => SHELLS.includes(judged(token)));
+    if (shell === -1)
     {
         return -1;
     }
-    const flag = argv.findIndex((token, index) => index > 0 && SHELL_C.test(token));
+    const flag = argv.findIndex((token, index) => index > shell && SHELL_C.test(token));
     return flag === -1 ? -1 : flag + 1;
 }
 
