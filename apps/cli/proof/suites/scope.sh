@@ -404,7 +404,44 @@ WS_EVENTS="$(log_events "$WS_ALL" count)"
 # dropped or repeated, and both mutations passed every assertion this suite had
 # (#165 review round 12). The projects are read out of the workspace rather than
 # written down here, so a third one registered later is covered too.
+# Which projects the workspace scope reports — and, before that list is trusted
+# as the expected set, that it is the whole registry.
+#
+# Completeness was built on this list alone, and the merge is built from the
+# same registered-project scope: both funnel through paths.ts readRegistry, so a
+# mutation that shortened it shortened the expected set with it and the check
+# went blind to exactly the omission it exists for (#165 review round 14).
+#
+# The independent source has to be the registry file. `self project` has no list
+# verb — it takes `add` and `link` only — and every other enumeration in the CLI
+# reaches readRegistry, so swapping one scoped read for another would change
+# nothing. This is coverage asserted as its own claim rather than a second
+# enumeration: once the scope is proved to cover the registry, the union may
+# keep using it, and a dual-path omission fails here by name instead of
+# surfacing as a confusing event-count mismatch.
+#
+# What it couples the proof to: the store's own layout — that registry.jsonl
+# sits under the store directory and holds one JSON object per line with a slug.
+# The project rule forbids hand-editing generated state, not reading it, and
+# the file is parsed as JSON rather than pattern-matched, so a reordered or
+# extended record still reads. A rename or a move of that file would fail this
+# assertion, which is the honest cost of having any source the CLI cannot
+# shorten.
+registry_slugs()
+{
+    node -e '
+const fs = require("node:fs");
+const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((line) => line.trim() !== "");
+for (const line of lines)
+{
+    process.stdout.write(JSON.parse(line).slug + "\n");
+}
+' "$1"
+}
+
 SELF status --workspace | sed -E 's/ — .*//' > "$ROOT/ws-projects.txt"
+[ "$(LC_ALL=C sort "$ROOT/ws-projects.txt")" = "$(registry_slugs "$STORE/registry.jsonl" | LC_ALL=C sort)" ] \
+    || fail "the workspace scope does not report every registered project — it lists $(wc -l < "$ROOT/ws-projects.txt" | tr -d ' '), the registry holds $(registry_slugs "$STORE/registry.jsonl" | wc -l | tr -d ' ')"
 : > "$ROOT/union-ids.txt"
 # Read from a file rather than through a pipe: a `while` on the right of a pipe
 # runs in a subshell, where `fail` would exit only that subshell and let the run

@@ -90,6 +90,14 @@ else if (mode === "count")
 }
 else if (mode === "tail")
 {
+    // A parser that returns more than it was asked for is the shape of defect
+    // this suite exists to remove, so an argument that does not name a positive
+    // count is refused rather than read as "everything" (#165 review round 14).
+    if (!/^[1-9][0-9]*$/.test(count ?? ""))
+    {
+        console.error(`tail wanted a positive whole number of events, saw "${count ?? ""}"`);
+        process.exit(2);
+    }
     // The last N events, with every line each of them occupies. `tail -n N`
     // cannot answer this: an event whose summary wrapped owns more than one
     // line, so a line window and an event window are different questions.
