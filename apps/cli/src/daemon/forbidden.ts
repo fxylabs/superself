@@ -184,9 +184,121 @@ export function forbiddenCommand(command: unknown): ForbiddenMatch | null
 //     capability declaration's statement and the runner's preflight enforces it.
 function invocation(command: unknown): string[]
 {
-    const argv = tokens(command);
+    const argv = respliced(tokens(command), 0);
     const script = shellScript(argv);
     return argv.filter((token, index) => index === 0 || index === script || !/\s/.test(token)).map(judged);
+}
+
+// The flags that say a token is a command line rather than one argument.
+// `env -S "FOO=bar sh -c 'npm publish'"` is a whole invocation packed into a
+// single argv token: env splits it back into words itself, so the shell, its
+// flag and its script are all inside something a scan over tokens sees as one
+// opaque payload — and the gate read nothing at all.
+//
+// This is the class, not the vector: any launcher that re-splits its own
+// argument into words delivers a script the same way. The token that follows
+// such a flag is invocation text for exactly the reason a shell's -c argument
+// is, so it is split on shell word rules and spliced into the vector before the
+// shell is looked for. The flag itself is dropped once it has done its work —
+// it is not vocabulary, and leaving it there would make the next pass split its
+// own output again.
+//
+// The short form is read as a cluster (`-S`, `-iS`, `-uS`) because that is how
+// a wrapper writes it. What that costs is a token of prose behind an unrelated
+// `-S` on some other program being read as words rather than as a payload,
+// which is the direction this whole list already errs in.
+const SPLIT_FLAG = /^-[a-zA-Z]*S[a-zA-Z]*$/;
+const SPLIT_INLINE = /^--split-string=([\s\S]*)$/;
+const SPLIT_LONG = "--split-string";
+
+// How many times a vector may re-split before this stops following it.
+// `env -S "env -S '…'"` is one nesting and is followed; a vector nested past
+// this is somebody exploring the parser rather than launching a program, and
+// what has already been split is still judged.
+const MAX_SPLIT_DEPTH = 4;
+
+// The most words one token may contribute. A token that splits into thousands
+// is not an invocation, and reading it as one would cost the matching pass its
+// whole budget. The bound is stated rather than hidden: a forbidden word past
+// the two hundred and fifty-sixth of a single packed token is not read.
+const MAX_SPLIT_WORDS = 256;
+
+function respliced(argv: string[], depth: number): string[]
+{
+    if (depth >= MAX_SPLIT_DEPTH)
+    {
+        return argv;
+    }
+    const out: string[] = [];
+    let split = false;
+    for (let index = 0; index < argv.length; index++)
+    {
+        const inline = SPLIT_INLINE.exec(argv[index]);
+        if (inline !== null)
+        {
+            out.push(...shellWords(inline[1]));
+            split = true;
+        }
+        else if ((argv[index] === SPLIT_LONG || SPLIT_FLAG.test(argv[index])) && index + 1 < argv.length)
+        {
+            out.push(...shellWords(argv[++index]));
+            split = true;
+        }
+        else
+        {
+            out.push(argv[index]);
+        }
+    }
+    return split ? respliced(out, depth + 1) : out;
+}
+
+// Shell word splitting, for reading only. One forward pass, so it terminates on
+// any input; an unterminated quote ends with the word it was building rather
+// than throwing, because a vector this cannot parse is still a vector this has
+// to answer about. Newlines are whitespace, as they are to a shell.
+function shellWords(text: string): string[]
+{
+    const words: string[] = [];
+    let word = "";
+    let quote: string | null = null;
+    let started = false;
+    for (let index = 0; index < text.length && words.length < MAX_SPLIT_WORDS; index++)
+    {
+        const character = text[index];
+        if (character === "\\" && quote !== "'" && index + 1 < text.length)
+        {
+            word += text[++index];
+            started = true;
+        }
+        else if (quote === null && (character === "'" || character === "\""))
+        {
+            quote = character;
+            started = true;
+        }
+        else if (character === quote)
+        {
+            quote = null;
+        }
+        else if (quote === null && /\s/.test(character))
+        {
+            if (started)
+            {
+                words.push(word);
+                word = "";
+                started = false;
+            }
+        }
+        else
+        {
+            word += character;
+            started = true;
+        }
+    }
+    if (started && words.length < MAX_SPLIT_WORDS)
+    {
+        words.push(word);
+    }
+    return words;
 }
 
 // The shells whose -c argument is a script rather than a payload, and the flags
