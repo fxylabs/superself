@@ -82,6 +82,10 @@ export interface WorktreeBinding
     template: string | null;
     templateSha256: string | null;
     steps: number;
+    // Whether `git worktree add` was known to have finished. False covers both
+    // "not started" and "killed in flight", and release treats them the same:
+    // it removes whatever is there and prunes the entry either way.
+    cut: boolean;
     prepared: boolean;
     released: boolean;
     created: string;
@@ -107,11 +111,18 @@ export async function provisionWorkdir(plan: AttemptPlan, spool: Spool, attemptI
     }
     const workdir = spool.path(WORKDIR_SUBDIR);
     const head = await resolveHead(plan, request);
-    await cutWorktree(plan, request, head, workdir);
-    // On record before a single step runs. A crash mid-preparation leaves a
-    // worktree nobody is holding, and this is the only thing that tells
-    // recovery where it is and which repository owns it.
+    // On record before the worktree exists, not after. The binding is the only
+    // thing that tells recovery which repository owns a checkout and where it
+    // is, and `git worktree add` both creates the directory and writes an
+    // administrative entry into the repository — so a runner killed while that
+    // command was in flight used to leave both behind with nothing durable
+    // pointing at either. Journalling the intent first makes the interval
+    // recoverable: release reads this record, and it takes a worktree back
+    // whether the cut finished, half finished, or never started.
     let binding = bind(attemptId, request, head, workdir);
+    spool.writeJson(PROVISION_FILE, binding);
+    await cutWorktree(plan, request, head, workdir);
+    binding = { ...binding, cut: true };
     spool.writeJson(PROVISION_FILE, binding);
     const template = readTemplate(plan, workdir);
     binding = { ...binding, template: template.file, templateSha256: template.sha256, steps: template.steps.length };
@@ -135,6 +146,7 @@ function bind(attemptId: string, request: ProvisionPlan, head: string, workdir: 
         template: null,
         templateSha256: null,
         steps: 0,
+        cut: false,
         prepared: false,
         released: false,
         created: new Date().toISOString()

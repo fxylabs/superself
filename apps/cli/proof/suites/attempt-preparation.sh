@@ -459,4 +459,42 @@ SELF attempt recover > /dev/null
 [ "$(attempt_state "$AT_REGCRASH")" = "exited-unreconciled" ] || fail "a registration that died mid-preparation was not recovered"
 no_worktree_left "$AT_REGCRASH" "recovery of a registration that died mid-preparation"
 
+# ---------------------------------------------------------------------------
+# Killed inside `git worktree add` itself. This is the interval the binding has
+# to already be durable for: the cut creates a directory and writes an
+# administrative entry into the repository, and a runner that dies while that
+# command is in flight leaves recovery nothing to work from unless the intent
+# was journalled first.
+#
+# The window is made wide rather than raced for: a boundary wrapper that sleeps
+# before exec'ing holds every command this attempt starts, so the kill lands
+# inside the cut and the assertions below can state where it landed.
+# ---------------------------------------------------------------------------
+PREV="$(last_attempt)"
+plan "$ROOT/p-cutcrash.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" \
+    "wrapper=[\"/bin/sh\",\"-c\",\"sleep 5; exec \\\"\$@\\\"\",\"sh\"]"
+SELF attempt register "$ROOT/p-cutcrash.json" > /dev/null 2>&1 &
+CUTPID=$!
+await '[ "$(last_attempt)" != "$PREV" ]' 400 || fail "the registration never opened a spool"
+AT_CUT="$(last_attempt)"
+await '[ -f "$(spool_of "$AT_CUT")/provision.json" ]' 400 || fail "the binding was not journalled before the worktree was cut"
+crash_runner "$AT_CUT"
+wait "$CUTPID" 2>/dev/null || true
+
+# Where the kill landed, stated rather than assumed: a binding on record, the
+# cut not yet finished, and no worktree on disk. This is the exact interval a
+# binding written after the cut could not describe.
+node -e '
+const fs = require("node:fs");
+const b = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (b.cut !== false) { console.error("the kill landed after the cut finished, not inside it"); process.exit(1); }
+if (!b.repo || !b.head || !b.workdir) { console.error("the journalled binding does not name the repository, head and workdir"); process.exit(1); }
+' "$(spool_of "$AT_CUT")/provision.json"
+[ -d "$(spool_of "$AT_CUT")/workdir" ] && fail "the kill landed after the worktree existed, not inside the cut"
+
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_CUT")" = "exited-unreconciled" ] || fail "a registration killed inside the cut was not recovered"
+released "$(spool_of "$AT_CUT")/events.jsonl" 0
+no_worktree_left "$AT_CUT" "recovery of a registration killed inside the cut"
+
 echo "proof OK: attempt-preparation"
