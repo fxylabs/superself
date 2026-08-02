@@ -184,9 +184,26 @@ export function forbiddenCommand(command: unknown): ForbiddenMatch | null
 //     capability declaration's statement and the runner's preflight enforces it.
 function invocation(command: unknown): string[]
 {
-    const argv = respliced(tokens(command), 0);
+    const words = respliced(tokens(command).map((text) => ({ text, split: false })), 0);
+    const argv = words.map((word) => word.text);
     const script = shellScript(argv);
-    return argv.filter((token, index) => index === 0 || index === script || !/\s/.test(token)).map(judged);
+    // A word this module produced by splitting is invocation text by
+    // construction — the launcher was going to re-split it too — so the
+    // payload rule does not apply to it. Without this, `env -S "'npm
+    // publish'"` split to one word that still carried a space, and the very
+    // filter that keeps an agent's prose out of the vocabulary dropped the
+    // only word stating the effect.
+    return words
+        .filter((word, index) => index === 0 || index === script || word.split || !/\s/.test(word.text))
+        .map((word) => judged(word.text));
+}
+
+// A token of the vector being read, and whether this module produced it by
+// splitting one that a launcher would have re-split itself.
+interface Word
+{
+    text: string;
+    split: boolean;
 }
 
 // The flags that say a token is a command line rather than one argument.
@@ -223,30 +240,30 @@ const MAX_SPLIT_DEPTH = 4;
 // the two hundred and fifty-sixth of a single packed token is not read.
 const MAX_SPLIT_WORDS = 256;
 
-function respliced(argv: string[], depth: number): string[]
+function respliced(words: Word[], depth: number): Word[]
 {
     if (depth >= MAX_SPLIT_DEPTH)
     {
-        return argv;
+        return words;
     }
-    const out: string[] = [];
+    const out: Word[] = [];
     let split = false;
-    for (let index = 0; index < argv.length; index++)
+    for (let index = 0; index < words.length; index++)
     {
-        const inline = SPLIT_INLINE.exec(argv[index]);
+        const inline = SPLIT_INLINE.exec(words[index].text);
         if (inline !== null)
         {
             out.push(...shellWords(inline[1]));
             split = true;
         }
-        else if ((argv[index] === SPLIT_LONG || SPLIT_FLAG.test(argv[index])) && index + 1 < argv.length)
+        else if ((words[index].text === SPLIT_LONG || SPLIT_FLAG.test(words[index].text)) && index + 1 < words.length)
         {
-            out.push(...shellWords(argv[++index]));
+            out.push(...shellWords(words[++index].text));
             split = true;
         }
         else
         {
-            out.push(argv[index]);
+            out.push(words[index]);
         }
     }
     return split ? respliced(out, depth + 1) : out;
@@ -256,9 +273,9 @@ function respliced(argv: string[], depth: number): string[]
 // any input; an unterminated quote ends with the word it was building rather
 // than throwing, because a vector this cannot parse is still a vector this has
 // to answer about. Newlines are whitespace, as they are to a shell.
-function shellWords(text: string): string[]
+function shellWords(text: string): Word[]
 {
-    const words: string[] = [];
+    const words: Word[] = [];
     let word = "";
     let quote: string | null = null;
     let started = false;
@@ -283,7 +300,7 @@ function shellWords(text: string): string[]
         {
             if (started)
             {
-                words.push(word);
+                words.push({ text: word, split: true });
                 word = "";
                 started = false;
             }
@@ -296,7 +313,7 @@ function shellWords(text: string): string[]
     }
     if (started && words.length < MAX_SPLIT_WORDS)
     {
-        words.push(word);
+        words.push({ text: word, split: true });
     }
     return words;
 }

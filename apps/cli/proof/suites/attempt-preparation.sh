@@ -349,7 +349,9 @@ no_worktree_left "$AT_FORBIDDEN" "a forbidden preparation step"
 # tokens sees an opaque payload.
 plan "$ROOT/p-packed.json" "provisionRepo=$SRC" "provisionHead=$SHA_PACKED" "tools=node,git,env" "marker=$ROOT/ran-packed"
 PACKED="$(SELF attempt run "$ROOT/p-packed.json" 2>&1 || true)"
-echo "$PACKED" | grep -q 'declares "publish", which is publish' || fail "a forbidden script packed into one env -S token was not refused: $PACKED"
+# The refusal names the word that matched, which for this vector is `npm`
+# rather than `publish`; the category is what has to be stated either way.
+echo "$PACKED" | grep -q 'which is publish' || fail "a forbidden script packed into one env -S token was not refused: $PACKED"
 AT_PACKED="$(last_attempt)"
 [ "$(attempt_state "$AT_PACKED")" = "preflight-failed" ] || fail "a packed forbidden step did not fail the preflight"
 [ -f "$ROOT/ran-packed" ] && fail "the provider ran despite a packed forbidden step"
@@ -361,7 +363,8 @@ no_worktree_left "$AT_PACKED" "a packed forbidden preparation step"
 # refusal of ordinary prose has no recovery except rewording somebody's prompt.
 cat > "$ROOT/gate-probe.mjs" <<'PROBE'
 
-const { forbiddenCommand } = await import(process.argv[1] + "/dist/daemon/forbidden.js");
+// argv[2] because this runs as a file: argv[1] is the script itself.
+const { forbiddenCommand } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
 const cases = [
     // direct and prefixed shells
     [["sh", "-c", "npm publish"], "publish"],
@@ -386,6 +389,9 @@ const cases = [
     [["env", "-S", "sh -c npm\\ publish"], "publish"],
     [["env", "-S", "sh -c 'npm publish"], "publish"],
     [["env", "-S", "sh -c 'npm publish'\n"], "publish"],
+    // a word this module produced by splitting is invocation text, not a
+    // payload, even when the quoting left whitespace inside it
+    [["env", "-S", "'npm publish'"], "publish"],
     // benign near-misses: text that merely mentions a shell is not an action
     [["git", "commit", "-m", "fix: document sh -c handling in the gate"], null],
     [["grep", "-rn", "sh -c", "src/"], null],
