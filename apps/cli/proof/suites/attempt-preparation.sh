@@ -893,6 +893,29 @@ for (const prefix of PREFIXES)
                 console.error(`the generator no longer produces the cell ${cellOf(prefix, env, split)} — a subshape left the family without any floor noticing`);
                 continue;
             }
+            // The cell's content, pinned to its own coordinates. Demanding the
+            // key alone left every key present while one cell's value was
+            // another cell's vector: the family gained a duplicate, lost the
+            // --split-string shape, and every count still read 255. The expected
+            // vector is rebuilt here from this walk's own loop variables, never
+            // read back from what the generation stored, so a cell cannot vouch
+            // for itself.
+            //
+            // Compared as JSON rather than by a joined key. These are flat
+            // arrays of strings and JSON.stringify escapes quotes and
+            // backslashes while keeping the array's brackets and commas, so two
+            // different string arrays cannot serialize alike — where a joined
+            // key would have to pick a delimiter that appears in none of
+            // `env FOO=1 mytool`, `-Snpm publish` or `./tools/env`, and a
+            // collision there would make two cells look like one, which is this
+            // same defect wearing a different hat.
+            const expected = JSON.stringify([...prefix, env, ...split]);
+            if (JSON.stringify(argv) !== expected)
+            {
+                bad++;
+                console.error(`the cell ${cellOf(prefix, env, split)} holds ${JSON.stringify(argv)} — it must hold ${expected}, rebuilt from its own coordinates`);
+                continue;
+            }
             // Which cells the invariant is meant to assert on is the oracle's
             // answer, not a list: a cell whose env is in program position is
             // present and legitimately uncovered.
@@ -926,7 +949,24 @@ for (const [shape, answers] of coverageByPrefix)
         console.error(`the cells under prefix ${shape} disagree about coverage — an env or split spelling has stopped behaving like the others`);
     }
 }
-console.log(`cells: ${cells} demanded from ${PREFIXES.length}x${ENVS.length}x${SPLITS.length}, ${coveredCells} covered, ${cells - coveredCells} present and in program position`);
+// Distinctness is a separate claim from equality, and the mutation that
+// exposed this finding produced a duplicate rather than a wrong single cell —
+// so it is asserted on its own terms and would still fail if some later
+// refactor loosened the comparison above. The cross-product is injective for
+// these three arrays: 255 cells produce 255 distinct vectors, checked rather
+// than assumed, so any duplicate means a cell was overwritten.
+const distinct = new Set([...generatedCells.values()].map((argv) => JSON.stringify(argv)));
+if (generatedCells.size !== PREFIXES.length * ENVS.length * SPLITS.length)
+{
+    bad++;
+    console.error(`the generator produced ${generatedCells.size} cells for a ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} cross-product`);
+}
+if (distinct.size !== generatedCells.size)
+{
+    bad++;
+    console.error(`the generated set holds ${distinct.size} distinct vectors across ${generatedCells.size} cells — a cell has been overwritten with another's vector`);
+}
+console.log(`cells: ${cells} demanded from ${PREFIXES.length}x${ENVS.length}x${SPLITS.length}, ${coveredCells} covered, ${cells - coveredCells} present and in program position, ${distinct.size} pairwise distinct`);
 
 // A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();
