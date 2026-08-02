@@ -365,103 +365,160 @@ cat > "$ROOT/gate-probe.mjs" <<'PROBE'
 // The delivery forms this gate has been shown, and the ordinary commands it
 // must not refuse, kept as a table so a later reading of the matcher cannot
 // quietly stop recognising one — or start refusing somebody's commit message.
+//
+// The gate reads a split-string argument only where env is the program: argv[0],
+// or behind NAME=value assignments. An `env -S` anywhere else is answered
+// `unreadable` rather than guessed at, which is why some vectors below assert a
+// refusal that names no effect.
+//
 // argv[2] because this runs as a file: argv[1] is the script itself.
 const { forbiddenCommand } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
+
 const nested = (n) => { let t = "sh -c p'ublish'"; for (let i = 0; i < n; i++) { t = "env -S " + JSON.stringify(t); } return t; };
 const harmless = (n) => { let t = "sh -c true"; for (let i = 0; i < n; i++) { t = "env -S " + JSON.stringify(t); } return t; };
 const words = (n) => Array.from({ length: n }, (_, i) => "w" + i).join(" ");
-const cat = (a) => { const m = forbiddenCommand(a); return m === null ? null : m.category; };
-const cases = [
-  // --- reviewer finding 5: false positives, must be ADMITTED ---
-  ["echo env -S prose",              ["echo","env","-S","release notes"],                 null],
-  ["git log env -S prose",           ["git","log","env","-S","release notes"],            null],
-  ["env -- -S prose",                ["env","--","-S","release notes"],                   null],
-  // --- reviewer finding 5: separate-value bypass, must be REFUSED ---
-  ["env -u FOO -S packed",           ["env","-u","FOO","-S","sh -c npm publish"],         "publish"],
-  ["env --unset FOO -S packed",      ["env","--unset","FOO","-S","sh -c npm publish"],    "publish"],
-  ["env -C /tmp -S packed",          ["env","-C","/tmp","-S","sh -c npm publish"],        "publish"],
-  ["env --chdir /tmp -S packed",     ["env","--chdir","/tmp","-S","sh -c npm publish"],   "publish"],
-  ["env -uFOO -S packed",            ["env","-uFOO","-S","sh -c npm publish"],            "publish"],
-  ["env --unset=FOO -S packed",      ["env","--unset=FOO","-S","sh -c npm publish"],      "publish"],
-  ["env -i -S packed",               ["env","-i","-S","sh -c npm publish"],               "publish"],
-  ["env --ignore-environment -S",    ["env","--ignore-environment","-S","sh -c npm publish"], "publish"],
-  // --- reviewer finding 6: exact boundaries ---
-  ["exactly 256 words, all read",    ["env","-S", words(256)],                            null],
-  ["257 words",                      ["env","-S", words(256) + " publish"],               "unreadable"],
-  ["exactly 8 nested with a forbidden core", ["env","-S", nested(7)],                     "publish"],
-  ["exactly 8 nested, harmless, all read",   ["env","-S", harmless(7)],                    null],
-  ["9 nested, harmless",                     ["env","-S", harmless(9)],                    "unreadable"],
-  ["9 nested",                       ["env","-S", nested(9)],                             "unreadable"],
-  // --- window closes correctly ---
-  ["env -- program then -S",         ["env","--","mytool","-S","release notes"],          null],
-  ["env FOO=1 program then -S",      ["env","FOO=1","mytool","-S","release notes"],       null],
-  ["env program then -S",            ["env","mytool","-S","release notes"],               null],
-  // --- launcher chain still opens the window ---
-  ["sudo env -S",                    ["sudo","env","-S","sh -c npm publish"],             "policy-change"],
-  ["xargs env -S",                   ["xargs","env","-S","sh -c aws deploy"],             "provision"],
-  ["timeout 30 env -S",              ["timeout","30","env","-S","sh -c npm publish"],     "publish"],
-  ["timeout -k 5 30 env -S",         ["timeout","-k","5","30","env","-S","sh -c aws deploy"], "provision"],
-  ["nohup setsid env -S",            ["nohup","setsid","env","-S","sh -c stripe charge"], "payment"],
-  ["stdbuf -o0 env -S",              ["stdbuf","-o0","env","-S","sh -c terraform apply"], "provision"],
-  ["nice -n 10 env -S",              ["nice","-n","10","env","-S","sh -c npm publish"],   "publish"],
-  ["absolute env path",              ["/usr/bin/env","-S","sh -c npm publish"],           "publish"],
-  // --- launcher with env as a mere argument must NOT open it ---
-  ["timeout 30 echo env -S prose",   ["timeout","30","echo","env","-S","release notes"],  null],
-  ["sudo git log env -S prose",      ["sudo","git","log","env","-S","release notes"],     "policy-change"],
-  ["xargs echo env -S prose",        ["xargs","echo","env","-S","release notes"],         null],
-  // --- rounds 3 and 5 vectors, unchanged ---
-  ["sh -c",                          ["sh","-c","npm publish"],                           "publish"],
-  ["bash -lc",                       ["bash","-lc","npm publish"],                        "publish"],
-  ["env assignment then shell",      ["env","FOO=bar","sh","-c","npm publish"],           "publish"],
-  ["nice -n 10 sh -c",               ["nice","-n","10","sh","-c","aws deploy"],           "provision"],
-  ["timeout 30 /bin/sh -c",          ["timeout","30","/bin/sh","-c","rm -rf /"],          "destructive"],
-  ["nohup setsid zsh -c",            ["nohup","setsid","zsh","-c","stripe charge"],       "payment"],
-  ["env -S packed",                  ["env","-S","FOO=bar sh -c npm publish"],            "publish"],
-  ["env -S quoted script",           ["env","-S","FOO=bar sh -c 'npm publish'"],          "publish"],
-  ["env --split-string=",            ["env","--split-string=FOO=bar sh -c npm publish"],  "publish"],
-  ["env --split-string arg",         ["env","--split-string","FOO=bar sh -c npm publish"],"publish"],
-  ["env -iS cluster",                ["env","-iS","FOO=bar sh -c npm publish"],           "publish"],
-  ["env -S value attached",          ["env","-Ssh -c npm publish"],                       "publish"],
-  ["env -iS value attached",         ["env","-iSsh -c npm publish"],                      "publish"],
-  ["env -uFOO -S value attached",    ["env","-uFOO","-Ssh -c aws deploy"],                "provision"],
-  ["env -uFOO -S (round 3)",         ["env","-uFOO","-S","sh -c npm publish"],            "publish"],
-  ["nested env -S",                  ["env","-S","env -S 'sh -c npm publish'"],           "publish"],
-  ["env -S no shell",                ["env","-S","npm publish"],                          "publish"],
-  ["double quotes packed",           ["env","-S","sh -c \"npm  publish\""],               "publish"],
-  ["backslash escape",               ["env","-S","sh -c npm\\ publish"],                  "publish"],
-  ["unterminated quote",             ["env","-S","sh -c 'npm publish"],                   "publish"],
-  ["trailing newline",               ["env","-S","sh -c 'npm publish'\n"],                "publish"],
-  ["quoted whole word",              ["env","-S","'npm publish'"],                        "publish"],
-  ["quote concatenation",            ["env","-S","sh -c p'ublish'"],                      "publish"],
-  ["pnpm run publish",               ["pnpm","run","publish"],                            "publish"]
+
+// Refused, and by what. A named effect where the gate could read one; the
+// unreadable answer where it could not.
+const REFUSED = [
+    // env in program position — these must name the effect, never `unreadable`
+    ["env -S packed", ["env", "-S", "npm publish"], "publish"],
+    ["env with an assignment then -S", ["env", "FOO=bar", "-S", "npm publish"], "publish"],
+    ["env -i -S", ["env", "-i", "-S", "npm publish"], "publish"],
+    ["env -u FOO -S", ["env", "-u", "FOO", "-S", "npm publish"], "publish"],
+    ["env --unset FOO -S", ["env", "--unset", "FOO", "-S", "sh -c npm publish"], "publish"],
+    ["env -C /tmp -S", ["env", "-C", "/tmp", "-S", "sh -c npm publish"], "publish"],
+    ["env --chdir /tmp -S", ["env", "--chdir", "/tmp", "-S", "sh -c npm publish"], "publish"],
+    ["env -uFOO -S", ["env", "-uFOO", "-S", "sh -c npm publish"], "publish"],
+    ["env --unset=FOO -S", ["env", "--unset=FOO", "-S", "sh -c npm publish"], "publish"],
+    ["env --ignore-environment -S", ["env", "--ignore-environment", "-S", "sh -c npm publish"], "publish"],
+    ["/usr/bin/env -S", ["/usr/bin/env", "-S", "sh -c npm publish"], "publish"],
+    ["env -iS cluster", ["env", "-iS", "FOO=bar sh -c npm publish"], "publish"],
+    ["env -S value attached", ["env", "-Ssh -c npm publish"], "publish"],
+    ["env -iS value attached", ["env", "-iSsh -c npm publish"], "publish"],
+    ["env -uFOO -S value attached", ["env", "-uFOO", "-Ssh -c aws deploy"], "provision"],
+    ["env --split-string=", ["env", "--split-string=FOO=bar sh -c npm publish"], "publish"],
+    ["env --split-string arg", ["env", "--split-string", "FOO=bar sh -c npm publish"], "publish"],
+    ["env -S quoted script", ["env", "-S", "FOO=bar sh -c 'npm publish'"], "publish"],
+    ["env -S with double quotes", ["env", "-S", "sh -c \"npm  publish\""], "publish"],
+    ["env -S with a backslash escape", ["env", "-S", "sh -c npm\\ publish"], "publish"],
+    ["env -S with an unterminated quote", ["env", "-S", "sh -c 'npm publish"], "publish"],
+    ["env -S with a trailing newline", ["env", "-S", "sh -c 'npm publish'\n"], "publish"],
+    ["env -S quoting that leaves whitespace in one word", ["env", "-S", "'npm publish'"], "publish"],
+    ["env -S quote concatenation", ["env", "-S", "sh -c p'ublish'"], "publish"],
+    ["env -S packing an env", ["env", "-S", "env -S 'sh -c npm publish'"], "publish"],
+    ["an assignment before env", ["FOO=bar", "env", "-S", "sh -c npm publish"], "publish"],
+    // a shell handed a script, wherever it sits
+    ["a shell handed a script", ["sh", "-c", "npm publish"], "publish"],
+    ["a login shell handed a script", ["bash", "-lc", "npm publish"], "publish"],
+    ["an assignment in front of the shell", ["env", "FOO=bar", "sh", "-c", "npm publish"], "publish"],
+    ["a launcher with its own flags", ["nice", "-n", "10", "sh", "-c", "aws deploy"], "provision"],
+    ["a bounded launcher", ["timeout", "30", "/bin/sh", "-c", "rm -rf /"], "destructive"],
+    ["two launchers", ["nohup", "setsid", "zsh", "-c", "stripe charge"], "payment"],
+    ["a package script through an allowed binary", ["pnpm", "run", "publish"], "publish"],
+    // vocabulary is still read first, so a forbidden launcher names itself
+    ["sudo in front of a packed env", ["sudo", "env", "-S", "npm publish"], "policy-change"],
+    // env behind another program: the gate stops guessing and says so
+    ["xargs in front of a packed env", ["xargs", "env", "-S", "npm publish"], "unreadable"],
+    ["xargs -I {} in front of a packed env", ["xargs", "-I", "{}", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["xargs -a file in front of a packed env", ["xargs", "-a", "list.txt", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["timeout in front of a packed env", ["timeout", "30", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["timeout --signal whose value is env", ["timeout", "--signal", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["time -f whose value is env", ["time", "-f", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["nice -n whose value is env", ["nice", "-n", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["command -v whose value is env", ["command", "-v", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["stdbuf in front of a packed env", ["stdbuf", "-o0", "env", "-S", "sh -c terraform apply"], "unreadable"],
+    ["nohup setsid in front of a packed env", ["nohup", "setsid", "env", "-S", "sh -c stripe charge"], "unreadable"],
+    ["echo naming env before a -S", ["echo", "env", "-S", "release notes"], "unreadable"],
+    ["git log naming env before a -S", ["git", "log", "env", "-S", "release notes"], "unreadable"],
+    // the bounds, one past each
+    ["a forbidden word past the packed-word bound", ["env", "-S", words(256) + " publish"], "unreadable"],
+    ["a packed chain past the rescan bound", ["env", "-S", nested(9)], "unreadable"],
+    ["a harmless chain past the rescan bound", ["env", "-S", harmless(9)], "unreadable"],
+    ["a forbidden core inside the allowed depth", ["env", "-S", nested(7)], "publish"]
 ];
+
+// Ordinary commands. Every one of these was a refusal at some point in this
+// gate's history, or is one flag away from having been.
 const BENIGN = [
-  ["echo env -S with prose", ["echo","env","-S","release notes"]],
-  ["git log env -S with prose", ["git","log","env","-S","release notes"]],
-  ["env -- -S is a program named -S", ["env","--","-S","release notes"]],
-  ["exactly 256 packed words, all read", ["env","-S", words(256)]],
-  ["exactly 8 packed layers, all read", ["env","-S", harmless(7)]],
-  ["git -S with prose (GPG-sign)", ["git","-S","release notes"]],
-  ["sort -S with prose (buffer size)", ["sort","-S","release notes"]],
-  ["sort -S with a size", ["sort","-S","1G","file.txt"]],
-  ["curl -sS with a url", ["curl","-sS","https://example.invalid/x"]],
-  ["git -S signing an ordinary commit", ["git","-S","commit","-m","ordinary work"]],
-  ["ssh -S with a control socket", ["ssh","-S","/tmp/cm","host","uptime"]],
-  ["tar -S with an archive", ["tar","-S","-xf","archive.tar"]],
-  ["a commit message mentioning sh -c", ["git","commit","-m","fix: document sh -c handling in the gate"]],
-  ["a grep pattern that is sh -c", ["grep","-rn","sh -c","src/"]],
-  ["an agent prompt in ordinary English", ["claude","-p","never run sh with a script; release notes are prose","--model","opus"]],
-  ["this repository's own agent invocation", ["node","/x/prep-agent.mjs"]],
-  ["this repository's own preparation step", ["pnpm","install","--frozen-lockfile"]],
-  ["the runner's own provisioning", ["git","worktree","add","--detach","/tmp/wd","abc"]],
-  ["env running an ordinary program", ["env","FOO=1","mytool","-S","release notes"]]
+    ["git -S with prose (GPG-sign)", ["git", "-S", "release notes"]],
+    ["sort -S with prose (buffer size)", ["sort", "-S", "release notes"]],
+    ["sort -S with a size", ["sort", "-S", "1G", "file.txt"]],
+    ["curl -sS with a url", ["curl", "-sS", "https://example.invalid/x"]],
+    ["git -S signing an ordinary commit", ["git", "-S", "commit", "-m", "ordinary work"]],
+    ["ssh -S with a control socket", ["ssh", "-S", "/tmp/cm", "host", "uptime"]],
+    ["tar -S with an archive", ["tar", "-S", "-xf", "archive.tar"]],
+    ["a commit message mentioning sh -c", ["git", "commit", "-m", "fix: document sh -c handling in the gate"]],
+    ["a grep pattern that is sh -c", ["grep", "-rn", "sh -c", "src/"]],
+    ["an agent prompt in ordinary English", ["claude", "-p", "never run sh with a script; release notes are prose", "--model", "opus"]],
+    ["this repository's own agent invocation", ["node", "/x/prep-agent.mjs"]],
+    ["this repository's own preparation step", ["pnpm", "install", "--frozen-lockfile"]],
+    ["the runner's own provisioning", ["git", "worktree", "add", "--detach", "/tmp/wd", "abc"]],
+    ["env after its option terminator", ["env", "--", "-S", "release notes"]],
+    ["env running an ordinary program", ["env", "FOO=1", "mytool", "-S", "release notes"]],
+    ["env running a program that takes -S", ["env", "mytool", "-S", "release notes"]],
+    ["echo naming env with no split flag after it", ["echo", "env", "hello"]],
+    ["exactly 255 packed words, all read", ["env", "-S", words(255)]],
+    ["exactly 256 packed words, all read", ["env", "-S", words(256)]],
+    ["exactly 8 packed layers, all read", ["env", "-S", harmless(7)]]
 ];
+
 let bad = 0;
-for (const [name, argv, want] of cases) { const got = cat(argv); if (got !== want) { bad++; console.error(name + " -> " + got + ", wanted " + want); } }
+const category = (argv) =>
+{
+    const match = forbiddenCommand(argv);
+    return match === null ? null : match.category;
+};
+
+console.log("refused vectors — each with the category it must be refused under:");
+for (const [name, argv, want] of REFUSED)
+{
+    const got = category(argv);
+    console.log(`  ${got === null ? "ADMITTED" : got.padEnd(13)}  ${name}`);
+    if (got !== want)
+    {
+        bad++;
+        console.error(`${name} -> ${got}, wanted ${want}`);
+    }
+}
 console.log("benign vectors — none of these may be refused:");
-for (const [name, argv] of BENIGN) { const got = cat(argv); console.log("  " + (got === null ? "admitted" : "REFUSED " + got) + "  " + name); if (got !== null) bad++; }
-for (const w of [1,100,255,256,257,1000,5000]) { if (forbiddenCommand(["env","-S", words(w) + " publish"]) === null) { bad++; console.error("a packed argument of " + w + " words answered null"); } }
-for (let d = 0; d <= 12; d++) { if (forbiddenCommand(["env","-S", nested(d)]) === null) { bad++; console.error("a packed chain nested " + d + " deep answered null"); } }
+for (const [name, argv] of BENIGN)
+{
+    const got = category(argv);
+    console.log(`  ${got === null ? "admitted" : "REFUSED " + got}  ${name}`);
+    if (got !== null)
+    {
+        bad++;
+    }
+}
+
+// No packed width and no packed depth may answer "nothing forbidden here".
+for (const width of [1, 100, 254, 255, 256, 257, 1000, 5000])
+{
+    if (forbiddenCommand(["env", "-S", words(width) + " publish"]) === null)
+    {
+        bad++;
+        console.error(`a packed argument of ${width} words answered null`);
+    }
+}
+for (let depth = 0; depth <= 12; depth++)
+{
+    if (forbiddenCommand(["env", "-S", nested(depth)]) === null)
+    {
+        bad++;
+        console.error(`a packed chain nested ${depth} deep answered null`);
+    }
+}
+
+// A token built to cost the matching pass its budget still has to answer.
+const started = Date.now();
+forbiddenCommand(["env", "-S", words(5000)]);
+if (Date.now() - started > 2000)
+{
+    bad++;
+    console.error("a token of five thousand words was not bounded");
+}
+
 process.exit(bad === 0 ? 0 : 1);
 PROBE
 node "$ROOT/gate-probe.mjs" "$CLI_DIR" || fail "the forbidden-action gate does not read every wrapper form it has been shown"

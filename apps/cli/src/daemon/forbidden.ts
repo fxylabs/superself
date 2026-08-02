@@ -280,16 +280,6 @@ const ENV_SHORT_VALUE = "uC";
 const ENV_SHORT_SPLIT = "S";
 const ENV_SHORT_BARE = "i0v";
 
-// The launchers verified to hand their program through as separate tokens. They
-// are named here only to answer "is the token after them a program position",
-// never to decide what is forbidden — that stays positional, so a launcher
-// nobody listed still cannot hide a shell.
-const LAUNCHERS = ["sudo", "doas", "xargs", "timeout", "nohup", "setsid", "stdbuf", "nice", "ionice", "chrt", "command", "time", "env"];
-
-// A launcher operand that is a number or a duration — `timeout 30`, `nice 10`.
-// Anything else bare in front of the program position is the program.
-const OPERAND = /^[0-9]+(\.[0-9]+)?[smhd]?$/;
-
 // Bounds on the work this reading may do. Neither is a licence to stop caring
 // about what is past it: overflowing either one is reported as unread text and
 // refused, because a higher bound has the same defect one word further out.
@@ -298,6 +288,7 @@ const MAX_SPLIT_WORDS = 256;
 
 const TOO_MANY_WORDS = `a single argument re-split into more than ${MAX_SPLIT_WORDS} words`;
 const TOO_DEEP = `launcher packing nested more than ${MAX_SPLIT_DEPTH} levels deep`;
+const NOT_PROGRAM = "an `env -S` behind another program, whose arguments this gate does not model, so which tokens are invocation and which are that program's operands cannot be told apart";
 
 function respliced(initial: Word[]): { words: Word[]; unread: string | null }
 {
@@ -309,7 +300,7 @@ function respliced(initial: Word[]): { words: Word[]; unread: string | null }
         unread = unread ?? step.unread;
         if (!step.split)
         {
-            return { words: step.words, unread };
+            return { words: step.words, unread: unread ?? launched(step.words) };
         }
         words = step.words;
     }
@@ -317,7 +308,7 @@ function respliced(initial: Word[]): { words: Word[]; unread: string | null }
     // needed exactly this many is fully read, and refusing it was the
     // off-by-one that turned a bound into a false refusal.
     const remaining = splitOnce(words);
-    return { words, unread: unread ?? (remaining.split ? TOO_DEEP : remaining.unread) };
+    return { words, unread: unread ?? (remaining.split ? TOO_DEEP : remaining.unread) ?? launched(words) };
 }
 
 // One pass over the vector, splicing the words out of the packed argument of
@@ -348,44 +339,71 @@ function splitOnce(words: Word[]): { words: Word[]; split: boolean; unread: stri
     }
 }
 
-// Where the next env after `after` is the program being run, or -1. Everything
-// before it has to be a launcher, a launcher's option, or a launcher's numeric
-// operand: `sudo env` and `timeout 30 env` are env in program position, and
-// `echo env` is the word "env" being printed.
+// Where the next env after `after` is the program being run, or -1.
+//
+// Program position is decided without knowing anything about any other
+// program: env is the program when it is argv[0], or when every token before it
+// is a NAME=value assignment — the one prefix whose meaning is fixed by the
+// shell rather than by whatever binary happens to be in front.
+//
+// Four rounds of this gate tried to walk a launcher prefix instead, and each
+// one closed the named vector and reopened the class one level out: first the
+// shell's position, then env's option grammar, then the launchers' own. Getting
+// `xargs -I {} env -S` and `time -f env -S` both right needs one option grammar
+// per launcher, and the next launcher reopens it. A launcher's prefix is not
+// something this module can know, so it stops claiming to — see `launched`
+// below for what it answers instead.
 function envProgram(words: Word[], after: number): number
 {
-    let launched = false;
     for (let index = 0; index < words.length; index++)
     {
-        const text = words[index].text;
-        const name = judged(text);
-        if (name === ENV)
+        if (judged(words[index].text) === ENV && index > after)
         {
-            if (index > after)
-            {
-                return index;
-            }
-            // An env already looked at is a launcher for whatever follows it.
-            launched = true;
-            continue;
+            return index;
         }
-        if (LAUNCHERS.includes(name))
+        // Anything that is not an assignment is the program, including at
+        // argv[0]: `xargs env -S …` and `echo env -S …` are xargs and echo
+        // running, and the env token in them is one of their arguments.
+        if (!ASSIGNMENT.test(words[index].text))
         {
-            launched = true;
-            continue;
+            return -1;
         }
-        if (text.startsWith("-") || ASSIGNMENT.test(text) || (launched && OPERAND.test(text)))
-        {
-            continue;
-        }
-        // The program, and it is not env.
-        return -1;
     }
     return -1;
 }
 
+// An `env -S` this gate cannot place: env is in the vector with a split flag
+// after it, but something else is the program, so which tokens are invocation
+// and which are that program's operands is exactly the question this module
+// has stopped guessing at.
+//
+// The answer is the fail-closed one rather than a guess in either direction. It
+// costs the specific sentence — `xargs env -S "npm publish"` is refused as
+// unreadable rather than as publication — and it costs two ordinary commands
+// that mention env before a -S, which now refuse too. That is the trade this
+// change makes deliberately: a wrong admission and a wrong vocabulary match are
+// both worse than an honest "this could not be read".
+function launched(words: Word[]): string | null
+{
+    const at = words.findIndex((word) => judged(word.text) === ENV);
+    if (at === -1 || envProgram(words, -1) !== -1)
+    {
+        return null;
+    }
+    return words.slice(at + 1).some(splits) ? NOT_PROGRAM : null;
+}
+
+function splits(word: Word): boolean
+{
+    const text = word.text;
+    return text === SPLIT_LONG || SPLIT_INLINE.test(text) || (envOption(text)?.split === true);
+}
+
 // The packed command line inside one env invocation: which tokens to replace
-// and with what. Null when this env runs an ordinary program.
+// and with what. The whole invocation is replaced — the env token, its options
+// and the packed argument — because `env -S "X"` *is* X, so X's own first word
+// lands in the program position the next pass reads. Null when this env runs an
+// ordinary program.
 function packedArgument(words: Word[], at: number): { from: number; count: number; text: string } | null
 {
     let index = at + 1;
@@ -400,11 +418,11 @@ function packedArgument(words: Word[], at: number): { from: number; count: numbe
         const inline = SPLIT_INLINE.exec(text);
         if (inline !== null)
         {
-            return { from: index, count: 1, text: inline[1] };
+            return { from: at, count: index + 1 - at, text: inline[1] };
         }
         if (text === SPLIT_LONG)
         {
-            return index + 1 < words.length ? { from: index, count: 2, text: words[index + 1].text } : null;
+            return index + 1 < words.length ? { from: at, count: index + 2 - at, text: words[index + 1].text } : null;
         }
         const step = envOption(text);
         if (step === null)
@@ -419,9 +437,9 @@ function packedArgument(words: Word[], at: number): { from: number; count: numbe
             // delivering a whole command line nobody looked at.
             if (step.attached !== null)
             {
-                return { from: index, count: 1, text: step.attached };
+                return { from: at, count: index + 1 - at, text: step.attached };
             }
-            return index + 1 < words.length ? { from: index, count: 2, text: words[index + 1].text } : null;
+            return index + 1 < words.length ? { from: at, count: index + 2 - at, text: words[index + 1].text } : null;
         }
         index += step.consumes;
     }
@@ -645,7 +663,7 @@ export function forbiddenRefusal(match: ForbiddenMatch, at: string): string
 {
     if (match.category === UNREADABLE)
     {
-        return `${at} packs more invocation text than this gate can read (${match.action}) — a command whose effects cannot be established is not one that runs unattended, so write it as an ordinary argument vector`;
+        return `${at} carries invocation text whose effects this gate cannot establish (${match.action}) — what cannot be read is not admitted, so write the command as a plain argument vector`;
     }
     return `${at} declares "${match.action}", which is ${match.category} — external publication, outreach, payment, purchase, ` +
         "cloud provisioning, destructive action and policy change are never done unattended, and no overnight policy can grant one";
