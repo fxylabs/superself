@@ -132,6 +132,116 @@ function unregisteredMessage(storeDir: string, cwd: string): string
     return "not inside a registered project — run `self project add` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine";
 }
 
+/* ── read scope ────────────────────────────────────────────────────── */
+
+// Which project a read answers for. Every read verb answers for the project
+// the directory resolves to, takes `--project <slug>` to answer for another
+// registered one, and — where the verb has a workspace-wide form — takes
+// `--workspace` to answer for all of them. One resolver stands behind all
+// three, so a slug means the same thing on every surface instead of each verb
+// growing its own answer to "which project is this".
+//
+// A named project resolves out of the workspace store alone. Project state is
+// synced state, so a read never needs the checkout, and a project registered
+// on another machine reads here exactly as its own machine reads it. Nothing
+// below folds, refolds, or appends: resolving a project in order to read it
+// leaves it exactly as it stood.
+//
+// Writes have no scope flag at all. A write records into the project it runs
+// in, so `--project` on one is an option that command never declared, and the
+// argument gate names it rather than dropping it.
+
+export type ProjectScope = CliContext & { project: string };
+
+export interface ScopeChoice
+{
+    project?: string;
+    workspace?: boolean;
+}
+
+// Declared once so every surface that offers the choice offers exactly it.
+export const SCOPE_OPTIONS = { project: { type: "string" } } as const;
+export const WORKSPACE_SCOPE_OPTIONS = { project: { type: "string" }, workspace: { type: "boolean" } } as const;
+
+// The scope for a read that also answers outside a project: `self context` and
+// `self status` summarize the workspace there rather than refusing, so this
+// keeps returning a context with no project for them to branch on.
+export function readScope(cwd: string, choice: ScopeChoice): CliContext
+{
+    requireOneScope(choice);
+    if (choice.workspace !== true)
+    {
+        return choice.project === undefined ? requireWorkspace(cwd) : namedScope(cwd, choice.project);
+    }
+    const ctx = requireWorkspace(cwd);
+    requireProjects(ctx.storeDir);
+    // The directory's own project is dropped deliberately: the caller asked
+    // for the workspace, and carrying it would answer for one project.
+    return { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir };
+}
+
+// The scopes for a read that speaks per project — one, or every registered one.
+export function readScopes(cwd: string, choice: ScopeChoice): ProjectScope[]
+{
+    requireOneScope(choice);
+    if (choice.workspace !== true)
+    {
+        return [choice.project === undefined ? requireProject(cwd) : namedScope(cwd, choice.project)];
+    }
+    const ctx = requireWorkspace(cwd);
+    return requireProjects(ctx.storeDir)
+        .map((entry) => ({ workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project: entry.slug }));
+}
+
+// The checkout travels only when the named project is the one this directory
+// already belongs to. Handing the current directory over as another project's
+// would name a path belonging to somebody else, and deriving that project's
+// own checkout costs a repository probe (#128) no read needs.
+function namedScope(cwd: string, slug: string): ProjectScope
+{
+    const ctx = requireWorkspace(cwd);
+    const project = requireRegistered(ctx.storeDir, slug);
+    return ctx.project === project
+        ? ctx as ProjectScope
+        : { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project };
+}
+
+export function requireRegistered(storeDir: string, slug: string): string
+{
+    const slugs = readRegistry(storeDir).map((entry) => entry.slug);
+    if (!slugs.includes(slug))
+    {
+        throw new CliError(slugs.length === 0
+            ? `unknown project "${slug}" — this workspace has no registered projects`
+            : `unknown project "${slug}" — registered: ${slugs.join(", ")}`);
+    }
+    return slug;
+}
+
+// A workspace-wide read of an empty workspace has nothing to aggregate. It is
+// refused rather than answered with silence: the caller asked for every
+// project, and empty output reads as "nothing is happening" when the truth is
+// that nothing is registered.
+function requireProjects(storeDir: string): RegistryEntry[]
+{
+    const entries = readRegistry(storeDir);
+    if (entries.length === 0)
+    {
+        throw new CliError("this workspace has no registered projects — run `self project add` inside a project directory to register one");
+    }
+    return entries;
+}
+
+// Two scopes is not a narrower ask, it is two different ones. Letting either
+// flag win would answer a question the caller did not ask.
+function requireOneScope(choice: ScopeChoice): void
+{
+    if (choice.workspace === true && choice.project !== undefined)
+    {
+        throw new CliError(`--workspace reads every registered project and --project reads "${choice.project}" — pass one of them, not both`);
+    }
+}
+
 export function projectStateDir(storeDir: string, slug: string): string
 {
     return join(storeDir, "projects", slug);

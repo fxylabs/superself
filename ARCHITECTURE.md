@@ -174,6 +174,18 @@ reminders:
   envelope, in `AttemptSummary.artifacts`, and in the gate. `name`, never
   `path`. See the envelope contract in
   [CONTRIBUTING.md](CONTRIBUTING.md#result-envelope-contract).
+- One scope contract, and one resolver behind it. A read verb answers for the
+  project the directory resolves to, takes `--project <slug>` to answer for
+  another registered project, and — where a workspace-wide form makes sense —
+  `--workspace` to answer for every registered project. `paths.ts` `readScope`
+  and `readScopes` are the one place a slug becomes a context, so a verb never
+  grows a second answer to "which project is this"; both refuse an unknown slug,
+  an empty workspace, and `--project` with `--workspace` in one call. A named
+  project resolves out of the workspace store alone and is never folded,
+  refolded, or appended to by the read, and the current checkout never travels
+  to a project it does not belong to. A write verb has no scope flag: it records
+  into the project it runs in, and `--project` on one is an option that command
+  never declared, so the argument-parse gate names it instead of dropping it.
 - Piped output is a contract. `self context`, `self work` and `self status`
   render for a person only when stdout is a terminal; a pipe, a redirect,
   `--plain`, `TERM=dumb`, and a terminal too narrow for a table all get the
@@ -189,10 +201,12 @@ them. The code moves are tracked by #88 and #90 adds the mechanical checks; an
 entry with no issue behind it says so. Do not use any of these as precedent.
 
 - Two argument-parse paths, not one. `main.ts`, `requirements.ts`,
-  `artifact.ts`, `daemon/commands.ts` and most of `attempt/commands.ts` go
-  through `args.ts` `parseCommand`; `goals.ts`, `lane.ts`, `train.ts`,
-  `promote.ts`, `reviews.ts` and the remainder of `spec/`, `attempt/commands.ts`
-  call `node:util` `parseArgs` directly — about 38 call sites. Those sites get
+  `artifact.ts`, `daemon/commands.ts`, the `objective` and `milestone` surfaces
+  of `goals.ts`, and most of `attempt/commands.ts` go through `args.ts`
+  `parseCommand`; `lane.ts`, `train.ts`, `promote.ts`, `reviews.ts`, the
+  work-proposal surfaces of `goals.ts`, and the remainder of `spec/`,
+  `attempt/commands.ts` call `node:util` `parseArgs` directly — about 31 call
+  sites, down from 38 when `objective` and `milestone` moved. Those sites get
   node's unknown-flag error translated by `main.ts` `userMessage`, but not
   `parseCommand`'s unexpected-positional refusal, so a stray argument is still
   dropped there (`lane.ts` `cancelAttempt` reads `positionals[0]` and ignores

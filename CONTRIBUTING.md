@@ -104,7 +104,7 @@ pnpm build
 
 ## Adding a command verb
 
-A new verb ships as a set. A pull request that adds one without all four is
+A new verb ships as a set. A pull request that adds one without all five is
 incomplete:
 
 1. A `parseCommand` guard in the command module, declaring its options and how
@@ -116,6 +116,13 @@ incomplete:
    in the user's terms. A refusal that only names a rule teaches nothing.
 4. Proof coverage under `apps/cli/proof/` for the behavior the verb adds,
    including the refusal path.
+5. A statement of the scope it answers for. A read verb defaults to the project
+   the directory resolves to, accepts `--project <slug>`, and either offers a
+   `--workspace` form or says in its `help.ts` detail why it has none. A write
+   verb states that it takes neither and records into the project it runs in.
+   Both resolve through `paths.ts` `readScope`/`readScopes` rather than reading
+   the registry themselves — see the scope contract in
+   [ARCHITECTURE.md](ARCHITECTURE.md#fixed-naming).
 
 Subcommand dispatch reads through `args.ts` `subcommand`, so `--` means the
 same thing across the whole CLI.

@@ -14,10 +14,11 @@ import {
     WorkState
 } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
-import { CliContext, readRegistry, readVerdicts } from "./paths.js";
+import { CliContext, ProjectScope, readRegistry, readVerdicts } from "./paths.js";
 import { AttemptRow, RenderMode, renderContext, renderStatus, renderWorkList, renderWorkspace } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
-import { blue, dim, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
+import { blue, dim, displayWidth, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
+import { SelfEvent } from "./types.js";
 
 const CONTEXT_LIMIT = 12_000;
 // The command writes one final newline; the rendered body owns the rest.
@@ -734,7 +735,7 @@ function countLine(works: WorkState[]): string
         + (retired > 0 ? `, ${retired} retired` : "");
 }
 
-export function printWorkList(ctx: CliContext & { project: string }, render: RenderMode): void
+export function printWorkList(ctx: ProjectScope, render: RenderMode): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     if (render === "pretty")
@@ -779,23 +780,44 @@ function gatedNote(work: WorkState): string
     return work.gatedBy.length === 0 ? "" : `  [gated by ${work.gatedBy.join(", ")}]`;
 }
 
-export function printLog(ctx: CliContext & { project: string }, limit: number): void
+export function printLog(ctx: ProjectScope, limit: number): void
 {
-    const events = readEvents(ctx.storeDir, ctx.project);
-    for (const event of events.slice(-limit))
+    for (const event of readEvents(ctx.storeDir, ctx.project).slice(-limit))
     {
-        if (styled)
-        {
-            const ts = event.ts.slice(5, 16).replace("T", " ");
-            const width = Math.max(20, termWidth() - 37 - event.id.length);
-            const summary = fit(eventSummary(event).split("\n", 1)[0], width);
-            console.log(`${dim(ts)}  ${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}`);
-        }
-        else
-        {
-            console.log(`${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`);
-        }
+        console.log(logLine(event, undefined));
     }
+}
+
+// Every registered project's events on one timeline, newest last, cut to the
+// limit after the merge rather than before it: the ask is the workspace's last
+// N events, not the last N of each project pasted together. The slug leads
+// each line as it does in `self search`, because a merged log that says what
+// happened without saying where is not readable.
+export function printWorkspaceLog(scopes: ProjectScope[], limit: number): void
+{
+    const merged = scopes.flatMap((scope) => readEvents(scope.storeDir, scope.project)
+        .map((event) => ({ event, slug: scope.project })));
+    merged.sort((left, right) => compareDated(left.event, right.event));
+    for (const item of merged.slice(-limit))
+    {
+        console.log(logLine(item.event, item.slug));
+    }
+}
+
+// One event, styled for a terminal and plain for everything else. The plain
+// form is the machine contract, so the project column appears only in the
+// workspace form — the surface where a line without it is ambiguous.
+function logLine(event: SelfEvent, slug: string | undefined): string
+{
+    if (!styled)
+    {
+        return `${slug === undefined ? "" : slug + "  "}${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`;
+    }
+    const lead = slug === undefined ? 0 : displayWidth(slug) + 2;
+    const ts = event.ts.slice(5, 16).replace("T", " ");
+    const summary = fit(eventSummary(event).split("\n", 1)[0], Math.max(20, termWidth() - 37 - lead - event.id.length));
+    return `${slug === undefined ? "" : dim(slug + "  ")}${dim(ts)}  ` +
+        `${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}`;
 }
 
 function eventStyle(type: string): (text: string) => string

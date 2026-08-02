@@ -110,12 +110,21 @@ export const COMMANDS: CommandHelp[] = [
     {
         name: "objective",
         usage: [
-            { syntax: "objective", description: ["list objectives and their milestones"] },
+            {
+                syntax: "objective [--project <slug>] [--workspace]",
+                description: [
+                    "list objectives and their milestones",
+                    "(--project reads another project, --workspace every registered one)"
+                ]
+            },
             {
                 syntax: 'objective add "<outcome>" [--horizon week|month|quarter|year] [--target d]',
                 description: ["create a time-boxed objective under the goal"]
             },
-            { syntax: "objective show|confirm <id>", description: ["print an objective, or confirm a proposed one"] },
+            {
+                syntax: "objective show <id> [--project <slug>] | confirm <id>",
+                description: ["print an objective, or confirm a proposed one"]
+            },
             {
                 syntax: "objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]",
                 description: ["an empty --target/--horizon/--priority withdraws that field"]
@@ -126,6 +135,12 @@ export const COMMANDS: CommandHelp[] = [
             "keep the time-boxed objectives that break the goal down, each with the",
             "reason for its state. Progress is never a percentage.",
             "",
+            "list and show read: without a scope flag they answer for the project this",
+            "directory belongs to. add, confirm, revise and close write, so they take no",
+            "scope flag at all and record into the project they run in.",
+            "",
+            "  --project <slug>      read this registered project instead of this directory's",
+            "  --workspace           list every registered project's objectives (list only)",
             "  --horizon <span>      week, month, quarter, or year",
             "  --target <date>       the date the outcome is judged on",
             "  --success <text>      what reached looks like",
@@ -140,9 +155,15 @@ export const COMMANDS: CommandHelp[] = [
     {
         name: "milestone",
         usage: [
-            { syntax: "milestone", description: ["list milestones with state, reason, and linked work"] },
+            {
+                syntax: "milestone [--project <slug>]",
+                description: ["list milestones with state, reason, and linked work"]
+            },
             { syntax: 'milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]' },
-            { syntax: "milestone show <id>", description: ["print a milestone, its exit criteria, and its coverage"] },
+            {
+                syntax: "milestone show <id> [--project <slug>]",
+                description: ["print a milestone, its exit criteria, and its coverage"]
+            },
             { syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]" },
             { syntax: "milestone met <id> --criterion c1 --why w [--work id] [--evidence c]" },
             { syntax: "milestone reach <id>", description: ["record a milestone as reached once every criterion is covered"] },
@@ -156,6 +177,11 @@ export const COMMANDS: CommandHelp[] = [
             "every exit criterion is covered by evidence — finishing work never",
             "reaches one on its own.",
             "",
+            "list and show read and take --project; every other verb writes into the",
+            "project it runs in. There is no --workspace form: a milestone hangs under",
+            "an objective, so `self objective --workspace` is the workspace-wide roll-up.",
+            "",
+            "  --project <slug>      read this registered project instead of this directory's",
             "  --objective <id>      the objective the milestone belongs to",
             "  --exit <criterion>    an exit criterion, repeatable",
             "  --target <date>       the date the checkpoint is judged on",
@@ -591,22 +617,34 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: "context",
-        usage: [{ syntax: "context [--pretty|--plain]", description: ["print derived context for agents"] }],
+        usage: [{ syntax: "context [--project <slug>] [--pretty|--plain]", description: ["print derived context for agents"] }],
         detail: [
             "print this project's current truth: goal, active decisions, open work, recent reports.",
-            "piped output is capped at 12,000 characters; every omission names the command",
-            "that recovers the omitted state in full.",
+            "piped output is capped at 12,000 characters per project; every omission names",
+            "the command that recovers the omitted state in full.",
             "a terminal gets the ruled render instead, which carries no cap; --plain forces",
-            "the capped agent output anywhere, --pretty forces the ruled render."
+            "the capped agent output anywhere, --pretty forces the ruled render.",
+            "there is no --workspace form: run from outside every project, `context` already",
+            "summarizes the whole workspace.",
+            "",
+            "  --project <slug>    read this registered project instead of this directory's"
         ]
     },
     {
         name: "status",
-        usage: [{ syntax: "status [--pretty|--plain]", description: ["print a short state summary"] }],
+        usage: [
+            {
+                syntax: "status [--project <slug>] [--workspace] [--pretty|--plain]",
+                description: ["print a short state summary"]
+            }
+        ],
         detail: [
             "print what waits on you, what is moving, and any health signals.",
             "on a terminal this machine's open attempts are rolled up per work unit;",
-            "piped output keeps one line per attempt."
+            "piped output keeps one line per attempt.",
+            "",
+            "  --project <slug>    summarize this registered project instead of this directory's",
+            "  --workspace         one line per registered project, from anywhere"
         ]
     },
     {
@@ -616,11 +654,15 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: "log",
-        usage: [{ syntax: "log [-n N]", description: ["print recent events"] }],
+        usage: [{ syntax: "log [-n N] [--project <slug>] [--workspace]", description: ["print recent events"] }],
         detail: [
             "print the project's event log, newest last.",
+            "--workspace merges every registered project onto one timeline and leads each",
+            "line with the project it happened in.",
             "",
-            "  -n <count>   how many events to print (default 20)"
+            "  -n <count>          how many events to print (default 20)",
+            "  --project <slug>    read this registered project instead of this directory's",
+            "  --workspace         every registered project's events on one timeline"
         ]
     },
     {

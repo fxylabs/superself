@@ -97,6 +97,13 @@
                 "lib.sh"
             ]
         },
+        "scope": {
+            "entry": "suites/scope.sh",
+            "deps": [
+                "lib.sh",
+                "pretty-terminal.mjs"
+            ]
+        },
         "pretty": {
             "entry": "suites/pretty.sh",
             "deps": [
