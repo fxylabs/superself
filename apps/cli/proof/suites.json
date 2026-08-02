@@ -105,6 +105,12 @@
                 "lib.sh"
             ]
         },
+        "evidence-bundle": {
+            "entry": "suites/evidence-bundle.sh",
+            "deps": [
+                "lib.sh"
+            ]
+        },
         "sync": {
             "entry": "suites/sync.sh",
             "deps": [

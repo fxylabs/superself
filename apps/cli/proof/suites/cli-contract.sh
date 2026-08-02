@@ -193,6 +193,15 @@ do
 done
 BADSPEC="$(SELF spec apply x surplus 2>&1 || true)"
 echo "$BADSPEC" | grep -q "unexpected argument 'surplus'" || fail "an extra spec argument was swallowed"
+# and the evidence verbs: none of them writes state, but a swallowed --out would
+# put a bundle somewhere nobody asked for and a swallowed flag would compile a
+# selection the operator never approved
+for SUB in "compile m.json" "verify b.json" "show b.json"
+do
+    rejects evidence evidence $SUB --bogus
+done
+BADEVIDENCE="$(SELF evidence compile m.json surplus 2>&1 || true)"
+echo "$BADEVIDENCE" | grep -q "unexpected argument 'surplus'" || fail "an extra evidence argument was swallowed"
 rejects "" --bogus
 
 # a typoed verb is named on stderr and exits non-zero, never a usage list
