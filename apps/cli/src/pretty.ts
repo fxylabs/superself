@@ -293,6 +293,15 @@ const SCOPED_POINTER = [
     /^self search /
 ];
 
+// A verb with no scope form cannot be run from anywhere: it answers for the
+// checkout it runs in. Every render that points at one says so in the same
+// words, so a reader of another project's output learns where to stand instead
+// of finding out by getting the wrong answer.
+export function fromCheckout(project: string): string
+{
+    return ` from a checkout of ${project}`;
+}
+
 export function scoped(command: string, project: string): string
 {
     if (command.includes("--project "))
@@ -358,7 +367,7 @@ function workRow(model: ProjectModel, work: WorkState): Row
     // line rather than folded into the state cell.
     if (work.gatedBy.length > 0)
     {
-        notes.push({ text: `gated by ${work.gatedBy.join(", ")} · self status`, paint: yellow });
+        notes.push({ text: `gated by ${work.gatedBy.join(", ")} · ${scoped("self status", shellArgument(model.slug))}`, paint: yellow });
     }
     if (toward !== "")
     {
@@ -477,7 +486,7 @@ const UNSHIPPED_COLUMNS: Column[] = [
 // One row per branch, its units on the row's own lines. Commits are counted
 // rather than listed: a hash truncated at a column boundary cannot be pasted,
 // and the thing a reader acts on here is the branch.
-function unshippedRow(branch: BranchUnshipped): Row
+function unshippedRow(branch: BranchUnshipped, project: string): Row
 {
     const totals = branchTotals(branch);
     const shown = branch.unshipped.slice(0, CONTEXT_ROWS);
@@ -487,7 +496,7 @@ function unshippedRow(branch: BranchUnshipped): Row
     }));
     if (branch.unshipped.length > shown.length)
     {
-        notes.push({ text: `+${branch.unshipped.length - shown.length} more · self work`, paint: dim });
+        notes.push({ text: `+${branch.unshipped.length - shown.length} more · ${scoped("self work", project)}`, paint: dim });
     }
     return {
         cells: [
@@ -511,7 +520,8 @@ function unshippedCounts(model: ProjectModel): string
 function unshippedSection(model: ProjectModel): string[]
 {
     return tableSection("UNSHIPPED BY BRANCH", unshippedCounts(model), UNSHIPPED_COLUMNS,
-        model.unshipped.map(unshippedRow), scoped("self work", shellArgument(model.slug)));
+        model.unshipped.map((branch) => unshippedRow(branch, shellArgument(model.slug))),
+        scoped("self work", shellArgument(model.slug)));
 }
 
 /* ── status ────────────────────────────────────────────────────────── */
@@ -697,7 +707,7 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
     lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text),
         scoped("self search --type convention", project)));
-    lines.push("", ...listSection("INTEGRATION", trainLines(model), "self integration plan"));
+    lines.push("", ...listSection("INTEGRATION", trainLines(model), "self integration plan" + fromCheckout(project)));
     lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     return lines;
 }

@@ -21,6 +21,7 @@ import {
     renderContext,
     renderStatus,
     renderWorkList,
+    fromCheckout,
     renderWorkspace,
     scoped,
     shellArgument
@@ -154,7 +155,7 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
         `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${project}`)}`));
     pushList(lines, "Integration train", options.compactOptional
         ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan",
-            ` from a checkout of ${project}`)
+            fromCheckout(project))
         : trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
     pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
@@ -209,7 +210,7 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         .sort(compareDated)
         .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
     pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length, "open change set",
-        "self integration plan", ` from a checkout of ${project}`));
+        "self integration plan", fromCheckout(project)));
     const progressing = [...model.works]
         .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
         .sort((left, right) => left.id.localeCompare(right.id));
