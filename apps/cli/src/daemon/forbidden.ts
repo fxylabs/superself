@@ -414,6 +414,13 @@ function packedArgument(words: Word[], at: number): { from: number; count: numbe
         }
         if (step.split)
         {
+            // Attached to the flag (`-Ssh -c npm publish`) or the token after
+            // it. env accepts both, and reading only the second left the first
+            // delivering a whole command line nobody looked at.
+            if (step.attached !== null)
+            {
+                return { from: index, count: 1, text: step.attached };
+            }
             return index + 1 < words.length ? { from: index, count: 2, text: words[index + 1].text } : null;
         }
         index += step.consumes;
@@ -424,20 +431,20 @@ function packedArgument(words: Word[], at: number): { from: number; count: numbe
 // How one of env's own option tokens is read: how many tokens it takes, and
 // whether it is the one that packs a command line. Null means the token is not
 // an option of env's at all.
-function envOption(text: string): { consumes: number; split: boolean } | null
+function envOption(text: string): { consumes: number; split: boolean; attached: string | null } | null
 {
     if (ASSIGNMENT.test(text))
     {
-        return { consumes: 1, split: false };
+        return { consumes: 1, split: false, attached: null };
     }
     if (text.startsWith("--"))
     {
         const name = text.split("=")[0];
         if (ENV_LONG_VALUE.includes(name))
         {
-            return { consumes: text.includes("=") ? 1 : 2, split: false };
+            return { consumes: text.includes("=") ? 1 : 2, split: false, attached: null };
         }
-        return ENV_LONG_BARE.includes(name) ? { consumes: 1, split: false } : null;
+        return ENV_LONG_BARE.includes(name) ? { consumes: 1, split: false, attached: null } : null;
     }
     if (!text.startsWith("-") || text.length < 2)
     {
@@ -446,28 +453,30 @@ function envOption(text: string): { consumes: number; split: boolean } | null
     return shortCluster(text.slice(1));
 }
 
-// A short cluster, read left to right the way env reads it. `u` and `C` take
-// the rest of the cluster as their value, or the next token when the cluster
-// ends at them; `S` takes the next token as the packed command line.
-function shortCluster(cluster: string): { consumes: number; split: boolean } | null
+// A short cluster, read left to right the way env reads it. `u`, `C` and `S`
+// all take the rest of the cluster as their value when there is one, and the
+// next token when the cluster ends at them — so `-Ssh -c npm publish` and
+// `-S "sh -c npm publish"` are the same delivery in two spellings.
+function shortCluster(cluster: string): { consumes: number; split: boolean; attached: string | null } | null
 {
     for (let index = 0; index < cluster.length; index++)
     {
         const letter = cluster[index];
+        const rest = cluster.slice(index + 1);
         if (ENV_SHORT_SPLIT.includes(letter))
         {
-            return { consumes: 2, split: true };
+            return { consumes: rest === "" ? 2 : 1, split: true, attached: rest === "" ? null : rest };
         }
         if (ENV_SHORT_VALUE.includes(letter))
         {
-            return { consumes: index + 1 < cluster.length ? 1 : 2, split: false };
+            return { consumes: rest === "" ? 2 : 1, split: false, attached: null };
         }
         if (!ENV_SHORT_BARE.includes(letter))
         {
             return null;
         }
     }
-    return { consumes: 1, split: false };
+    return { consumes: 1, split: false, attached: null };
 }
 
 // Shell word splitting, for reading only. One forward pass, so it terminates on
