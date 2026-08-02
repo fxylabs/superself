@@ -157,14 +157,16 @@ echo "$SCOPED_CTX" | grep -q "self integration plan --project" && fail "a pointe
 # --plain` passed as scoped though neither names a project (#165 review round
 # 3). Each exclusion below is safe for a stated reason:
 #
-#   --project             the scope flag itself — the thing being enforced
 #   from a checkout of    the standing requirement a verb with no scope form
 #                         takes instead of a flag it does not have
 #   self decide confirm | self attempt show | self work accept
 #                         a write and a machine-local read. Neither has a
 #                         --project form at all, so scoping them would promise
 #                         a flag that does not exist
-RULED_OK="--project|from a checkout of|self decide confirm|self attempt show|self work accept"
+#   --project '<slug>'    the scope flag naming a project. The quote matters:
+#                         `--project` with nothing after it renders when the
+#                         slug is empty, and a bare flag names no project
+RULED_OK="--project '|from a checkout of|self decide confirm|self attempt show|self work accept"
 
 # The fourth exclusion is the table's own truncation, and it is the one that
 # needs care. A ruled cell narrower than its text ends in `…`, so at 80 columns
@@ -176,7 +178,7 @@ RULED_OK="--project|from a checkout of|self decide confirm|self attempt show|sel
 # second pass exists.
 bare_ruled()
 {
-    printf '%s\n' "$1" | grep -F '· self ' | grep -vE -- "$RULED_OK" | grep -vE -- "· self [a-z ]*(--)?…" || true
+    printf '%s\n' "$1" | grep -F '· self ' | grep -vE -- "$RULED_OK" | grep -vE -- "· self [a-z ]*(--[a-z]*)?…" || true
 }
 
 # The same predicate with no truncation exclusion, for a terminal wide enough
