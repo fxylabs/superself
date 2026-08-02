@@ -362,62 +362,145 @@ no_worktree_left "$AT_PACKED" "a packed forbidden preparation step"
 # recognising one — and the benign near-misses are kept beside them, because a
 # refusal of ordinary prose has no recovery except rewording somebody's prompt.
 cat > "$ROOT/gate-probe.mjs" <<'PROBE'
-
+// The delivery forms this gate has been shown, kept as a table so a later
+// reading of the matcher cannot quietly stop recognising one — and the benign
+// near-misses kept beside them, because refusing ordinary prose has no recovery
+// except rewording somebody's work.
+//
 // argv[2] because this runs as a file: argv[1] is the script itself.
 const { forbiddenCommand } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
-const cases = [
-    // direct and prefixed shells
-    [["sh", "-c", "npm publish"], "publish"],
-    [["bash", "-lc", "npm publish"], "publish"],
-    [["env", "FOO=bar", "sh", "-c", "npm publish"], "publish"],
-    [["nice", "-n", "10", "sh", "-c", "aws deploy"], "provision"],
-    [["timeout", "30", "/bin/sh", "-c", "rm -rf /"], "destructive"],
-    [["nohup", "setsid", "zsh", "-c", "stripe charge"], "payment"],
-    // a launcher that re-splits its own argument into words
-    [["env", "-S", "FOO=bar sh -c npm publish"], "publish"],
-    [["env", "-S", "FOO=bar sh -c 'npm publish'"], "publish"],
-    [["env", "--split-string=FOO=bar sh -c npm publish"], "publish"],
-    [["env", "--split-string", "FOO=bar sh -c npm publish"], "publish"],
-    [["env", "-iS", "FOO=bar sh -c npm publish"], "publish"],
-    [["env", "-uFOO", "-S", "sh -c npm publish"], "publish"],
-    [["env", "-S", "env -S 'sh -c npm publish'"], "publish"],
-    [["env", "-S", "npm publish"], "publish"],
-    [["xargs", "env", "-S", "sh -c aws deploy"], "provision"],
-    [["stdbuf", "-o0", "env", "-S", "sh -c terraform apply"], "provision"],
-    // the splitter itself: quoting, escapes, an unterminated quote, a newline
-    [["env", "-S", "sh -c \"npm  publish\""], "publish"],
-    [["env", "-S", "sh -c npm\\ publish"], "publish"],
-    [["env", "-S", "sh -c 'npm publish"], "publish"],
-    [["env", "-S", "sh -c 'npm publish'\n"], "publish"],
-    // a word this module produced by splitting is invocation text, not a
-    // payload, even when the quoting left whitespace inside it
-    [["env", "-S", "'npm publish'"], "publish"],
-    // benign near-misses: text that merely mentions a shell is not an action
-    [["git", "commit", "-m", "fix: document sh -c handling in the gate"], null],
-    [["grep", "-rn", "sh -c", "src/"], null],
-    [["claude", "-p", "never run sh with a script; release notes are prose", "--model", "opus"], null],
-    [["node", "/x/prep-agent.mjs"], null],
-    [["pnpm", "install", "--frozen-lockfile"], null],
-    [["git", "worktree", "add", "--detach", "/tmp/wd", "abc"], null],
-    [["curl", "-sS", "https://example.invalid/x"], null],
-    [["sort", "-S", "1G", "file.txt"], null]
+
+const safe = Array.from({ length: 256 }, (_, i) => "w" + i).join(" ");
+// Quote-concatenated, so the vocabulary exists only once the splitter has run,
+// and nested, so the rescan bound runs out before it does.
+const nested = (n) =>
+{
+    let text = "sh -c p'ublish'";
+    for (let i = 0; i < n; i++)
+    {
+        text = "env -S " + JSON.stringify(text);
+    }
+    return text;
+};
+
+// A bound this gate places on its own work is not permission to admit what is
+// past it. Both of these came back as "nothing forbidden here".
+const OVERFLOW = [
+    ["a forbidden word past the packed-word bound", ["env", "-S", safe + " publish"]],
+    ["a packed chain past the rescan bound", ["env", "-S", nested(9)]]
 ];
+
+const FORBIDDEN = [
+    ["a shell handed a script", ["sh", "-c", "npm publish"], "publish"],
+    ["a login shell handed a script", ["bash", "-lc", "npm publish"], "publish"],
+    ["an assignment in front of the shell", ["env", "FOO=bar", "sh", "-c", "npm publish"], "publish"],
+    ["a launcher with its own flags", ["nice", "-n", "10", "sh", "-c", "aws deploy"], "provision"],
+    ["a bounded launcher", ["timeout", "30", "/bin/sh", "-c", "rm -rf /"], "destructive"],
+    ["two launchers", ["nohup", "setsid", "zsh", "-c", "stripe charge"], "payment"],
+    ["env packing the whole invocation", ["env", "-S", "FOO=bar sh -c npm publish"], "publish"],
+    ["env packing a quoted script", ["env", "-S", "FOO=bar sh -c 'npm publish'"], "publish"],
+    ["the inline long form", ["env", "--split-string=FOO=bar sh -c npm publish"], "publish"],
+    ["the separate long form", ["env", "--split-string", "FOO=bar sh -c npm publish"], "publish"],
+    ["the flag bundled with another", ["env", "-iS", "FOO=bar sh -c npm publish"], "publish"],
+    ["the flag after an unset", ["env", "-uFOO", "-S", "sh -c npm publish"], "publish"],
+    ["env packing an env", ["env", "-S", "env -S 'sh -c npm publish'"], "publish"],
+    ["env packing no shell at all", ["env", "-S", "npm publish"], "publish"],
+    ["a launcher in front of env", ["xargs", "env", "-S", "sh -c aws deploy"], "provision"],
+    ["a buffering launcher in front of env", ["stdbuf", "-o0", "env", "-S", "sh -c terraform apply"], "provision"],
+    ["double quotes inside the packed token", ["env", "-S", "sh -c \"npm  publish\""], "publish"],
+    ["a backslash escape inside it", ["env", "-S", "sh -c npm\\ publish"], "publish"],
+    ["an unterminated quote inside it", ["env", "-S", "sh -c 'npm publish"], "publish"],
+    ["a trailing newline inside it", ["env", "-S", "sh -c 'npm publish'\n"], "publish"],
+    ["quoting that leaves whitespace in one word", ["env", "-S", "'npm publish'"], "publish"],
+    ["quote concatenation", ["env", "-S", "sh -c p'ublish'"], "publish"],
+    ["env by absolute path", ["/usr/bin/env", "-S", "sh -c npm publish"], "publish"],
+    ["a forbidden launcher in front of env", ["sudo", "env", "-S", "sh -c npm publish"], "policy-change"],
+    ["a package script through an allowed binary", ["pnpm", "run", "publish"], "publish"]
+];
+
+// Ordinary commands. Every one of these was a refusal at some point in this
+// gate's history, or is one flag away from having been.
+const BENIGN = [
+    ["git -S with prose (GPG-sign)", ["git", "-S", "release notes"]],
+    ["sort -S with prose (buffer size)", ["sort", "-S", "release notes"]],
+    ["sort -S with a size", ["sort", "-S", "1G", "file.txt"]],
+    ["curl -sS with a url", ["curl", "-sS", "https://example.invalid/x"]],
+    ["git -S signing an ordinary commit", ["git", "-S", "commit", "-m", "ordinary work"]],
+    ["ssh -S with a control socket", ["ssh", "-S", "/tmp/cm", "host", "uptime"]],
+    ["tar -S with an archive", ["tar", "-S", "-xf", "archive.tar"]],
+    ["a commit message mentioning sh -c", ["git", "commit", "-m", "fix: document sh -c handling in the gate"]],
+    ["a grep pattern that is sh -c", ["grep", "-rn", "sh -c", "src/"]],
+    ["an agent prompt in ordinary English", ["claude", "-p", "never run sh with a script; release notes are prose", "--model", "opus"]],
+    ["this repository's own agent invocation", ["node", "/x/prep-agent.mjs"]],
+    ["this repository's own preparation step", ["pnpm", "install", "--frozen-lockfile"]],
+    ["the runner's own provisioning", ["git", "worktree", "add", "--detach", "/tmp/wd", "abc"]]
+];
+
 let bad = 0;
-for (const [argv, want] of cases)
+const category = (argv) =>
 {
     const match = forbiddenCommand(argv);
-    const category = match === null ? null : match.category;
-    if (category !== want)
+    return match === null ? null : match.category;
+};
+
+for (const [name, argv] of OVERFLOW)
+{
+    const got = category(argv);
+    if (got !== "unreadable")
     {
         bad++;
-        console.error(`${JSON.stringify(argv)} -> ${category}, wanted ${want}`);
+        console.error(`${name} -> ${got}, wanted unreadable`);
     }
 }
-// A token that splits into thousands of words must be bounded rather than
-// followed: it has to answer, and it has to answer quickly.
+for (const [name, argv, want] of FORBIDDEN)
+{
+    const got = category(argv);
+    if (got !== want)
+    {
+        bad++;
+        console.error(`${name} -> ${got}, wanted ${want}`);
+    }
+}
+console.log("benign vectors — none of these may be refused:");
+for (const [name, argv] of BENIGN)
+{
+    const got = category(argv);
+    console.log(`  ${got === null ? "admitted" : "REFUSED " + got}  ${name}`);
+    if (got !== null)
+    {
+        bad++;
+    }
+}
+
+// No packed width and no packed depth may answer "nothing forbidden here".
+// Both bounds used to, which is what made them bypasses rather than bounds.
+for (const width of [1, 100, 255, 256, 257, 1000, 5000])
+{
+    const packed = Array.from({ length: width }, (_, i) => "w" + i).join(" ") + " publish";
+    if (forbiddenCommand(["env", "-S", packed]) === null)
+    {
+        bad++;
+        console.error(`a packed argument of ${width} words answered null`);
+    }
+}
+for (let depth = 0; depth <= 12; depth++)
+{
+    if (forbiddenCommand(["env", "-S", nested(depth)]) === null)
+    {
+        bad++;
+        console.error(`a packed chain nested ${depth} deep answered null`);
+    }
+}
+
+// A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();
 forbiddenCommand(["env", "-S", Array.from({ length: 5000 }, (_, i) => "w" + i).join(" ")]);
-if (Date.now() - started > 2000) { console.error("a token of five thousand words was not bounded"); bad++; }
+if (Date.now() - started > 2000)
+{
+    bad++;
+    console.error("a token of five thousand words was not bounded");
+}
+
 process.exit(bad === 0 ? 0 : 1);
 PROBE
 node "$ROOT/gate-probe.mjs" "$CLI_DIR" || fail "the forbidden-action gate does not read every wrapper form it has been shown"

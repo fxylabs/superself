@@ -139,7 +139,8 @@ export function forbiddenTools(tools: unknown): ForbiddenMatch | null
 // `invocation()` below is where that line is drawn and what it costs.
 export function forbiddenCommand(command: unknown): ForbiddenMatch | null
 {
-    for (const token of invocation(command))
+    const reading = invocation(command);
+    for (const token of reading.words)
     {
         const match = wordMatch(token);
         if (match !== null)
@@ -147,8 +148,18 @@ export function forbiddenCommand(command: unknown): ForbiddenMatch | null
             return { action: match.word, category: match.category };
         }
     }
-    return null;
+    // Vocabulary first, because a named effect is the more useful sentence.
+    // What is left is text this gate bounded itself out of reading, and the
+    // answer to that is a refusal: 256 harmless words followed by `publish`
+    // came back as "nothing forbidden here", which is the one thing a
+    // categorical gate may never say about text it did not look at.
+    return reading.unread === null ? null : { action: reading.unread, category: UNREADABLE };
 }
+
+// Not a category of effect — a statement that the effects could not be
+// established. It is kept out of FORBIDDEN_ACTIONS for that reason: nothing
+// declares itself unreadable, and no policy surface should offer it as a class.
+export const UNREADABLE = "unreadable";
 
 // The tokens of a command array that state what it will do, with the payload
 // it merely carries left out.
@@ -182,98 +193,138 @@ export function forbiddenCommand(command: unknown): ForbiddenMatch | null
 //     and what program source is not, and matching it against source would
 //     produce noise rather than signal. What such a run may reach is the
 //     capability declaration's statement and the runner's preflight enforces it.
-function invocation(command: unknown): string[]
+function invocation(command: unknown): Reading
 {
-    const words = respliced(tokens(command).map((text) => ({ text, split: false })), 0);
-    const argv = words.map((word) => word.text);
+    const reading = respliced(tokens(command).map((text) => ({ text, split: false })));
+    const argv = reading.words.map((word) => word.text);
     const script = shellScript(argv);
     // A word this module produced by splitting is invocation text by
-    // construction — the launcher was going to re-split it too — so the
-    // payload rule does not apply to it. Without this, `env -S "'npm
-    // publish'"` split to one word that still carried a space, and the very
-    // filter that keeps an agent's prose out of the vocabulary dropped the
-    // only word stating the effect.
-    return words
-        .filter((word, index) => index === 0 || index === script || word.split || !/\s/.test(word.text))
-        .map((word) => judged(word.text));
+    // construction — env was going to re-split it too — so the payload rule
+    // does not apply to it. Without this, `env -S "'npm publish'"` split to one
+    // word that still carried a space, and the very filter that keeps an
+    // agent's prose out of the vocabulary dropped the only word stating the
+    // effect. The marker is only ever set by the env reading below, so no other
+    // program's argument can escape the payload rule through it.
+    return {
+        words: reading.words
+            .filter((word, index) => index === 0 || index === script || word.split || !/\s/.test(word.text))
+            .map((word) => judged(word.text)),
+        unread: reading.unread
+    };
+}
+
+// What one command's invocation text came to, and whether any of it was left
+// unread. `unread` is never an admission: a gate that bounds its own work has
+// to say so rather than answer "nothing forbidden here" about text it never
+// looked at.
+interface Reading
+{
+    words: string[];
+    unread: string | null;
 }
 
 // A token of the vector being read, and whether this module produced it by
-// splitting one that a launcher would have re-split itself.
+// splitting one that env would have re-split itself.
 interface Word
 {
     text: string;
     split: boolean;
 }
 
-// The flags that say a token is a command line rather than one argument.
 // `env -S "FOO=bar sh -c 'npm publish'"` is a whole invocation packed into a
 // single argv token: env splits it back into words itself, so the shell, its
 // flag and its script are all inside something a scan over tokens sees as one
 // opaque payload — and the gate read nothing at all.
 //
-// This is the class, not the vector: any launcher that re-splits its own
-// argument into words delivers a script the same way. The token that follows
-// such a flag is invocation text for exactly the reason a shell's -c argument
-// is, so it is split on shell word rules and spliced into the vector before the
-// shell is looked for. The flag itself is dropped once it has done its work —
-// it is not vocabulary, and leaving it there would make the next pass split its
-// own output again.
-//
-// The short form is read as a cluster (`-S`, `-iS`, `-uS`) because that is how
-// a wrapper writes it. What that costs is a token of prose behind an unrelated
-// `-S` on some other program being read as words rather than as a payload,
-// which is the direction this whole list already errs in.
+// The reading belongs to env and to nothing else. A short cluster containing an
+// uppercase S is `-S` on env and somebody else's flag everywhere else: `git -S`
+// signs a commit and `sort -S` sizes a buffer, and treating either one's
+// argument as invocation text turned an ordinary commit message into a refusal
+// nobody could get past. So the flag is honoured only inside an env invocation,
+// found by the same basename judgement the rest of this module uses — which is
+// why `/usr/bin/env` and a bare `env` behind `sudo` or `xargs` are all covered.
 const SPLIT_FLAG = /^-[a-zA-Z]*S[a-zA-Z]*$/;
 const SPLIT_INLINE = /^--split-string=([\s\S]*)$/;
 const SPLIT_LONG = "--split-string";
+const ENV = "env";
 
-// How many times a vector may re-split before this stops following it.
-// `env -S "env -S '…'"` is one nesting and is followed; a vector nested past
-// this is somebody exploring the parser rather than launching a program, and
-// what has already been split is still judged.
-const MAX_SPLIT_DEPTH = 4;
+// env's own arguments, which is how far forward its `-S` may be found: its
+// options, and the NAME=value assignments it exists to set. The first token
+// that is neither is the program env will exec, and from there the flags belong
+// to that program.
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-// The most words one token may contribute. A token that splits into thousands
-// is not an invocation, and reading it as one would cost the matching pass its
-// whole budget. The bound is stated rather than hidden: a forbidden word past
-// the two hundred and fifty-sixth of a single packed token is not read.
+// Bounds on the work this reading may do. Neither is a licence to stop caring
+// about what is past it: overflowing either one is reported as unread text and
+// refused, because a higher bound has the same defect one word further out.
+const MAX_SPLIT_DEPTH = 8;
 const MAX_SPLIT_WORDS = 256;
 
-function respliced(words: Word[], depth: number): Word[]
+const TOO_MANY_WORDS = `a single argument re-split into more than ${MAX_SPLIT_WORDS} words`;
+const TOO_DEEP = `launcher packing nested more than ${MAX_SPLIT_DEPTH} levels deep`;
+
+function respliced(initial: Word[]): { words: Word[]; unread: string | null }
 {
-    if (depth >= MAX_SPLIT_DEPTH)
+    let words = initial;
+    let unread: string | null = null;
+    for (let pass = 0; pass < MAX_SPLIT_DEPTH; pass++)
     {
-        return words;
+        const step = splitOnce(words);
+        words = step.words;
+        unread = unread ?? step.unread;
+        if (!step.split)
+        {
+            return { words, unread };
+        }
     }
+    // The bound ran out with a packed launcher still in the vector. Whatever is
+    // inside it was never read, and this is the answer that says so.
+    return { words, unread: unread ?? TOO_DEEP };
+}
+
+// One pass over the vector, splicing the words out of every packed env
+// argument it finds.
+function splitOnce(words: Word[]): { words: Word[]; split: boolean; unread: string | null }
+{
     const out: Word[] = [];
     let split = false;
+    let unread: string | null = null;
+    // Whether the tokens being walked are still env's own arguments.
+    let inEnv = false;
     for (let index = 0; index < words.length; index++)
     {
-        const inline = SPLIT_INLINE.exec(words[index].text);
+        const text = words[index].text;
+        const inline = inEnv ? SPLIT_INLINE.exec(text) : null;
         if (inline !== null)
         {
-            out.push(...shellWords(inline[1]));
+            const packed = shellWords(inline[1]);
+            out.push(...packed.words);
+            unread = unread ?? packed.unread;
             split = true;
+            inEnv = false;
         }
-        else if ((words[index].text === SPLIT_LONG || SPLIT_FLAG.test(words[index].text)) && index + 1 < words.length)
+        else if (inEnv && (text === SPLIT_LONG || SPLIT_FLAG.test(text)) && index + 1 < words.length)
         {
-            out.push(...shellWords(words[++index].text));
+            const packed = shellWords(words[++index].text);
+            out.push(...packed.words);
+            unread = unread ?? packed.unread;
             split = true;
+            inEnv = false;
         }
         else
         {
             out.push(words[index]);
+            inEnv = judged(text) === ENV || (inEnv && (text.startsWith("-") || ASSIGNMENT.test(text)));
         }
     }
-    return split ? respliced(out, depth + 1) : out;
+    return { words: out, split, unread };
 }
 
 // Shell word splitting, for reading only. One forward pass, so it terminates on
 // any input; an unterminated quote ends with the word it was building rather
 // than throwing, because a vector this cannot parse is still a vector this has
 // to answer about. Newlines are whitespace, as they are to a shell.
-function shellWords(text: string): Word[]
+function shellWords(text: string): { words: Word[]; unread: string | null }
 {
     const words: Word[] = [];
     let word = "";
@@ -315,7 +366,10 @@ function shellWords(text: string): Word[]
     {
         words.push({ text: word, split: true });
     }
-    return words;
+    // Truncation is a statement about what was not read, not a quiet ceiling.
+    // A packed argument of 256 safe words and a forbidden one after them used
+    // to come back as "nothing forbidden here".
+    return { words, unread: words.length >= MAX_SPLIT_WORDS ? TOO_MANY_WORDS : null };
 }
 
 // The shells whose -c argument is a script rather than a payload, and the flags
@@ -387,7 +441,11 @@ const NETWORK_WORDS = ["curl", "wget", "ssh", "scp", "sftp", "rsync", "netcat", 
 // default policy for the rest of the night.
 export function commandReachesNetwork(command: unknown): boolean
 {
-    return invocation(command).some(reaches);
+    const reading = invocation(command);
+    // Unread text is assumed to reach off this machine, for the same reason the
+    // forbidden list refuses it: narrowing is the only honest way to guess, and
+    // this answer only ever narrows what a policy will run.
+    return reading.unread !== null || reading.words.some(reaches);
 }
 
 function reaches(token: string): boolean
@@ -412,6 +470,10 @@ export function forbiddenSpec(spec: WorkSpec): ForbiddenMatch | null
 // in each place would look like three rules rather than one.
 export function forbiddenRefusal(match: ForbiddenMatch, at: string): string
 {
+    if (match.category === UNREADABLE)
+    {
+        return `${at} packs more invocation text than this gate can read (${match.action}) — a command whose effects cannot be established is not one that runs unattended, so write it as an ordinary argument vector`;
+    }
     return `${at} declares "${match.action}", which is ${match.category} — external publication, outreach, payment, purchase, ` +
         "cloud provisioning, destructive action and policy change are never done unattended, and no overnight policy can grant one";
 }
