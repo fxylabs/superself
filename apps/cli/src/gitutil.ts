@@ -248,6 +248,105 @@ export function currentBranch(dir: string): string | null
     return result.ok && result.out !== "" && result.out !== "HEAD" ? result.out : null;
 }
 
+// ── batch probes ─────────────────────────────────────────────────────────
+// Everything below asks one question about a whole set of commits in a single
+// git process. Before them, verifying evidence spawned four or five gits per
+// hash per project, sequentially: a workspace holding 350 recorded commits
+// spent minutes of wall time at 1% CPU waiting on them (#128).
+//
+// Each batch is a synchronous call, so the child is started, drained and
+// reaped before the function returns. That is deliberate rather than a
+// streaming `--batch-check` kept open across the fold: this CLI is
+// synchronous, and a long-lived child would have to be torn down on every
+// path a fold can throw from. One process per repository is the bound the
+// design asks for; owning its whole lifetime inside one call is how it is
+// kept without a zombie on an exception.
+//
+// Every batch answers `null` when git could not be asked — a broken
+// repository, or output that does not line up with the input. The caller
+// leaves the stored verdicts untouched there, because a batch that could not
+// answer must never be read as "nothing resolves".
+
+// The output of one probe is bounded by the repository's history, not by the
+// caller, so the pipe is given room a default 1 MB buffer would not have. A
+// repository large enough to overrun even this reports as unanswerable.
+const BATCH_BUFFER = 64 * 1024 * 1024;
+
+function batch(cwd: string, args: string[], input: string): string | null
+{
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", input, maxBuffer: BATCH_BUFFER });
+    if (result.error !== undefined || result.status !== 0)
+    {
+        return null;
+    }
+    return result.stdout ?? "";
+}
+
+function lines(out: string): string[]
+{
+    return out.split("\n").filter((line) => line !== "");
+}
+
+// Which of `values` name a commit in this repository, and the object each one
+// resolves to. Only hex is offered to git, exactly as `classifyEvidence`
+// decides above: prose never reaches a probe. `cat-file --batch-check` writes
+// one line per input line — an object name, or the input echoed back with
+// `missing`/`ambiguous` — so the answers are matched to the questions by
+// position, which is the only thing the protocol guarantees.
+export function resolveCommits(dir: string, values: string[]): Map<string, string> | null
+{
+    const askable = values.filter((value) => HEX.test(value));
+    if (askable.length === 0)
+    {
+        return new Map();
+    }
+    const out = batch(dir, ["cat-file", "--batch-check"], askable.map((value) => `${value}^{commit}\n`).join(""));
+    if (out === null)
+    {
+        return null;
+    }
+    const answers = lines(out);
+    if (answers.length !== askable.length)
+    {
+        return null;
+    }
+    const resolved = new Map<string, string>();
+    answers.forEach((answer, index) =>
+    {
+        const parts = answer.split(" ");
+        if (parts[1] === "commit")
+        {
+            resolved.set(askable[index], parts[0]);
+        }
+    });
+    return resolved;
+}
+
+// The commits `git rev-list` still reaches from `oids` once `exclude` is
+// subtracted. Membership of an oid in the answer is the batched form of
+// `merge-base --is-ancestor <oid> <exclude>` returning false: reachable from
+// what was excluded means not printed. Ancestors of the given commits come
+// back too; the caller asks only about the oids it handed in.
+export function revListExcept(dir: string, oids: string[], exclude: string[]): Set<string> | null
+{
+    if (oids.length === 0)
+    {
+        return new Set();
+    }
+    const out = batch(dir, ["rev-list", "--stdin", ...exclude], oids.map((oid) => `${oid}\n`).join(""));
+    return out === null ? null : new Set(lines(out));
+}
+
+// Every ref this repository holds, plus the HEAD of the working tree the
+// command is standing in — the whole of what a reachability verdict can turn
+// on, in one probe. A branch deletion moves no HEAD and still flips an
+// abandonment verdict, so the branch names have to be in here beside it.
+export function refListing(dir: string): string
+{
+    const listed = git(dir, "show-ref", "--head");
+    return listed.ok ? listed.out : "";
+}
+
 export function excludeLocally(dir: string, pattern: string): void
 {
     const common = gitCommonDir(dir);
