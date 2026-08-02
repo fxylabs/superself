@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawn, SpawnOptions } from "node:child_process";
+import { spawn, spawnSync, SpawnOptions } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
@@ -153,6 +153,31 @@ export interface RunOutcome
     stderr: string;
     timedOut: boolean;
     spawnError?: NodeJS.ErrnoException;
+}
+
+// The same bounded run for a caller that has no await to give it. Releasing a
+// provisioned worktree happens inside the synchronous terminal writes every
+// settlement path ends in, and it is a local git operation with no network in
+// it — so it goes through the same `boundaryCommand` every other launch does,
+// rather than making every settlement path asynchronous to reach it.
+export function runBoundedSync(boundary: Boundary, argv: string[], timeoutMs: number): RunOutcome
+{
+    const command = boundaryCommand(boundary, argv);
+    const result = spawnSync(command.argv[0], command.argv.slice(1), {
+        cwd: command.options.cwd as string,
+        env: command.options.env as NodeJS.ProcessEnv,
+        encoding: "utf8",
+        timeout: timeoutMs
+    });
+    const error = result.error as NodeJS.ErrnoException | undefined;
+    return {
+        code: result.status,
+        signal: result.signal,
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        timedOut: error?.code === "ETIMEDOUT",
+        spawnError: error
+    };
 }
 
 // A bounded run used by every probe: a boundary that hangs must cost the

@@ -233,15 +233,21 @@ function homePattern(home: string): RegExp
 
 // Environment values are never written anywhere, so a declared secret enters
 // redaction by value without the plan ever carrying it.
-export function scopeFor(secretNames: string[]): RedactionScope
+// `declared` is the environment the plan itself supplies — a value it wrote
+// down rather than one it named. A declared secret can arrive either way and
+// both are covered, because the child receives the merged environment and the
+// runner's own has no reason to hold a literal somebody put in a plan file.
+export function scopeFor(secretNames: string[], declared: Record<string, string> = {}): RedactionScope
 {
     const literals: string[] = [];
     for (const name of secretNames)
     {
-        const value = process.env[name];
-        if (value !== undefined && value.trim() !== "" && value.length >= MIN_LITERAL)
+        for (const value of [declared[name], process.env[name]])
         {
-            literals.push(value);
+            if (value !== undefined && value.trim() !== "" && value.length >= MIN_LITERAL)
+            {
+                literals.push(value);
+            }
         }
     }
     return { literals };
