@@ -535,7 +535,35 @@ for (let depth = 0; depth <= 12; depth++)
 // vectors selected, above the old flat floor of 200.
 const { envProgramPositions } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
 const basename = (token) => /^(?:\.{0,2}|~)\/\S*$/.test(token) ? token.slice(token.lastIndexOf("/") + 1) : token;
-const splitFlag = (token) => token === "--split-string" || /^--split-string=/.test(token) || /^-[a-zA-Z]*S[a-zA-Z]*$/.test(token);
+// A split flag, read the way env reads a cluster rather than as a whole-token
+// shape. A regex over the whole token missed `-Snpm publish`, where the value is
+// attached and the token therefore carries a space — the module has always
+// treated that as a split, so the premise was quietly narrower than the rule.
+// The per-prefix uniformity check below is what found it.
+const splitFlag = (token) =>
+{
+    if (token === "--split-string" || /^--split-string=/.test(token))
+    {
+        return true;
+    }
+    if (!token.startsWith("-") || token.startsWith("--") || token.length < 2)
+    {
+        return false;
+    }
+    const cluster = token.slice(1);
+    for (let letter = 0; letter < cluster.length; letter++)
+    {
+        if (cluster[letter] === "S")
+        {
+            return true;
+        }
+        if (!"i0v".includes(cluster[letter]))
+        {
+            return false;
+        }
+    }
+    return false;
+};
 const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 // env's option window, read from env's documented grammar: where does it end,
@@ -678,17 +706,25 @@ for (const [name, base, forbidden, harmless] of NESTED)
     }
 }
 
-const family = [...REFUSED.map((c) => c[1]), ...BENIGN.map((c) => c[1]), ...NESTED_VECTORS];
+// Two populations, kept apart because only one of them has a cell. The
+// hand-written vectors are the cases somebody thought of; the generated ones
+// are the cross-product, and the cell assertions below have that cross-product
+// as their denominator while agreement, the invariant and the topology counts
+// have all of `family`.
+const handWritten = [...REFUSED.map((c) => c[1]), ...BENIGN.map((c) => c[1]), ...NESTED_VECTORS];
+const cellOf = (prefix, env, split) => JSON.stringify([prefix, env, split]);
+const generatedCells = new Map();
 for (const prefix of PREFIXES)
 {
     for (const env of ENVS)
     {
         for (const split of SPLITS)
         {
-            family.push([...prefix, env, ...split]);
+            generatedCells.set(cellOf(prefix, env, split), [...prefix, env, ...split]);
         }
     }
 }
+const family = [...handWritten, ...generatedCells.values()];
 
 // Neither reading may drift from the other. The oracle cannot go wrong quietly
 // because the module contradicts it, and the module cannot go wrong quietly
@@ -713,38 +749,64 @@ console.log(`agreement: ${family.length} vectors compared for every env token, $
 // The shapes this check exists for, counted apart. A count per topology is what
 // notices a class-shaped hole; a single total cannot.
 const LAUNCHERS = ["xargs", "timeout", "time", "nice", "command", "stdbuf", "nohup", "setsid", "sudo", "doas", "ionice", "chrt"];
+
+// The shapes this check exists for, in the order they are tried, with the
+// reason for the order written down rather than left in the control flow. They
+// are deliberately not disjoint: `env mytool xargs env -S` is an env inside an
+// outer env's arguments AND behind a launcher at the same time, and the code
+// used to pick one silently.
+//
+// Launcher first, because when both hold the launcher is the nearer reason the
+// env cannot be placed — it is the program whose arguments the gate refuses to
+// model, and naming the outer env instead would point at a shape that is
+// readable on its own. Outer-env before ordinary-program for the same reason in
+// the other direction: it is the more specific statement of the two.
+const TOPOLOGIES = [
+    {
+        name: "env behind a launcher",
+        why: "a launcher's own arguments are what the gate will not model, so it is the nearest reason",
+        matches: (argv, at) => at !== -1 && argv.slice(0, at).some((token) => LAUNCHERS.includes(basename(token)))
+    },
+    {
+        name: "env inside an outer env's program arguments",
+        why: "more specific than 'some ordinary program', and the shape round 11 was filed for",
+        matches: (argv, at, programs) => at !== -1 && [...programs].some((index) => index < at)
+    },
+    {
+        name: "env behind an ordinary program",
+        why: "the remainder: something is the program and the gate cannot say what its arguments mean",
+        matches: (argv, at) => at !== -1
+    },
+    {
+        name: "nested env in program position",
+        why: "no env is away from the program, and more than one is the program",
+        matches: (argv, at, programs) => at === -1 && programs.size > 1
+    },
+    {
+        name: "an ordinary program whose argument merely names env",
+        why: "an env token is there and nothing packs behind it",
+        matches: (argv, at) => at === -1 && argv.some((token) => basename(token) === "env")
+    }
+];
+const awayIndex = (argv) =>
+{
+    const programs = new Set(oraclePositions(argv));
+    return argv.findIndex((token, index) => basename(token) === "env" && !programs.has(index)
+        && argv.slice(index + 1).some(splitFlag));
+};
 const topology = (argv) =>
 {
     const programs = new Set(oraclePositions(argv));
-    const at = argv.findIndex((token, index) => basename(token) === "env" && !programs.has(index)
-        && argv.slice(index + 1).some(splitFlag));
-    if (at === -1)
-    {
-        if (programs.size > 1)
-        {
-            return "nested env in program position";
-        }
-        return argv.some((token) => basename(token) === "env") ? "an ordinary program whose argument merely names env" : "no env token";
-    }
-    if (argv.slice(0, at).some((token) => LAUNCHERS.includes(basename(token))))
-    {
-        return "env behind a launcher";
-    }
-    return [...programs].some((index) => index < at)
-        ? "env inside an outer env's program arguments"
-        : "env behind an ordinary program";
+    const at = awayIndex(argv);
+    return TOPOLOGIES.find((shape) => shape.matches(argv, at, programs))?.name ?? "no env token";
 };
-// Two numbers per topology: how many vectors the family carries of that shape,
-// and how many of them the invariant actually asserts on. The family floor stops
-// a shape from vanishing when somebody edits the generated set; requiring the
-// three "away" shapes to be covered in full stops one of their vectors from
-// dropping out of the assertion while the totals still look healthy.
+
 const FLOORS = {
     "env behind an ordinary program": { family: 30, all: true },
     "env behind a launcher": { family: 120, all: true },
     "env inside an outer env's program arguments": { family: 30, all: true },
     "nested env in program position": { family: 10, all: false },
-    "an ordinary program whose argument merely names env": { family: 50, all: false }
+    "an ordinary program whose argument merely names env": { family: 20, all: false }
 };
 const counted = {};
 let admitted = 0;
@@ -781,6 +843,90 @@ for (const [shape, floor] of Object.entries(FLOORS))
     }
 }
 console.log(`invariant: ${family.length} vectors across ${Object.keys(counted).length} topologies, ${admitted} admitted`);
+
+// How much the predicates overlap, in the log rather than in an argument. A
+// vector matching two of them is not a defect — it is why the order above has to
+// be written down — but it must be visible.
+const overlaps = new Map();
+for (const argv of family)
+{
+    const programs = new Set(oraclePositions(argv));
+    const at = awayIndex(argv);
+    const matched = TOPOLOGIES.filter((shape) => shape.matches(argv, at, programs)).length;
+    overlaps.set(matched, (overlaps.get(matched) ?? 0) + 1);
+}
+console.log(`overlap: ${[...overlaps.entries()].sort().map(([n, count]) => `${count} vectors match ${n}`).join(", ")}`);
+
+// The vector the reviewer named, classified where the precedence says.
+const OVERLAPPING = ["env", "mytool", "xargs", "env", "-S", "npm publish"];
+if (topology(OVERLAPPING) !== "env behind a launcher")
+{
+    bad++;
+    console.error(`${JSON.stringify(OVERLAPPING)} is classified as "${topology(OVERLAPPING)}" — the precedence says the launcher wins`);
+}
+
+// Coverage per generator cell, read from the generator rather than from a
+// number. A floor counts a bucket's volume, and a bucket stays full while a
+// whole subshape leaves it: dropping every `./tools/env` crossed with the
+// attached `-iS` took 17 vectors and that entire path-and-cluster shape out,
+// and every floor stayed green. So each cell of PREFIXES x ENVS x SPLITS is
+// demanded by name.
+//
+// This loop walks the three arrays again rather than reusing the map built
+// above, which is the whole point: a filter added to the generation is invisible
+// to a check that shares its iteration, and visible to one that does not. Adding
+// an entry to any dimension grows what is demanded here with no number to edit.
+let cells = 0;
+let coveredCells = 0;
+const coverageByPrefix = new Map();
+for (const prefix of PREFIXES)
+{
+    for (const env of ENVS)
+    {
+        for (const split of SPLITS)
+        {
+            cells++;
+            const argv = generatedCells.get(cellOf(prefix, env, split));
+            if (argv === undefined)
+            {
+                bad++;
+                console.error(`the generator no longer produces the cell ${cellOf(prefix, env, split)} — a subshape left the family without any floor noticing`);
+                continue;
+            }
+            // Which cells the invariant is meant to assert on is the oracle's
+            // answer, not a list: a cell whose env is in program position is
+            // present and legitimately uncovered.
+            const covered = awayFromProgram(argv);
+            const shape = JSON.stringify(prefix);
+            const seen = coverageByPrefix.get(shape) ?? new Set();
+            seen.add(covered);
+            coverageByPrefix.set(shape, seen);
+            if (!covered)
+            {
+                continue;
+            }
+            coveredCells++;
+            if (forbiddenCommand(argv) === null)
+            {
+                bad++;
+                console.error(`the cell ${cellOf(prefix, env, split)} packs an env away from program position and was admitted`);
+            }
+        }
+    }
+}
+// Whether an env is in program position is decided by the shape in front of it,
+// so it cannot depend on which spelling of env or of the split flag the cell
+// happens to use. A cell that disagrees with its prefix's siblings means one of
+// the three dimensions stopped meaning what it means.
+for (const [shape, answers] of coverageByPrefix)
+{
+    if (answers.size !== 1)
+    {
+        bad++;
+        console.error(`the cells under prefix ${shape} disagree about coverage — an env or split spelling has stopped behaving like the others`);
+    }
+}
+console.log(`cells: ${cells} demanded from ${PREFIXES.length}x${ENVS.length}x${SPLITS.length}, ${coveredCells} covered, ${cells - coveredCells} present and in program position`);
 
 // A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();
