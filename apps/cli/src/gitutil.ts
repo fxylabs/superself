@@ -128,8 +128,9 @@ export function bareRevisionRefusal(verb: string): RevisionRefusal
 // name, and it is recorded lowercased so one object has one spelling. Every
 // entry point that takes a typed or declared commit ref goes through this —
 // the report verb through `classifyEvidence` above, the attempt gate with the
-// refs an envelope declared, `work met --evidence` and `milestone met
-// --evidence` (#132). A second, laxer reading of the same question is what let
+// refs an envelope declared, `work met --evidence`, `milestone met
+// --evidence` (#132), and the evidence-bundle manifest's commit pins through
+// `requireCommit` (#145). A second, laxer reading of the same question is what let
 // prose reach `refs.commits` and be reported later as a rewritten history.
 export function requireRevision(value: string, refusal: RevisionRefusal = typedEvidence): string
 {
