@@ -16,8 +16,8 @@ import {
     branchLabel,
     BranchUnshipped,
     branchTotals,
-    MachineLocalVerb,
     ProjectModel,
+    RecoveryTarget,
     ScopableVerb,
     WorkState
 } from "./model.js";
@@ -285,13 +285,13 @@ export function shellArgument(value: string): string
 // exist. Both context renders read this, which is why it lives here: `views.ts`
 // already imports this module, so one direction stays.
 //
-// Which verbs those are is `ScopableVerb` and `MachineLocalVerb` in `model.ts`,
+// Which verbs those are is `ScopableVerb` in `model.ts`, and the targets that
+// carry an id are `RecoveryTarget`;
 // and nothing here restates it. A list of patterns beside the types was a
 // second answer to the same question, and the two disagreed: the type admits
 // `self work show ` and `self work show id with space` where the pattern
 // `/^self work show \S+$/` did not, so those left `scoped()` branded and
 // unscoped (#165 review round 7). The type is the only authority now.
-const MACHINE_LOCAL = "self attempt show ";
 
 // A recovery pointer a section prints, rather than any string that happens to
 // look like one. The brand is what a section builder asks for, so a bare
@@ -338,18 +338,50 @@ export function withCheckout(command: UnscopedVerb, where: Checkout): Pointer
     return `${command}${where}` as Pointer;
 }
 
-// The command's type is what makes the mint safe. Given a `ScopableVerb` this
-// appends the project; given a `MachineLocalVerb` it returns the command as it
-// stands, which is correct because the spool is one store wherever it is read.
-// Nothing else has a road in — a `string` here would let a verb with no scope
-// form leave as a branded pointer that names no project at all.
-export function scoped(command: ScopableVerb | MachineLocalVerb, project: string): Pointer
+// The command's type is what makes the mint safe: `ScopableVerb` is a finite
+// list of exact commands, so appending the project always produces one the CLI
+// parses. Anything carrying an id goes through `pointerTo` instead, because a
+// template member would admit a suffix the append turns into nonsense.
+export function scoped(command: ScopableVerb, project: string): Pointer
 {
-    if (command.includes("--project ") || command.startsWith(MACHINE_LOCAL))
+    if (command.includes("--project "))
     {
         return command as Pointer;
     }
     return `${command} --project ${project}` as Pointer;
+}
+
+// The pointer for a target that carries an id. The caller names what it is
+// pointing at and this writes the command, so there is no suffix for a caller
+// to malform and no place for an empty id to become a verb with no positional.
+export function pointerTo(target: RecoveryTarget, project: string): Pointer
+{
+    if (target.verb === "attempt-show")
+    {
+        return `self attempt show ${target.id}` as Pointer;
+    }
+    if (target.verb === "work-show")
+    {
+        // An id that is empty or carries a space renders a command the argument
+        // parser refuses — `self work show` with no positional, or with two. A
+        // type cannot say "one token", so the pointer falls back to the list a
+        // reader can act on rather than printing something that fails when they
+        // paste it (#165 review round 8).
+        return oneToken(target.id)
+            ? `self work show ${target.id} --project ${project}` as Pointer
+            : scoped("self work", project);
+    }
+    const named = target.id === undefined || !oneToken(target.id) ? "" : ` ${target.id}`;
+    const kind = target.type === undefined || !oneToken(target.type) ? "" : ` --type ${target.type}`;
+    return `self search${named}${kind} --project ${project}` as Pointer;
+}
+
+// One shell word and not empty, which is what every id these targets carry
+// already is. What it rules out is the shape a type cannot: a substitution that
+// arrived empty, or one carrying a space that would read as a second argument.
+function oneToken(value: string): boolean
+{
+    return value.length > 0 && !/\s/.test(value);
 }
 
 // The workspace render's own pointers. `self status` there IS the command being

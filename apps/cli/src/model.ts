@@ -136,13 +136,20 @@ export type ScopableVerb =
     | "self status"
     | "self context"
     | "self log"
-    | `self work show ${string}`
-    | `self search ${string}`;
+    | "self search --type decision"
+    | "self search --type convention";
 
-// Read verbs that answer about this machine rather than about a project: the
-// attempt spool is one store wherever it is read from, so these are correct
-// bare, and promising them a `--project` would be a flag that does not exist.
-export type MachineLocalVerb = `self attempt show ${string}`;
+// What a render points at, when what it points at carries an id. A template
+// member of the union above would admit any suffix, and `scoped()` appends the
+// project to whatever it is handed — so `self search needle --type` came back
+// as `self search needle --type --project 'slug'`, which the argument parser
+// rejects, and an empty id produced a `self work show` with no positional
+// (#165 review round 8). Naming the target instead of formatting the command
+// leaves the caller nothing to malform: `pretty.ts` `pointerTo` writes it.
+export type RecoveryTarget =
+    | { verb: "work-show"; id: string }
+    | { verb: "attempt-show"; id: string }
+    | { verb: "search"; id?: string; type?: string };
 
 // One thing that waits on the human. `full` is the sentence shown while space
 // allows; when the context budget forces the short form, `identity` still
@@ -151,7 +158,7 @@ export interface WaitingItem
 {
     full: string;
     identity: string;
-    recovery: ScopableVerb | MachineLocalVerb;
+    recovery: ScopableVerb | RecoveryTarget;
 }
 
 // What confirming a proposal would do, which is the only ranking a reader can
@@ -656,7 +663,7 @@ function deriveSignals(model: ProjectModel, now: Date): void
             noteWaiting(model, {
                 full: `${work.id} is waiting on human approval: ${work.completion.approvalRequired?.why ?? work.outcome}`,
                 identity: `approval wait on ${work.id}`,
-                recovery: `self work show ${work.id}`
+                recovery: { verb: "work-show", id: work.id }
             });
         }
         if (work.status === "blocked" && work.blockedOn === "decision")
@@ -664,7 +671,7 @@ function deriveSignals(model: ProjectModel, now: Date): void
             noteWaiting(model, {
                 full: `${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`,
                 identity: `blocked work ${work.id}`,
-                recovery: `self work show ${work.id}`
+                recovery: { verb: "work-show", id: work.id }
             });
         }
         if (work.status === "active" && ageDays(work.lastEventTs, now) > STALL_DAYS)
@@ -698,7 +705,7 @@ function deriveAttemptSignals(model: ProjectModel, work: WorkState, now: Date): 
         noteWaiting(model, {
             full: `${work.id} attempt ${latest.id} is waiting on a capability grant: ${latest.detail ?? "see `self attempt show`"}`,
             identity: `blocked attempt ${latest.id} on ${work.id}`,
-            recovery: `self attempt show ${latest.id}`
+            recovery: { verb: "attempt-show", id: latest.id }
         });
     }
     if (latest.state === "failed" && ageDays(latest.ts, now) <= ATTEMPT_FAILURE_DAYS)

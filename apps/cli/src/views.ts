@@ -27,6 +27,7 @@ import {
     renderWorkspace,
     scoped,
     shellArgument,
+    pointerTo,
     UnscopedVerb,
     workspacePointer
 } from "./pretty.js";
@@ -147,16 +148,16 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
-        lines.push(detail(model.description, options.detailLimit, scoped(`self search --project ${project}`, project)), "");
+        lines.push(detail(model.description, options.detailLimit, pointerTo({ verb: "search" }, project)), "");
     }
-    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, scoped(`self search --project ${project}`, project))}`, "");
+    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, pointerTo({ verb: "search" }, project))}`, "");
     pushList(lines, "Objectives", options.compactOptional
         ? countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project))
         : objectiveLines(model));
     pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions,
         scoped("self search --type decision", project)));
     pushList(lines, "Conventions", model.conventions.map((convention) =>
-        `- ${detail(convention.text, options.detailLimit, scoped(`self search ${convention.id} --type convention --project ${project}`, project))}`));
+        `- ${detail(convention.text, options.detailLimit, pointerTo({ verb: "search", id: convention.id, type: "convention" }, project))}`));
     pushList(lines, "Integration train", options.compactOptional
         ? countedOmission(openChangeSets(model.integration).length,
             "open change set", "self integration plan", fromCheckout(project))
@@ -165,12 +166,12 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
     pushList(lines, "Waiting on you", [
         ...options.compactOptional ? attentionOmission(model) : [],
-        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, scoped(item.recovery, project))}`)
+        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, itemPointer(item.recovery, project))}`)
     ]);
     const next = model.works.filter((work) => work.status === "next");
     pushList(lines, "Next", options.compactOptional
         ? countedOmission(next.length, "next work item", scoped("self work", project))
-        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, scoped(`self work show ${work.id}`, project))}`));
+        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))}`));
     pushList(lines, "Health", options.compactOptional
         ? countedOmission(model.health.length, "health signal", scoped("self status", project))
         : model.health.map((health) => `- ${detail(health, options.detailLimit, scoped("self status", project))}`));
@@ -219,11 +220,11 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
         .sort((left, right) => left.id.localeCompare(right.id));
     pushList(lines, "Work in progress", progressing.map((work) =>
-        `- ${work.status} work ${work.id}; run \`${scoped(`self work show ${work.id}`, project)}\``));
+        `- ${work.status} work ${work.id}; run \`${pointerTo({ verb: "work-show", id: work.id }, project)}\``));
     pushList(lines, "Unshipped by branch", unshippedCountLines(model));
     pushList(lines, "Waiting on you", [
         ...attentionOmission(model),
-        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${scoped(item.recovery, project)}\``)
+        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${itemPointer(item.recovery, project)}\``)
     ]);
     pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item",
         scoped("self work", project)));
@@ -251,6 +252,14 @@ function attentionOmission(model: ProjectModel): string[]
 {
     const recovery = scoped("self status", shellArgument(model.slug));
     return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`${recovery}\``];
+}
+
+// A waiting item's recovery pointer. The item names an exact command or names
+// what it is pointing at; either way the pointer is minted here rather than
+// formatted where the item was built.
+function itemPointer(recovery: WaitingItem["recovery"], project: string): Pointer
+{
+    return typeof recovery === "string" ? scoped(recovery, project) : pointerTo(recovery, project);
 }
 
 // One omission row for a section the budget treats as optional: the count and
@@ -392,21 +401,21 @@ function inProgressLines(model: ProjectModel, reportLimit: number, detailLimit: 
     const active = model.works.filter((w) => w.status === "active").map((work) =>
     {
         const latest = [...work.reports].sort(compareDated).at(-1);
-        const outcome = detail(work.outcome, detailLimit, scoped(`self work show ${work.id}`, project));
+        const outcome = detail(work.outcome, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project));
         const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit, project);
-        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, scoped(`self work show ${work.id}`, project))})`;
+        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))})`;
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
         return `- ${work.id} ${outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
     });
     const blocked = model.works
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
-        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, scoped(`self work show ${work.id}`, project))} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, scoped(`self work show ${work.id}`, project))}`}`);
+        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))}`}`);
     return [...active, ...blocked];
 }
 
 function reportExcerpt(text: string, work: string, limit: number, project: string): string
 {
-    const recovery = `\`${scoped(`self work show ${work}`, project)}\``;
+    const recovery = `\`${pointerTo({ verb: "work-show", id: work }, project)}\``;
     if (limit === 0)
     {
         return ` — latest report: ${recovery}`;
@@ -447,7 +456,7 @@ function proposalItems(model: ProjectModel): WaitingItem[]
         full: `proposal [${attentionLabel(row)}]: ${row.text}`
             + ` (confirm with \`self decide confirm ${row.decision}\`)`,
         identity: `proposal ${row.decision}`,
-        recovery: `self search ${row.decision} --type decision --project ${project}`
+        recovery: { verb: "search", id: row.decision, type: "decision" }
     }));
 }
 
@@ -541,7 +550,7 @@ function workProposalItems(model: ProjectModel): WaitingItem[]
             `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work accept ${proposal.id.slice(0, 8)}\``
         ].join("\n"),
         identity: `work proposal ${proposal.id.slice(0, 8)}`,
-        recovery: `self search ${proposal.id.slice(0, 8)} --project ${project}`
+        recovery: { verb: "search", id: proposal.id.slice(0, 8) }
     }));
 }
 
@@ -793,7 +802,7 @@ function plainWorkLine(work: WorkState, toward: string, project: string): string
 {
     const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
     const reports = work.reports.length > 0
-        ? `  — ${work.reports.length} report(s), see \`${scoped(`self work show ${work.id}`, project)}\`` : "";
+        ? `  — ${work.reports.length} report(s), see \`${pointerTo({ verb: "work-show", id: work.id }, project)}\`` : "";
     return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}`
         + `${gatedNote(work)}${reports}`;
 }
