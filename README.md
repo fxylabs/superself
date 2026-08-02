@@ -1,45 +1,65 @@
 # Superself
 
-**Your agents forget. Your projects shouldn't.**
+**The open Company State Runtime.**
 
-Superself is version control for your project's state. Git versions your code;
-Superself versions the project itself — goals, decisions, work, and outputs —
-so you pick up where you left off across sessions, models, and tools instead
-of re-explaining your project every session.
+Models have context. Agents have runtimes. Companies need state.
+
+Company State is the durable, versioned truth of what an organization intends,
+has decided, is doing, may authorize, and can prove. A Company State Runtime
+turns that state into context, ready work, policy decisions, supervised
+execution, verified completion, and the next company state.
+
+Superself is building the open-source Company State Runtime. It gives a company
+durable state beyond any one context window and governed execution beyond any
+one person's attention span. People set direction, make consequential
+decisions, and remain accountable. Agents carry most planning, routine
+execution, recovery, verification, and reporting.
 
 > [!IMPORTANT]
-> Superself is an early alpha. `npm install -g superself` installs the `self`
-> CLI; expect breaking changes while the event schema and verbs settle.
+> Superself is an early alpha. The local `self` CLI and the foundations
+> described under [Where the project is today](#where-the-project-is-today)
+> work now. The complete Company State Runtime loop is the direction of the
+> project, not a capability this release claims to have finished. Expect
+> breaking changes while the event schema and verbs settle.
 
-## Why Superself
+## Why this exists
 
-AI agents start every session from zero. The project's goals, decisions,
-progress, and rejected directions live nowhere — scattered across chat
-histories, terminals, hand-maintained markdown files, and provider-specific
-sessions that each tool forgets or silos. Hand-maintained fixes (CLAUDE.md
-files, memory banks, handoff notes) rot, contradict themselves, and depend on
-discipline that fails under fatigue.
+Adding more agents does not by itself create a company that can operate at
+greater scale. Two ceilings appear first.
 
-Superself splits a project into **state, work, and outputs**, and keeps them
-versioned above any single session:
+### 1. The continuity ceiling
 
-- **State** — goals, active decisions, progress, and open questions, kept
-  small and current, with append-only history.
-- **Work** — each unit has an identity, state, current report, and revision
-  history.
-- **Outputs** — artifacts remain connected to the work that produced them.
-- **Derived context** — what an agent receives each session is generated from
-  state, not hand-maintained.
-- **Local-first ownership** keeps the primary workspace on your machine.
+Long-running projects outlive every chat, context window, model, and human
+memory. Goals, decisions, rejected directions, progress, and evidence become
+scattered across sessions and tools. Each new agent spends time reconstructing
+the project, misses constraints, or repeats a decision that was already made.
 
-Superself is not another model provider, chat client, agent runtime, or memory
-plugin. It is the project-state layer above the AI tools you already use, so
-work can be directed, inspected, and finished across all of them.
+Hand-maintained instruction files and handoff notes help briefly, then grow
+stale or too large to use. A project needs canonical state that survives its
+sessions, plus a way to compile only the relevant part of that state for the
+next action.
+
+### 2. The supervision ceiling
+
+Agent execution does not scale when a person must decompose every request,
+choose every next task, watch every process, approve every step, recover every
+failure, and verify every completion. The human becomes the scheduler,
+message bus, and retry loop for the system.
+
+The goal is not to remove human control. It is to spend human attention where
+judgment and accountability matter, while the system handles routine planning,
+execution, coordination, recovery, verification, and reporting inside explicit
+boundaries.
+
+These ceilings reinforce each other: execution cannot be delegated safely
+without durable context, and durable context has limited value if a person
+still has to drive every action.
 
 ## What works today
 
-The first vertical slice is the `self` CLI — a workspace-level state store that
-sits next to git:
+The command-level foundation below is the detailed inventory; [Where the
+project is today](#where-the-project-is-today) summarizes the same foundation
+as operating outcomes and separates it from what is not complete.
 
 - `self init` turns a directory into a workspace with its own state store and
   git history, and records it as the one workspace this machine uses —
@@ -103,40 +123,264 @@ sits next to git:
   (`self lang` changes it later) and `self theme` picks the accent, while the
   recorded state keeps whatever language your workspace conventions choose.
 
-The CLI is the first application shell. A read-only viewer is a later, optional
-layer — never a required surface.
+## The core operating loop
+
+Superself is designed to turn one human direction into a durable, inspectable
+execution loop:
+
+```text
+human intent
+    ↓
+durable directive, goal, and constraints
+    ↓
+scoped context and executable work
+    ↓
+policy, priority, dependency, capacity, and approval gates
+    ↓
+agent and MCP capability execution
+    ↓
+recovery, verification, and evidence
+    ↓
+canonical project state and an exception-focused report
+    ↓
+only consequential judgment returns to the human
+```
+
+Transcript text is not canonical state, an agent saying “done” is not proof,
+and autonomy is not permission to act without boundaries.
+
+## From real problems to core capabilities
+
+| Operating problem | Core capability | Why it matters |
+| --- | --- | --- |
+| A session ends and the next agent starts from zero | Append-only project and work events, derived state, and session context | Work can continue across sessions, models, and tools |
+| State grows until useful context is buried | Scope-specific, bounded context with retrieval pointers | Mature projects can resume without injecting their full history |
+| Decisions and rejected directions are repeated | A decision ledger with rationale, confirmation, revision, and history | The organization accumulates judgment instead of re-deriving it |
+| A handoff loses the outcome, current truth, or next action | Durable work units with requirements, reports, artifacts, and evidence | Another agent can take over without a private transcript |
+| Activity is disconnected from company goals | Goal, objective, milestone, work, requirement, and evidence links | Progress is judged by outcomes rather than motion |
+| A person must translate every direction into tasks | Versioned directives and work specifications | People state the outcome; the system can compile the execution structure |
+| A person must choose and launch every next action | Dependency-, policy-, priority-, budget-, and capacity-aware scheduling | Ready work can advance without another foreground conversation |
+| Agent processes fail, disappear, or leave partial output | Preflight, durable attempt state, heartbeats, retry, recovery, and atomic artifacts | Execution can be supervised without a person watching the terminal |
+| Every action is either blocked or over-permissioned | Capability scopes, versioned risk policy, policy authorization, and explicit human gates | Routine work proceeds while consequential actions still require judgment |
+| Completion reports cannot be trusted | Result envelopes, hashes, declared checks, and one completion gate | “Done” means the promised output exists and has evidence |
+| Parallel agents collide on shared resources | Dependencies, leases, fences, and serialized integration gates | Work stays parallel except where correctness requires serialization |
+| The human cannot tell what is actually running | Attempt telemetry, live activity, health, and digests | Attention goes to exceptions, not continuous supervision |
+| Every company capability is hard-coded into the core | A trusted extension and MCP capability boundary | Companies can compose their own tools without weakening the operating loop |
+
+The table includes both shipped foundations and direction still being built.
+The distinction is explicit below.
+
+Read [Company State and context](docs/concepts/company-state-and-context.md)
+for the exact relationship between append-only event history, folded current
+state, generated views, agent context, recovery, and machine-local runtime
+data.
+
+## Human accountability
+
+Superself's autonomy model is an allocation of responsibility.
+
+Humans own:
+
+- goals, priorities, values, and organizational constraints;
+- irreversible, external, high-risk, or ambiguous decisions;
+- approval boundaries and the policies agents operate within;
+- accountability for what the company ultimately does.
+
+The engine should own:
+
+- translating approved intent into bounded work;
+- routine scheduling, execution, coordination, retry, and recovery;
+- checking declared outputs, tests, evidence, and completion conditions;
+- maintaining canonical state and reporting material changes;
+- escalating when policy says human judgment is required.
+
+## Where the project is today
+
+Superself currently ships an early local-first vertical slice as the `self`
+CLI. It requires no Superself account and keeps the primary workspace on your
+machine.
+
+### Working foundations
+
+- **Durable state.** Goals, decisions, conventions, objectives, milestones,
+  work, requirements, reports, and artifacts are typed events in an
+  append-only log. Every event immediately refolds canonical views and lands
+  as one commit in the workspace's own git history.
+- **Cross-session pickup.** `self context`, `self work show`, and `self search`
+  give agents a generated view of current state and a pull path into full
+  history. Managed blocks in `AGENTS.md` and `CLAUDE.md` teach terminal agents
+  to load and maintain that state.
+- **Outcome and evidence links.** Work can contribute to objectives and
+  milestones, declare requirements, attach reports and immutable artifacts,
+  and refuse completion while required coverage is missing.
+- **Supervised attempts.** Work specifications can dispatch provider-neutral
+  attempts through capability preflight, durable local spools, lifecycle
+  records, directives, cancellation, retry, recovery, and result validation.
+- **Governed integration.** Review receipts, leases, fences, exact-head CI,
+  human approvals, and promotion records form a serialized gate for changes
+  reaching `main`. See [the integration contract](docs/integration-train.md).
+- **Local supervision.** A daemon can supervise attempts for the one project in
+  which it started, enforce an overnight policy, maintain provider circuit
+  state, and produce a digest of what happened while nobody was watching.
+- **Inspectable views and sync.** `self view` renders read-only workspace,
+  project, work, decision, event, and artifact pages. Explicit git-backed sync
+  can carry the state store between machines.
+
+### Not complete yet
+
+- Project context is not yet reliably bounded and selected by workspace,
+  project, work, attempt, domain, risk, and directive scope.
+- Natural-language intent does not yet compile through one stable public
+  contract into objectives, work graphs, policies, and attempts.
+- One local supervisor does not yet schedule across projects, and scheduling
+  does not yet close the full loop across priorities, dependencies, policy
+  authorization, budgets, capacity, failures, completion, and newly freed
+  resources.
+- The extension and MCP capability registry is still a design direction, not a
+  general shipped plugin runtime.
+- The viewer is read-only today. It is not yet the conversational surface for
+  directing, approving, interrupting, and observing company execution.
+- The complete path — one human outcome, autonomous planning and execution,
+  recovery from failure, evidence-backed completion, and escalation only for
+  consequential judgment — has not yet been proven as one stable product loop.
+
+The command surface is broader than the finished product loop because the
+project is building and dogfooding its reliability primitives from the bottom
+up.
+
+## Roadmap
+
+The roadmap is organized by operating outcome, not by release date. It states
+direction rather than a compatibility or delivery promise. The detailed
+current constraints, near-horizon capabilities, exit evidence, and issue
+mapping live in the [living roadmap](docs/roadmap.md).
+
+### Phase 1 — Durable project state
+
+Make goals, decisions, work, reports, artifacts, history, and evidence survive
+any session or tool. Keep state local-first, inspectable, and reconstructible.
+
+**Status:** the first usable CLI foundation is shipped and actively dogfooded.
+
+### Phase 2 — Bounded context at every scope
+
+Compile stable workspace, project, work, and attempt contexts. Select governing
+decisions, conventions, dependencies, and risk rules for the current action;
+keep long reports and history behind explicit recovery pointers.
+
+**Exit outcome:** a fresh agent can resume a mature project without a manual
+rebrief, an oversized context dump, or a contradiction of governing state.
+
+### Phase 3 — Governed autonomous execution
+
+Compile bounded intent into executable work, schedule ready work across
+projects and available resources, supervise attempts, recover failures, verify
+outputs, derive routine authorization from versioned policy, and complete work
+whose evidence and authority gates are satisfied. Escalate only when policy
+requires human judgment.
+
+**Exit outcome:** one bounded human direction reaches evidence-backed
+completion without continuous human scheduling or terminal supervision.
+
+### Phase 4 — Composable company capabilities
+
+Let trusted local or remote extensions contribute namespaced operations through
+one permissioned capability contract, including MCP adapters. Preserve process
+isolation, audit, compatibility, revocation, and approval boundaries.
+
+**Exit outcome:** a company can add CRM, research, publishing, operations, or
+other domain capabilities without hard-coding them into Superself or creating a
+path around its trust model.
+
+### Phase 5 — The Company State operating surface
+
+Turn the viewer into the primary conversational surface for directives,
+questions, approvals, interruption, reprioritization, live activity, and
+reports. A persistent orchestrator uses the same canonical state and governed
+runtime underneath it.
+
+**Exit outcome:** a person can direct and understand a continuously operating
+agent organization from one surface while remaining responsible for the
+decisions that matter.
+
+## Why an open core
+
+The state, policy, evidence, and execution boundary is where a company decides
+what agents may know and do. That layer must be inspectable, portable, and able
+to run locally without metering the number of agents, attempts, or connected
+capabilities.
+
+An open core also gives capability builders one stable operating contract
+instead of requiring every tool to invent its own memory, approval, recovery,
+and evidence system.
 
 ## Quick start
 
-Requires Node.js 22.12 or newer and pnpm 10. The repository pins Node 22.20 for
-contributors using nvm.
+Requires Node.js 22.12 or newer.
+
+```bash
+npm install -g superself
+```
+
+Initialize the directory that should hold the machine's workspace state, then
+register an existing project:
+
+```bash
+mkdir -p ~/self-workspace
+cd ~/self-workspace
+self init
+
+cd ~/path/to/my-project
+self project add
+self goal set "Ship the first trustworthy release"
+self decide "Keep customer data local" --why "This project handles private data"
+self work add "The payment flow passes its end-to-end proof"
+self context
+```
+
+`self context` is what an agent reads at session start. `self work show <id>`
+recovers the complete history of one unit, and `self search <query>` pulls older
+or cross-project state on demand.
+
+Follow the [getting started guide](docs/guides/getting-started.md) for the full
+setup path, including the separate state repository, managed agent blocks,
+private Git synchronization, and restoration on another machine.
+Read [Company State and context](docs/concepts/company-state-and-context.md) to
+understand how event history, folded state, generated views, agent context, and
+machine-local runtime data fit together.
+Use the [CLI and record reference](docs/reference/cli.md) when you need the
+current command families, record shapes, or the implementation-owned help
+boundary.
+If you are customizing the rendered viewer, use the
+[viewer theming guide](docs/viewer-theming.md) for the supported token and
+theme boundary.
+Follow the [long-running project guide](docs/guides/running-a-long-term-project.md)
+to carry a real outcome across sessions and agents through milestones,
+requirements, reports, and evidence-backed completion.
+Then use the [governed agent execution guide](docs/guides/governing-agent-execution.md)
+to bind one agent run to explicit capabilities, artifacts, validation, and
+human gates.
+
+Run `self --help` for the full command surface. The main families are:
+
+- project state: `goal`, `decide`, `convention`, `objective`, `milestone`;
+- work and evidence: `work`, `report`, `artifact`;
+- execution: `spec`, `attempt`, `daemon`, `overnight`, `digest`;
+- governed delivery: `integration`, `review`;
+- context and inspection: `context`, `status`, `search`, `view`;
+- workspace ownership: `project`, `workspace`, `remote`, `sync`, `clone`.
+
+## Develop and verify a checkout
+
+The repository pins Node 22.20 for contributors using nvm and uses pnpm 10.
 
 ```bash
 git clone https://github.com/fxylabs/superself.git
 cd superself
 nvm use
 pnpm install
-pnpm build
-alias self="node $PWD/apps/cli/bin/self.mjs"
-```
-
-Then, in the directory that should hold your state:
-
-```bash
-self init                      # once per machine; asks about agents, then every
-                               # later command finds the workspace on its own
-cd ~/anywhere/my-project && self project add
-self goal set "Ship the first release"
-self work add "Payment flow passes e2e"
-self context                   # what an agent should read at session start
-```
-
-## Verify a checkout
-
-```bash
 pnpm typecheck
-pnpm proof                     # end-to-end proof: lifecycle, two-machine sync,
-                               # and the #43 -> #44 -> #52 integration train
+pnpm proof
 pnpm build
 ```
 
@@ -144,45 +388,34 @@ pnpm build
 
 ```text
 apps/
-└─ cli/                   the `self` CLI: event log, fold, context, search
+└─ cli/                   the `self` CLI: state, context, work, execution, and gates
 
 docs/
-├─ integration-train.md   how change sets, receipts, leases, and merges gate
+├─ concepts/              the state, context, authority, and evidence model
+├─ guides/                task-oriented guides for using the current CLI
+├─ examples/              end-to-end governed operating scenarios
+├─ reference/             current CLI command and record reference
+├─ viewer-theming.md      supported viewer tokens and accent themes
+├─ integration-train.md   the change-set, receipt, lease, and merge contract
 ├─ maintainers/           branch, version, and release policy
+├─ roadmap.md             current capability, next outcomes, and exit evidence
 └─ strategy/              problem definition and positioning decisions
 
 ARCHITECTURE.md           layering, subsystem boundaries, single gates, namespaces
 CONTRIBUTING.md           process, code conventions, and the envelope contract
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the structure rules any change to
-`apps/cli/src` is judged by, and [the problem
-definition](docs/strategy/problem-definition.md) for the state architecture the
-CLI implements.
-
-## Project status
-
-The near-term sequence is:
-
-1. ship the `self` CLI vertical slice: workspace store, event verbs, fold,
-   derived context;
-2. harvest commit-message trailers into events and render the managed context
-   block for agent instruction files;
-3. add artifact commands and evidence-reachability checks;
-4. add health derivation and cross-project workspace views;
-5. add backup, restore, and migration guarantees;
-6. publish the CLI as the `superself` package;
-7. evaluate an optional read-only viewer after the CLI stabilizes.
+Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing code and
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## Community and contributions
 
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
-  request, and [ARCHITECTURE.md](ARCHITECTURE.md) before writing code.
 - Use the structured GitHub issue forms for reproducible bugs, concrete feature
   proposals, and maintenance work.
 - Do not open a pull request until a maintainer has accepted the related issue
   and assigned it to you.
-- Sign off every commit to certify the [Developer Certificate of Origin](DCO).
+- Sign off every commit to certify the
+  [Developer Certificate of Origin](https://developercertificate.org/).
 - Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 - Read the [release policy](docs/maintainers/releases.md) before proposing
   version or tag changes.
