@@ -14,14 +14,21 @@ ESC="$(printf '\033')"
 # pty_run COLUMNS COMMAND — COMMAND under a real pseudo-terminal of the stated
 # width, with its output captured. BSD and util-linux `script` take their
 # command differently.
+#
+# TERM is pinned because the render reads it: some hosts hand `script`'s child
+# TERM=dumb, and `dumbTerminal` answers a dumb terminal with the plain render.
+# That is the correct answer to a different question than the one the width
+# assertions below ask, and a suite that did not pin it failed on exactly those
+# hosts while passing everywhere else. The dumb terminal keeps its own
+# assertion, which sets TERM itself.
 pty_run()
 {
     local columns="$1" command="$2"
     if script --version > /dev/null 2>&1
     then
-        script -qec "stty columns $columns > /dev/null 2>&1; $command" /dev/null < /dev/null 2>&1 | tr -d '\r\b' | sed '1s/^\^D//'
+        script -qec "stty columns $columns > /dev/null 2>&1; TERM=${PROOF_TERM:-xterm-256color} $command" /dev/null < /dev/null 2>&1 | tr -d '\r\b' | sed '1s/^\^D//'
     else
-        script -q /dev/null sh -c "stty columns $columns > /dev/null 2>&1; $command" < /dev/null 2>&1 | tr -d '\r\b' | sed '1s/^\^D//'
+        script -q /dev/null sh -c "stty columns $columns > /dev/null 2>&1; TERM=${PROOF_TERM:-xterm-256color} $command" < /dev/null 2>&1 | tr -d '\r\b' | sed '1s/^\^D//'
     fi
 }
 
@@ -96,6 +103,44 @@ SCOPED_CHARS="$(SELF context --project outside | wc -m | tr -d ' ')"
 [ "$SCOPED_CHARS" -le 12000 ] || fail "context --project ignored the 12,000-character cap ($SCOPED_CHARS)"
 SELF context --project outside | grep -q "omitted; run" || fail "the capped cross-project context named no recovery command"
 
+# ── a scoped read's recovery pointers name the project they pull from ──────
+# Context is read far from where it was produced. A pointer that named no
+# project answered for wherever it was pasted, so `self context --project
+# outside` handed back commands that read demo (#165 review round 1).
+#
+# bare_pointers OUTPUT — every backticked pointer naming a read verb that has a
+# scope form but carries no --project. Any hit is the defect.
+bare_pointers()
+{
+    printf '%s\n' "$1" | grep -oE '`self (work show [^ `]+|work|status|objective|milestone|context|log)`' || true
+    printf '%s\n' "$1" | grep -oE '`self search [^`]*`' | grep -v -- '--project' || true
+}
+
+SCOPED_CTX="$(SELF context --project outside)"
+echo "$SCOPED_CTX" | grep -q -- "--project 'outside'" || fail "a scoped context named no project on any recovery pointer"
+echo "$SCOPED_CTX" | grep -q -- "--project 'demo'" && fail "a scoped context pointed at the directory's own project"
+BARE="$(bare_pointers "$SCOPED_CTX")"
+[ -z "$BARE" ] || fail "a scoped context carried an unscoped read pointer: $BARE"
+# the default render is scoped too, so its output stays portable once piped.
+# It has to be pushed past the budget first: an uncompacted context prints no
+# recovery pointer at all, so asserting on one there would prove nothing.
+for index in 1 2 3 4 5 6
+do
+    SELF decide "demo budget decision $index $FILL" > /dev/null
+done
+OWN_CTX="$(SELF context)"
+echo "$OWN_CTX" | grep -q -- "--project 'demo'" || fail "the default context named no project on any recovery pointer"
+BARE="$(bare_pointers "$OWN_CTX")"
+[ -z "$BARE" ] || fail "the default context carried an unscoped read pointer: $BARE"
+# and the sibling read surfaces that print pointers hold the same rule
+for ARGV in "status --project outside" "work --project outside" "status" "work"
+do
+    BARE="$(bare_pointers "$(SELF $ARGV)")"
+    [ -z "$BARE" ] || fail "self $ARGV carried an unscoped read pointer: $BARE"
+done
+# a command with no scope form is not given one: the row says where to stand
+echo "$SCOPED_CTX" | grep -q "self integration plan --project" && fail "a pointer promised --project on a verb that has none"
+
 # ── a read of another project changes nothing in it ───────────────────────
 BEFORE="$(snapshot)"
 OUT_LOG_BEFORE="$(cat "$STORE/projects/outside/log.jsonl")"
@@ -132,7 +177,8 @@ WS_LOG="$(SELF log --workspace -n 60)"
 echo "$WS_LOG" | grep -q "^demo  .*objective.created" || fail "log --workspace did not lead a demo line with its project"
 echo "$WS_LOG" | grep -q "^outside  .*objective.created" || fail "log --workspace omitted another project's events"
 [ "$(SELF log --workspace -n 3 | wc -l | tr -d ' ')" = "3" ] || fail "log --workspace applied the limit per project instead of to the merge"
-SELF log --workspace -n 3 | grep -q "^outside  " || fail "log --workspace cut the newest events instead of the oldest"
+[ "$(SELF log --workspace -n 3)" = "$(SELF log --workspace -n 60 | tail -3)" ] \
+    || fail "log --workspace cut the newest events instead of the oldest"
 # the merged timeline is sorted, so the last line is the newest event overall
 [ "$(SELF log --workspace -n 1)" = "$(SELF log --workspace -n 60 | tail -1)" ] || fail "log --workspace did not merge in timestamp order"
 # the single-project form is untouched: no project column, same bytes as before
@@ -258,9 +304,16 @@ SELF context --project outside | grep -q "^## " || fail "the piped render for a 
 BOTHRENDER="$(SELF status --workspace --pretty --plain 2>&1)" && fail "asking for both renders at once was accepted on the workspace form"
 echo "$BOTHRENDER" | grep -q "pass one of them" || fail "the conflicting-render refusal was lost on the workspace form"
 
+# The probe reports isTTY, columns and TERM. A dumb terminal is answered like a
+# pipe by design, so it is skipped here rather than asserted against — reading
+# `true:100:` alone accepted TERM=dumb and then demanded a ruled render the
+# renderer is right to withhold.
 PROBE="$(pty_run 100 "node $CLI_DIR/proof/pretty-terminal.mjs" || true)"
 case "$PROBE" in
-    *true:100:*)
+    *true:100:dumb*)
+        echo "scope: the pseudo-terminal reports TERM=dumb ($PROBE); the ruled render is not exercised"
+        ;;
+    *true:100:?*)
         # a terminal gets the ruled render for a named project and for the
         # workspace, and --plain at a terminal is the piped bytes exactly
         WIDE="$(pty_run 100 "node $SELF_JS status --workspace")"
@@ -271,14 +324,14 @@ case "$PROBE" in
         [ "$PLAIN_TTY" = "$(SELF status --workspace)" ] || fail "--plain at a terminal differs from the piped workspace status"
         # the log and objective forms colour at a terminal and stay plain in a
         # pipe, the project column surviving both
-        TTY_LOG="$(pty_run 100 "node $SELF_JS log --workspace -n 5")"
+        TTY_LOG="$(pty_run 100 "node $SELF_JS log --workspace -n 60")"
         printf '%s\n' "$TTY_LOG" | grep -q "outside" || fail "the terminal workspace log dropped the project column"
         case "$TTY_LOG" in
             *"$ESC"*) : ;;
             *) fail "a colour-capable terminal got no colour on the workspace log" ;;
         esac
-        NOCOLOR_LOG="$(NO_COLOR=1 pty_run 100 "node $SELF_JS log --workspace -n 5")"
-        [ "$NOCOLOR_LOG" = "$(SELF log --workspace -n 5)" ] || fail "NO_COLOR at a terminal differs from the piped workspace log"
+        NOCOLOR_LOG="$(NO_COLOR=1 pty_run 100 "node $SELF_JS log --workspace -n 60")"
+        [ "$NOCOLOR_LOG" = "$(SELF log --workspace -n 60)" ] || fail "NO_COLOR at a terminal differs from the piped workspace log"
         ;;
     *)
         echo "scope: no pseudo-terminal available ($PROBE); terminal detection not exercised"

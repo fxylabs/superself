@@ -127,6 +127,36 @@ function fillDecisions(model: ProjectModel, options: ProjectContextOptions, conf
     return options;
 }
 
+// Every recovery pointer a rendered surface prints names the project it pulls
+// from. A context or a status is read far from where it was produced — piped
+// into an agent, saved to a file, pasted in another project's directory — and
+// `self context --project other` made that literal: a bare `self work` in that
+// output answers for wherever it is pasted rather than for what it describes.
+//
+// Only the verbs that have a scope form take one. `self integration plan`,
+// `self attempt show`, `self decide confirm` and `self work accept` have none,
+// so they are left alone and the line around them says where to stand instead
+// of promising a flag that does not exist.
+const SCOPED_POINTER = [
+    /^self work show \S+$/,
+    /^self work$/,
+    /^self objective$/,
+    /^self milestone$/,
+    /^self status$/,
+    /^self context$/,
+    /^self log$/,
+    /^self search /
+];
+
+function scoped(command: string, project: string): string
+{
+    if (command.includes("--project "))
+    {
+        return command;
+    }
+    return SCOPED_POINTER.some((form) => form.test(command)) ? `${command} --project ${project}` : command;
+}
+
 function renderProject(model: ProjectModel, options: ProjectContextOptions): string
 {
     const project = shellArgument(model.slug);
@@ -137,27 +167,29 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     }
     lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self search --project ${project}`)}`, "");
     pushList(lines, "Objectives", options.compactOptional
-        ? countedOmission(openObjectives(model.goals).length, "open objective", "self objective")
+        ? countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project))
         : objectiveLines(model));
-    pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions, "self search --type decision"));
+    pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions,
+        scoped("self search --type decision", project)));
     pushList(lines, "Conventions", model.conventions.map((convention) =>
         `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${project}`)}`));
     pushList(lines, "Integration train", options.compactOptional
-        ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan")
+        ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan",
+            ` from a checkout of ${project}`)
         : trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
     pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
     pushList(lines, "Waiting on you", [
         ...options.compactOptional ? attentionOmission(model) : [],
-        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, item.recovery)}`)
+        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, scoped(item.recovery, project))}`)
     ]);
     const next = model.works.filter((work) => work.status === "next");
     pushList(lines, "Next", options.compactOptional
-        ? countedOmission(next.length, "next work item", "self work")
-        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, `self work show ${work.id}`)}`));
+        ? countedOmission(next.length, "next work item", scoped("self work", project))
+        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, scoped(`self work show ${work.id}`, project))}`));
     pushList(lines, "Health", options.compactOptional
-        ? countedOmission(model.health.length, "health signal", "self status")
-        : model.health.map((health) => `- ${detail(health, options.detailLimit, "self status")}`));
+        ? countedOmission(model.health.length, "health signal", scoped("self status", project))
+        : model.health.map((health) => `- ${detail(health, options.detailLimit, scoped("self status", project))}`));
     return lines.join("\n").replace(/\n+$/, "");
 }
 
@@ -192,24 +224,26 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         lines.push(`Description: omitted; run \`${recovery}\``, "");
     }
     lines.push(`Goal: omitted; run \`${recovery}\``, "");
-    pushList(lines, "Objectives", countedOmission(openObjectives(model.goals).length, "open objective", "self objective"));
+    pushList(lines, "Objectives", countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project)));
     pushList(lines, "Decisions", decisionLines(decisions, omittedDecisions, `self search --type decision --project ${project}`));
     pushList(lines, "Conventions", [...model.conventions]
         .sort(compareDated)
         .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
-    pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan"));
+    pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length, "open change set",
+        "self integration plan", ` from a checkout of ${project}`));
     const progressing = [...model.works]
         .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
         .sort((left, right) => left.id.localeCompare(right.id));
     pushList(lines, "Work in progress", progressing.map((work) =>
-        `- ${work.status} work ${work.id}; run \`self work show ${work.id}\``));
+        `- ${work.status} work ${work.id}; run \`${scoped(`self work show ${work.id}`, project)}\``));
     pushList(lines, "Unshipped by branch", unshippedCountLines(model));
     pushList(lines, "Waiting on you", [
         ...attentionOmission(model),
-        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${item.recovery}\``)
+        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${scoped(item.recovery, project)}\``)
     ]);
-    pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item", "self work"));
-    pushList(lines, "Health", countedOmission(model.health.length, "health signal", "self status"));
+    pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item",
+        scoped("self work", project)));
+    pushList(lines, "Health", countedOmission(model.health.length, "health signal", scoped("self status", project)));
     return lines.join("\n").replace(/\n+$/, "");
 }
 
@@ -231,19 +265,22 @@ function decisionLines(selected: string[], omitted: number, recovery: string): s
 // back in full.
 function attentionOmission(model: ProjectModel): string[]
 {
-    return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`self status\``];
+    const recovery = scoped("self status", shellArgument(model.slug));
+    return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`${recovery}\``];
 }
 
 // One omission row for a section the budget treats as optional: the count and
 // the command that prints the section in full, or no row when there is
-// nothing to omit.
-function countedOmission(count: number, noun: string, recovery: string): string[]
+// nothing to omit. `where` states the standing requirement of a command that
+// has no scope flag, so the row stays honest instead of implying the pointer
+// answers for this project from anywhere.
+function countedOmission(count: number, noun: string, recovery: string, where = ""): string[]
 {
     if (count === 0)
     {
         return [];
     }
-    return [`- … ${count} ${noun}${count === 1 ? "" : "s"} omitted; run \`${recovery}\``];
+    return [`- … ${count} ${noun}${count === 1 ? "" : "s"} omitted; run \`${recovery}\`${where}`];
 }
 
 // If even one identity-and-pointer row per protected item cannot fit, listing
@@ -256,14 +293,15 @@ function renderAggregateProject(model: ProjectModel): string
     const waiting = waitingItems(model).length;
     const project = shellArgument(model.slug);
     const recovery = `self search --project ${project}`;
+    const works = scoped("self work", project);
     return [
         `# ${takeCharacters(model.slug, 200)}`,
         "",
         `Protected context is larger than ${CONTEXT_LIMIT.toLocaleString("en-US")} characters even as identity rows.`,
         `- description/goal: run \`${recovery}\``,
         `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
-        `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`self work\``,
-        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`self work\``,
+        `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`${works}\``,
+        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`${works}\``,
         `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
         `- decisions: run \`self search --type decision --project ${project}\``
     ].join("\n");
@@ -362,24 +400,25 @@ function trainLines(model: ProjectModel): string[]
 
 function inProgressLines(model: ProjectModel, reportLimit: number, detailLimit: number): string[]
 {
+    const project = shellArgument(model.slug);
     const active = model.works.filter((w) => w.status === "active").map((work) =>
     {
         const latest = [...work.reports].sort(compareDated).at(-1);
-        const outcome = detail(work.outcome, detailLimit, `self work show ${work.id}`);
-        const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit);
-        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, `self work show ${work.id}`)})`;
+        const outcome = detail(work.outcome, detailLimit, scoped(`self work show ${work.id}`, project));
+        const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit, project);
+        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, scoped(`self work show ${work.id}`, project))})`;
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
         return `- ${work.id} ${outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
     });
     const blocked = model.works
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
-        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, `self work show ${work.id}`)} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, `self work show ${work.id}`)}`}`);
+        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, scoped(`self work show ${work.id}`, project))} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, scoped(`self work show ${work.id}`, project))}`}`);
     return [...active, ...blocked];
 }
 
-function reportExcerpt(text: string, work: string, limit: number): string
+function reportExcerpt(text: string, work: string, limit: number, project: string): string
 {
-    const recovery = `\`self work show ${work}\``;
+    const recovery = `\`${scoped(`self work show ${work}`, project)}\``;
     if (limit === 0)
     {
         return ` — latest report: ${recovery}`;
@@ -467,7 +506,8 @@ function unshippedLines(model: ProjectModel): string[]
 // hidden — the branches themselves are still named.
 function unshippedCountLines(model: ProjectModel): string[]
 {
-    return model.unshipped.map((branch) => `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped; run \`self work\``);
+    const works = scoped("self work", shellArgument(model.slug));
+    return model.unshipped.map((branch) => `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped; run \`${works}\``);
 }
 
 // The whole statement in one line, for the surfaces that report counts rather
@@ -487,7 +527,7 @@ function unshippedLine(model: ProjectModel): string
     const hidden = model.unshipped.length - named.length;
     return hidden === 0
         ? named.join(", ")
-        : `${named.join(", ")}, +${hidden} more; run \`self context\``;
+        : `${named.join(", ")}, +${hidden} more; run \`${scoped("self context", shellArgument(model.slug))}\``;
 }
 
 // Counted as open work wherever it is printed, because that is the scope the
@@ -738,6 +778,7 @@ function countLine(works: WorkState[]): string
 export function printWorkList(ctx: ProjectScope, render: RenderMode): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const project = shellArgument(model.slug);
     if (render === "pretty")
     {
         console.log(renderWorkList(model).join("\n"));
@@ -750,7 +791,7 @@ export function printWorkList(ctx: ProjectScope, render: RenderMode): void
     }
     for (const work of open)
     {
-        console.log(plainWorkLine(work, contributionsOf(model.goals, work).map((item) => item.id).join(", ")));
+        console.log(plainWorkLine(work, contributionsOf(model.goals, work).map((item) => item.id).join(", "), project));
     }
     const done = model.works.filter((w) => w.status === "done").length;
     if (done > 0)
@@ -764,10 +805,11 @@ export function printWorkList(ctx: ProjectScope, render: RenderMode): void
     }
 }
 
-function plainWorkLine(work: WorkState, toward: string): string
+function plainWorkLine(work: WorkState, toward: string, project: string): string
 {
     const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
-    const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
+    const reports = work.reports.length > 0
+        ? `  — ${work.reports.length} report(s), see \`${scoped(`self work show ${work.id}`, project)}\`` : "";
     return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}`
         + `${gatedNote(work)}${reports}`;
 }
