@@ -355,21 +355,35 @@ function splitOnce(words: Word[]): { words: Word[]; split: boolean; unread: stri
 // below for what it answers instead.
 function envProgram(words: Word[], after: number): number
 {
-    for (let index = 0; index < words.length; index++)
+    let index = 0;
+    for (;;)
     {
-        if (judged(words[index].text) === ENV && index > after)
+        while (index < words.length && ASSIGNMENT.test(words[index].text))
         {
-            return index;
+            index++;
         }
         // Anything that is not an assignment is the program, including at
         // argv[0]: `xargs env -S …` and `echo env -S …` are xargs and echo
         // running, and the env token in them is one of their arguments.
-        if (!ASSIGNMENT.test(words[index].text))
+        if (index >= words.length || judged(words[index].text) !== ENV)
         {
             return -1;
         }
+        if (index > after)
+        {
+            return index;
+        }
+        // This env was already looked at and runs an ordinary program, so that
+        // program is the next program position. Reading it is env's own
+        // grammar through the one walker below, not knowledge of any other
+        // program — and `env env -S "npm publish"` is the vector that needs it.
+        const window = envWindow(words, index);
+        if (window.kind !== "program")
+        {
+            return -1;
+        }
+        index = window.index;
     }
-    return -1;
 }
 
 // An `env -S` this gate cannot place: env is in the vector with a split flag
@@ -399,12 +413,19 @@ function splits(word: Word): boolean
     return text === SPLIT_LONG || SPLIT_INLINE.test(text) || (envOption(text)?.split === true);
 }
 
-// The packed command line inside one env invocation: which tokens to replace
-// and with what. The whole invocation is replaced — the env token, its options
-// and the packed argument — because `env -S "X"` *is* X, so X's own first word
-// lands in the program position the next pass reads. Null when this env runs an
-// ordinary program.
-function packedArgument(words: Word[], at: number): { from: number; count: number; text: string } | null
+// One walk of env's own option grammar, and the only implementation of it. It
+// answers either the packed command line this env carries or the index of the
+// program env will exec — the two things anything here needs — so that env's
+// grammar is never read two slightly different ways.
+type EnvWindow =
+    | { kind: "split"; from: number; count: number; text: string }
+    | { kind: "program"; index: number }
+    | { kind: "none" };
+
+// A split replaces the whole invocation — the env token, its options and the
+// packed argument — because `env -S "X"` *is* X, so X's own first word lands in
+// the program position the next pass reads.
+function envWindow(words: Word[], at: number): EnvWindow
 {
     let index = at + 1;
     while (index < words.length)
@@ -413,37 +434,48 @@ function packedArgument(words: Word[], at: number): { from: number; count: numbe
         // The option terminator. Whatever follows is the program, `-S` or not.
         if (text === "--")
         {
-            return null;
+            return index + 1 < words.length ? { kind: "program", index: index + 1 } : { kind: "none" };
         }
         const inline = SPLIT_INLINE.exec(text);
         if (inline !== null)
         {
-            return { from: at, count: index + 1 - at, text: inline[1] };
+            return { kind: "split", from: at, count: index + 1 - at, text: inline[1] };
         }
         if (text === SPLIT_LONG)
         {
-            return index + 1 < words.length ? { from: at, count: index + 2 - at, text: words[index + 1].text } : null;
+            return packedNext(words, at, index);
         }
         const step = envOption(text);
         if (step === null)
         {
             // Not an option and not an assignment: the program env will exec.
-            return null;
+            return { kind: "program", index };
         }
         if (step.split)
         {
             // Attached to the flag (`-Ssh -c npm publish`) or the token after
             // it. env accepts both, and reading only the second left the first
             // delivering a whole command line nobody looked at.
-            if (step.attached !== null)
-            {
-                return { from: at, count: index + 1 - at, text: step.attached };
-            }
-            return index + 1 < words.length ? { from: at, count: index + 2 - at, text: words[index + 1].text } : null;
+            return step.attached === null
+                ? packedNext(words, at, index)
+                : { kind: "split", from: at, count: index + 1 - at, text: step.attached };
         }
         index += step.consumes;
     }
-    return null;
+    return { kind: "none" };
+}
+
+function packedNext(words: Word[], at: number, index: number): EnvWindow
+{
+    return index + 1 < words.length
+        ? { kind: "split", from: at, count: index + 2 - at, text: words[index + 1].text }
+        : { kind: "none" };
+}
+
+function packedArgument(words: Word[], at: number): { from: number; count: number; text: string } | null
+{
+    const window = envWindow(words, at);
+    return window.kind === "split" ? window : null;
 }
 
 // How one of env's own option tokens is read: how many tokens it takes, and

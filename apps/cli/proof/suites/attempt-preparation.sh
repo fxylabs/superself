@@ -408,6 +408,10 @@ const REFUSED = [
     ["env -S quote concatenation", ["env", "-S", "sh -c p'ublish'"], "publish"],
     ["env -S packing an env", ["env", "-S", "env -S 'sh -c npm publish'"], "publish"],
     ["an assignment before env", ["FOO=bar", "env", "-S", "sh -c npm publish"], "publish"],
+    ["env launching env", ["env", "env", "-S", "npm publish"], "publish"],
+    ["env with an assignment launching env", ["env", "FOO=1", "env", "-S", "npm publish"], "publish"],
+    ["env launching env after its terminator", ["env", "--", "env", "-S", "npm publish"], "publish"],
+    ["env launching env launching env", ["env", "env", "env", "-S", "npm publish"], "publish"],
     // a shell handed a script, wherever it sits
     ["a shell handed a script", ["sh", "-c", "npm publish"], "publish"],
     ["a login shell handed a script", ["bash", "-lc", "npm publish"], "publish"],
