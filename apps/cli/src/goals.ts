@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import { parseCommand, subcommand } from "./args.js";
 import { validDate } from "./dates.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
@@ -12,7 +13,14 @@ import {
     openObjectives,
     WorkProposal
 } from "./objectives.js";
-import { ProjectContext } from "./paths.js";
+import {
+    ProjectContext,
+    ProjectScope,
+    readScopes,
+    requireProject,
+    SCOPE_OPTIONS,
+    WORKSPACE_SCOPE_OPTIONS
+} from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { dim, errYellow, markdownHeadings, styled } from "./style.js";
 import { CliError, EventRefs } from "./types.js";
@@ -26,21 +34,32 @@ const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --object
 const OBJECTIVE_VERBS = ["list", "add", "show", "confirm", "revise", "close"];
 const MILESTONE_VERBS = ["list", "add", "show", "revise", "met", "reach", "recheck"];
 
+// `met` and `recheck` are one intake read twice, so they declare one option set
+// rather than two that can drift apart.
+const COVERAGE_OPTIONS = {
+    criterion: { type: "string" },
+    why: { type: "string" },
+    work: { type: "string" },
+    evidence: { type: "string", multiple: true }
+} as const;
+
 /* ── objectives ────────────────────────────────────────────────────── */
 
-export function cmdObjective(ctx: ProjectContext, rest: string[]): void
+// Listing and showing are reads, so they answer for any project the workspace
+// knows; every verb that writes still records into the project this directory
+// belongs to, and resolves it only once the arguments are known to be good. A
+// bare `--` is not a listing flag — subcommand() explains it.
+export function cmdObjective(rest: string[]): void
 {
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const verb = rest[0] ?? "list";
-    const args = rest.slice(1);
-    if (verb === "list")
+    if (rest.length === 0 || (rest[0] !== "--" && rest[0].startsWith("--")))
     {
-        printObjectives(model);
+        objectiveList(rest);
         return;
     }
-    if (verb === "add")
+    const verb = subcommand("objective", rest) ?? "list";
+    if (verb === "list")
     {
-        objectiveAdd(ctx, model, args);
+        objectiveList(rest.slice(1));
         return;
     }
     // An unknown verb is answered before the id is resolved: telling someone
@@ -50,35 +69,63 @@ export function cmdObjective(ctx: ProjectContext, rest: string[]): void
     {
         throw new CliError(OBJECTIVE_USAGE);
     }
-    const objective = requireObjective(model, rest[1]);
-    if (verb === "show")
-    {
-        console.log(markdownHeadings(renderObjectiveBody(objective).trimEnd()));
-        return;
-    }
-    if (verb === "confirm")
-    {
-        confirmObjective(ctx, objective);
-        return;
-    }
-    if (verb === "revise")
-    {
-        objectiveRevise(ctx, objective, args.slice(1));
-        return;
-    }
-    if (verb === "close")
-    {
-        objectiveClose(ctx, objective, args.slice(1));
-        return;
-    }
-    throw new CliError(OBJECTIVE_USAGE);
+    objectiveVerb(verb, rest.slice(1));
 }
 
-function objectiveAdd(ctx: ProjectContext, model: ProjectModel, args: string[]): void
+function objectiveVerb(verb: string, args: string[]): void
 {
-    const { values, positionals } = parseArgs({
+    switch (verb)
+    {
+        case "show": objectiveShow(args); break;
+        case "add": objectiveAdd(args); break;
+        case "confirm": confirmObjective(args); break;
+        case "revise": objectiveRevise(args); break;
+        default: objectiveClose(args); break;
+    }
+}
+
+function objectiveList(args: string[]): void
+{
+    const { values } = parseCommand("objective", args, WORKSPACE_SCOPE_OPTIONS, 0);
+    const scopes = readScopes(process.cwd(), values);
+    if (values.workspace !== true)
+    {
+        printObjectives(scopeModel(scopes[0]));
+        return;
+    }
+    scopes.forEach((scope, index) =>
+    {
+        console.log(`${index === 0 ? "" : "\n"}${styled ? dim(scope.project) : scope.project}`);
+        printObjectives(scopeModel(scope));
+    });
+}
+
+function objectiveShow(args: string[]): void
+{
+    const { values, positionals } = parseCommand("objective", args, SCOPE_OPTIONS, 1);
+    const objective = requireObjective(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
+    console.log(markdownHeadings(renderObjectiveBody(objective).trimEnd()));
+}
+
+// The project a write records into, and its state, resolved together: a write
+// verb never takes a scope flag, so this is the only project it can mean.
+function writeTarget(): { ctx: ProjectContext; model: ProjectModel }
+{
+    const ctx = requireProject(process.cwd());
+    return { ctx, model: buildModel(ctx.storeDir, ctx.project, new Date()) };
+}
+
+function scopeModel(scope: ProjectScope): ProjectModel
+{
+    return buildModel(scope.storeDir, scope.project, new Date());
+}
+
+function objectiveAdd(args: string[]): void
+{
+    const { values, positionals } = parseCommand(
+        "objective",
         args,
-        options: {
+        {
             horizon: { type: "string" },
             target: { type: "string" },
             success: { type: "string", multiple: true },
@@ -87,8 +134,9 @@ function objectiveAdd(ctx: ProjectContext, model: ProjectModel, args: string[]):
             proposed: { type: "boolean" },
             supersedes: { type: "string", multiple: true }
         },
-        allowPositionals: true
-    });
+        1
+    );
+    const { ctx, model } = writeTarget();
     const outcome = requireText(positionals[0], 'objective add "<desired outcome>"');
     const id = objectiveId();
     const payload: Record<string, unknown> = { objective: id, outcome, success: values.success ?? [], stop: values.stop ?? [] };
@@ -102,8 +150,11 @@ function objectiveAdd(ctx: ProjectContext, model: ProjectModel, args: string[]):
     console.log(id);
 }
 
-function confirmObjective(ctx: ProjectContext, objective: ObjectiveState): void
+function confirmObjective(args: string[]): void
 {
+    const { positionals } = parseCommand("objective", args, {}, 1);
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
     if (objective.status !== "proposed")
     {
         throw new CliError(`${objective.id} is already ${objective.status}`);
@@ -113,11 +164,12 @@ function confirmObjective(ctx: ProjectContext, objective: ObjectiveState): void
 
 // A revision is the record that the target moved, so it demands a reason and
 // at least one change — an empty revision would only invalidate coverage.
-function objectiveRevise(ctx: ProjectContext, objective: ObjectiveState, args: string[]): void
+function objectiveRevise(args: string[]): void
 {
-    const { values } = parseArgs({
+    const { values, positionals } = parseCommand(
+        "objective",
         args,
-        options: {
+        {
             outcome: { type: "string" },
             horizon: { type: "string" },
             target: { type: "string" },
@@ -125,8 +177,11 @@ function objectiveRevise(ctx: ProjectContext, objective: ObjectiveState, args: s
             success: { type: "string", multiple: true },
             stop: { type: "string", multiple: true },
             why: { type: "string" }
-        }
-    });
+        },
+        1
+    );
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
     const why = requireText(values.why, 'objective revise <id> --why "<what changed and why>"');
     const payload: Record<string, unknown> = {
         objective: objective.id,
@@ -145,9 +200,11 @@ function objectiveRevise(ctx: ProjectContext, objective: ObjectiveState, args: s
     recordEvent(ctx, makeEvent(ctx.project, "objective.revised", strip(payload), undefined, true), `${objective.id} ${why}`);
 }
 
-function objectiveClose(ctx: ProjectContext, objective: ObjectiveState, args: string[]): void
+function objectiveClose(args: string[]): void
 {
-    const { values } = parseArgs({ args, options: { as: { type: "string" }, why: { type: "string" } } });
+    const { values, positionals } = parseCommand("objective", args, { as: { type: "string" }, why: { type: "string" } }, 1);
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
     if (values.as !== "reached" && values.as !== "dropped")
     {
         throw new CliError("objective close requires --as reached|dropped");
@@ -163,67 +220,87 @@ function objectiveClose(ctx: ProjectContext, objective: ObjectiveState, args: st
 
 /* ── milestones ────────────────────────────────────────────────────── */
 
-export function cmdMilestone(ctx: ProjectContext, rest: string[]): void
+// Scoped exactly as `objective` is, minus the workspace form: a milestone
+// hangs under an objective, so `self objective --workspace` is the
+// workspace-wide roll-up and a second one here would print the same state
+// stripped of what gives it meaning.
+export function cmdMilestone(rest: string[]): void
 {
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const verb = rest[0] ?? "list";
-    const args = rest.slice(2);
-    if (verb === "list")
+    if (rest.length === 0 || (rest[0] !== "--" && rest[0].startsWith("--")))
     {
-        printMilestones(model);
+        milestoneList(rest);
         return;
     }
-    if (verb === "add")
+    const verb = subcommand("milestone", rest) ?? "list";
+    if (verb === "list")
     {
-        milestoneAdd(ctx, model, rest.slice(1));
+        milestoneList(rest.slice(1));
         return;
     }
     if (!MILESTONE_VERBS.includes(verb))
     {
         throw new CliError(MILESTONE_USAGE);
     }
-    const found = requireMilestone(model, rest[1]);
-    if (verb === "show")
-    {
-        console.log(markdownHeadings(renderMilestoneBody(found.milestone, found.objective).trimEnd()));
-        return;
-    }
-    if (verb === "revise")
-    {
-        milestoneRevise(ctx, found.milestone, args);
-        return;
-    }
-    if (verb === "met")
-    {
-        milestoneMet(ctx, model, found.milestone, found.objective, args);
-        return;
-    }
-    if (verb === "reach")
-    {
-        milestoneReach(ctx, found.milestone, found.objective);
-        return;
-    }
-    if (verb === "recheck")
-    {
-        milestoneRecheck(ctx, model, found.milestone, found.objective, args);
-        return;
-    }
-    throw new CliError(MILESTONE_USAGE);
+    milestoneVerb(verb, rest.slice(1));
 }
 
-function milestoneAdd(ctx: ProjectContext, model: ProjectModel, args: string[]): void
+function milestoneVerb(verb: string, args: string[]): void
 {
-    const { values, positionals } = parseArgs({
+    switch (verb)
+    {
+        case "show": milestoneShow(args); break;
+        case "add": milestoneAdd(args); break;
+        case "revise": milestoneRevise(args); break;
+        case "met": milestoneMet(args); break;
+        case "reach": milestoneReach(args); break;
+        default: milestoneRecheck(args); break;
+    }
+}
+
+function milestoneList(args: string[]): void
+{
+    const { values } = parseCommand("milestone", args, SCOPE_OPTIONS, 0);
+    printMilestones(scopeModel(readScopes(process.cwd(), values)[0]));
+}
+
+function milestoneShow(args: string[]): void
+{
+    const { values, positionals } = parseCommand("milestone", args, SCOPE_OPTIONS, 1);
+    const found = requireMilestone(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
+    console.log(markdownHeadings(renderMilestoneBody(found.milestone, found.objective).trimEnd()));
+}
+
+// What a milestone write speaks about: the project it runs in, that project's
+// state, and the milestone with the objective it hangs under.
+interface MilestoneTarget
+{
+    ctx: ProjectContext;
+    model: ProjectModel;
+    milestone: MilestoneState;
+    objective: ObjectiveState;
+}
+
+function milestoneTarget(id: string | undefined): MilestoneTarget
+{
+    const { ctx, model } = writeTarget();
+    return { ctx, model, ...requireMilestone(model, id) };
+}
+
+function milestoneAdd(args: string[]): void
+{
+    const { values, positionals } = parseCommand(
+        "milestone",
         args,
-        options: {
+        {
             objective: { type: "string" },
             target: { type: "string" },
             exit: { type: "string", multiple: true },
             after: { type: "string", multiple: true },
             supersedes: { type: "string" }
         },
-        allowPositionals: true
-    });
+        1
+    );
+    const { ctx, model } = writeTarget();
     const outcome = requireText(positionals[0], 'milestone add "<outcome>" --objective <id> --exit "<criterion>"');
     const objective = requireObjective(model, requireText(values.objective, 'milestone add … --objective <id>'));
     if (values.exit === undefined || values.exit.length === 0)
@@ -244,18 +321,21 @@ function milestoneAdd(ctx: ProjectContext, model: ProjectModel, args: string[]):
     console.log(id);
 }
 
-function milestoneRevise(ctx: ProjectContext, milestone: MilestoneState, args: string[]): void
+function milestoneRevise(args: string[]): void
 {
-    const { values } = parseArgs({
+    const { values, positionals } = parseCommand(
+        "milestone",
         args,
-        options: {
+        {
             outcome: { type: "string" },
             target: { type: "string" },
             exit: { type: "string", multiple: true },
             "drop-exit": { type: "string", multiple: true },
             why: { type: "string" }
-        }
-    });
+        },
+        1
+    );
+    const { ctx, milestone } = milestoneTarget(positionals[0]);
     const why = requireText(values.why, 'milestone revise <id> --why "<what changed and why>"');
     const payload: Record<string, unknown> = {
         milestone: milestone.id,
@@ -280,12 +360,10 @@ function nextCriteria(milestone: MilestoneState, texts: string[]): { id: string;
     return texts.map((text, index) => ({ id: `c${highest + index + 1}`, text }));
 }
 
-function milestoneMet(ctx: ProjectContext, model: ProjectModel, milestone: MilestoneState, objective: ObjectiveState, args: string[]): void
+function milestoneMet(args: string[]): void
 {
-    const { values } = parseArgs({
-        args,
-        options: { criterion: { type: "string" }, why: { type: "string" }, work: { type: "string" }, evidence: { type: "string", multiple: true } }
-    });
+    const { values, positionals } = parseCommand("milestone", args, COVERAGE_OPTIONS, 1);
+    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const criterion = requireCriterion(milestone, requireText(values.criterion, "milestone met <id> --criterion <c1>"));
     const why = requireText(values.why, 'milestone met <id> --criterion c1 --why "<how the evidence covers it>"');
     if (milestone.met.includes(criterion.id))
@@ -328,18 +406,10 @@ function coverageRefs(
 // judgment someone makes deliberately, at the revision standing now — never a
 // side effect of another verb, and never an assertion that skips the gate the
 // first reach had to pass.
-function milestoneRecheck(
-    ctx: ProjectContext,
-    model: ProjectModel,
-    milestone: MilestoneState,
-    objective: ObjectiveState,
-    args: string[]
-): void
+function milestoneRecheck(args: string[]): void
 {
-    const { values } = parseArgs({
-        args,
-        options: { criterion: { type: "string" }, why: { type: "string" }, work: { type: "string" }, evidence: { type: "string", multiple: true } }
-    });
+    const { values, positionals } = parseCommand("milestone", args, COVERAGE_OPTIONS, 1);
+    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const why = requireText(values.why, 'milestone recheck <id> [--criterion c1] --why "<what you re-judged>"');
     if (values.criterion === undefined)
     {
@@ -399,8 +469,10 @@ function currentAlready(what: string, objective: ObjectiveState, milestone: Mile
 
 // Work reaching done is not a milestone being reached: the exit criteria are
 // the gate, and they are checked here rather than inferred from a transition.
-function milestoneReach(ctx: ProjectContext, milestone: MilestoneState, objective: ObjectiveState): void
+function milestoneReach(args: string[]): void
 {
+    const { positionals } = parseCommand("milestone", args, {}, 1);
+    const { ctx, milestone, objective } = milestoneTarget(positionals[0]);
     if (milestone.reached !== undefined)
     {
         throw new CliError(`${milestone.id} was already reached on ${milestone.reached.ts.slice(0, 10)}`);

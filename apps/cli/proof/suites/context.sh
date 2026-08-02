@@ -88,13 +88,14 @@ echo "$PROTECTED_CONTEXT" | grep -q "w-p090" || fail "protected compaction lost 
 echo "$PROTECTED_CONTEXT" | grep -q "protected-proposal-020" || fail "protected compaction lost a waiting identity"
 # Once rows are cut short they can no longer carry their own group, so the
 # ranking is restated once as counts beside the command that prints it whole.
-echo "$PROTECTED_CONTEXT" | grep -q "decisions waiting: 21 unblock work, 0 cannot be decided yet, 0 already in effect; run \`self status\`" \
+echo "$PROTECTED_CONTEXT" | grep -q "decisions waiting: 21 unblock work, 0 cannot be decided yet, 0 already in effect; run \`self status --project 'demo'\`" \
     || fail "the compacted band lost the ranking without saying how to read it back"
 # The outcome layer and the integration train are whole-state recoverable
 # through one command each, so under pressure they compact to a count and a
 # pointer instead of crowding out the protected sections.
-echo "$PROTECTED_CONTEXT" | grep -q "open objective.*omitted; run \`self objective\`" || fail "objectives did not compact to a self objective pointer"
-echo "$PROTECTED_CONTEXT" | grep -q "open change set.*omitted; run \`self integration plan\`" || fail "the train did not compact to a self integration plan pointer"
+echo "$PROTECTED_CONTEXT" | grep -q "open objective.*omitted; run \`self objective --project 'demo'\`" || fail "objectives did not compact to a self objective pointer"
+echo "$PROTECTED_CONTEXT" | grep -q "open change set.*omitted; run \`self integration plan\` from a checkout of 'demo'" \
+    || fail "the train pointer lost the checkout it has to be run from"
 
 # When even identity rows cannot fit, the mathematical exception is explicit
 # and its project-only pull command must expose the canonical state.
@@ -129,12 +130,12 @@ UNSHIPPED_CONTEXT="$(SELF context)"
 UNSHIPPED_CHARS="$(printf '%s\n' "$UNSHIPPED_CONTEXT" | wc -m | tr -d ' ')"
 [ "$UNSHIPPED_CHARS" -le 12000 ] || fail "the per-branch statement pushed context past 12,000 characters ($UNSHIPPED_CHARS)"
 echo "$UNSHIPPED_CONTEXT" | grep -q "## Unshipped by branch" || fail "the budget dropped the per-branch statement entirely"
-echo "$UNSHIPPED_CONTEXT" | grep -q "^- feat/unshipped-001 — 1 open work unit unshipped; run \`self work\`$" \
+echo "$UNSHIPPED_CONTEXT" | grep -q "^- feat/unshipped-001 — 1 open work unit unshipped; run \`self work --project 'demo'\`$" \
     || fail "the compacted statement lost its per-branch count or the command that reads the units back"
 echo "$UNSHIPPED_CONTEXT" | grep -q "feat/unshipped-040" || fail "the compacted statement dropped a branch instead of counting it"
 # The one-line form is bounded rather than joined: this list only leaves by
 # settling, so a project a year in would otherwise print a paragraph here.
-SELF status | grep -q '^unshipped: feat/unshipped-001 1 open work unit, .*, +36 more; run `self context`$' \
+SELF status | grep -q "^unshipped: feat/unshipped-001 1 open work unit, .*, +36 more; run \`self context --project 'demo'\`$" \
     || fail "the one-line statement joined every branch instead of counting the remainder"
 cp "$ROOT/demo-log-before-unshipped-fixture" "$LOG_A"
 SELF fold > /dev/null

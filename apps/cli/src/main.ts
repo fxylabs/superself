@@ -30,14 +30,19 @@ import {
     ProjectContext,
     projectStateDir,
     readRegistry,
+    readScope,
+    readScopes,
     readStoreConfig,
     readVerdicts,
     recordLink,
     requireProject,
+    requireRegistered,
     requireWorkspace,
+    SCOPE_OPTIONS,
     siblingSlug,
     STORE_DIR,
-    StoreConfig
+    StoreConfig,
+    WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import {
@@ -59,7 +64,7 @@ import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
-import { printContext, printLog, printStatus, printWorkList } from "./views.js";
+import { printContext, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
 import { CliError, EventRefs } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
@@ -92,8 +97,8 @@ async function main(argv: string[]): Promise<void>
         case "sync": cmdSync(rest); break;
         case "clone": cmdClone(rest); break;
         case "goal": cmdGoal(rest); break;
-        case "objective": cmdObjective(requireProject(process.cwd()), guarded(rest)); break;
-        case "milestone": cmdMilestone(requireProject(process.cwd()), guarded(rest)); break;
+        case "objective": cmdObjective(guarded(rest)); break;
+        case "milestone": cmdMilestone(guarded(rest)); break;
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
@@ -454,9 +459,9 @@ function cmdView(rest: string[]): void
 {
     const [slug] = parseCommand("view", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
-    if (slug !== undefined && !readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
+    if (slug !== undefined)
     {
-        throw new CliError(`unknown project "${slug}" — registered: ${readRegistry(ctx.storeDir).map((e) => e.slug).join(", ")}`);
+        requireRegistered(ctx.storeDir, slug);
     }
     openFile(ctx, viewFile(ctx.storeDir, slug));
 }
@@ -489,16 +494,19 @@ function cmdClone(rest: string[]): void
     cloneStore(requireText(url, "clone <url> [dir]"), dir);
 }
 
+// `context` has no workspace form because it already is one: run from outside
+// any project, it renders the workspace summary, and --project names one
+// project to read instead of the directory's own.
 function cmdContext(rest: string[]): void
 {
-    const { values } = parseCommand("context", rest, RENDER_OPTIONS, 0);
-    printContext(requireWorkspace(process.cwd()), resolveRender(values));
+    const { values } = parseCommand("context", rest, { ...SCOPE_OPTIONS, ...RENDER_OPTIONS }, 0);
+    printContext(readScope(process.cwd(), values), resolveRender(values));
 }
 
 function cmdStatus(rest: string[]): void
 {
-    const { values } = parseCommand("status", rest, RENDER_OPTIONS, 0);
-    printStatus(requireWorkspace(process.cwd()), resolveRender(values));
+    const { values } = parseCommand("status", rest, { ...WORKSPACE_SCOPE_OPTIONS, ...RENDER_OPTIONS }, 0);
+    printStatus(readScope(process.cwd(), values), resolveRender(values));
 }
 
 function cmdSetup(rest: string[]): void
@@ -704,20 +712,13 @@ function completionVerb(sub: string, args: string[]): void
 
 function cmdWorkList(rest: string[]): void
 {
-    const { values } = parseCommand("work", rest, { project: { type: "string" }, ...RENDER_OPTIONS }, 0);
-    const render = resolveRender(values);
-    if (values.project === undefined)
-    {
-        printWorkList(requireProject(process.cwd()), render);
-        return;
-    }
-    const ctx = requireWorkspace(process.cwd());
-    printWorkList({ ...ctx, project: requireRegistered(ctx.storeDir, values.project) }, render);
+    const { values } = parseCommand("work", rest, { ...SCOPE_OPTIONS, ...RENDER_OPTIONS }, 0);
+    printWorkList(readScopes(process.cwd(), values)[0], resolveRender(values));
 }
 
 function cmdWorkShow(args: string[]): void
 {
-    const { values, positionals } = parseCommand("work", args, { project: { type: "string" } }, 1);
+    const { values, positionals } = parseCommand("work", args, SCOPE_OPTIONS, 1);
     const wanted = requireText(positionals[0], "work show <work-id> [--project <slug>]");
     const ctx = requireWorkspace(process.cwd());
     const found = findWorkAcross(ctx, wanted, values.project);
@@ -793,15 +794,6 @@ function orderedSlugs(ctx: CliContext): string[]
 {
     const rest = readRegistry(ctx.storeDir).map((entry) => entry.slug).filter((slug) => slug !== ctx.project);
     return ctx.project === undefined ? rest : [ctx.project, ...rest];
-}
-
-function requireRegistered(storeDir: string, slug: string): string
-{
-    if (!readRegistry(storeDir).some((entry) => entry.slug === slug))
-    {
-        throw new CliError(`unknown project "${slug}" — registered: ${readRegistry(storeDir).map((e) => e.slug).join(", ")}`);
-    }
-    return slug;
 }
 
 // Retiring a unit records that its outcome was deliberately given up or moved
@@ -1045,13 +1037,19 @@ function cmdConvention(rest: string[]): void
 
 function cmdLog(rest: string[]): void
 {
-    const { values } = parseCommand("log", rest, { lines: { type: "string", short: "n" } }, 0);
+    const { values } = parseCommand("log", rest, { lines: { type: "string", short: "n" }, ...WORKSPACE_SCOPE_OPTIONS }, 0);
     const limit = values.lines === undefined ? 20 : Number.parseInt(values.lines, 10);
     if (Number.isNaN(limit) || limit <= 0)
     {
         throw new CliError("log -n expects a positive number");
     }
-    printLog(requireProject(process.cwd()), limit);
+    const scopes = readScopes(process.cwd(), values);
+    if (values.workspace === true)
+    {
+        printWorkspaceLog(scopes, limit);
+        return;
+    }
+    printLog(scopes[0], limit);
 }
 
 function cmdSearch(rest: string[]): void

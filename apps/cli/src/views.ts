@@ -14,10 +14,26 @@ import {
     WorkState
 } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
-import { CliContext, readRegistry, readVerdicts } from "./paths.js";
-import { AttemptRow, RenderMode, renderContext, renderStatus, renderWorkList, renderWorkspace } from "./pretty.js";
+import { CliContext, ProjectScope, readRegistry, readVerdicts } from "./paths.js";
+import {
+    AttemptRow,
+    Checkout,
+    Pointer,
+    RenderMode,
+    fromCheckout,
+    renderContext,
+    renderStatus,
+    renderWorkList,
+    renderWorkspace,
+    scoped,
+    shellArgument,
+    pointerTo,
+    UnscopedVerb,
+    workspacePointer
+} from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
-import { blue, dim, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
+import { blue, dim, displayWidth, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
+import { SelfEvent } from "./types.js";
 
 const CONTEXT_LIMIT = 12_000;
 // The command writes one final newline; the rendered body owns the rest.
@@ -132,31 +148,33 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
-        lines.push(detail(model.description, options.detailLimit, `self search --project ${project}`), "");
+        lines.push(detail(model.description, options.detailLimit, pointerTo({ verb: "search" }, project)), "");
     }
-    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self search --project ${project}`)}`, "");
+    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, pointerTo({ verb: "search" }, project))}`, "");
     pushList(lines, "Objectives", options.compactOptional
-        ? countedOmission(openObjectives(model.goals).length, "open objective", "self objective")
+        ? countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project))
         : objectiveLines(model));
-    pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions, "self search --type decision"));
+    pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions,
+        scoped("self search --type decision", project)));
     pushList(lines, "Conventions", model.conventions.map((convention) =>
-        `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${project}`)}`));
+        `- ${detail(convention.text, options.detailLimit, pointerTo({ verb: "search", id: convention.id, type: "convention" }, project))}`));
     pushList(lines, "Integration train", options.compactOptional
-        ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan")
+        ? countedOmission(openChangeSets(model.integration).length,
+            "open change set", "self integration plan", fromCheckout(project))
         : trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
     pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
     pushList(lines, "Waiting on you", [
         ...options.compactOptional ? attentionOmission(model) : [],
-        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, item.recovery)}`)
+        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, itemPointer(item.recovery, project))}`)
     ]);
     const next = model.works.filter((work) => work.status === "next");
     pushList(lines, "Next", options.compactOptional
-        ? countedOmission(next.length, "next work item", "self work")
-        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, `self work show ${work.id}`)}`));
+        ? countedOmission(next.length, "next work item", scoped("self work", project))
+        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))}`));
     pushList(lines, "Health", options.compactOptional
-        ? countedOmission(model.health.length, "health signal", "self status")
-        : model.health.map((health) => `- ${detail(health, options.detailLimit, "self status")}`));
+        ? countedOmission(model.health.length, "health signal", scoped("self status", project))
+        : model.health.map((health) => `- ${detail(health, options.detailLimit, scoped("self status", project))}`));
     return lines.join("\n").replace(/\n+$/, "");
 }
 
@@ -191,24 +209,26 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         lines.push(`Description: omitted; run \`${recovery}\``, "");
     }
     lines.push(`Goal: omitted; run \`${recovery}\``, "");
-    pushList(lines, "Objectives", countedOmission(openObjectives(model.goals).length, "open objective", "self objective"));
+    pushList(lines, "Objectives", countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project)));
     pushList(lines, "Decisions", decisionLines(decisions, omittedDecisions, `self search --type decision --project ${project}`));
     pushList(lines, "Conventions", [...model.conventions]
         .sort(compareDated)
         .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
-    pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan"));
+    pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length,
+        "open change set", "self integration plan", fromCheckout(project)));
     const progressing = [...model.works]
         .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
         .sort((left, right) => left.id.localeCompare(right.id));
     pushList(lines, "Work in progress", progressing.map((work) =>
-        `- ${work.status} work ${work.id}; run \`self work show ${work.id}\``));
+        `- ${work.status} work ${work.id}; run \`${pointerTo({ verb: "work-show", id: work.id }, project)}\``));
     pushList(lines, "Unshipped by branch", unshippedCountLines(model));
     pushList(lines, "Waiting on you", [
         ...attentionOmission(model),
-        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${item.recovery}\``)
+        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${itemPointer(item.recovery, project)}\``)
     ]);
-    pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item", "self work"));
-    pushList(lines, "Health", countedOmission(model.health.length, "health signal", "self status"));
+    pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item",
+        scoped("self work", project)));
+    pushList(lines, "Health", countedOmission(model.health.length, "health signal", scoped("self status", project)));
     return lines.join("\n").replace(/\n+$/, "");
 }
 
@@ -230,19 +250,34 @@ function decisionLines(selected: string[], omitted: number, recovery: string): s
 // back in full.
 function attentionOmission(model: ProjectModel): string[]
 {
-    return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`self status\``];
+    const recovery = scoped("self status", shellArgument(model.slug));
+    return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`${recovery}\``];
+}
+
+// A waiting item's recovery pointer. The item names an exact command or names
+// what it is pointing at; either way the pointer is minted here rather than
+// formatted where the item was built.
+function itemPointer(recovery: WaitingItem["recovery"], project: string): Pointer
+{
+    return typeof recovery === "string" ? scoped(recovery, project) : pointerTo(recovery, project);
 }
 
 // One omission row for a section the budget treats as optional: the count and
 // the command that prints the section in full, or no row when there is
-// nothing to omit.
-function countedOmission(count: number, noun: string, recovery: string): string[]
+// nothing to omit. The two shapes are separate signatures rather than one with
+// an optional argument: a scoped pointer names its project and needs nothing
+// more, and a verb with no scope form cannot be written here without the
+// sentence that says where to stand. The sentence sits outside the code span,
+// because it is prose rather than something to paste.
+function countedOmission(count: number, noun: string, recovery: Pointer): string[];
+function countedOmission(count: number, noun: string, recovery: UnscopedVerb, where: Checkout): string[];
+function countedOmission(count: number, noun: string, recovery: string, where = ""): string[]
 {
     if (count === 0)
     {
         return [];
     }
-    return [`- … ${count} ${noun}${count === 1 ? "" : "s"} omitted; run \`${recovery}\``];
+    return [`- … ${count} ${noun}${count === 1 ? "" : "s"} omitted; run \`${recovery}\`${where}`];
 }
 
 // If even one identity-and-pointer row per protected item cannot fit, listing
@@ -255,14 +290,15 @@ function renderAggregateProject(model: ProjectModel): string
     const waiting = waitingItems(model).length;
     const project = shellArgument(model.slug);
     const recovery = `self search --project ${project}`;
+    const works = scoped("self work", project);
     return [
         `# ${takeCharacters(model.slug, 200)}`,
         "",
         `Protected context is larger than ${CONTEXT_LIMIT.toLocaleString("en-US")} characters even as identity rows.`,
         `- description/goal: run \`${recovery}\``,
         `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
-        `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`self work\``,
-        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`self work\``,
+        `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`${works}\``,
+        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`${works}\``,
         `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
         `- decisions: run \`self search --type decision --project ${project}\``
     ].join("\n");
@@ -361,24 +397,25 @@ function trainLines(model: ProjectModel): string[]
 
 function inProgressLines(model: ProjectModel, reportLimit: number, detailLimit: number): string[]
 {
+    const project = shellArgument(model.slug);
     const active = model.works.filter((w) => w.status === "active").map((work) =>
     {
         const latest = [...work.reports].sort(compareDated).at(-1);
-        const outcome = detail(work.outcome, detailLimit, `self work show ${work.id}`);
-        const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit);
-        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, `self work show ${work.id}`)})`;
+        const outcome = detail(work.outcome, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project));
+        const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit, project);
+        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))})`;
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
         return `- ${work.id} ${outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
     });
     const blocked = model.works
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
-        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, `self work show ${work.id}`)} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, `self work show ${work.id}`)}`}`);
+        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))}`}`);
     return [...active, ...blocked];
 }
 
-function reportExcerpt(text: string, work: string, limit: number): string
+function reportExcerpt(text: string, work: string, limit: number, project: string): string
 {
-    const recovery = `\`self work show ${work}\``;
+    const recovery = `\`${pointerTo({ verb: "work-show", id: work }, project)}\``;
     if (limit === 0)
     {
         return ` — latest report: ${recovery}`;
@@ -419,7 +456,7 @@ function proposalItems(model: ProjectModel): WaitingItem[]
         full: `proposal [${attentionLabel(row)}]: ${row.text}`
             + ` (confirm with \`self decide confirm ${row.decision}\`)`,
         identity: `proposal ${row.decision}`,
-        recovery: `self search ${row.decision} --type decision --project ${project}`
+        recovery: { verb: "search", id: row.decision, type: "decision" }
     }));
 }
 
@@ -466,7 +503,8 @@ function unshippedLines(model: ProjectModel): string[]
 // hidden — the branches themselves are still named.
 function unshippedCountLines(model: ProjectModel): string[]
 {
-    return model.unshipped.map((branch) => `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped; run \`self work\``);
+    const works = scoped("self work", shellArgument(model.slug));
+    return model.unshipped.map((branch) => `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped; run \`${works}\``);
 }
 
 // The whole statement in one line, for the surfaces that report counts rather
@@ -486,7 +524,7 @@ function unshippedLine(model: ProjectModel): string
     const hidden = model.unshipped.length - named.length;
     return hidden === 0
         ? named.join(", ")
-        : `${named.join(", ")}, +${hidden} more; run \`self context\``;
+        : `${named.join(", ")}, +${hidden} more; run \`${scoped("self context", shellArgument(model.slug))}\``;
 }
 
 // Counted as open work wherever it is printed, because that is the scope the
@@ -512,7 +550,7 @@ function workProposalItems(model: ProjectModel): WaitingItem[]
             `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work accept ${proposal.id.slice(0, 8)}\``
         ].join("\n"),
         identity: `work proposal ${proposal.id.slice(0, 8)}`,
-        recovery: `self search ${proposal.id.slice(0, 8)} --project ${project}`
+        recovery: { verb: "search", id: proposal.id.slice(0, 8) }
     }));
 }
 
@@ -530,7 +568,7 @@ function pushList(lines: string[], title: string, items: string[]): void
     lines.push(`## ${title}`, "", ...items, "");
 }
 
-function detail(text: string, limit: number, recovery: string): string
+function detail(text: string, limit: number, recovery: Pointer): string
 {
     if (!Number.isFinite(limit) || contextLength(text) <= limit)
     {
@@ -578,13 +616,17 @@ function renderWorkspaceContext(models: ProjectModel[]): string
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail(model.goal ?? "(no goal)", 500, "self status");
+    const goal = detail(model.goal ?? "(no goal)", 500, workspacePointer("self status"));
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 
 function workspaceOmission(count: number): string
 {
-    return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`self status\` from the workspace for the full summaries`;
+    // The workspace's own omission, not a project's: `self status` here is the
+    // command being pointed at, which is why this function and
+    // workspaceContextLine are the two names proof/scope-pointers.mjs exempts.
+    const recovery = "self status";
+    return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`${recovery}\` from the workspace for the full summaries`;
 }
 
 function writeContext(text: string): void
@@ -600,14 +642,6 @@ function contextLength(text: string): number
 function takeCharacters(text: string, count: number): string
 {
     return Array.from(text).slice(0, Math.max(0, count)).join("");
-}
-
-// Context recovery commands are pasted into POSIX shells. Always quote a
-// project slug as one literal argument; the '"'"' sequence is the portable
-// way to embed a single quote inside a single-quoted shell word.
-function shellArgument(value: string): string
-{
-    return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 export function printStatus(ctx: CliContext, render: RenderMode): void
@@ -734,9 +768,10 @@ function countLine(works: WorkState[]): string
         + (retired > 0 ? `, ${retired} retired` : "");
 }
 
-export function printWorkList(ctx: CliContext & { project: string }, render: RenderMode): void
+export function printWorkList(ctx: ProjectScope, render: RenderMode): void
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const project = shellArgument(model.slug);
     if (render === "pretty")
     {
         console.log(renderWorkList(model).join("\n"));
@@ -749,7 +784,7 @@ export function printWorkList(ctx: CliContext & { project: string }, render: Ren
     }
     for (const work of open)
     {
-        console.log(plainWorkLine(work, contributionsOf(model.goals, work).map((item) => item.id).join(", ")));
+        console.log(plainWorkLine(work, contributionsOf(model.goals, work).map((item) => item.id).join(", "), project));
     }
     const done = model.works.filter((w) => w.status === "done").length;
     if (done > 0)
@@ -763,10 +798,11 @@ export function printWorkList(ctx: CliContext & { project: string }, render: Ren
     }
 }
 
-function plainWorkLine(work: WorkState, toward: string): string
+function plainWorkLine(work: WorkState, toward: string, project: string): string
 {
     const blocked = work.status === "blocked" ? ` (on ${work.blockedOn})` : "";
-    const reports = work.reports.length > 0 ? `  — ${work.reports.length} report(s), see \`self work show ${work.id}\`` : "";
+    const reports = work.reports.length > 0
+        ? `  — ${work.reports.length} report(s), see \`${pointerTo({ verb: "work-show", id: work.id }, project)}\`` : "";
     return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}`
         + `${gatedNote(work)}${reports}`;
 }
@@ -779,23 +815,44 @@ function gatedNote(work: WorkState): string
     return work.gatedBy.length === 0 ? "" : `  [gated by ${work.gatedBy.join(", ")}]`;
 }
 
-export function printLog(ctx: CliContext & { project: string }, limit: number): void
+export function printLog(ctx: ProjectScope, limit: number): void
 {
-    const events = readEvents(ctx.storeDir, ctx.project);
-    for (const event of events.slice(-limit))
+    for (const event of readEvents(ctx.storeDir, ctx.project).slice(-limit))
     {
-        if (styled)
-        {
-            const ts = event.ts.slice(5, 16).replace("T", " ");
-            const width = Math.max(20, termWidth() - 37 - event.id.length);
-            const summary = fit(eventSummary(event).split("\n", 1)[0], width);
-            console.log(`${dim(ts)}  ${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}`);
-        }
-        else
-        {
-            console.log(`${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`);
-        }
+        console.log(logLine(event, undefined));
     }
+}
+
+// Every registered project's events on one timeline, newest last, cut to the
+// limit after the merge rather than before it: the ask is the workspace's last
+// N events, not the last N of each project pasted together. The slug leads
+// each line as it does in `self search`, because a merged log that says what
+// happened without saying where is not readable.
+export function printWorkspaceLog(scopes: ProjectScope[], limit: number): void
+{
+    const merged = scopes.flatMap((scope) => readEvents(scope.storeDir, scope.project)
+        .map((event) => ({ event, slug: scope.project })));
+    merged.sort((left, right) => compareDated(left.event, right.event));
+    for (const item of merged.slice(-limit))
+    {
+        console.log(logLine(item.event, item.slug));
+    }
+}
+
+// One event, styled for a terminal and plain for everything else. The plain
+// form is the machine contract, so the project column appears only in the
+// workspace form — the surface where a line without it is ambiguous.
+function logLine(event: SelfEvent, slug: string | undefined): string
+{
+    if (!styled)
+    {
+        return `${slug === undefined ? "" : slug + "  "}${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`;
+    }
+    const lead = slug === undefined ? 0 : displayWidth(slug) + 2;
+    const ts = event.ts.slice(5, 16).replace("T", " ");
+    const summary = fit(eventSummary(event).split("\n", 1)[0], Math.max(20, termWidth() - 37 - lead - event.id.length));
+    return `${slug === undefined ? "" : dim(slug + "  ")}${dim(ts)}  ` +
+        `${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}`;
 }
 
 function eventStyle(type: string): (text: string) => string
