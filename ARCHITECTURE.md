@@ -82,7 +82,7 @@ appends nothing, so it never reaches `pipeline.ts` and owns no event namespace.
 ## Single gates
 
 Each rule below has exactly one implementation. Adding a second path around one
-of them is a review finding, not a refactor note. Four of the five have exactly
+of them is a review finding, not a refactor note. Five of the six have exactly
 one path through them today; the argument-parse gate has two, recorded under
 [Known debt](#known-debt), and a new command may not widen that.
 
@@ -92,6 +92,7 @@ one path through them today; the argument-parse gate has two, recorded under
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Attempt completion | `attempt/gate.ts` `verifyDeclarations` | an attempt is complete only through the envelope check; an exit code is not a result |
+| Attempt preparation | `attempt/provision.ts` `provisionWorkdir` / `releaseWorkdir` | an attempt's execution environment is cut, prepared and taken back in one place; `run.ts` `prepareAttempt` is how `attempt run` and `attempt register` both reach it, and no brief prepares anything itself |
 | Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). Required of every new or migrated command surface |
 
 Unknown flags are named CLI-wide even in the surfaces that still call
@@ -159,6 +160,16 @@ reminders:
   layout, its append path, its redaction scope. Raw runner output stays there
   and never folds into project state. Code that needs runner output opens a
   `Spool`; it does not read the directory itself.
+- One provisioned workdir per attempt, and the attempt id names it. It is cut
+  at `workdir/` inside that attempt's spool, so two attempts of one work unit
+  can never be handed the same checkout and retention reclaims it with the rest
+  of the attempt. The binding — repository, remote, head, digest — is
+  `provision.json`, the ordered step log is `preparation.jsonl`, and the agent
+  reads the path from `SUPERSELF_ATTEMPT_WORKDIR`. The project's preparation
+  template is `.self-preparation.json` at the repository root, read out of the
+  provisioned worktree at its pinned head and never off the runner's own
+  checkout; see the contract in
+  [CONTRIBUTING.md](CONTRIBUTING.md#attempt-preparation-template).
 - One artifact declaration shape: `{name, sha256, bytes}`, in the result
   envelope, in `AttemptSummary.artifacts`, and in the gate. `name`, never
   `path`. See the envelope contract in
@@ -190,6 +201,15 @@ entry with no issue behind it says so. Do not use any of these as precedent.
 - The integration train cluster is flat: `integration.ts` (1,500 lines),
   `lane.ts`, `train.ts`, `trainutil.ts`, `promote.ts`, `reviews.ts`,
   `envelope.ts` form one subsystem with no directory.
+- `attempt/` reaches up into `daemon/` for the categorical forbidden-action
+  list: `attempt/commands.ts` and `attempt/provision.ts` both import
+  `daemon/forbidden.js`, which is the wrong direction for the subsystem order
+  above. The list is policy vocabulary that answers the same question for a
+  plan's command, a work spec's, and a preparation step's, so it belongs at the
+  top level beside the other shared judgements — but it types its two entry
+  points on `AttemptPlan` and `WorkSpec`, so moving it is the #88 split rather
+  than an import change. Do not add a third reacher; call one of the two that
+  already exist, or move the module.
 - Two core modules reach into `attempt/`: `sanitize.ts` imports
   `attempt/redact.js`, and `views.ts` imports `attempt/spool.js`. `redact`
   belongs at the top level so the event guard depends only on core.

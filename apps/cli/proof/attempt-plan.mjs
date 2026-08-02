@@ -50,6 +50,17 @@ const plan = {
     resume: o.resume === "on"
 };
 
+// Runner-owned provisioning. Left off entirely when the case does not ask for
+// it, which is what every plan in this proof written before it existed says.
+if (o.provisionRepo !== undefined)
+{
+    plan.provision = {
+        repo: o.provisionRepo,
+        head: o.provisionHead,
+        ...(o.provisionRemote === undefined ? {} : { remote: o.provisionRemote }),
+        ...(o.provisionTimeoutMs === undefined ? {} : { timeoutMs: Number(o.provisionTimeoutMs) })
+    };
+}
 if (o.provider !== undefined)
 {
     plan.capabilities.provider = { name: o.providerName ?? "proof-provider", endpoint: o.provider };

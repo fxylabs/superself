@@ -12,9 +12,10 @@ import { classify, FailureClass, FailureSignal, fromDeclaration, isTransient } f
 import { deliverDirectives, inboxPath } from "./directive.js";
 import { alreadyCompleted, alreadyReported, attachReport, NO_ENVELOPE, publishArtifacts, Published, ResultEnvelope, sha256File, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
 import { CliError } from "../types.js";
-import { AttemptPlan, policyDigest } from "./plan.js";
+import { AttemptPlan, planScope, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
-import { MIN_LITERAL, redact, scopeFor, unredactableSecrets } from "./redact.js";
+import { bindingOf, provisionWorkdir, releaseWorkdir } from "./provision.js";
+import { MIN_LITERAL, redact, unredactableSecrets } from "./redact.js";
 import { admitAttempt, backoffFor, BREAKER_DEFAULT, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
 import { settling } from "./settlement.js";
 import { AttemptState, AttemptStatus, createSpool, liveAttemptFor, Spool } from "./spool.js";
@@ -81,7 +82,7 @@ function currentFence(file: string): number
 // a launcher of the operator's own. One writer, so the two cannot drift apart.
 export function prepareSpool(ctx: ProjectContext, plan: AttemptPlan, id: string, fence: number, state: AttemptState, options: RunOptions): Spool
 {
-    const spool = new Spool(createSpool(id), scopeFor(plan.capabilities.secrets));
+    const spool = new Spool(createSpool(id), planScope(plan));
     const identity = identityOf(plan.boundary);
     spool.claim(fence);
     writeBrief(spool, plan, id);
@@ -102,6 +103,7 @@ export function prepareSpool(ctx: ProjectContext, plan: AttemptPlan, id: string,
         // applied while this attempt runs never reinterprets it, because
         // what it was admitted under is already on its record.
         spec: plan.spec,
+        provision: plan.provision,
         command: plan.command,
         capabilities: plan.capabilities,
         artifacts: plan.artifacts,
@@ -234,20 +236,54 @@ async function gateBeforeSpend(
         console.error(drift);
         return { attempt: id, state: "preflight-failed", failure: "capability", detail: drift };
     }
+    // The execution environment, before anything can be spent on it. A
+    // preparation that fails is a preflight failure like any other, and it
+    // fails for the same reason a missing tool does: the run could not have
+    // produced anything.
+    await prepareAttempt(ctx, plan, spool, id);
     // Last, because a cooled-down breaker lets exactly one attempt through and
     // the probe costs the provider nothing. An attempt that stops on a missing
     // tool or an unwritable destination never reaches the provider, so it must
-    // not be the one that spends the trial the whole queue is waiting on.
+    // not be the one that spends the trial the whole queue is waiting on — and
+    // a preparation that fails is exactly that class, which is why it is
+    // decided above this at the cost of preparing an attempt the breaker then
+    // sends back to the queue.
     const provider = plan.capabilities.provider?.name;
     if (provider !== undefined && admitAttempt(provider, BREAKER_DEFAULT, options.now, id) === "open")
     {
         const detail = `the circuit breaker for provider "${provider}" is open — this work stays queued and no attempt was spent`;
         spool.setStatus({ state: "waiting-provider", failure: "transient-provider", detail });
         spool.append("events.jsonl", { event: "breaker.open", provider });
+        releaseWorkdir(plan, spool);
         console.log(detail);
         return { attempt: id, state: "waiting-provider", failure: "transient-provider", detail };
     }
     return null;
+}
+
+// The one place an attempt's execution environment is provisioned and prepared:
+// the runner's own launch reaches it here and `self attempt register` reaches
+// it from `external.ts`, so the worktree a launcher is handed and the worktree
+// the runner spawns into are cut by the same code.
+//
+// Everything it does happens before the attempt clock starts. A refusal costs
+// no run and no provider call, it is recorded where every other blocked attempt
+// is recorded, and it leaves nothing of a half-provisioned worktree behind.
+export async function prepareAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string): Promise<void>
+{
+    try
+    {
+        await provisionWorkdir(plan, spool, id);
+    }
+    catch (error)
+    {
+        const detail = redact((error as Error).message);
+        releaseWorkdir(plan, spool);
+        spool.setStatus({ state: "preflight-failed", failure: "validation", detail });
+        spool.append("events.jsonl", { event: "preparation.failed", detail });
+        recordAttemptEvent(ctx, plan, "run.blocked", id, { failure: "validation", detail });
+        throw error;
+    }
 }
 
 export function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: string, receipt: PreflightReceipt): AttemptResult
@@ -256,6 +292,7 @@ export function blockOnCapability(ctx: ProjectContext, plan: AttemptPlan, spool:
     const missing = receipt.checks.filter((check) => !check.ok).map((check) => `${check.capability}:${check.target}`);
     spool.setStatus({ state: "preflight-failed", failure: "capability", detail: missing.join(", ") });
     spool.append("events.jsonl", { event: "preflight.failed", missing });
+    releaseWorkdir(plan, spool);
     writeFileSync(spool.path("approval-request.txt"), request + "\n");
     // A read or write capability names an absolute path, and this event is
     // synced and committed. The same rewrite the request already goes through
@@ -307,8 +344,28 @@ function writeBrief(spool: Spool, plan: AttemptPlan, id: string): void
     {
         lines.push(`- ${artifact.name} → ${artifact.dest}`);
     }
-    lines.push("", ...envelopeSection(plan), `Attempt: ${id}`, "");
+    lines.push("", ...workdirSection(plan), ...envelopeSection(plan), `Attempt: ${id}`, "");
     writeFileSync(spool.path("brief.md"), redact(lines.join("\n")));
+}
+
+// Where the work happens, when the runner cut a worktree for it. This section
+// exists so a brief never has to instruct an agent to prepare anything: the
+// checkout is already at the pinned head and the project's own preparation has
+// already run in it by the time the agent reads this.
+function workdirSection(plan: AttemptPlan): string[]
+{
+    if (plan.provision === undefined)
+    {
+        return [];
+    }
+    return [
+        "## Where to work",
+        "",
+        `A worktree of ${plan.provision.repo} at ${plan.provision.head.slice(0, 12)} is already checked out at`,
+        "`$SUPERSELF_ATTEMPT_WORKDIR`, and this project's preparation has already run in it.",
+        "Work there. Do not create, clean up or re-pin a checkout of your own.",
+        ""
+    ];
 }
 
 // The contract the attempt is judged by, said where the agent will actually
@@ -467,6 +524,7 @@ export function failAttempt(ctx: ProjectContext, plan: AttemptPlan, spool: Spool
     // left the spool saying `running` for a run that had already ended, and
     // recovery then had to declare a runner dead that had simply lost a lock.
     spool.setStatus({ state, failure, detail, exitSource: "confirmed" });
+    releaseWorkdir(plan, spool);
     recordAttemptEvent(ctx, plan, failure === "cancelled" ? "run.cancelled" : "run.failed", id, { failure, detail: redact(detail) });
     noteProviderFailure(plan, spool, failure, observed, options);
     console.error(`attempt ${id} ${state}: ${failure} — ${detail}`);
@@ -659,6 +717,14 @@ export function childEnv(spool: Spool, id: string, run: number, resumeFrom: stri
         SUPERSELF_ATTEMPT_TOOLS: spool.path("tools.jsonl"),
         SUPERSELF_ATTEMPT_EVIDENCE: spool.path("evidence.json")
     };
+    // The worktree the runner cut and prepared at the plan's pinned head. A
+    // plan that asked for none adds no variable at all, so the environment a
+    // plan written before provisioning existed receives is unchanged.
+    const binding = bindingOf(spool);
+    if (binding !== null)
+    {
+        env.SUPERSELF_ATTEMPT_WORKDIR = binding.workdir;
+    }
     if (resumeFrom !== null)
     {
         env.SUPERSELF_ATTEMPT_RESUME = resumeFrom;
@@ -728,7 +794,7 @@ function watch(spool: Spool, child: ReturnType<typeof spawn>, plan: AttemptPlan)
 }
 
 // The heartbeat on its own, for the stretch before a child exists to watch.
-function beat(spool: Spool, everyMs: number): { stop: () => void }
+export function beat(spool: Spool, everyMs: number): { stop: () => void }
 {
     guard(() => spool.heartbeat());
     const timer = setInterval(() => guard(() => spool.heartbeat()), everyMs);
@@ -946,6 +1012,10 @@ function recordCompletion(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, 
     spool.writeJson("published.json", published);
     spool.setStatus({ state: "completed", failure: undefined, detail: undefined, exitSource: "confirmed" });
     spool.append("events.jsonl", { event: "run.completed", published: published.map((item) => item.name), reported });
+    // After the result is on record, never before: the residue check reads the
+    // worktree the agent worked in, and the removal is the last thing anybody
+    // needs it for.
+    releaseWorkdir(plan, spool);
     // The completion is exactly-once here, where the report's idempotency
     // already lives, rather than in whichever caller reaches settlement twice.
     if (!alreadyCompleted(ctx, id))
@@ -982,6 +1052,7 @@ function gateFailed(ctx: ProjectContext, plan: AttemptPlan, spool: Spool, id: st
     const detail = redact(reason);
     spool.setStatus({ state: "failed", failure: "validation", detail, exitSource: "confirmed" });
     spool.append("events.jsonl", { event: "gate.failed", detail });
+    releaseWorkdir(plan, spool);
     recordAttemptEvent(ctx, plan, "run.failed", id, { failure: "validation", detail });
     console.error(`attempt ${id} failed the completion gate: ${detail}`);
     return { attempt: id, state: "failed", failure: "validation", detail };

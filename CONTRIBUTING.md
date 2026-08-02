@@ -201,6 +201,47 @@ Rules the gate enforces:
 The same `{name, sha256, bytes}` shape appears in `AttemptSummary.artifacts`
 after the fold. Keep them identical.
 
+## Attempt preparation template
+
+Preparation is runner code, not brief instructions. When a plan pins a head,
+`self attempt run` and `self attempt register` cut a worktree of that head
+before the attempt clock starts, run this repository's preparation template in
+it, and take the worktree back when the attempt settles. An agent never
+provisions, re-verifies or cleans up a checkout of its own; it works in
+`$SUPERSELF_ATTEMPT_WORKDIR`.
+
+The template is `.self-preparation.json` at the repository root. It is read out
+of the provisioned worktree at the pinned head, so a lockfile-era template rides
+the commit that needs it and a template change is reviewed like any other change:
+
+```json
+{
+  "version": 1,
+  "steps": [
+    { "name": "install", "command": ["pnpm", "install", "--frozen-lockfile"], "timeoutMs": 600000 }
+  ]
+}
+```
+
+- `steps` runs in order, each with the provisioned worktree as its working
+  directory and the attempt plan's own boundary and passthrough environment.
+- `command` is argv, not a shell line. `argv[0]` must appear in the plan's
+  tools allowlist; a step naming anything else is refused at preflight.
+- `timeoutMs` is optional and defaults to ten minutes.
+- `name` is optional and labels the step in `self attempt show`.
+- No `.self-preparation.json` at that head means no steps — worktree
+  provisioning alone, which is a complete answer for a project that installs
+  nothing.
+
+A step that exits non-zero or runs past its timeout is a preflight failure: the
+attempt never starts, no run is spent, and each step's command, exit, duration
+and a bounded, redacted output tail are in the spool as `preparation.jsonl`. A
+malformed template is refused the same way, naming the field that is wrong.
+
+When settlement takes the worktree back it first records what was left
+uncommitted there. Ignored preparation output is not residue; an attempt that
+stopped before finalizing its outputs shows up in that count.
+
 ## Branches
 
 `main` is the only long-lived branch. Direct pushes to `main` are not allowed;

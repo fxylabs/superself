@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
-import { Boundary } from "./boundary.js";
+import { Boundary, boundaryEnv } from "./boundary.js";
+import { RedactionScope, scopeFor } from "./redact.js";
 import { CliError } from "../types.js";
 
 export interface ArtifactPlan
@@ -61,6 +62,28 @@ export interface SpecPin
     requestedModel: string;
 }
 
+// The execution environment the runner cuts for this attempt: a worktree of
+// `repo` at exactly `head`, provisioned before the attempt clock starts and
+// removed when it settles. A plan that carries no `provision` block is not
+// provisioned at all, which is what every plan written before this existed
+// says — the agent works wherever the boundary already put it.
+//
+// The head is an object name rather than a ref on purpose. A branch name moves
+// under the attempt: preparation would then match one commit and the agent
+// build another, which is the whole failure this block exists to remove.
+export interface ProvisionPlan
+{
+    // The repository the worktree is cut from, on this machine.
+    repo: string;
+    head: string;
+    // Where the head is fetched from when the repository does not hold it yet.
+    remote?: string;
+    // How long any one git step of the provisioning may take. A fetch is the
+    // only step here that can reach the network, and an unbounded one holds a
+    // runner that keeps heartbeating for ever.
+    timeoutMs: number;
+}
+
 export interface AttemptPlan
 {
     work: string;
@@ -75,6 +98,7 @@ export interface AttemptPlan
     runTimeoutMs: number;
     heartbeatMs: number;
     resume: boolean;
+    provision?: ProvisionPlan;
     spec?: SpecPin;
 }
 
@@ -128,8 +152,43 @@ export function normalizePlan(raw: any, base: string): AttemptPlan
         preflightTimeoutMs: positive(raw.preflightTimeoutMs, 10_000, "preflightTimeoutMs"),
         runTimeoutMs: positive(raw.runTimeoutMs, 900_000, "runTimeoutMs"),
         heartbeatMs: positive(raw.heartbeatMs, 1_000, "heartbeatMs"),
-        resume: raw.resume === true
+        resume: raw.resume === true,
+        // Left off the object when the plan declared none, so a plan written
+        // before provisioning existed normalizes, digests and spools to exactly
+        // the same bytes it always did.
+        provision: normalizeProvision(raw.provision, base)
     };
+}
+
+// A pinned head, in the spelling git names objects with. The floor is git's own
+// abbreviation floor and the ceiling is a sha256 object name.
+const OBJECT_NAME = /^[0-9a-fA-F]{7,64}$/;
+
+function normalizeProvision(raw: any, base: string): ProvisionPlan | undefined
+{
+    if (raw === undefined)
+    {
+        return undefined;
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    {
+        throw new CliError('attempt plan field "provision" must be an object naming the repository and the head this attempt builds');
+    }
+    const head = requireString(raw.head, "provision.head");
+    if (!OBJECT_NAME.test(head))
+    {
+        throw new CliError(`attempt plan field "provision.head" is "${head}", which is not a commit object name — a branch or a tag moves under the attempt, so the head an attempt builds is pinned`);
+    }
+    const provision: ProvisionPlan = {
+        repo: absolute(requireString(raw.repo, "provision.repo"), base),
+        head: head.toLowerCase(),
+        timeoutMs: positive(raw.timeoutMs, 300_000, "provision.timeoutMs")
+    };
+    if (raw.remote !== undefined)
+    {
+        provision.remote = requireString(raw.remote, "provision.remote");
+    }
+    return provision;
 }
 
 function normalizeBoundary(raw: any, base: string): Boundary
@@ -223,6 +282,20 @@ function normalizeRetry(raw: any): RetryPlan
     return retry;
 }
 
+// What this plan declared secret, read from both places a declared value can
+// come from. `scopeFor` looks in the runner's own environment, and that is only
+// half the answer: a plan may supply the value literally in `boundary.env`, and
+// that value is in no environment the runner can see — while the child, the
+// capability probe and every preparation step receive it, and whatever they
+// echo of it reaches the spool.
+//
+// Every writer that redacts under a plan takes its scope from here, so the two
+// halves are read once rather than in each caller.
+export function planScope(plan: AttemptPlan): RedactionScope
+{
+    return scopeFor(plan.capabilities.secrets, boundaryEnv(plan.boundary));
+}
+
 // The identity of what this attempt was allowed to do. Recorded in the
 // preflight receipt so a later reader can tell that the policy the probe
 // cleared is the policy the provider ran under.
@@ -233,7 +306,11 @@ export function policyDigest(plan: AttemptPlan): string
         command: plan.command,
         capabilities: plan.capabilities,
         artifacts: plan.artifacts,
-        retry: plan.retry
+        retry: plan.retry,
+        // Undefined for a plan that declares no provisioning, and JSON.stringify
+        // drops the key — so the digest of every plan written before this field
+        // existed is the value it has always had.
+        provision: plan.provision
     };
     return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
@@ -289,7 +366,7 @@ function stringMap(value: unknown, field: string): Record<string, string>
 // instant it starts. The realistic way to write one is a typo on a value that
 // was already large, and the bounds an attempt records have to be the bounds
 // it enforces.
-const MAX_BOUND = 2_147_483_647;
+export const MAX_BOUND = 2_147_483_647;
 
 function positive(value: unknown, fallback: number, field: string): number
 {

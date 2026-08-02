@@ -1,0 +1,1404 @@
+#!/usr/bin/env bash
+# Domain suite: runner-owned attempt preparation — the worktree the runner cuts
+# at the plan's pinned head, the binding it records, the project's preparation
+# template read at that same head, and the settle gate that checks the residue
+# and takes the worktree back.
+# Runs alone: bash proof/suites/attempt-preparation.sh
+set -euo pipefail
+CLI_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$CLI_DIR/proof/lib.sh"
+
+demo_workspace
+RUNNER="$ROOT/A/home/.local/state/superself/runner"
+machine A
+cd "$DEMO"
+WATT="$(SELF work add "the runner prepares an attempt's environment instead of asking the agent to" | tail -1)"
+SELF work start "$WATT" > /dev/null
+
+AGENT="$CLI_DIR/proof/prep-agent.mjs"
+MKPLAN="$CLI_DIR/proof/attempt-plan.mjs"
+SRC="$ROOT/src"
+mkdir -p "$ROOT/dest"
+
+command -v git > /dev/null || fail "the proof needs git on PATH to provision a worktree"
+
+# ---------------------------------------------------------------------------
+# The repository an attempt builds. Each template lives at a commit of its own,
+# and the branch is left standing at the last of them: a plan that pins an
+# earlier commit must get that commit's template, not whatever the repository
+# happens to be on now.
+# ---------------------------------------------------------------------------
+mkdir -p "$SRC"
+git -C "$SRC" init -q -b main
+printf 'pinned-head-body\n' > "$SRC/head.txt"
+printf 'prep-order.txt\n' > "$SRC/.gitignore"
+cat > "$SRC/prep.mjs" <<'PREP'
+// A preparation step of the project under test. Deterministic, and loud in the
+// exact ways a real one can be: it fails, it hangs, and it prints far more than
+// anything wants to keep.
+//
+// Nothing here calls process.exit on a path that has written to stdout. Eighty
+// kilobytes into a pipe is queued rather than delivered, and exit discards
+// whatever is still queued — a step that truncates its own output cannot prove
+// what the runner kept of it. The exit code is set and the process is left to
+// end when its writes have drained.
+import { appendFileSync, writeFileSync } from "node:fs";
+
+const arg = process.argv[2] ?? "";
+if (arg === "fail")
+{
+    process.stderr.write("dependencies could not be installed at this head\n");
+    process.exitCode = 3;
+}
+else if (arg === "sleep")
+{
+    writeFileSync(process.env.AGENT_GATE, "started\n");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120_000);
+}
+else if (arg === "leak")
+{
+    process.stdout.write(`configured with ${process.env.MY_API_KEY ?? "nothing"}\n`);
+}
+else if (arg === "noisy")
+{
+    for (let i = 0; i < 400; i++)
+    {
+        process.stdout.write("x".repeat(200) + "\n");
+    }
+    process.stdout.write("api_key=sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111\n");
+}
+else
+{
+    appendFileSync("prep-order.txt", arg + "\n");
+}
+PREP
+
+template()
+{
+    cat > "$SRC/.self-preparation.json"
+}
+commit_at()
+{
+    git -C "$SRC" add -A
+    git -C "$SRC" commit -qm "$1"
+    git -C "$SRC" rev-parse HEAD
+}
+
+template <<'T'
+{
+    "version": 1,
+    "steps": [
+        { "name": "first", "command": ["node", "prep.mjs", "one"], "timeoutMs": 30000 },
+        { "name": "second", "command": ["node", "prep.mjs", "two"], "timeoutMs": 30000 }
+    ]
+}
+T
+SHA_OK="$(commit_at "a template that prepares in two ordered steps")"
+
+rm "$SRC/.self-preparation.json"
+SHA_BARE="$(commit_at "no template at all")"
+
+template <<'T'
+{ "steps": [{ "name": "install", "command": ["node", "prep.mjs", "fail"], "timeoutMs": 30000 }] }
+T
+SHA_FAIL="$(commit_at "a template whose step fails")"
+
+template <<'T'
+{ "steps": [{ "name": "deploy", "command": ["pnpm", "install"], "timeoutMs": 30000 }] }
+T
+SHA_DISALLOWED="$(commit_at "a template that runs a command the plan never declared")"
+
+printf '{ "steps": [ this is not json\n' > "$SRC/.self-preparation.json"
+SHA_BADJSON="$(commit_at "a template that is not valid JSON")"
+
+template <<'T'
+{ "steps": [{ "name": "install" }] }
+T
+SHA_NOARGV="$(commit_at "a step with no argv")"
+
+template <<'T'
+{ "steps": [{ "command": ["node", "prep.mjs", "one"], "timeoutMs": -5 }] }
+T
+SHA_BADTIMEOUT="$(commit_at "a step with a negative timeout")"
+
+template <<'T'
+{ "steps": [{ "name": "noisy", "command": ["node", "prep.mjs", "noisy"], "timeoutMs": 30000 }] }
+T
+SHA_NOISY="$(commit_at "a step that prints far more than anything keeps")"
+
+template <<'T'
+{ "steps": [{ "name": "leaky", "command": ["node", "prep.mjs", "leak"], "timeoutMs": 30000 }] }
+T
+SHA_LEAK="$(commit_at "a step that echoes back what it was configured with")"
+
+template <<'T'
+{ "steps": [{ "name": "release", "command": ["pnpm", "run", "publish"], "timeoutMs": 30000 }] }
+T
+SHA_FORBIDDEN="$(commit_at "a template that smuggles a forbidden action through an allowed binary")"
+
+template <<'T'
+{ "steps": [{ "name": "release", "command": ["env", "-S", "sh -c 'npm publish'"], "timeoutMs": 30000 }] }
+T
+SHA_PACKED="$(commit_at "a template that packs a forbidden shell script into one env -S token")"
+
+template <<'T'
+{ "steps": [{ "name": "hang", "command": ["node", "prep.mjs", "sleep"], "timeoutMs": 120000 }] }
+T
+SHA_SLEEP="$(commit_at "a step that never finishes")"
+
+cd "$DEMO"
+plan()
+{
+    local file="$1"
+    shift
+    node "$MKPLAN" "$file" "work=$WATT" "agent=$AGENT" "cwd=$DEMO" "tools=node,git" "$@"
+}
+last_attempt()
+{
+    attempts_of "$WATT" | tail -1
+}
+# Kills the runner process the attempt recorded, and whatever it started.
+# `SELF … &` backgrounds a shell function, so $! is the wrapping subshell: the
+# runner would survive it and keep heartbeating, and nothing would look crashed.
+crash_runner()
+{
+    local pid
+    pid="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).pid))' "$(spool_of "$1")/status.json")"
+    pkill -9 -P "$pid" 2>/dev/null || true
+    kill -9 "$pid" 2>/dev/null || true
+}
+released()
+{
+    node -e '
+const fs = require("node:fs");
+const [file, wanted, sample] = process.argv.slice(1);
+const lines = fs.readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+const release = lines.filter((line) => line.event === "workdir.released").pop();
+if (release === undefined) { console.error("no workdir.released record"); process.exit(1); }
+if (release.removed !== true) { console.error("the worktree was not removed"); process.exit(1); }
+if (release.residue !== Number(wanted)) { console.error(`residue ${release.residue}, wanted ${wanted}`); process.exit(1); }
+if (sample && !release.sample.join(" ").includes(sample)) { console.error(`residue sample does not name ${sample}`); process.exit(1); }
+' "$1" "$2" "${3:-}"
+}
+# Every refusal has to leave the repository exactly as it found it.
+no_worktree_left()
+{
+    [ -d "$(spool_of "$1")/workdir" ] && fail "$2 left a provisioned worktree behind"
+    git -C "$SRC" worktree list | grep -q "$1" && fail "$2 left the attempt's worktree registered in the repository"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# The provisioned attempt. The agent is handed a worktree at the pinned head
+# with the project's preparation already run in it, and it never prepares or
+# cleans up anything itself.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-ok.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" "dest=$ROOT/dest/ok.md" "marker=$ROOT/ran-ok"
+SELF attempt run "$ROOT/p-ok.json" > /dev/null || fail "a provisioned attempt did not complete"
+AT_OK="$(last_attempt)"
+[ "$(attempt_state "$AT_OK")" = "completed" ] || fail "a provisioned attempt did not reach completed"
+grep -q "head=pinned-head-body" "$ROOT/dest/ok.md" || fail "the agent was not handed a checkout of the pinned head"
+grep -q "order=one,two" "$ROOT/dest/ok.md" || fail "the preparation steps did not run, or did not run in template order"
+grep -q "workdir=$(spool_of "$AT_OK")/workdir" "$ROOT/dest/ok.md" || fail "SUPERSELF_ATTEMPT_WORKDIR did not name the provisioned worktree"
+
+# the binding: what this attempt was bound to, as structured data
+node -e '
+const fs = require("node:fs");
+const [file, head, repo, attempt] = process.argv.slice(1);
+const b = JSON.parse(fs.readFileSync(file, "utf8"));
+const wrong = (why) => { console.error(why); process.exit(1); };
+if (b.head !== head) wrong(`binding head ${b.head} is not the pinned head`);
+if (b.repo !== repo) wrong("binding does not name the repository it was cut from");
+if (b.remote !== null) wrong("binding invented a remote the plan never named");
+if (!/^[0-9a-f]{64}$/.test(b.digest)) wrong("binding carries no digest");
+if (b.template !== ".self-preparation.json") wrong("binding does not name the template it read");
+if (!/^[0-9a-f]{64}$/.test(b.templateSha256)) wrong("binding does not digest the template it read");
+if (b.steps !== 2) wrong(`binding recorded ${b.steps} steps`);
+if (b.prepared !== true) wrong("binding does not say the preparation finished");
+if (!b.workdir.endsWith(`${attempt}/workdir`)) wrong("the workdir is not derived from the attempt id");
+' "$(spool_of "$AT_OK")/provision.json" "$SHA_OK" "$SRC" "$AT_OK"
+
+# the step log: each step's command, exit, duration and output, in order
+node -e '
+const fs = require("node:fs");
+const lines = fs.readFileSync(process.argv[1], "utf8").trim().split("\n").map((line) => JSON.parse(line));
+const wrong = (why) => { console.error(why); process.exit(1); };
+if (lines.length !== 2) wrong(`${lines.length} step records, wanted 2`);
+if (lines[0].step !== 1 || lines[0].name !== "first") wrong("the first step is not recorded first");
+if (lines[1].step !== 2 || lines[1].name !== "second") wrong("the second step is not recorded second");
+for (const line of lines) {
+    if (line.exit !== 0) wrong(`step ${line.step} recorded exit ${line.exit}`);
+    if (!Array.isArray(line.command) || line.command[0] !== "node") wrong("a step record does not carry its command");
+    if (typeof line.durationMs !== "number") wrong("a step record does not carry its duration");
+    if (typeof line.output !== "string") wrong("a step record does not carry its output");
+}
+' "$(spool_of "$AT_OK")/preparation.jsonl"
+
+SELF attempt show "$AT_OK" | grep -q "^workdir    " || fail "attempt show does not report the worktree the runner bound"
+SELF attempt show "$AT_OK" | grep -q "prep 2  second  exit 0" || fail "attempt show does not report the preparation steps"
+
+# the settle gate: the residue check, then the worktree taken back. Preparation
+# output the repository ignores is not residue.
+released "$(spool_of "$AT_OK")/events.jsonl" 0
+no_worktree_left "$AT_OK" "a completed attempt"
+
+# ---------------------------------------------------------------------------
+# Work the attempt left unaccounted for is what the residue check is for.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-residue.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" "dest=$ROOT/dest/residue.md" "mode=residue"
+SELF attempt run "$ROOT/p-residue.json" > /dev/null || fail "the residue case did not complete"
+AT_RESIDUE="$(last_attempt)"
+released "$(spool_of "$AT_RESIDUE")/events.jsonl" 1 "left-behind.txt"
+no_worktree_left "$AT_RESIDUE" "an attempt that left residue"
+
+# ---------------------------------------------------------------------------
+# The worktree comes back from every terminal verdict, not only from a run that
+# produced something: a run that wrote no result at all, and a run the
+# completion gate refused.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-crash.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" "mode=crashout" "maxRuns=1"
+SELF attempt run "$ROOT/p-crash.json" > /dev/null 2>&1 && fail "a run that wrote no result was reported as completed"
+AT_CRASH="$(last_attempt)"
+[ "$(attempt_state "$AT_CRASH")" = "failed" ] || fail "a run that wrote no result did not fail"
+released "$(spool_of "$AT_CRASH")/events.jsonl" 0
+no_worktree_left "$AT_CRASH" "a failed run"
+
+plan "$ROOT/p-gate.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" "dest=$ROOT/dest/gate.md" "mode=mismatch" "maxRuns=1"
+SELF attempt run "$ROOT/p-gate.json" > /dev/null 2>&1 && fail "an attempt the gate refuses was reported as completed"
+AT_GATE="$(last_attempt)"
+[ "$(attempt_state "$AT_GATE")" = "failed" ] || fail "an attempt the gate refuses did not fail"
+released "$(spool_of "$AT_GATE")/events.jsonl" 0
+no_worktree_left "$AT_GATE" "an attempt the completion gate refused"
+
+# ---------------------------------------------------------------------------
+# No template at the pinned head means worktree provisioning alone.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-bare.json" "provisionRepo=$SRC" "provisionHead=$SHA_BARE" "dest=$ROOT/dest/bare.md"
+SELF attempt run "$ROOT/p-bare.json" > /dev/null || fail "a head with no preparation template did not complete"
+AT_BARE="$(last_attempt)"
+grep -q "head=pinned-head-body" "$ROOT/dest/bare.md" || fail "a head with no template was not provisioned"
+grep -q "order=missing" "$ROOT/dest/bare.md" || fail "a head with no template ran preparation steps anyway"
+[ -f "$(spool_of "$AT_BARE")/preparation.jsonl" ] && fail "a head with no template recorded step logs"
+no_worktree_left "$AT_BARE" "an attempt with no template"
+
+# ---------------------------------------------------------------------------
+# Backward compatibility. A plan that carries no provisioning request is the
+# plan every attempt before this was written as, and nothing about it changes:
+# no worktree, no binding, and no workdir in the child's environment.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-none.json" "dest=$ROOT/dest/none.md"
+SELF attempt run "$ROOT/p-none.json" > /dev/null || fail "a plan with no provisioning request did not complete"
+AT_NONE="$(last_attempt)"
+grep -q '"provision"' "$(spool_of "$AT_NONE")/plan.json" && fail "a plan with no provisioning request grew a provision field when it normalized"
+grep -q '"provision"' "$(spool_of "$AT_NONE")/attempt.json" && fail "a plan with no provisioning request grew a provision field on its record"
+[ -f "$(spool_of "$AT_NONE")/provision.json" ] && fail "a plan with no provisioning request was bound to a worktree"
+[ -d "$(spool_of "$AT_NONE")/workdir" ] && fail "a plan with no provisioning request was given a worktree"
+grep -q "workdir=none" "$ROOT/dest/none.md" || fail "a plan with no provisioning request still received SUPERSELF_ATTEMPT_WORKDIR"
+grep -q "Where to work" "$(spool_of "$AT_NONE")/brief.md" && fail "an unprovisioned brief tells the agent about a worktree it has not got"
+grep -q "Where to work" "$(spool_of "$AT_OK")/brief.md" || fail "a provisioned brief does not tell the agent where to work"
+
+# ---------------------------------------------------------------------------
+# A failed preparation step is a preflight failure: the attempt never starts,
+# no run is spent, and the step's own record says why.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-fail.json" "provisionRepo=$SRC" "provisionHead=$SHA_FAIL" "dest=$ROOT/dest/fail.md" "marker=$ROOT/ran-fail"
+FAILED="$(SELF attempt run "$ROOT/p-fail.json" 2>&1 || true)"
+echo "$FAILED" | grep -q 'preparation step 1 ("install")' || fail "the refusal did not name the step that failed"
+echo "$FAILED" | grep -q "the attempt was not started" || fail "the refusal did not say the attempt never started"
+AT_FAIL="$(last_attempt)"
+[ "$(attempt_state "$AT_FAIL")" = "preflight-failed" ] || fail "a failed preparation step did not fail the preflight"
+[ -f "$ROOT/ran-fail" ] && fail "the provider ran despite a failed preparation step"
+[ -f "$(spool_of "$AT_FAIL")/run-1.stdout.log" ] && fail "a run was spent on an attempt whose preparation failed"
+node -e '
+const fs = require("node:fs");
+const line = JSON.parse(fs.readFileSync(process.argv[1], "utf8").trim().split("\n").pop());
+if (line.exit !== 3) { console.error(`the failing step recorded exit ${line.exit}`); process.exit(1); }
+if (!line.output.includes("dependencies could not be installed")) { console.error("the failing step recorded no output"); process.exit(1); }
+' "$(spool_of "$AT_FAIL")/preparation.jsonl"
+no_worktree_left "$AT_FAIL" "a failed preparation"
+
+# ---------------------------------------------------------------------------
+# A step whose command the plan never declared is refused before it runs.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-tool.json" "provisionRepo=$SRC" "provisionHead=$SHA_DISALLOWED" "marker=$ROOT/ran-tool"
+TOOL="$(SELF attempt run "$ROOT/p-tool.json" 2>&1 || true)"
+echo "$TOOL" | grep -q 'runs "pnpm", which this attempt.s tools allowlist does not carry' || fail "the refusal did not name the command the allowlist does not carry"
+AT_TOOL="$(last_attempt)"
+[ "$(attempt_state "$AT_TOOL")" = "preflight-failed" ] || fail "a step outside the tools allowlist did not fail the preflight"
+[ -f "$(spool_of "$AT_TOOL")/preparation.jsonl" ] && fail "a step outside the allowlist ran anyway"
+no_worktree_left "$AT_TOOL" "a step outside the tools allowlist"
+
+# The allowlist is not the whole of what a step is judged by. `pnpm` is in
+# nobody's forbidden vocabulary, so a template that runs a package script named
+# `publish` through it would have reached the categorical list only if the whole
+# argv is read — which is how a plan's own command is read.
+plan "$ROOT/p-forbidden.json" "provisionRepo=$SRC" "provisionHead=$SHA_FORBIDDEN" "tools=node,git,pnpm" "marker=$ROOT/ran-forbidden"
+FORBIDDEN="$(SELF attempt run "$ROOT/p-forbidden.json" 2>&1 || true)"
+echo "$FORBIDDEN" | grep -q 'preparation step 1 of the template at this head declares "publish", which is publish' \
+    || fail "a forbidden package script smuggled through an allowed binary was not refused: $FORBIDDEN"
+echo "$FORBIDDEN" | grep -q "no overnight policy can grant one" || fail "the forbidden refusal did not read like every other one"
+AT_FORBIDDEN="$(last_attempt)"
+[ "$(attempt_state "$AT_FORBIDDEN")" = "preflight-failed" ] || fail "a forbidden preparation step did not fail the preflight"
+[ -f "$(spool_of "$AT_FORBIDDEN")/preparation.jsonl" ] && fail "a forbidden preparation step ran anyway"
+[ -f "$ROOT/ran-forbidden" ] && fail "the provider ran despite a forbidden preparation step"
+no_worktree_left "$AT_FORBIDDEN" "a forbidden preparation step"
+
+# The same refusal when the whole invocation is packed into one token. A
+# launcher that re-splits its own argument — `env -S` — hands the shell, the
+# flag and the script to the kernel as one argv word, and a gate that scans
+# tokens sees an opaque payload.
+plan "$ROOT/p-packed.json" "provisionRepo=$SRC" "provisionHead=$SHA_PACKED" "tools=node,git,env" "marker=$ROOT/ran-packed"
+PACKED="$(SELF attempt run "$ROOT/p-packed.json" 2>&1 || true)"
+# The refusal names the word that matched, which for this vector is `npm`
+# rather than `publish`; the category is what has to be stated either way.
+echo "$PACKED" | grep -q 'which is publish' || fail "a forbidden script packed into one env -S token was not refused: $PACKED"
+AT_PACKED="$(last_attempt)"
+[ "$(attempt_state "$AT_PACKED")" = "preflight-failed" ] || fail "a packed forbidden step did not fail the preflight"
+[ -f "$ROOT/ran-packed" ] && fail "the provider ran despite a packed forbidden step"
+no_worktree_left "$AT_PACKED" "a packed forbidden preparation step"
+
+# The delivery forms themselves, as a table. Every wrapper shape this gate has
+# been shown is kept here, so a later reading of the matcher cannot quietly stop
+# recognising one — and the benign near-misses are kept beside them, because a
+# refusal of ordinary prose has no recovery except rewording somebody's prompt.
+cat > "$ROOT/gate-probe.mjs" <<'PROBE'
+// The delivery forms this gate has been shown, and the ordinary commands it
+// must not refuse, kept as a table so a later reading of the matcher cannot
+// quietly stop recognising one — or start refusing somebody's commit message.
+//
+// The gate reads a split-string argument only where env is the program: argv[0],
+// or behind NAME=value assignments. An `env -S` anywhere else is answered
+// `unreadable` rather than guessed at, which is why some vectors below assert a
+// refusal that names no effect.
+//
+// argv[2] because this runs as a file: argv[1] is the script itself.
+const { forbiddenCommand } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
+
+const nested = (n) => { let t = "sh -c p'ublish'"; for (let i = 0; i < n; i++) { t = "env -S " + JSON.stringify(t); } return t; };
+const harmless = (n) => { let t = "sh -c true"; for (let i = 0; i < n; i++) { t = "env -S " + JSON.stringify(t); } return t; };
+const words = (n) => Array.from({ length: n }, (_, i) => "w" + i).join(" ");
+
+// Refused, and by what. A named effect where the gate could read one; the
+// unreadable answer where it could not.
+const REFUSED = [
+    // env in program position — these must name the effect, never `unreadable`
+    ["env -S packed", ["env", "-S", "npm publish"], "publish"],
+    ["env with an assignment then -S", ["env", "FOO=bar", "-S", "npm publish"], "publish"],
+    ["env -i -S", ["env", "-i", "-S", "npm publish"], "publish"],
+    ["env -u FOO -S", ["env", "-u", "FOO", "-S", "npm publish"], "publish"],
+    ["env --unset FOO -S", ["env", "--unset", "FOO", "-S", "sh -c npm publish"], "publish"],
+    ["env -C /tmp -S", ["env", "-C", "/tmp", "-S", "sh -c npm publish"], "publish"],
+    ["env --chdir /tmp -S", ["env", "--chdir", "/tmp", "-S", "sh -c npm publish"], "publish"],
+    ["env -uFOO -S", ["env", "-uFOO", "-S", "sh -c npm publish"], "publish"],
+    ["env --unset=FOO -S", ["env", "--unset=FOO", "-S", "sh -c npm publish"], "publish"],
+    ["env --ignore-environment -S", ["env", "--ignore-environment", "-S", "sh -c npm publish"], "publish"],
+    ["/usr/bin/env -S", ["/usr/bin/env", "-S", "sh -c npm publish"], "publish"],
+    ["env -iS cluster", ["env", "-iS", "FOO=bar sh -c npm publish"], "publish"],
+    ["env -S value attached", ["env", "-Ssh -c npm publish"], "publish"],
+    ["env -iS value attached", ["env", "-iSsh -c npm publish"], "publish"],
+    ["env -uFOO -S value attached", ["env", "-uFOO", "-Ssh -c aws deploy"], "provision"],
+    ["env --split-string=", ["env", "--split-string=FOO=bar sh -c npm publish"], "publish"],
+    ["env --split-string arg", ["env", "--split-string", "FOO=bar sh -c npm publish"], "publish"],
+    ["env -S quoted script", ["env", "-S", "FOO=bar sh -c 'npm publish'"], "publish"],
+    ["env -S with double quotes", ["env", "-S", "sh -c \"npm  publish\""], "publish"],
+    ["env -S with a backslash escape", ["env", "-S", "sh -c npm\\ publish"], "publish"],
+    ["env -S with an unterminated quote", ["env", "-S", "sh -c 'npm publish"], "publish"],
+    ["env -S with a trailing newline", ["env", "-S", "sh -c 'npm publish'\n"], "publish"],
+    ["env -S quoting that leaves whitespace in one word", ["env", "-S", "'npm publish'"], "publish"],
+    ["env -S quote concatenation", ["env", "-S", "sh -c p'ublish'"], "publish"],
+    ["env -S packing an env", ["env", "-S", "env -S 'sh -c npm publish'"], "publish"],
+    ["an assignment before env", ["FOO=bar", "env", "-S", "sh -c npm publish"], "publish"],
+    ["env launching env", ["env", "env", "-S", "npm publish"], "publish"],
+    ["env with an assignment launching env", ["env", "FOO=1", "env", "-S", "npm publish"], "publish"],
+    ["env launching env after its terminator", ["env", "--", "env", "-S", "npm publish"], "publish"],
+    ["env launching env launching env", ["env", "env", "env", "-S", "npm publish"], "publish"],
+    ["a valid env hiding a packed env in its program's arguments", ["env", "mytool", "env", "-S", "npm publish"], "unreadable"],
+    ["the same with the inline split spelling", ["env", "mytool", "env", "--split-string=npm publish"], "unreadable"],
+    ["the same with a launcher between them", ["env", "mytool", "xargs", "env", "-S", "npm publish"], "unreadable"],
+    // a shell handed a script, wherever it sits
+    ["a shell handed a script", ["sh", "-c", "npm publish"], "publish"],
+    ["a login shell handed a script", ["bash", "-lc", "npm publish"], "publish"],
+    ["an assignment in front of the shell", ["env", "FOO=bar", "sh", "-c", "npm publish"], "publish"],
+    ["a launcher with its own flags", ["nice", "-n", "10", "sh", "-c", "aws deploy"], "provision"],
+    ["a bounded launcher", ["timeout", "30", "/bin/sh", "-c", "rm -rf /"], "destructive"],
+    ["two launchers", ["nohup", "setsid", "zsh", "-c", "stripe charge"], "payment"],
+    ["a package script through an allowed binary", ["pnpm", "run", "publish"], "publish"],
+    // vocabulary is still read first, so a forbidden launcher names itself
+    ["sudo in front of a packed env", ["sudo", "env", "-S", "npm publish"], "policy-change"],
+    // env behind another program: the gate stops guessing and says so
+    ["xargs in front of a packed env", ["xargs", "env", "-S", "npm publish"], "unreadable"],
+    ["xargs -I {} in front of a packed env", ["xargs", "-I", "{}", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["xargs -a file in front of a packed env", ["xargs", "-a", "list.txt", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["timeout in front of a packed env", ["timeout", "30", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["timeout --signal whose value is env", ["timeout", "--signal", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["time -f whose value is env", ["time", "-f", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["nice -n whose value is env", ["nice", "-n", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["command -v whose value is env", ["command", "-v", "env", "-S", "sh -c npm publish"], "unreadable"],
+    ["stdbuf in front of a packed env", ["stdbuf", "-o0", "env", "-S", "sh -c terraform apply"], "unreadable"],
+    ["nohup setsid in front of a packed env", ["nohup", "setsid", "env", "-S", "sh -c stripe charge"], "unreadable"],
+    ["echo naming env before a -S", ["echo", "env", "-S", "release notes"], "unreadable"],
+    ["git log naming env before a -S", ["git", "log", "env", "-S", "release notes"], "unreadable"],
+    // the bounds, one past each
+    ["a forbidden word past the packed-word bound", ["env", "-S", words(256) + " publish"], "unreadable"],
+    ["a packed chain past the rescan bound", ["env", "-S", nested(9)], "unreadable"],
+    ["a harmless chain past the rescan bound", ["env", "-S", harmless(9)], "unreadable"],
+    ["a forbidden core inside the allowed depth", ["env", "-S", nested(7)], "publish"]
+];
+
+// Ordinary commands. Every one of these was a refusal at some point in this
+// gate's history, or is one flag away from having been.
+const BENIGN = [
+    ["git -S with prose (GPG-sign)", ["git", "-S", "release notes"]],
+    ["sort -S with prose (buffer size)", ["sort", "-S", "release notes"]],
+    ["sort -S with a size", ["sort", "-S", "1G", "file.txt"]],
+    ["curl -sS with a url", ["curl", "-sS", "https://example.invalid/x"]],
+    ["git -S signing an ordinary commit", ["git", "-S", "commit", "-m", "ordinary work"]],
+    ["ssh -S with a control socket", ["ssh", "-S", "/tmp/cm", "host", "uptime"]],
+    ["tar -S with an archive", ["tar", "-S", "-xf", "archive.tar"]],
+    ["a commit message mentioning sh -c", ["git", "commit", "-m", "fix: document sh -c handling in the gate"]],
+    ["a grep pattern that is sh -c", ["grep", "-rn", "sh -c", "src/"]],
+    ["an agent prompt in ordinary English", ["claude", "-p", "never run sh with a script; release notes are prose", "--model", "opus"]],
+    ["this repository's own agent invocation", ["node", "/x/prep-agent.mjs"]],
+    ["this repository's own preparation step", ["pnpm", "install", "--frozen-lockfile"]],
+    ["the runner's own provisioning", ["git", "worktree", "add", "--detach", "/tmp/wd", "abc"]],
+    ["env after its option terminator", ["env", "--", "-S", "release notes"]],
+    ["env running an ordinary program", ["env", "FOO=1", "mytool", "-S", "release notes"]],
+    ["env running a program that takes -S", ["env", "mytool", "-S", "release notes"]],
+    ["echo naming env with no split flag after it", ["echo", "env", "hello"]],
+    ["exactly 255 packed words, all read", ["env", "-S", words(255)]],
+    ["exactly 256 packed words, all read", ["env", "-S", words(256)]],
+    ["exactly 8 packed layers, all read", ["env", "-S", harmless(7)]]
+];
+
+let bad = 0;
+const category = (argv) =>
+{
+    const match = forbiddenCommand(argv);
+    return match === null ? null : match.category;
+};
+
+console.log("refused vectors — each with the category it must be refused under:");
+for (const [name, argv, want] of REFUSED)
+{
+    const got = category(argv);
+    console.log(`  ${got === null ? "ADMITTED" : got.padEnd(13)}  ${name}`);
+    if (got !== want)
+    {
+        bad++;
+        console.error(`${name} -> ${got}, wanted ${want}`);
+    }
+}
+console.log("benign vectors — none of these may be refused:");
+for (const [name, argv] of BENIGN)
+{
+    const got = category(argv);
+    console.log(`  ${got === null ? "admitted" : "REFUSED " + got}  ${name}`);
+    if (got !== null)
+    {
+        bad++;
+    }
+}
+
+// No packed width and no packed depth may answer "nothing forbidden here".
+for (const width of [1, 100, 254, 255, 256, 257, 1000, 5000])
+{
+    if (forbiddenCommand(["env", "-S", words(width) + " publish"]) === null)
+    {
+        bad++;
+        console.error(`a packed argument of ${width} words answered null`);
+    }
+}
+for (let depth = 0; depth <= 12; depth++)
+{
+    if (forbiddenCommand(["env", "-S", nested(depth)]) === null)
+    {
+        bad++;
+        console.error(`a packed chain nested ${depth} deep answered null`);
+    }
+}
+
+// The invariant, and the two things that keep it honest.
+//
+// Round 13 replaced a restated premise with one shared with the module, and
+// each failed the opposite way: a restatement drifts out of agreement silently,
+// and a shared notion goes blind, because forbiddenCommand reaches the same
+// helper through launched() — so a broken notion moves the answer and the
+// coverage together and the check cannot see its own blindness. The answer is
+// both readings plus an assertion that they agree.
+//
+// Below: an oracle written from the rule and short enough to be judged by
+// reading it; an assertion that it and the module say the same thing about
+// every env token in every vector; coverage computed from the oracle so a
+// broken module cannot shrink it; and a floor per topology, because a single
+// global count cannot notice a class-shaped hole — a mutation that deleted the
+// env-behind-an-ordinary-program topology entirely still left 205 of 222
+// vectors selected, above the old flat floor of 200.
+const { envProgramPositions } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
+const basename = (token) => /^(?:\.{0,2}|~)\/\S*$/.test(token) ? token.slice(token.lastIndexOf("/") + 1) : token;
+// A split flag, read the way env reads a cluster rather than as a whole-token
+// shape. A regex over the whole token missed `-Snpm publish`, where the value is
+// attached and the token therefore carries a space — the module has always
+// treated that as a split, so the premise was quietly narrower than the rule.
+// The per-prefix uniformity check below is what found it.
+const splitFlag = (token) =>
+{
+    if (token === "--split-string" || /^--split-string=/.test(token))
+    {
+        return true;
+    }
+    if (!token.startsWith("-") || token.startsWith("--") || token.length < 2)
+    {
+        return false;
+    }
+    const cluster = token.slice(1);
+    for (let letter = 0; letter < cluster.length; letter++)
+    {
+        if (cluster[letter] === "S")
+        {
+            return true;
+        }
+        if (!"i0v".includes(cluster[letter]))
+        {
+            return false;
+        }
+    }
+    return false;
+};
+const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+// env's option window, read from env's documented grammar: where does it end,
+// and does it end by packing a command line or by naming a program? -1 means it
+// packs one or runs out of tokens; otherwise the index of the program env execs.
+const BARE_LONG = ["--ignore-environment", "--null", "--debug", "--help", "--version"];
+const VALUE_LONG = ["--unset", "--chdir", "--block-signal", "--default-signal", "--ignore-signal"];
+const oracleProgramToken = (argv, at) =>
+{
+    let index = at + 1;
+    while (index < argv.length)
+    {
+        const token = argv[index];
+        if (token === "--")
+        {
+            return index + 1 < argv.length ? index + 1 : -1;
+        }
+        if (ASSIGN.test(token))
+        {
+            index++;
+        }
+        else if (token === "--split-string" || /^--split-string=/.test(token))
+        {
+            return -1;
+        }
+        else if (token.startsWith("--"))
+        {
+            const name = token.split("=")[0];
+            if (VALUE_LONG.includes(name))
+            {
+                index += token.includes("=") ? 1 : 2;
+            }
+            else if (BARE_LONG.includes(name))
+            {
+                index++;
+            }
+            else
+            {
+                return index;
+            }
+        }
+        else if (token.startsWith("-") && token.length > 1)
+        {
+            const cluster = token.slice(1);
+            let consumes = 1;
+            for (let letter = 0; letter < cluster.length; letter++)
+            {
+                const rest = cluster.slice(letter + 1);
+                if (cluster[letter] === "S")
+                {
+                    return -1;
+                }
+                if (cluster[letter] === "u" || cluster[letter] === "C")
+                {
+                    consumes = rest === "" ? 2 : 1;
+                    break;
+                }
+                if (!"i0v".includes(cluster[letter]))
+                {
+                    return index;
+                }
+            }
+            index += consumes;
+        }
+        else
+        {
+            return index;
+        }
+    }
+    return -1;
+};
+
+// The rule's three cases and nothing else: index 0, behind NAME=value
+// assignments only, or the program token an outer env's window resolved to.
+const oraclePositions = (argv) =>
+{
+    const found = [];
+    let index = 0;
+    while (index < argv.length && ASSIGN.test(argv[index]))
+    {
+        index++;
+    }
+    while (index < argv.length && basename(argv[index]) === "env")
+    {
+        found.push(index);
+        const next = oracleProgramToken(argv, index);
+        if (next === -1)
+        {
+            break;
+        }
+        index = next;
+    }
+    return found;
+};
+
+// Coverage is the oracle's reading, so a module that broke cannot shrink it.
+const awayFromProgram = (argv) =>
+{
+    const programs = new Set(oraclePositions(argv));
+    return argv.filter((token, index) => basename(token) === "env" && !programs.has(index)
+        && argv.slice(index + 1).some(splitFlag)).length > 0;
+};
+
+const PREFIXES = [
+    ["echo"], ["git", "log"], ["xargs"], ["xargs", "-I", "{}"], ["xargs", "-a", "list.txt"],
+    ["timeout", "30"], ["timeout", "--signal"], ["time", "-f"], ["nice", "-n"], ["command", "-v"],
+    ["stdbuf", "-o0"], ["nohup", "setsid"], ["env", "mytool"], ["env", "FOO=1", "mytool"],
+    ["env", "--", "mytool"], ["env", "mytool", "xargs"], ["mytool", "--flag", "value"]
+];
+const ENVS = ["env", "/usr/bin/env", "./tools/env"];
+const SPLITS = [["-S", "npm publish"], ["--split-string", "npm publish"], ["--split-string=npm publish"], ["-Snpm publish"], ["-iS", "npm publish"]];
+
+// An env launching an env is in program position through the outer one's own
+// option window, so it is read rather than refused. Both directions are
+// asserted: the same shape carrying something forbidden must refuse, and
+// carrying something ordinary must be admitted — a family of refusals alone
+// could not catch a premise that had become too narrow.
+const NESTED = [
+    ["env launching env", ["env", "env", "-S"], "publish", null],
+    ["env with an assignment launching env", ["env", "FOO=1", "env", "-S"], "publish", null],
+    ["env -i launching env", ["env", "-i", "env", "-S"], "publish", null],
+    ["env launching a program named env after its terminator", ["env", "--", "env", "-S"], "publish", null],
+    ["env running a program whose argument names env", ["env", "mytool", "env", "-S"], "unreadable", "unreadable"],
+    ["env launching env launching env", ["env", "env", "env", "-S"], "publish", null]
+];
+const NESTED_VECTORS = [];
+for (const [name, base, forbidden, harmless] of NESTED)
+{
+    for (const [packed, want] of [["npm publish", forbidden], ["echo hello", harmless]])
+    {
+        const argv = [...base, packed];
+        NESTED_VECTORS.push(argv);
+        const got = category(argv);
+        console.log(`  ${got === null ? "admitted" : got.padEnd(13)}  ${name} packing "${packed}"`);
+        if (got !== want)
+        {
+            bad++;
+            console.error(`${name} packing "${packed}" -> ${got}, wanted ${want}`);
+        }
+    }
+}
+
+// Two populations, kept apart because only one of them has a cell. The
+// hand-written vectors are the cases somebody thought of; the generated ones
+// are the cross-product, and the cell assertions below have that cross-product
+// as their denominator while agreement, the invariant and the topology counts
+// have all of `family`.
+const handWritten = [...REFUSED.map((c) => c[1]), ...BENIGN.map((c) => c[1]), ...NESTED_VECTORS];
+if (handWritten.length !== REFUSED.length + BENIGN.length + NESTED_VECTORS.length)
+{
+    bad++;
+    console.error(`the hand-written population is ${handWritten.length} vectors, not the ${REFUSED.length} + ${BENIGN.length} + ${NESTED_VECTORS.length} its three tables hold`);
+}
+const cellOf = (prefix, env, split) => JSON.stringify([prefix, env, split]);
+const generatedCells = new Map();
+// A collision is named where it happens. A Map that is simply written to
+// swallows the first of two colliding coordinates and the evidence with it —
+// adding a duplicate ENVS entry used to surface three cells later as "255 cells
+// for a 17x4x5 cross-product", which is a cardinality symptom rather than the
+// collision that caused it. Both triples and the value they share are reported
+// here, before the overwrite.
+//
+// What these two checks claim, said exactly: uniqueness WITHIN the cross-product.
+// They never see a hand-written vector, so they say nothing about the family as
+// a whole — and the family genuinely is not unique. What is claimed across the
+// two populations is asserted separately below.
+const firstAt = new Map();
+for (const prefix of PREFIXES)
+{
+    for (const env of ENVS)
+    {
+        for (const split of SPLITS)
+        {
+            const key = cellOf(prefix, env, split);
+            const argv = [...prefix, env, ...split];
+            if (generatedCells.has(key))
+            {
+                bad++;
+                console.error(`two coordinate triples produce the same cell key ${key} — the second is ${JSON.stringify([prefix, env, split])} and both would hold ${JSON.stringify(argv)}`);
+            }
+            const vector = JSON.stringify(argv);
+            if (firstAt.has(vector))
+            {
+                bad++;
+                console.error(`two coordinate triples produce the same vector ${vector} — ${firstAt.get(vector)} and ${JSON.stringify([prefix, env, split])}`);
+            }
+            firstAt.set(vector, JSON.stringify([prefix, env, split]));
+            generatedCells.set(key, argv);
+        }
+    }
+}
+const family = [...handWritten, ...generatedCells.values()];
+
+// --- Finding 19: the denominators, derived rather than pinned.
+//
+// `family` and `generatedCells` are read by different walks — the cell checks
+// iterate the Map, and agreement, the invariant, the topology floors and the
+// overlap iterate the family — so the two can drift apart. Removing one
+// generated vector from the family alone dropped every one of those walks to
+// 343 and the suite still exited 0, because a printed denominator cannot fail.
+//
+// Length alone would not close it: a hand-written member swapped for a
+// generated one keeps the length. So the family is compared to its two sources
+// element by element, which is what makes the number mean something.
+const cellCount = PREFIXES.length * ENVS.length * SPLITS.length;
+if (family.length !== handWritten.length + cellCount)
+{
+    bad++;
+    console.error(`the family is ${family.length} vectors, not the ${handWritten.length} hand-written plus ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} generated it is built from`);
+}
+const generatedList = [...generatedCells.values()];
+for (let index = 0; index < handWritten.length; index++)
+{
+    if (JSON.stringify(family[index]) !== JSON.stringify(handWritten[index]))
+    {
+        bad++;
+        console.error(`family[${index}] is ${JSON.stringify(family[index])}, not the hand-written vector ${JSON.stringify(handWritten[index])}`);
+    }
+}
+for (let index = 0; index < generatedList.length; index++)
+{
+    if (JSON.stringify(family[handWritten.length + index]) !== JSON.stringify(generatedList[index]))
+    {
+        bad++;
+        console.error(`family[${handWritten.length + index}] is ${JSON.stringify(family[handWritten.length + index])}, not the generated vector ${JSON.stringify(generatedList[index])}`);
+    }
+}
+console.log(`populations: ${handWritten.length} hand-written (${REFUSED.length} refused + ${BENIGN.length} benign + ${NESTED_VECTORS.length} nested) + ${cellCount} generated = ${family.length} in the family`);
+
+// Uniqueness across both populations, which is a different claim from the one
+// the insert-time checks make and had to be measured before it could be
+// asserted: the two populations already share four vectors and the hand-written
+// tables already repeat five, so demanding a unique family would fail today for
+// something that is not a defect.
+//
+// The family is deliberately NOT deduplicated. Two equal vectors are two
+// members: agreement, the invariant and the topology walks count both, which is
+// why the denominators add up, and collapsing them would move every count this
+// stream has just finished asserting.
+//
+// The expected sharing is pinned rather than derived, because what makes a
+// shared vector deliberate is that somebody wrote it down twice on purpose —
+// once to pin its named category and once as a generated shape — and intent is
+// not in the data. Nothing distinguishes a deliberate duplicate from an
+// accidental one by inspection, so the honest form is a list with a reason
+// beside each entry. What stops the list from rotting is that each entry is
+// checked to be real: it must still decompose into a cell of the cross-product
+// and must still be present in the hand-written tables, so a stale pin fails
+// naming itself rather than sitting there agreeing with nothing.
+// Each entry names which hand-written tables hold it, so the pin is about
+// provenance rather than about a bare vector. Without that, dropping the nested
+// case for a vector that REFUSED also holds changed nothing this could see: the
+// vector was still shared, so the overlap set still matched.
+const EXPECTED_SHARED = [
+    { argv: ["env", "mytool", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "REFUSED pins its unreadable category and NESTED asserts both packing directions; the cross-product reaches it from the env-mytool prefix" },
+    { argv: ["env", "mytool", "env", "--split-string=npm publish"], tables: ["REFUSED"], why: "the same shape in the inline split spelling, pinned in REFUSED and generated from the same prefix" },
+    { argv: ["env", "mytool", "xargs", "env", "-S", "npm publish"], tables: ["REFUSED"], why: "the round-11 hidden-token vector, pinned in REFUSED and generated from the env-mytool-xargs prefix" },
+    { argv: ["xargs", "env", "-S", "npm publish"], tables: ["REFUSED"], why: "the launcher case whose category REFUSED pins, generated from the xargs prefix" }
+];
+const generatedSet = new Set([...generatedCells.values()].map((argv) => JSON.stringify(argv)));
+const handWrittenSet = new Set(handWritten.map((argv) => JSON.stringify(argv)));
+const actualShared = [...handWrittenSet].filter((vector) => generatedSet.has(vector)).sort();
+const expectedShared = EXPECTED_SHARED.map((entry) => JSON.stringify(entry.argv)).sort();
+const refusedVectors = new Set(REFUSED.map((entry) => JSON.stringify(entry[1])));
+const nestedVectors = new Set(NESTED_VECTORS.map((argv) => JSON.stringify(argv)));
+const holders = { REFUSED: refusedVectors, BENIGN: new Set(BENIGN.map((entry) => JSON.stringify(entry[1]))), NESTED: nestedVectors };
+for (const entry of EXPECTED_SHARED)
+{
+    const vector = JSON.stringify(entry.argv);
+    if (!generatedSet.has(vector))
+    {
+        bad++;
+        console.error(`${vector} is listed as a deliberate overlap but the cross-product no longer produces it — the list is stale`);
+    }
+    for (const [name, held] of Object.entries(holders))
+    {
+        if (entry.tables.includes(name) !== held.has(vector))
+        {
+            bad++;
+            console.error(`${vector} is listed as held by ${JSON.stringify(entry.tables)}, but ${name} ${held.has(vector) ? "also holds" : "no longer holds"} it — the list is stale`);
+        }
+    }
+}
+if (JSON.stringify(actualShared) !== JSON.stringify(expectedShared))
+{
+    bad++;
+    for (const vector of actualShared.filter((item) => !expectedShared.includes(item)))
+    {
+        console.error(`${vector} is in both populations and is not one of the ${EXPECTED_SHARED.length} deliberate overlaps — an accidental duplicate`);
+    }
+    for (const vector of expectedShared.filter((item) => !actualShared.includes(item)))
+    {
+        console.error(`${vector} is listed as a deliberate overlap but the two populations no longer share it`);
+    }
+}
+// The hand-written tables repeat vectors too, and that repetition is pinned the
+// same way the overlap is, for the same reason it had to be: a loop over the
+// repeats it happens to find validates the ones that are there and says nothing
+// about one that left. Editing REFUSED[26] so it no longer matched its nested
+// counterpart removed a repeat and the suite reported four of them and exited 0
+// — the third time in this stream that an assertion iterating what it finds has
+// failed to notice its own set shrinking.
+const EXPECTED_REPEATS = [
+    { argv: ["env", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "REFUSED pins the category and NESTED asserts both packing directions of the same shape" },
+    { argv: ["env", "FOO=1", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the assignment spelling of the same pairing" },
+    { argv: ["env", "--", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the terminator spelling of the same pairing" },
+    { argv: ["env", "env", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the one-level-deeper spelling of the same pairing" },
+    { argv: ["env", "mytool", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the unreadable case, which is also the vector both populations share" }
+];
+const repeats = new Map();
+for (const argv of handWritten)
+{
+    const vector = JSON.stringify(argv);
+    repeats.set(vector, (repeats.get(vector) ?? 0) + 1);
+}
+const actualRepeats = [...repeats.entries()].filter(([, times]) => times > 1).map(([vector]) => vector).sort();
+const expectedRepeats = EXPECTED_REPEATS.map((entry) => JSON.stringify(entry.argv)).sort();
+for (const entry of EXPECTED_REPEATS)
+{
+    const vector = JSON.stringify(entry.argv);
+    if ((repeats.get(vector) ?? 0) !== entry.tables.length)
+    {
+        bad++;
+        console.error(`${vector} is listed as an intended repeat held by ${JSON.stringify(entry.tables)} but appears ${repeats.get(vector) ?? 0} time(s) in the hand-written tables — the list is stale`);
+    }
+    for (const [name, held] of Object.entries(holders))
+    {
+        if (entry.tables.includes(name) !== held.has(vector))
+        {
+            bad++;
+            console.error(`${vector} is listed as an intended repeat held by ${JSON.stringify(entry.tables)}, but ${name} ${held.has(vector) ? "also holds" : "no longer holds"} it — the list is stale`);
+        }
+    }
+}
+if (JSON.stringify(actualRepeats) !== JSON.stringify(expectedRepeats))
+{
+    bad++;
+    for (const vector of actualRepeats.filter((item) => !expectedRepeats.includes(item)))
+    {
+        console.error(`${vector} is repeated in the hand-written tables and is not one of the ${EXPECTED_REPEATS.length} intended repeats — an accidental duplicate`);
+    }
+    for (const vector of expectedRepeats.filter((item) => !actualRepeats.includes(item)))
+    {
+        console.error(`${vector} is listed as an intended repeat but the hand-written tables no longer repeat it`);
+    }
+}
+const handWrittenRepeats = actualRepeats.length;
+// Round 21 put every printed count through this and the line added in round 23
+// was never taken through it. Each of its four numbers is derived: the generated
+// distinct count from the cross-product, the hand-written distinct count from
+// its length less the repeats it is pinned to have, and the repeat and shared
+// counts from the two expected sets.
+if (generatedSet.size !== cellCount)
+{
+    bad++;
+    console.error(`the generated population holds ${generatedSet.size} distinct vectors for a ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} cross-product`);
+}
+if (handWrittenSet.size !== handWritten.length - handWrittenRepeats)
+{
+    bad++;
+    console.error(`the hand-written population holds ${handWrittenSet.size} distinct vectors across ${handWritten.length} positions with ${handWrittenRepeats} repeat(s) — those do not add up`);
+}
+if (handWrittenRepeats !== EXPECTED_REPEATS.length || actualShared.length !== EXPECTED_SHARED.length)
+{
+    bad++;
+    console.error(`${handWrittenRepeats} repeat(s) and ${actualShared.length} shared vector(s) against ${EXPECTED_REPEATS.length} and ${EXPECTED_SHARED.length} expected`);
+}
+console.log(`uniqueness: ${generatedSet.size} distinct generated, ${handWrittenSet.size} distinct hand-written with ${handWrittenRepeats} intended repeat(s), ${actualShared.length} shared with the cross-product and all ${EXPECTED_SHARED.length} of them expected`);
+
+// Neither reading may drift from the other. The oracle cannot go wrong quietly
+// because the module contradicts it, and the module cannot go wrong quietly
+// because the oracle does — which is what makes the pair worth more than either
+// alone, and it is checked on every vector rather than argued about.
+let disagreed = 0;
+for (const argv of family)
+{
+    const mine = JSON.stringify(oraclePositions(argv));
+    const theirs = JSON.stringify(envProgramPositions(argv));
+    if (mine !== theirs)
+    {
+        disagreed++;
+        bad++;
+        console.error(`the oracle and the module disagree about program position: ${JSON.stringify(argv)} — oracle ${mine}, module ${theirs}`);
+    }
+}
+// Counted rather than claimed, for the reason the invariant line is: a check
+// that announces its own success is one nobody can read the log of.
+console.log(`agreement: ${family.length} vectors compared for every env token, ${disagreed} disagreements between the oracle and the module`);
+
+// The shapes this check exists for, counted apart. A count per topology is what
+// notices a class-shaped hole; a single total cannot.
+const LAUNCHERS = ["xargs", "timeout", "time", "nice", "command", "stdbuf", "nohup", "setsid", "sudo", "doas", "ionice", "chrt"];
+
+// The shapes this check exists for, in the order they are tried, with the
+// reason for the order written down rather than left in the control flow. They
+// are deliberately not disjoint: `env mytool xargs env -S` is an env inside an
+// outer env's arguments AND behind a launcher at the same time, and the code
+// used to pick one silently.
+//
+// Launcher first, because when both hold the launcher is the nearer reason the
+// env cannot be placed — it is the program whose arguments the gate refuses to
+// model, and naming the outer env instead would point at a shape that is
+// readable on its own. Outer-env before ordinary-program for the same reason in
+// the other direction: it is the more specific statement of the two.
+const TOPOLOGIES = [
+    {
+        name: "env behind a launcher",
+        why: "a launcher's own arguments are what the gate will not model, so it is the nearest reason",
+        matches: (argv, at) => at !== -1 && argv.slice(0, at).some((token) => LAUNCHERS.includes(basename(token)))
+    },
+    {
+        name: "env inside an outer env's program arguments",
+        why: "more specific than 'some ordinary program', and the shape round 11 was filed for",
+        matches: (argv, at, programs) => at !== -1 && [...programs].some((index) => index < at)
+    },
+    {
+        name: "env behind an ordinary program",
+        why: "the remainder: something is the program and the gate cannot say what its arguments mean",
+        matches: (argv, at) => at !== -1
+    },
+    {
+        name: "nested env in program position",
+        why: "no env is away from the program, and more than one is the program",
+        matches: (argv, at, programs) => at === -1 && programs.size > 1
+    },
+    {
+        name: "an ordinary program whose argument merely names env",
+        why: "an env token is there and nothing packs behind it",
+        matches: (argv, at) => at === -1 && argv.some((token) => basename(token) === "env")
+    },
+    {
+        name: "no env token",
+        why: "the remainder, named so the classification is total and every vector matches something",
+        matches: (argv) => !argv.some((token) => basename(token) === "env")
+    }
+];
+const awayIndex = (argv) =>
+{
+    const programs = new Set(oraclePositions(argv));
+    return argv.findIndex((token, index) => basename(token) === "env" && !programs.has(index)
+        && argv.slice(index + 1).some(splitFlag));
+};
+const topology = (argv) =>
+{
+    const programs = new Set(oraclePositions(argv));
+    const at = awayIndex(argv);
+    return TOPOLOGIES.find((shape) => shape.matches(argv, at, programs))?.name ?? "unclassified";
+};
+
+const FLOORS = {
+    "env behind an ordinary program": { family: 30, all: true },
+    "env behind a launcher": { family: 120, all: true },
+    "env inside an outer env's program arguments": { family: 30, all: true },
+    "nested env in program position": { family: 10, all: false },
+    "an ordinary program whose argument merely names env": { family: 20, all: false },
+    // Found by this round's sweep rather than by a review: the remainder bucket
+    // had no floor, so the family could lose every env-free vector — the plain
+    // `sh -c` and prose cases — and nothing would have said anything.
+    "no env token": { family: 10, all: false }
+};
+const counted = {};
+let admitted = 0;
+for (const argv of family)
+{
+    const shape = topology(argv);
+    const seen = counted[shape] ?? { family: 0, covered: 0 };
+    seen.family++;
+    if (awayFromProgram(argv))
+    {
+        seen.covered++;
+        if (forbiddenCommand(argv) === null)
+        {
+            admitted++;
+            bad++;
+            console.error(`packs an env away from program position and was admitted: ${JSON.stringify(argv)}`);
+        }
+    }
+    counted[shape] = seen;
+}
+for (const [shape, floor] of Object.entries(FLOORS))
+{
+    const seen = counted[shape] ?? { family: 0, covered: 0 };
+    console.log(`  family ${String(seen.family).padStart(4)} / ${String(floor.family).padStart(3)}   covered ${String(seen.covered).padStart(4)}   ${shape}`);
+    if (seen.family < floor.family)
+    {
+        bad++;
+        console.error(`the family has ${seen.family} vectors of the "${shape}" topology, below the ${floor.family} this check needs to mean anything`);
+    }
+    if (floor.all && seen.covered !== seen.family)
+    {
+        bad++;
+        console.error(`only ${seen.covered} of ${seen.family} "${shape}" vectors are covered by the invariant, and every one of them should be`);
+    }
+}
+for (const shape of Object.keys(counted))
+{
+    if (!TOPOLOGIES.some((entry) => entry.name === shape))
+    {
+        bad++;
+        console.error(`the topology "${shape}" is counted but is not one of the ${TOPOLOGIES.length} ordered predicates — a vector fell outside the classification`);
+    }
+}
+// Informational: how the family happens to distribute across the buckets. The
+// distribution is data, so it is not pinned; what is asserted is the floor per
+// bucket above and that every bucket is one of the predicates.
+console.log(`invariant: ${family.length} vectors across ${Object.keys(counted).length} of ${TOPOLOGIES.length} topologies, ${admitted} admitted`);
+
+// How much the predicates overlap, in the log rather than in an argument. A
+// vector matching two of them is not a defect — it is why the order above has to
+// be written down — but it must be visible.
+const overlaps = new Map();
+for (const argv of family)
+{
+    const programs = new Set(oraclePositions(argv));
+    const at = awayIndex(argv);
+    const matched = TOPOLOGIES.filter((shape) => shape.matches(argv, at, programs)).length;
+    overlaps.set(matched, (overlaps.get(matched) ?? 0) + 1);
+}
+// The histogram itself is data and is left informational — pinning 19/85/224/16
+// would be the fitted number this stream already corrected once. What is
+// asserted is that every vector was classified by something and that the buckets
+// account for the whole family.
+const overlapTotal = [...overlaps.values()].reduce((sum, count) => sum + count, 0);
+if (overlapTotal !== family.length)
+{
+    bad++;
+    console.error(`the overlap histogram accounts for ${overlapTotal} vectors, not the ${family.length} in the family`);
+}
+if ((overlaps.get(0) ?? 0) !== 0)
+{
+    bad++;
+    console.error(`${overlaps.get(0)} vectors match none of the ${TOPOLOGIES.length} predicates — the classification is not total`);
+}
+console.log(`overlap: ${[...overlaps.entries()].sort().map(([n, count]) => `${count} vectors match ${n}`).join(", ")} (informational; total ${overlapTotal} asserted against the family)`);
+
+// The vector the reviewer named, classified where the precedence says.
+const OVERLAPPING = ["env", "mytool", "xargs", "env", "-S", "npm publish"];
+if (topology(OVERLAPPING) !== "env behind a launcher")
+{
+    bad++;
+    console.error(`${JSON.stringify(OVERLAPPING)} is classified as "${topology(OVERLAPPING)}" — the precedence says the launcher wins`);
+}
+
+// Coverage per generator cell, read from the generator rather than from a
+// number. A floor counts a bucket's volume, and a bucket stays full while a
+// whole subshape leaves it: dropping every `./tools/env` crossed with the
+// attached `-iS` took 17 vectors and that entire path-and-cluster shape out,
+// and every floor stayed green. So each cell of PREFIXES x ENVS x SPLITS is
+// demanded by name.
+//
+// This loop walks the three arrays again rather than reusing the map built
+// above, which is the whole point: a filter added to the generation is invisible
+// to a check that shares its iteration, and visible to one that does not. Adding
+// an entry to any dimension grows what is demanded here with no number to edit.
+let cells = 0;
+let coveredCells = 0;
+const coverageByPrefix = new Map();
+for (const prefix of PREFIXES)
+{
+    for (const env of ENVS)
+    {
+        for (const split of SPLITS)
+        {
+            cells++;
+            const argv = generatedCells.get(cellOf(prefix, env, split));
+            if (argv === undefined)
+            {
+                bad++;
+                console.error(`the generator no longer produces the cell ${cellOf(prefix, env, split)} — a subshape left the family without any floor noticing`);
+                continue;
+            }
+            // The cell's content, pinned to its own coordinates. Demanding the
+            // key alone left every key present while one cell's value was
+            // another cell's vector: the family gained a duplicate, lost the
+            // --split-string shape, and every count still read 255. The expected
+            // vector is rebuilt here from this walk's own loop variables, never
+            // read back from what the generation stored, so a cell cannot vouch
+            // for itself.
+            //
+            // Compared as JSON rather than by a joined key. These are flat
+            // arrays of strings and JSON.stringify escapes quotes and
+            // backslashes while keeping the array's brackets and commas, so two
+            // different string arrays cannot serialize alike — where a joined
+            // key would have to pick a delimiter that appears in none of
+            // `env FOO=1 mytool`, `-Snpm publish` or `./tools/env`, and a
+            // collision there would make two cells look like one, which is this
+            // same defect wearing a different hat.
+            const expected = JSON.stringify([...prefix, env, ...split]);
+            if (JSON.stringify(argv) !== expected)
+            {
+                bad++;
+                console.error(`the cell ${cellOf(prefix, env, split)} holds ${JSON.stringify(argv)} — it must hold ${expected}, rebuilt from its own coordinates`);
+                continue;
+            }
+            // Which cells the invariant is meant to assert on is the oracle's
+            // answer, not a list: a cell whose env is in program position is
+            // present and legitimately uncovered.
+            const covered = awayFromProgram(argv);
+            const shape = JSON.stringify(prefix);
+            const seen = coverageByPrefix.get(shape) ?? new Set();
+            seen.add(covered);
+            coverageByPrefix.set(shape, seen);
+            if (!covered)
+            {
+                continue;
+            }
+            coveredCells++;
+            if (forbiddenCommand(argv) === null)
+            {
+                bad++;
+                console.error(`the cell ${cellOf(prefix, env, split)} packs an env away from program position and was admitted`);
+            }
+        }
+    }
+}
+// Whether an env is in program position is decided by the shape in front of it,
+// so it cannot depend on which spelling of env or of the split flag the cell
+// happens to use. A cell that disagrees with its prefix's siblings means one of
+// the three dimensions stopped meaning what it means.
+// Anchored to the declared prefixes rather than to whatever the cell walk
+// happened to record, so a prefix dropping out of the map is a failure instead
+// of one fewer check.
+if (coverageByPrefix.size !== PREFIXES.length)
+{
+    bad++;
+    console.error(`coverage was recorded for ${coverageByPrefix.size} prefixes, not the ${PREFIXES.length} declared`);
+}
+for (const [shape, answers] of coverageByPrefix)
+{
+    if (answers.size !== 1)
+    {
+        bad++;
+        console.error(`the cells under prefix ${shape} disagree about coverage — an env or split spelling has stopped behaving like the others`);
+    }
+}
+// Distinctness is a separate claim from equality, and the mutation that
+// exposed this finding produced a duplicate rather than a wrong single cell —
+// so it is asserted on its own terms and would still fail if some later
+// refactor loosened the comparison above. The cross-product is injective for
+// these three arrays: 255 cells produce 255 distinct vectors, checked rather
+// than assumed, so any duplicate means a cell was overwritten.
+const distinct = new Set([...generatedCells.values()].map((argv) => JSON.stringify(argv)));
+if (generatedCells.size !== PREFIXES.length * ENVS.length * SPLITS.length)
+{
+    bad++;
+    console.error(`the generator produced ${generatedCells.size} cells for a ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} cross-product`);
+}
+if (distinct.size !== generatedCells.size)
+{
+    bad++;
+    console.error(`the generated set holds ${distinct.size} distinct vectors across ${generatedCells.size} cells — a cell has been overwritten with another's vector`);
+}
+if (cells !== cellCount)
+{
+    bad++;
+    console.error(`the assertion walk demanded ${cells} cells for a ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} cross-product`);
+}
+// coveredCells and the present-but-in-program-position remainder are
+// informational: which cells the invariant asserts on is the oracle's answer
+// about each vector, so the split is data. What is asserted is that each covered
+// cell refuses, that every cell's content matches its coordinates, and that the
+// cells under one prefix agree — a spelling going quiet fails there rather than
+// by a count moving here.
+console.log(`cells: ${cells} demanded from ${PREFIXES.length}x${ENVS.length}x${SPLITS.length}, ${coveredCells} covered and ${cells - coveredCells} in program position (informational), ${distinct.size} pairwise distinct`);
+
+// A token built to cost the matching pass its budget still has to answer.
+const started = Date.now();
+forbiddenCommand(["env", "-S", words(5000)]);
+if (Date.now() - started > 2000)
+{
+    bad++;
+    console.error("a token of five thousand words was not bounded");
+}
+
+process.exit(bad === 0 ? 0 : 1);
+PROBE
+node "$ROOT/gate-probe.mjs" "$CLI_DIR" || fail "the forbidden-action gate does not read every wrapper form it has been shown"
+
+# ---------------------------------------------------------------------------
+# A malformed template names the field that is wrong, and starts nothing.
+# ---------------------------------------------------------------------------
+malformed()
+{
+    local name="$1" head="$2" expect="$3"
+    plan "$ROOT/p-$name.json" "provisionRepo=$SRC" "provisionHead=$head" "marker=$ROOT/ran-$name"
+    local out
+    out="$(SELF attempt run "$ROOT/p-$name.json" 2>&1 || true)"
+    echo "$out" | grep -q "$expect" || fail "the $name template refusal did not name $expect: $out"
+    local id
+    id="$(last_attempt)"
+    [ "$(attempt_state "$id")" = "preflight-failed" ] || fail "the $name template did not fail the preflight"
+    [ -f "$ROOT/ran-$name" ] && fail "the provider ran despite the $name template"
+    no_worktree_left "$id" "the $name template"
+}
+malformed badjson "$SHA_BADJSON" "is not valid JSON"
+malformed noargv "$SHA_NOARGV" "steps\[0\].command"
+malformed badtimeout "$SHA_BADTIMEOUT" "steps\[0\].timeoutMs"
+
+# ---------------------------------------------------------------------------
+# A head this machine does not hold, with no remote to fetch it from.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-nohead.json" "provisionRepo=$SRC" "provisionHead=$(printf '0%.0s' $(seq 40))" "marker=$ROOT/ran-nohead"
+NOHEAD="$(SELF attempt run "$ROOT/p-nohead.json" 2>&1 || true)"
+echo "$NOHEAD" | grep -q "names no remote to fetch it from" || fail "an unavailable pinned head was not refused in the operator's terms"
+AT_NOHEAD="$(last_attempt)"
+[ "$(attempt_state "$AT_NOHEAD")" = "preflight-failed" ] || fail "an unavailable pinned head did not fail the preflight"
+[ -f "$ROOT/ran-nohead" ] && fail "the provider ran despite an unavailable pinned head"
+no_worktree_left "$AT_NOHEAD" "an unavailable pinned head"
+
+# A branch name is not a pin: it moves under the attempt.
+plan "$ROOT/p-ref.json" "provisionRepo=$SRC" "provisionHead=main"
+REF="$(SELF attempt run "$ROOT/p-ref.json" 2>&1 || true)"
+echo "$REF" | grep -q "not a commit object name" || fail "a plan that pinned a branch name instead of a head was accepted"
+
+# ---------------------------------------------------------------------------
+# Step output is kept as a bounded, redacted tail. A dependency install prints
+# more than any record should hold, and it prints whatever it was configured
+# with.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-noisy.json" "provisionRepo=$SRC" "provisionHead=$SHA_NOISY" "dest=$ROOT/dest/noisy.md"
+SELF attempt run "$ROOT/p-noisy.json" > /dev/null || fail "a noisy preparation step did not complete"
+AT_NOISY="$(last_attempt)"
+node -e '
+const fs = require("node:fs");
+const line = JSON.parse(fs.readFileSync(process.argv[1], "utf8").trim().split("\n").pop());
+if (line.output.length > 2100) { console.error(`the step record kept ${line.output.length} characters of output`); process.exit(1); }
+if (line.output.includes("sk-live-AAAABBBB")) { console.error("the step record carries a credential the step printed"); process.exit(1); }
+if (!line.output.includes("api_key=")) { console.error("the step record kept no tail at all"); process.exit(1); }
+' "$(spool_of "$AT_NOISY")/preparation.jsonl"
+grep -q "sk-live-AAAABBBB" "$(spool_of "$AT_NOISY")/preparation.jsonl" && fail "a credential a preparation step printed reached the spool"
+no_worktree_left "$AT_NOISY" "a noisy preparation"
+
+# A value no pattern recognises, declared as a secret by the plan and supplied
+# by the plan itself. MY_API_KEY is deliberately unset in this shell: the value
+# exists only in boundary.env, which is the half a scope read out of the
+# runner's own environment cannot see — while the step receives it and echoes
+# it, and plan.json carries it too.
+DECLARED="PLAINPROOFLITERALVALUE"
+[ -z "${MY_API_KEY:-}" ] || fail "the declared-secret case needs MY_API_KEY unset in the runner environment"
+plan "$ROOT/p-leak.json" "provisionRepo=$SRC" "provisionHead=$SHA_LEAK" "dest=$ROOT/dest/leak.md" \
+    "secrets=MY_API_KEY" "envsecret=$DECLARED"
+SELF attempt run "$ROOT/p-leak.json" > /dev/null || fail "the declared-secret case did not complete"
+AT_LEAK="$(last_attempt)"
+grep -q "$DECLARED" "$(spool_of "$AT_LEAK")/preparation.jsonl" && fail "a declared secret a preparation step echoed reached the spool"
+grep -q "configured with" "$(spool_of "$AT_LEAK")/preparation.jsonl" || fail "the step record kept none of the step's output"
+grep -q "$DECLARED" "$(spool_of "$AT_LEAK")/plan.json" && fail "a declared secret the plan supplied literally reached the spooled plan"
+grep -rq "$DECLARED" "$(spool_of "$AT_LEAK")" && fail "a declared secret the plan supplied literally reached the spool somewhere"
+no_worktree_left "$AT_LEAK" "a step that echoed a declared secret"
+
+# ---------------------------------------------------------------------------
+# A registered attempt is provisioned by the same gate, and the environment its
+# launcher is handed names the worktree.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-register.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" "dest=$ROOT/dest/register.md"
+AT_REG="$(SELF attempt register "$ROOT/p-register.json" | tail -1)"
+[ -d "$(spool_of "$AT_REG")/workdir" ] || fail "a registered attempt was not provisioned"
+grep -q "SUPERSELF_ATTEMPT_WORKDIR" "$(spool_of "$AT_REG")/env.json" || fail "the launcher environment does not name the provisioned worktree"
+node -e '
+const env = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+if (!env.SUPERSELF_ATTEMPT_WORKDIR.endsWith("/workdir")) { console.error("the launcher environment names no worktree"); process.exit(1); }
+' "$(spool_of "$AT_REG")/env.json"
+
+# ---------------------------------------------------------------------------
+# A runner that dies in the middle of preparation. The attempt never ran, so
+# nothing about it can be settled — and recovery still has to take the worktree
+# back rather than leave a checkout nobody owns.
+# ---------------------------------------------------------------------------
+plan "$ROOT/p-sleep.json" "provisionRepo=$SRC" "provisionHead=$SHA_SLEEP" "gate=$ROOT/prep-started"
+SELF attempt run "$ROOT/p-sleep.json" > /dev/null 2>&1 &
+RUNPID=$!
+await '[ -f "$ROOT/prep-started" ]' 120 || fail "the preparation step that never finishes did not start"
+AT_SLEEP="$(last_attempt)"
+[ -d "$(spool_of "$AT_SLEEP")/workdir" ] || fail "the crashing attempt was never provisioned"
+crash_runner "$AT_SLEEP"
+wait "$RUNPID" 2>/dev/null || true
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_SLEEP")" = "exited-unreconciled" ] || fail "an attempt that died mid-preparation was not recovered"
+no_worktree_left "$AT_SLEEP" "recovery of an attempt that died mid-preparation"
+
+# ---------------------------------------------------------------------------
+# The same crash during `self attempt register`. A registered attempt owns no
+# process and is deliberately not recoverable — but while it is preparing it
+# owns a worktree, and a registration that died in that window would otherwise
+# leave the checkout and its git administrative entry behind for ever.
+# ---------------------------------------------------------------------------
+rm -f "$ROOT/prep-started"
+plan "$ROOT/p-regcrash.json" "provisionRepo=$SRC" "provisionHead=$SHA_SLEEP" "gate=$ROOT/prep-started"
+SELF attempt register "$ROOT/p-regcrash.json" > /dev/null 2>&1 &
+REGPID=$!
+await '[ -f "$ROOT/prep-started" ]' 120 || fail "the registration's preparation step never started"
+AT_REGCRASH="$(last_attempt)"
+[ -d "$(spool_of "$AT_REGCRASH")/workdir" ] || fail "the crashing registration was never provisioned"
+[ "$(attempt_state "$AT_REGCRASH")" = "preflight" ] || fail "a registration preparing a worktree is not visible to recovery as driven"
+crash_runner "$AT_REGCRASH"
+wait "$REGPID" 2>/dev/null || true
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_REGCRASH")" = "exited-unreconciled" ] || fail "a registration that died mid-preparation was not recovered"
+no_worktree_left "$AT_REGCRASH" "recovery of a registration that died mid-preparation"
+
+# ---------------------------------------------------------------------------
+# Killed inside `git worktree add` itself. This is the interval the binding has
+# to already be durable for: the cut creates a directory and writes an
+# administrative entry into the repository, and a runner that dies while that
+# command is in flight leaves recovery nothing to work from unless the intent
+# was journalled first.
+#
+# The window is made wide rather than raced for: a boundary wrapper that sleeps
+# before exec'ing holds every command this attempt starts, so the kill lands
+# inside the cut and the assertions below can state where it landed.
+# ---------------------------------------------------------------------------
+PREV="$(last_attempt)"
+plan "$ROOT/p-cutcrash.json" "provisionRepo=$SRC" "provisionHead=$SHA_OK" \
+    "wrapper=[\"/bin/sh\",\"-c\",\"sleep 5; exec \\\"\$@\\\"\",\"sh\"]"
+SELF attempt register "$ROOT/p-cutcrash.json" > /dev/null 2>&1 &
+CUTPID=$!
+await '[ "$(last_attempt)" != "$PREV" ]' 400 || fail "the registration never opened a spool"
+AT_CUT="$(last_attempt)"
+await '[ -f "$(spool_of "$AT_CUT")/provision.json" ]' 400 || fail "the binding was not journalled before the worktree was cut"
+crash_runner "$AT_CUT"
+wait "$CUTPID" 2>/dev/null || true
+
+# Where the kill landed, stated rather than assumed: a binding on record, the
+# cut not yet finished, and no worktree on disk. This is the exact interval a
+# binding written after the cut could not describe.
+node -e '
+const fs = require("node:fs");
+const b = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (b.cut !== false) { console.error("the kill landed after the cut finished, not inside it"); process.exit(1); }
+if (!b.repo || !b.head || !b.workdir) { console.error("the journalled binding does not name the repository, head and workdir"); process.exit(1); }
+' "$(spool_of "$AT_CUT")/provision.json"
+[ -d "$(spool_of "$AT_CUT")/workdir" ] && fail "the kill landed after the worktree existed, not inside the cut"
+
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_CUT")" = "exited-unreconciled" ] || fail "a registration killed inside the cut was not recovered"
+released "$(spool_of "$AT_CUT")/events.jsonl" 0
+no_worktree_left "$AT_CUT" "recovery of a registration killed inside the cut"
+
+echo "proof OK: attempt-preparation"
