@@ -101,7 +101,8 @@
             "entry": "suites/scope.sh",
             "deps": [
                 "lib.sh",
-                "pretty-terminal.mjs"
+                "pretty-terminal.mjs",
+                "scope-pointers.mjs"
             ]
         },
         "pretty": {

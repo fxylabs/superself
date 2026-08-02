@@ -599,14 +599,16 @@ function renderWorkspaceContext(models: ProjectModel[]): string
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail(model.goal ?? "(no goal)", 500, "self status"); // scope-exempt: the workspace's own pointer
+    const goal = detail(model.goal ?? "(no goal)", 500, "self status");
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 
 function workspaceOmission(count: number): string
 {
-    // this omission is the workspace's own, not a project's
-    const recovery = "self status"; // scope-exempt: the workspace command itself
+    // The workspace's own omission, not a project's: `self status` here is the
+    // command being pointed at, which is why this function and
+    // workspaceContextLine are the two names proof/scope-pointers.mjs exempts.
+    const recovery = "self status";
     return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`${recovery}\` from the workspace for the full summaries`;
 }
 
