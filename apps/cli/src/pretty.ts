@@ -284,16 +284,14 @@ export function shellArgument(value: string): string
 // so they are left as they are rather than promising a flag that does not
 // exist. Both context renders read this, which is why it lives here: `views.ts`
 // already imports this module, so one direction stays.
-const SCOPED_POINTER = [
-    /^self work show \S+$/,
-    /^self work$/,
-    /^self objective$/,
-    /^self milestone$/,
-    /^self status$/,
-    /^self context$/,
-    /^self log$/,
-    /^self search /
-];
+//
+// Which verbs those are is `ScopableVerb` and `MachineLocalVerb` in `model.ts`,
+// and nothing here restates it. A list of patterns beside the types was a
+// second answer to the same question, and the two disagreed: the type admits
+// `self work show ` and `self work show id with space` where the pattern
+// `/^self work show \S+$/` did not, so those left `scoped()` branded and
+// unscoped (#165 review round 7). The type is the only authority now.
+const MACHINE_LOCAL = "self attempt show ";
 
 // A recovery pointer a section prints, rather than any string that happens to
 // look like one. The brand is what a section builder asks for, so a bare
@@ -347,13 +345,21 @@ export function withCheckout(command: UnscopedVerb, where: Checkout): Pointer
 // form leave as a branded pointer that names no project at all.
 export function scoped(command: ScopableVerb | MachineLocalVerb, project: string): Pointer
 {
-    if (command.includes("--project "))
+    if (command.includes("--project ") || command.startsWith(MACHINE_LOCAL))
     {
         return command as Pointer;
     }
-    return (SCOPED_POINTER.some((form) => form.test(command))
-        ? `${command} --project ${project}`
-        : command) as Pointer;
+    return `${command} --project ${project}` as Pointer;
+}
+
+// The workspace render's own pointers. `self status` there IS the command being
+// pointed at, so there is no project to name. This mint takes no project on
+// purpose, and `proof/scope-pointers.mjs` is what keeps it where it belongs: a
+// literal here reads as reaching no `scoped()` anywhere except inside the two
+// workspace helpers its allowlist names.
+export function workspacePointer(command: ScopableVerb): Pointer
+{
+    return command as Pointer;
 }
 
 function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: Pointer): string[]

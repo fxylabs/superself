@@ -27,7 +27,8 @@ import {
     renderWorkspace,
     scoped,
     shellArgument,
-    UnscopedVerb
+    UnscopedVerb,
+    workspacePointer
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
 import { blue, dim, displayWidth, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
@@ -146,16 +147,16 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     const lines: string[] = [`# ${model.slug}`, ""];
     if (model.description !== undefined)
     {
-        lines.push(detail(model.description, options.detailLimit, `self search --project ${project}`), "");
+        lines.push(detail(model.description, options.detailLimit, scoped(`self search --project ${project}`, project)), "");
     }
-    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, `self search --project ${project}`)}`, "");
+    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, scoped(`self search --project ${project}`, project))}`, "");
     pushList(lines, "Objectives", options.compactOptional
         ? countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project))
         : objectiveLines(model));
     pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions,
         scoped("self search --type decision", project)));
     pushList(lines, "Conventions", model.conventions.map((convention) =>
-        `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${project}`)}`));
+        `- ${detail(convention.text, options.detailLimit, scoped(`self search ${convention.id} --type convention --project ${project}`, project))}`));
     pushList(lines, "Integration train", options.compactOptional
         ? countedOmission(openChangeSets(model.integration).length,
             "open change set", "self integration plan", fromCheckout(project))
@@ -558,7 +559,7 @@ function pushList(lines: string[], title: string, items: string[]): void
     lines.push(`## ${title}`, "", ...items, "");
 }
 
-function detail(text: string, limit: number, recovery: string): string
+function detail(text: string, limit: number, recovery: Pointer): string
 {
     if (!Number.isFinite(limit) || contextLength(text) <= limit)
     {
@@ -606,7 +607,7 @@ function renderWorkspaceContext(models: ProjectModel[]): string
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail(model.goal ?? "(no goal)", 500, "self status");
+    const goal = detail(model.goal ?? "(no goal)", 500, workspacePointer("self status"));
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 
