@@ -517,23 +517,36 @@ for (let depth = 0; depth <= 12; depth++)
     }
 }
 
-// The invariant, not the three vectors that exposed it. The rule says an env
-// token that is not in program position, with a split flag after it, is never
+// The invariant, not the vectors that exposed it. The rule says an env token
+// that is not in program position, with a split flag after it, is never
 // admitted — so that is asserted directly, over every vector in this table and
-// over a generated cross-product of the shapes the class is made of. Closing a
-// named vector is what the last several readings of this gate each did while
-// the class stayed open; this is the assertion that says the class is closed.
+// over a generated family of the shapes the class is made of. Closing a named
+// vector is what several readings of this gate each did while the class stayed
+// open; this is the assertion that says the class is closed.
 //
-// Program position is recomputed here from the rule's own words rather than
-// imported, so the check is an independent reading: argv[0], or preceded only
-// by NAME=value assignments.
+// The premise reads the module's own notion of program position rather than
+// restating it. Restating it was wrong: `env env -S "echo hello"` has an env
+// with a non-assignment token in front of it, which a hand-written premise
+// reads as "away from program position" — while that env is exactly the program
+// the outer env runs, and is read correctly. A premise that disagrees with the
+// rule either fires on right behaviour or hides a wrong one as soon as the
+// generated set grows.
+//
+// Sharing the notion is not circular. What is asserted here is the ANSWER —
+// that forbiddenCommand is never null for these vectors — and program position
+// only decides which vectors the assertion covers. If that notion were broken
+// the premise would select nothing and the assertion would go quiet, so the
+// count it selects is printed and floored below, and the whole check is
+// verified to fail when the walk it exists for is reverted.
+const { envProgramPositions } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
 const basename = (token) => /^(?:\.{0,2}|~)\/\S*$/.test(token) ? token.slice(token.lastIndexOf("/") + 1) : token;
 const splitFlag = (token) => token === "--split-string" || /^--split-string=/.test(token) || /^-[a-zA-Z]*S[a-zA-Z]*$/.test(token);
-const assignment = (token) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
-const packedAwayFromProgram = (argv) => argv.some((token, index) =>
-    basename(token) === "env"
-    && !argv.slice(0, index).every(assignment)
-    && argv.slice(index + 1).some(splitFlag));
+const packedAwayFromProgram = (argv) =>
+{
+    const programs = new Set(envProgramPositions(argv));
+    return argv.some((token, index) =>
+        basename(token) === "env" && !programs.has(index) && argv.slice(index + 1).some(splitFlag));
+};
 
 const PREFIXES = [
     ["echo"], ["git", "log"], ["xargs"], ["xargs", "-I", "{}"], ["xargs", "-a", "list.txt"],
@@ -544,7 +557,38 @@ const PREFIXES = [
 const ENVS = ["env", "/usr/bin/env", "./tools/env"];
 const SPLITS = [["-S", "npm publish"], ["--split-string", "npm publish"], ["--split-string=npm publish"], ["-Snpm publish"], ["-iS", "npm publish"]];
 
+// An env launching an env is in program position through the outer one's own
+// option window, so it is read rather than refused. Both directions are
+// asserted: the same shape carrying something forbidden must refuse, and
+// carrying something ordinary must be admitted — a family of refusals alone
+// could not catch a premise that had become too narrow.
+const NESTED = [
+    ["env launching env", ["env", "env", "-S"], "publish", null],
+    ["env with an assignment launching env", ["env", "FOO=1", "env", "-S"], "publish", null],
+    ["env -i launching env", ["env", "-i", "env", "-S"], "publish", null],
+    ["env launching a program named env after its terminator", ["env", "--", "env", "-S"], "publish", null],
+    ["env running a program whose argument names env", ["env", "mytool", "env", "-S"], "unreadable", "unreadable"],
+    ["env launching env launching env", ["env", "env", "env", "-S"], "publish", null]
+];
+const NESTED_VECTORS = [];
+for (const [name, base, forbidden, harmless] of NESTED)
+{
+    for (const [packed, want] of [["npm publish", forbidden], ["echo hello", harmless]])
+    {
+        const argv = [...base, packed];
+        NESTED_VECTORS.push(argv);
+        const got = category(argv);
+        console.log(`  ${got === null ? "admitted" : got.padEnd(13)}  ${name} packing "${packed}"`);
+        if (got !== want)
+        {
+            bad++;
+            console.error(`${name} packing "${packed}" -> ${got}, wanted ${want}`);
+        }
+    }
+}
+
 let generated = 0;
+let admitted = 0;
 const holds = (argv) =>
 {
     if (!packedAwayFromProgram(argv))
@@ -552,32 +596,43 @@ const holds = (argv) =>
         return true;
     }
     generated++;
-    return forbiddenCommand(argv) !== null;
-};
-for (const [, argv] of [...REFUSED.map((c) => [c[0], c[1]]), ...BENIGN])
-{
-    if (!holds(argv))
+    if (forbiddenCommand(argv) !== null)
     {
-        bad++;
-        console.error(`a table vector packs an env away from program position and was admitted: ${JSON.stringify(argv)}`);
+        return true;
     }
-}
+    admitted++;
+    return false;
+};
+const family = [...REFUSED.map((c) => c[1]), ...BENIGN.map((c) => c[1]), ...NESTED_VECTORS];
 for (const prefix of PREFIXES)
 {
     for (const env of ENVS)
     {
         for (const split of SPLITS)
         {
-            const argv = [...prefix, env, ...split];
-            if (!holds(argv))
-            {
-                bad++;
-                console.error(`admitted: ${JSON.stringify(argv)}`);
-            }
+            family.push([...prefix, env, ...split]);
         }
     }
 }
-console.log(`invariant: ${generated} vectors pack an env away from program position, and none is admitted`);
+for (const argv of family)
+{
+    if (!holds(argv))
+    {
+        bad++;
+        console.error(`packs an env away from program position and was admitted: ${JSON.stringify(argv)}`);
+    }
+}
+// A premise that stopped selecting anything would leave this assertion passing
+// against the very defect it exists for, so the count it selects is floored.
+if (generated < 200)
+{
+    bad++;
+    console.error(`the invariant only selected ${generated} vectors — its premise has stopped matching the class`);
+}
+// Counted rather than claimed: this line used to say "none is admitted"
+// whatever it had just found, which is the shape of a check that reports its
+// own success.
+console.log(`invariant: ${generated} of ${family.length} vectors pack an env away from program position, ${admitted} admitted`);
 
 // A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();

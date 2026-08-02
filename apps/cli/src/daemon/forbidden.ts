@@ -418,6 +418,17 @@ function launched(words: Word[]): string | null
     return null;
 }
 
+// Where every env this gate can place sits in a command, for a caller that has
+// tokens rather than words. The proof reads this so that its statement of the
+// rule and this module's cannot drift: the assertion there is about the answer
+// `forbiddenCommand` gives, never about the position logic, and sharing the
+// notion of position is what keeps the premise from quietly disagreeing with
+// the rule it exists to check.
+export function envProgramPositions(command: unknown): number[]
+{
+    return [...programPositions(tokens(command).map((text) => ({ text, split: false })))];
+}
+
 // Every env this gate can place, not the first. `envProgram` already answers
 // them one at a time and each answer is past the last, so the walk terminates.
 function programPositions(words: Word[]): Set<number>
