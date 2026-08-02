@@ -712,19 +712,81 @@ for (const [name, base, forbidden, harmless] of NESTED)
 // as their denominator while agreement, the invariant and the topology counts
 // have all of `family`.
 const handWritten = [...REFUSED.map((c) => c[1]), ...BENIGN.map((c) => c[1]), ...NESTED_VECTORS];
+if (handWritten.length !== REFUSED.length + BENIGN.length + NESTED_VECTORS.length)
+{
+    bad++;
+    console.error(`the hand-written population is ${handWritten.length} vectors, not the ${REFUSED.length} + ${BENIGN.length} + ${NESTED_VECTORS.length} its three tables hold`);
+}
 const cellOf = (prefix, env, split) => JSON.stringify([prefix, env, split]);
 const generatedCells = new Map();
+// A collision is named where it happens. A Map that is simply written to
+// swallows the first of two colliding coordinates and the evidence with it —
+// adding a duplicate ENVS entry used to surface three cells later as "255 cells
+// for a 17x4x5 cross-product", which is a cardinality symptom rather than the
+// collision that caused it. Both triples and the value they share are reported
+// here, before the overwrite.
+const firstAt = new Map();
 for (const prefix of PREFIXES)
 {
     for (const env of ENVS)
     {
         for (const split of SPLITS)
         {
-            generatedCells.set(cellOf(prefix, env, split), [...prefix, env, ...split]);
+            const key = cellOf(prefix, env, split);
+            const argv = [...prefix, env, ...split];
+            if (generatedCells.has(key))
+            {
+                bad++;
+                console.error(`two coordinate triples produce the same cell key ${key} — the second is ${JSON.stringify([prefix, env, split])} and both would hold ${JSON.stringify(argv)}`);
+            }
+            const vector = JSON.stringify(argv);
+            if (firstAt.has(vector))
+            {
+                bad++;
+                console.error(`two coordinate triples produce the same vector ${vector} — ${firstAt.get(vector)} and ${JSON.stringify([prefix, env, split])}`);
+            }
+            firstAt.set(vector, JSON.stringify([prefix, env, split]));
+            generatedCells.set(key, argv);
         }
     }
 }
 const family = [...handWritten, ...generatedCells.values()];
+
+// --- Finding 19: the denominators, derived rather than pinned.
+//
+// `family` and `generatedCells` are read by different walks — the cell checks
+// iterate the Map, and agreement, the invariant, the topology floors and the
+// overlap iterate the family — so the two can drift apart. Removing one
+// generated vector from the family alone dropped every one of those walks to
+// 343 and the suite still exited 0, because a printed denominator cannot fail.
+//
+// Length alone would not close it: a hand-written member swapped for a
+// generated one keeps the length. So the family is compared to its two sources
+// element by element, which is what makes the number mean something.
+const cellCount = PREFIXES.length * ENVS.length * SPLITS.length;
+if (family.length !== handWritten.length + cellCount)
+{
+    bad++;
+    console.error(`the family is ${family.length} vectors, not the ${handWritten.length} hand-written plus ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} generated it is built from`);
+}
+const generatedList = [...generatedCells.values()];
+for (let index = 0; index < handWritten.length; index++)
+{
+    if (JSON.stringify(family[index]) !== JSON.stringify(handWritten[index]))
+    {
+        bad++;
+        console.error(`family[${index}] is ${JSON.stringify(family[index])}, not the hand-written vector ${JSON.stringify(handWritten[index])}`);
+    }
+}
+for (let index = 0; index < generatedList.length; index++)
+{
+    if (JSON.stringify(family[handWritten.length + index]) !== JSON.stringify(generatedList[index]))
+    {
+        bad++;
+        console.error(`family[${handWritten.length + index}] is ${JSON.stringify(family[handWritten.length + index])}, not the generated vector ${JSON.stringify(generatedList[index])}`);
+    }
+}
+console.log(`populations: ${handWritten.length} hand-written (${REFUSED.length} refused + ${BENIGN.length} benign + ${NESTED_VECTORS.length} nested) + ${cellCount} generated = ${family.length} in the family`);
 
 // Neither reading may drift from the other. The oracle cannot go wrong quietly
 // because the module contradicts it, and the module cannot go wrong quietly
@@ -786,6 +848,11 @@ const TOPOLOGIES = [
         name: "an ordinary program whose argument merely names env",
         why: "an env token is there and nothing packs behind it",
         matches: (argv, at) => at === -1 && argv.some((token) => basename(token) === "env")
+    },
+    {
+        name: "no env token",
+        why: "the remainder, named so the classification is total and every vector matches something",
+        matches: (argv) => !argv.some((token) => basename(token) === "env")
     }
 ];
 const awayIndex = (argv) =>
@@ -798,7 +865,7 @@ const topology = (argv) =>
 {
     const programs = new Set(oraclePositions(argv));
     const at = awayIndex(argv);
-    return TOPOLOGIES.find((shape) => shape.matches(argv, at, programs))?.name ?? "no env token";
+    return TOPOLOGIES.find((shape) => shape.matches(argv, at, programs))?.name ?? "unclassified";
 };
 
 const FLOORS = {
@@ -842,7 +909,18 @@ for (const [shape, floor] of Object.entries(FLOORS))
         console.error(`only ${seen.covered} of ${seen.family} "${shape}" vectors are covered by the invariant, and every one of them should be`);
     }
 }
-console.log(`invariant: ${family.length} vectors across ${Object.keys(counted).length} topologies, ${admitted} admitted`);
+for (const shape of Object.keys(counted))
+{
+    if (!TOPOLOGIES.some((entry) => entry.name === shape))
+    {
+        bad++;
+        console.error(`the topology "${shape}" is counted but is not one of the ${TOPOLOGIES.length} ordered predicates — a vector fell outside the classification`);
+    }
+}
+// Informational: how the family happens to distribute across the buckets. The
+// distribution is data, so it is not pinned; what is asserted is the floor per
+// bucket above and that every bucket is one of the predicates.
+console.log(`invariant: ${family.length} vectors across ${Object.keys(counted).length} of ${TOPOLOGIES.length} topologies, ${admitted} admitted`);
 
 // How much the predicates overlap, in the log rather than in an argument. A
 // vector matching two of them is not a defect — it is why the order above has to
@@ -855,7 +933,22 @@ for (const argv of family)
     const matched = TOPOLOGIES.filter((shape) => shape.matches(argv, at, programs)).length;
     overlaps.set(matched, (overlaps.get(matched) ?? 0) + 1);
 }
-console.log(`overlap: ${[...overlaps.entries()].sort().map(([n, count]) => `${count} vectors match ${n}`).join(", ")}`);
+// The histogram itself is data and is left informational — pinning 19/85/224/16
+// would be the fitted number this stream already corrected once. What is
+// asserted is that every vector was classified by something and that the buckets
+// account for the whole family.
+const overlapTotal = [...overlaps.values()].reduce((sum, count) => sum + count, 0);
+if (overlapTotal !== family.length)
+{
+    bad++;
+    console.error(`the overlap histogram accounts for ${overlapTotal} vectors, not the ${family.length} in the family`);
+}
+if ((overlaps.get(0) ?? 0) !== 0)
+{
+    bad++;
+    console.error(`${overlaps.get(0)} vectors match none of the ${TOPOLOGIES.length} predicates — the classification is not total`);
+}
+console.log(`overlap: ${[...overlaps.entries()].sort().map(([n, count]) => `${count} vectors match ${n}`).join(", ")} (informational; total ${overlapTotal} asserted against the family)`);
 
 // The vector the reviewer named, classified where the precedence says.
 const OVERLAPPING = ["env", "mytool", "xargs", "env", "-S", "npm publish"];
@@ -966,7 +1059,18 @@ if (distinct.size !== generatedCells.size)
     bad++;
     console.error(`the generated set holds ${distinct.size} distinct vectors across ${generatedCells.size} cells — a cell has been overwritten with another's vector`);
 }
-console.log(`cells: ${cells} demanded from ${PREFIXES.length}x${ENVS.length}x${SPLITS.length}, ${coveredCells} covered, ${cells - coveredCells} present and in program position, ${distinct.size} pairwise distinct`);
+if (cells !== cellCount)
+{
+    bad++;
+    console.error(`the assertion walk demanded ${cells} cells for a ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} cross-product`);
+}
+// coveredCells and the present-but-in-program-position remainder are
+// informational: which cells the invariant asserts on is the oracle's answer
+// about each vector, so the split is data. What is asserted is that each covered
+// cell refuses, that every cell's content matches its coordinates, and that the
+// cells under one prefix agree — a spelling going quiet fails there rather than
+// by a count moving here.
+console.log(`cells: ${cells} demanded from ${PREFIXES.length}x${ENVS.length}x${SPLITS.length}, ${coveredCells} covered and ${cells - coveredCells} in program position (informational), ${distinct.size} pairwise distinct`);
 
 // A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();
