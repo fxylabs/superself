@@ -397,14 +397,42 @@ function envProgram(words: Word[], after: number): number
 // that mention env before a -S, which now refuse too. That is the trade this
 // change makes deliberately: a wrong admission and a wrong vocabulary match are
 // both worse than an honest "this could not be read".
+// The rule is a statement about every env token in the vector, so it is written
+// that way. Finding one that is in program position used to end the walk, which
+// let a perfectly ordinary outer env hide every env token in its program's
+// arguments: `env mytool env -S "npm publish"` answered nothing at all.
 function launched(words: Word[]): string | null
 {
-    const at = words.findIndex((word) => judged(word.text) === ENV);
-    if (at === -1 || envProgram(words, -1) !== -1)
+    const programs = programPositions(words);
+    for (let index = 0; index < words.length; index++)
     {
-        return null;
+        if (judged(words[index].text) !== ENV || programs.has(index))
+        {
+            continue;
+        }
+        if (words.slice(index + 1).some(splits))
+        {
+            return NOT_PROGRAM;
+        }
     }
-    return words.slice(at + 1).some(splits) ? NOT_PROGRAM : null;
+    return null;
+}
+
+// Every env this gate can place, not the first. `envProgram` already answers
+// them one at a time and each answer is past the last, so the walk terminates.
+function programPositions(words: Word[]): Set<number>
+{
+    const found = new Set<number>();
+    for (let after = -1; ; )
+    {
+        const at = envProgram(words, after);
+        if (at === -1)
+        {
+            return found;
+        }
+        found.add(at);
+        after = at;
+    }
 }
 
 function splits(word: Word): boolean

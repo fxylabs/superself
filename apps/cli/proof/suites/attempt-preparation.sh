@@ -412,6 +412,9 @@ const REFUSED = [
     ["env with an assignment launching env", ["env", "FOO=1", "env", "-S", "npm publish"], "publish"],
     ["env launching env after its terminator", ["env", "--", "env", "-S", "npm publish"], "publish"],
     ["env launching env launching env", ["env", "env", "env", "-S", "npm publish"], "publish"],
+    ["a valid env hiding a packed env in its program's arguments", ["env", "mytool", "env", "-S", "npm publish"], "unreadable"],
+    ["the same with the inline split spelling", ["env", "mytool", "env", "--split-string=npm publish"], "unreadable"],
+    ["the same with a launcher between them", ["env", "mytool", "xargs", "env", "-S", "npm publish"], "unreadable"],
     // a shell handed a script, wherever it sits
     ["a shell handed a script", ["sh", "-c", "npm publish"], "publish"],
     ["a login shell handed a script", ["bash", "-lc", "npm publish"], "publish"],
@@ -513,6 +516,68 @@ for (let depth = 0; depth <= 12; depth++)
         console.error(`a packed chain nested ${depth} deep answered null`);
     }
 }
+
+// The invariant, not the three vectors that exposed it. The rule says an env
+// token that is not in program position, with a split flag after it, is never
+// admitted — so that is asserted directly, over every vector in this table and
+// over a generated cross-product of the shapes the class is made of. Closing a
+// named vector is what the last several readings of this gate each did while
+// the class stayed open; this is the assertion that says the class is closed.
+//
+// Program position is recomputed here from the rule's own words rather than
+// imported, so the check is an independent reading: argv[0], or preceded only
+// by NAME=value assignments.
+const basename = (token) => /^(?:\.{0,2}|~)\/\S*$/.test(token) ? token.slice(token.lastIndexOf("/") + 1) : token;
+const splitFlag = (token) => token === "--split-string" || /^--split-string=/.test(token) || /^-[a-zA-Z]*S[a-zA-Z]*$/.test(token);
+const assignment = (token) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+const packedAwayFromProgram = (argv) => argv.some((token, index) =>
+    basename(token) === "env"
+    && !argv.slice(0, index).every(assignment)
+    && argv.slice(index + 1).some(splitFlag));
+
+const PREFIXES = [
+    ["echo"], ["git", "log"], ["xargs"], ["xargs", "-I", "{}"], ["xargs", "-a", "list.txt"],
+    ["timeout", "30"], ["timeout", "--signal"], ["time", "-f"], ["nice", "-n"], ["command", "-v"],
+    ["stdbuf", "-o0"], ["nohup", "setsid"], ["env", "mytool"], ["env", "FOO=1", "mytool"],
+    ["env", "--", "mytool"], ["env", "mytool", "xargs"], ["mytool", "--flag", "value"]
+];
+const ENVS = ["env", "/usr/bin/env", "./tools/env"];
+const SPLITS = [["-S", "npm publish"], ["--split-string", "npm publish"], ["--split-string=npm publish"], ["-Snpm publish"], ["-iS", "npm publish"]];
+
+let generated = 0;
+const holds = (argv) =>
+{
+    if (!packedAwayFromProgram(argv))
+    {
+        return true;
+    }
+    generated++;
+    return forbiddenCommand(argv) !== null;
+};
+for (const [, argv] of [...REFUSED.map((c) => [c[0], c[1]]), ...BENIGN])
+{
+    if (!holds(argv))
+    {
+        bad++;
+        console.error(`a table vector packs an env away from program position and was admitted: ${JSON.stringify(argv)}`);
+    }
+}
+for (const prefix of PREFIXES)
+{
+    for (const env of ENVS)
+    {
+        for (const split of SPLITS)
+        {
+            const argv = [...prefix, env, ...split];
+            if (!holds(argv))
+            {
+                bad++;
+                console.error(`admitted: ${JSON.stringify(argv)}`);
+            }
+        }
+    }
+}
+console.log(`invariant: ${generated} vectors pack an env away from program position, and none is admitted`);
 
 // A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();
