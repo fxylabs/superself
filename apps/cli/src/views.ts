@@ -154,8 +154,8 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
     pushList(lines, "Conventions", model.conventions.map((convention) =>
         `- ${detail(convention.text, options.detailLimit, `self search ${convention.id} --type convention --project ${project}`)}`));
     pushList(lines, "Integration train", options.compactOptional
-        ? countedOmission(openChangeSets(model.integration).length, "open change set", "self integration plan",
-            fromCheckout(project))
+        ? countedOmission(openChangeSets(model.integration).length, "open change set",
+            "self integration plan" + fromCheckout(project))
         : trainLines(model));
     pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
     pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
@@ -210,7 +210,7 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
         .sort(compareDated)
         .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
     pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length, "open change set",
-        "self integration plan", fromCheckout(project)));
+        "self integration plan" + fromCheckout(project)));
     const progressing = [...model.works]
         .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
         .sort((left, right) => left.id.localeCompare(right.id));
@@ -599,13 +599,15 @@ function renderWorkspaceContext(models: ProjectModel[]): string
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail(model.goal ?? "(no goal)", 500, "self status");
+    const goal = detail(model.goal ?? "(no goal)", 500, "self status"); // scope-exempt: the workspace's own pointer
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 
 function workspaceOmission(count: number): string
 {
-    return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`self status\` from the workspace for the full summaries`;
+    // this omission is the workspace's own, not a project's
+    const recovery = "self status"; // scope-exempt: the workspace command itself
+    return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`${recovery}\` from the workspace for the full summaries`;
 }
 
 function writeContext(text: string): void

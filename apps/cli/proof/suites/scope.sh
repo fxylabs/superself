@@ -141,6 +141,72 @@ done
 # a command with no scope form is not given one: the row says where to stand
 echo "$SCOPED_CTX" | grep -q "self integration plan --project" && fail "a pointer promised --project on a verb that has none"
 
+# ── the ruled render carries the same rule ────────────────────────────────
+# --pretty forces the ruled render into a pipe, so this needs no terminal. It
+# is asserted separately because the two renders build their pointers in
+# different modules: round 1 scoped the plain one and left `· self work`,
+# `· self status` and `· self integration plan` bare in the ruled one (#165
+# review round 2), and a check that only read the plain render passed anyway.
+#
+# bare_ruled OUTPUT — every ruled row pointing at a read verb without naming a
+# project, or at a verb with no scope form without naming the checkout.
+# A scoped pointer always carries a flag, so ` --` after the verb is the mark
+# that survives the table's own truncation: a ruled cell narrower than its
+# text ends in `…`, and `· self status --…` is a scoped pointer the column cut,
+# while `· self status` standing alone is the defect. A pointer elided before
+# its flag (`· self status…`) says nothing either way and is left to the
+# positive assertions below.
+bare_ruled()
+{
+    printf '%s\n' "$1" | grep -F '· self ' \
+        | grep -vE -- "--|from a checkout of|self decide confirm|self attempt show|self work accept|self [a-z]+…" || true
+}
+
+# force the sections whose pointers only appear once a section overflows, and a
+# gated unit, whose row carries a pointer of its own
+cd "$ROOT/outside/app"
+PRETTY_WID="$(SELF work add "a ruled-render unit a proposal gates" | tail -1)"
+SELF decide "ruled render gate" --proposed --blocks "$PRETTY_WID" > /dev/null
+for index in 1 2 3 4 5 6 7 8 9
+do
+    SELF objective add "ruled render objective $index" > /dev/null
+    SELF decide "ruled render decision $index" > /dev/null
+    SELF decide "ruled render proposal $index" --proposed > /dev/null
+done
+cd "$DEMO"
+
+for ARGV in "context --project outside --pretty" "status --project outside --pretty" "work --project outside --pretty"
+do
+    RULED="$(SELF $ARGV)"
+    BARE="$(bare_ruled "$RULED")"
+    [ -z "$BARE" ] || fail "self $ARGV carried an unscoped ruled pointer: $BARE"
+done
+
+# and the assertion is not vacuous: each pointer it polices is really printed,
+# naming the project the render is about rather than the caller's
+RULED_CTX="$(SELF context --project outside --pretty)"
+echo "$RULED_CTX" | grep -q "self objective --project 'outside'" || fail "the ruled objectives overflow printed no scoped pointer"
+echo "$RULED_CTX" | grep -q "self search --type decision --project 'outside'" || fail "the ruled decisions overflow printed no scoped pointer"
+# proposals rank into the decisions band, whose overflow row carries the other
+# pointer the ruled render prints outside a table cell
+echo "$RULED_CTX" | grep -q "self status --project 'outside'" || fail "the ruled decisions band printed no scoped pointer"
+echo "$RULED_CTX" | grep -q -- "--project 'demo'" && fail "the ruled render pointed at the caller's project"
+# the gated-by note sits in a table cell narrow enough to cut the slug, so what
+# is asserted is that the pointer carries a flag at all — bare or scoped is
+# exactly what that first `--` tells apart
+SELF work --project outside --pretty | grep -q "· self status --" \
+    || fail "the ruled gated-by note printed a bare pointer"
+
+# the rows a fixture cannot cheaply reach — the unshipped overflow and the
+# integration section — are held by the source rule instead of by silence: no
+# render may name a scopable read verb in a literal that never reaches
+# scoped(), and no unscoped verb may be named without fromCheckout().
+BARE_SRC="$(grep -nE '("|`)self (work|status|objective|milestone|context|log|search|integration)' \
+    "$CLI_DIR/src/pretty.ts" "$CLI_DIR/src/views.ts" \
+    | grep -vE '^[^:]*:[0-9]+: *(//|\*)' \
+    | grep -vE 'scoped\(|fromCheckout\(|SCOPED_POINTER|scope-exempt|--project|self work accept|self decide confirm|self attempt show' || true)"
+[ -z "$BARE_SRC" ] || fail "a render names a read verb in a pointer that never reaches scoped(): $BARE_SRC"
+
 # ── a read of another project changes nothing in it ───────────────────────
 BEFORE="$(snapshot)"
 OUT_LOG_BEFORE="$(cat "$STORE/projects/outside/log.jsonl")"
