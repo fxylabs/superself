@@ -813,16 +813,23 @@ console.log(`populations: ${handWritten.length} hand-written (${REFUSED.length} 
 // checked to be real: it must still decompose into a cell of the cross-product
 // and must still be present in the hand-written tables, so a stale pin fails
 // naming itself rather than sitting there agreeing with nothing.
+// Each entry names which hand-written tables hold it, so the pin is about
+// provenance rather than about a bare vector. Without that, dropping the nested
+// case for a vector that REFUSED also holds changed nothing this could see: the
+// vector was still shared, so the overlap set still matched.
 const EXPECTED_SHARED = [
-    { argv: ["env", "mytool", "env", "-S", "npm publish"], why: "REFUSED pins its unreadable category and NESTED asserts both packing directions; the cross-product reaches it from the env-mytool prefix" },
-    { argv: ["env", "mytool", "env", "--split-string=npm publish"], why: "the same shape in the inline split spelling, pinned in REFUSED and generated from the same prefix" },
-    { argv: ["env", "mytool", "xargs", "env", "-S", "npm publish"], why: "the round-11 hidden-token vector, pinned in REFUSED and generated from the env-mytool-xargs prefix" },
-    { argv: ["xargs", "env", "-S", "npm publish"], why: "the launcher case whose category REFUSED pins, generated from the xargs prefix" }
+    { argv: ["env", "mytool", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "REFUSED pins its unreadable category and NESTED asserts both packing directions; the cross-product reaches it from the env-mytool prefix" },
+    { argv: ["env", "mytool", "env", "--split-string=npm publish"], tables: ["REFUSED"], why: "the same shape in the inline split spelling, pinned in REFUSED and generated from the same prefix" },
+    { argv: ["env", "mytool", "xargs", "env", "-S", "npm publish"], tables: ["REFUSED"], why: "the round-11 hidden-token vector, pinned in REFUSED and generated from the env-mytool-xargs prefix" },
+    { argv: ["xargs", "env", "-S", "npm publish"], tables: ["REFUSED"], why: "the launcher case whose category REFUSED pins, generated from the xargs prefix" }
 ];
 const generatedSet = new Set([...generatedCells.values()].map((argv) => JSON.stringify(argv)));
 const handWrittenSet = new Set(handWritten.map((argv) => JSON.stringify(argv)));
 const actualShared = [...handWrittenSet].filter((vector) => generatedSet.has(vector)).sort();
 const expectedShared = EXPECTED_SHARED.map((entry) => JSON.stringify(entry.argv)).sort();
+const refusedVectors = new Set(REFUSED.map((entry) => JSON.stringify(entry[1])));
+const nestedVectors = new Set(NESTED_VECTORS.map((argv) => JSON.stringify(argv)));
+const holders = { REFUSED: refusedVectors, BENIGN: new Set(BENIGN.map((entry) => JSON.stringify(entry[1]))), NESTED: nestedVectors };
 for (const entry of EXPECTED_SHARED)
 {
     const vector = JSON.stringify(entry.argv);
@@ -831,10 +838,13 @@ for (const entry of EXPECTED_SHARED)
         bad++;
         console.error(`${vector} is listed as a deliberate overlap but the cross-product no longer produces it — the list is stale`);
     }
-    if (!handWrittenSet.has(vector))
+    for (const [name, held] of Object.entries(holders))
     {
-        bad++;
-        console.error(`${vector} is listed as a deliberate overlap but no hand-written table holds it any more — the list is stale`);
+        if (entry.tables.includes(name) !== held.has(vector))
+        {
+            bad++;
+            console.error(`${vector} is listed as held by ${JSON.stringify(entry.tables)}, but ${name} ${held.has(vector) ? "also holds" : "no longer holds"} it — the list is stale`);
+        }
     }
 }
 if (JSON.stringify(actualShared) !== JSON.stringify(expectedShared))
@@ -854,8 +864,6 @@ if (JSON.stringify(actualShared) !== JSON.stringify(expectedShared))
 // REFUSED already pins, so every repeat is a vector held by both of those two
 // tables. This one is a property rather than a list — an accidental repeat
 // inside a single table fails it.
-const refusedSet = new Set(REFUSED.map((entry) => JSON.stringify(entry[1])));
-const nestedSet = new Set(NESTED_VECTORS.map((argv) => JSON.stringify(argv)));
 const repeats = new Map();
 for (const argv of handWritten)
 {
@@ -870,7 +878,7 @@ for (const [vector, times] of repeats)
         continue;
     }
     handWrittenRepeats += times - 1;
-    if (times !== 2 || !refusedSet.has(vector) || !nestedSet.has(vector))
+    if (times !== 2 || !refusedVectors.has(vector) || !nestedVectors.has(vector))
     {
         bad++;
         console.error(`${vector} appears ${times} times in the hand-written tables — the only repetition this proof intends is one vector held by both REFUSED and NESTED_VECTORS`);
