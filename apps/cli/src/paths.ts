@@ -1,12 +1,18 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { checkoutTops, realPath, repositoryIdentity, topOf } from "./gitutil.js";
+import { checkoutTops, excludeLocally, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
 
 export const STORE_DIR = ".superself";
 export const MARKER_FILE = ".self";
 export const LINKS_FILE = "links.jsonl";
+// Derived, machine-local, and git-excluded: what it summarizes is this
+// machine's checkout of the project repository, so it must never travel in the
+// synced store. `EVIDENCE_HEAD_EXCLUDE` is the pattern `self sync` writes into
+// the store's local excludes.
+export const EVIDENCE_HEAD_FILE = ".evidence-head.json";
+export const EVIDENCE_HEAD_EXCLUDE = `projects/*/${EVIDENCE_HEAD_FILE}`;
 
 export interface CliContext
 {
@@ -137,9 +143,53 @@ export function ensureDir(path: string): string
     return path;
 }
 
+// ── resolution cache ─────────────────────────────────────────────────────
+// Which project a directory belongs to is asked many times inside one
+// command: once per registered project by `self setup`, once per project by a
+// workspace fold, and again by everything they call. The answer is derived
+// from the registry, the links ledger, and what git says about the paths in
+// them, so re-deriving it re-reads both files and re-probes the same
+// directories.
+//
+// The cache is deliberately in-process and nothing else. A resolution answer
+// contains, implicitly, the claim that a given repository still stands at a
+// given path; persisting that claim is the #115 bug, where a checkout deleted
+// and replaced went on resolving to the project that used to be there. Nothing
+// here is written down, so a read after a write in another process starts from
+// the files.
+//
+// What keeps it from outliving the state it summarizes is not the process:
+// `self daemon start --foreground` is one process running ticks for as long as
+// the supervisor lives. It is that every writer of those files calls
+// `invalidateResolution` — the event append included, before the fold that
+// follows it — and that a daemon tick clears them before it does anything, so
+// a tick reads what the last one left on disk rather than what it summarized
+// an hour ago. State the invariant that way to the next caller: the caches
+// live until the next append or the next tick, never "until this command
+// ends".
+const links = new Map<string, Record<string, LinkedCheckout[]>>();
+const registries = new Map<string, RegistryEntry[]>();
+const matched = new Map<string, CheckoutMatch[]>();
+const resolvedPaths = new Map<string, string | null>();
+
+export function invalidateResolution(): void
+{
+    links.clear();
+    registries.clear();
+    matched.clear();
+    resolvedPaths.clear();
+}
+
 export function readRegistry(storeDir: string): RegistryEntry[]
 {
-    return readJsonl(join(storeDir, "registry.jsonl"));
+    const cached = registries.get(storeDir);
+    if (cached !== undefined)
+    {
+        return cached;
+    }
+    const entries: RegistryEntry[] = readJsonl(join(storeDir, "registry.jsonl"));
+    registries.set(storeDir, entries);
+    return entries;
 }
 
 export interface StoreConfig
@@ -195,6 +245,59 @@ export function readVerdicts(storeDir: string, slug: string): Record<string, Ver
     }
 }
 
+// What the verdicts beside it were computed against: `repository` digests
+// every ref and the working tree's HEAD, `verdicts` digests the evidence file
+// itself. Both are derived from the state the record summarizes, which is what
+// makes the record safe to trust — a ref that moved, a branch that was
+// deleted, or an evidence file another machine's fold replaced all change one
+// of the two, and the recheck runs.
+//
+// It is emphatically not a cache of what repository a path holds. That
+// question is answered lazily at resolution and never stored, because a stale
+// answer to it resolves a command into the wrong project (#115).
+export interface EvidenceHead
+{
+    repository: string;
+    verdicts: string;
+}
+
+export function readEvidenceHead(storeDir: string, slug: string): EvidenceHead | null
+{
+    const file = join(projectStateDir(storeDir, slug), EVIDENCE_HEAD_FILE);
+    if (!existsSync(file))
+    {
+        return null;
+    }
+    try
+    {
+        const parsed = JSON.parse(readFileSync(file, "utf8"));
+        return typeof parsed?.repository === "string" && typeof parsed?.verdicts === "string" ? parsed : null;
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+// Written once the exclude is in place, so a store that has never synced
+// cannot commit a machine-local file on its first fold. The exclude is asked
+// for once per process, because it costs a git probe and nothing this process
+// does removes the line again. A daemon is one process for as long as it runs,
+// so an exclude taken out from under it stays out of this set — the sync path
+// is where that would matter, and `ensureSyncConfig` writes the line again
+// there rather than trusting this.
+const excluded = new Set<string>();
+
+export function writeEvidenceHead(storeDir: string, slug: string, head: EvidenceHead): void
+{
+    if (!excluded.has(storeDir))
+    {
+        excluded.add(storeDir);
+        excludeLocally(storeDir, EVIDENCE_HEAD_EXCLUDE);
+    }
+    writeFileSync(join(projectStateDir(storeDir, slug), EVIDENCE_HEAD_FILE), JSON.stringify(head) + "\n");
+}
+
 // A path this machine linked, and the repository that stood there when it was
 // linked. The identity is absent on links written before it was recorded, and
 // on a checkout that had no commit yet when it was linked — both are read as
@@ -208,20 +311,85 @@ export interface LinkedCheckout
 // One slug holds every checkout linked on this machine, not just the newest:
 // parallel worktrees of one repository are normal, and last-wins repointing
 // silently moved where a fold refreshes the managed block.
+// The file is an append-only ledger, read in order: a link entry adds a path,
+// a prune entry takes it away again, and a later link entry at the same path
+// brings it back. Nothing is ever deleted from the file behind a reader's
+// back, so what happened to a link is still legible after it stopped
+// resolving — which is the whole point of pruning through a recorded entry
+// rather than by rewriting the list (#128).
 export function readLinks(storeDir: string): Record<string, LinkedCheckout[]>
 {
-    const links: Record<string, LinkedCheckout[]> = {};
+    const cached = links.get(storeDir);
+    if (cached !== undefined)
+    {
+        return cached;
+    }
+    const read: Record<string, LinkedCheckout[]> = {};
     for (const entry of readJsonl(join(storeDir, LINKS_FILE)))
     {
-        const linked = links[entry.slug] ?? (links[entry.slug] = []);
-        if (!linked.some((item) => item.path === entry.path))
+        applyLinkEntry(read[entry.slug] ?? (read[entry.slug] = []), entry);
+    }
+    links.set(storeDir, read);
+    return read;
+}
+
+function applyLinkEntry(linked: LinkedCheckout[], entry: any): void
+{
+    const at = linked.findIndex((item) => item.path === entry.path);
+    if (entry.pruned !== undefined)
+    {
+        if (at !== -1)
         {
-            linked.push(entry.repository === undefined
-                ? { path: entry.path }
-                : { path: entry.path, repository: String(entry.repository) });
+            linked.splice(at, 1);
+        }
+        return;
+    }
+    if (at === -1)
+    {
+        linked.push(entry.repository === undefined
+            ? { path: entry.path }
+            : { path: entry.path, repository: String(entry.repository) });
+    }
+}
+
+export interface PrunedLink
+{
+    slug: string;
+    path: string;
+}
+
+// Links whose checkout is simply not there any more. Every read of a linked
+// path pays for it — `existsSync`, and on the paths that survive that, a probe
+// — so a workspace that accumulates deleted worktrees pays for them on every
+// command forever (#128).
+//
+// Pruning is recorded, never silent list surgery: an entry naming the path and
+// why it went states what happened, and the path is restored by re-linking it
+// with `self project link`, exactly as the #115 remedy restores a replaced
+// one. The record is a line in the links ledger rather than an event in the
+// log because a link path is this machine's filesystem, and the sanitization
+// gate refuses — correctly — to let a machine's paths into synced state.
+//
+// It runs only in a workspace sweep, never on an append: a read command must
+// not decide that a volume which happens to be unmounted right now is gone.
+export function pruneDeadLinks(storeDir: string): PrunedLink[]
+{
+    const gone: PrunedLink[] = [];
+    for (const [slug, linked] of Object.entries(readLinks(storeDir)))
+    {
+        for (const link of linked.filter((item) => !existsSync(realPath(item.path))))
+        {
+            gone.push({ slug, path: link.path });
         }
     }
-    return links;
+    if (gone.length > 0)
+    {
+        appendFileSync(join(storeDir, LINKS_FILE), gone
+            .map((item) => JSON.stringify({ ...item, pruned: new Date().toISOString(), why: "path no longer exists" }) + "\n")
+            .join(""));
+        invalidateResolution();
+    }
+    return gone;
 }
 
 // Linking a path this machine already linked. Appending a second entry for a
@@ -235,29 +403,62 @@ export function readLinks(storeDir: string): Record<string, LinkedCheckout[]>
 // Deliberate is the point: `self project link` is a user act at that path, so
 // the replacement is something a person asked for rather than resolution
 // quietly deciding the claim was wrong.
-export function recordLink(storeDir: string, slug: string, path: string, repository: string | null): boolean
+// One checkout reaches the ledger under one spelling. A path handed in as an
+// argument keeps whatever symlinks the caller typed, while the same directory
+// entered and read back from `process.cwd()` arrives resolved — and the two
+// compare unequal, so linking a path both ways used to leave two entries for
+// one checkout, each probed on every resolution. Every read already asks about
+// `realPath(link.path)`, so recording it resolved is what the file was being
+// read as anyway (#128).
+//
+// Every comparison against an existing line resolves that line too. A ledger
+// written before this change holds whatever spelling was typed then, and
+// comparing a resolved path against a raw one matched neither the stale scan
+// nor the linked check: the re-link printed success, replaced nothing, and
+// appended a second entry for one physical checkout. `pruneDeadLinks` can
+// never remove it, because the path it names does exist — so the extra
+// `existsSync` and identity probe on every resolution stayed forever, which is
+// the cost #128 set out to remove.
+export function recordLink(storeDir: string, slug: string, at: string, repository: string | null): boolean
 {
+    const path = realPath(at);
     const file = join(storeDir, LINKS_FILE);
     const entries = readJsonl(file);
-    const stale = entries.filter((entry) => entry.path === path
+    const here = (line: { path?: unknown }): boolean => typeof line.path === "string" && realPath(line.path) === path;
+    const stale = entries.filter((entry) => here(entry)
         && entry.repository !== undefined && repository !== null && String(entry.repository) !== repository);
     const entry = repository === null ? { slug, path } : { slug, path, repository };
+    // Whether this path is linked is read off the ledger's resolved state, not
+    // off the raw lines: a path that was pruned still has its original line in
+    // the file, and taking that as "already linked" would make the re-link at a
+    // restored path report success and change nothing — the same dead end #115
+    // closed for a replaced one.
+    const linked = (readLinks(storeDir)[slug] ?? []).some(here);
     if (stale.length > 0)
     {
-        const kept = entries.filter((item) => item.path !== path).concat([entry]);
+        // The stale claim goes; what was recorded about the path stays. A prune
+        // entry is kept where it stood, so replacing an identity never quietly
+        // erases the account of a checkout that went missing first — and the new
+        // entry is appended last, so the replay ends with the path linked.
+        const kept = entries.filter((item) => !here(item) || item.pruned !== undefined).concat([entry]);
         writeFileSync(file, kept.map((item) => JSON.stringify(item) + "\n").join(""));
+        invalidateResolution();
         return true;
     }
-    if (!entries.some((item) => item.slug === slug && item.path === path))
+    if (!linked)
     {
         appendFileSync(file, JSON.stringify(entry) + "\n");
+        invalidateResolution();
     }
     return false;
 }
 
-// Warned about once per process: the resolution path runs on every command,
-// and a stale link would otherwise print the same line in front of every one
-// of them.
+// Warned about once per process, and deliberately not per tick: the resolution
+// path runs on every command, and a stale link would otherwise print the same
+// line in front of every one of them — or, in a daemon, once every interval
+// into the log for as long as it runs, burying everything else it records. The
+// remedy the line names is a person re-linking the checkout, so repeating it
+// teaches nothing the first one did not.
 const reported = new Set<string>();
 
 // Whether the repository standing at a linked path is still the one that was
@@ -304,6 +505,18 @@ function standing(link: LinkedCheckout): boolean
 // each of a project's checkouts there put a read command an order of magnitude
 // over #128's half-second budget.
 export function resolveProjectPath(storeDir: string, slug: string, from: string = process.cwd()): string | null
+{
+    // A serialized tuple, not a joined string: a separator that can occur
+    // inside a path would let two different questions share one answer.
+    const key = JSON.stringify([storeDir, slug, from]);
+    if (!resolvedPaths.has(key))
+    {
+        resolvedPaths.set(key, resolveProjectPathOnce(storeDir, slug, from));
+    }
+    return resolvedPaths.get(key) ?? null;
+}
+
+function resolveProjectPathOnce(storeDir: string, slug: string, from: string): string | null
 {
     const linked = readLinks(storeDir)[slug] ?? [];
     const active = linked.find((link) => contains(link.path, from) && standing(link));
@@ -419,6 +632,16 @@ function repositoryClaim(tops: string[]): () => string | null
 // position under its own top level, which is what stops a monorepo where
 // `apps/foo` is registered from claiming the whole worktree.
 export function checkoutMatches(storeDir: string, dir: string): CheckoutMatch[]
+{
+    const key = JSON.stringify([storeDir, dir]);
+    if (!matched.has(key))
+    {
+        matched.set(key, checkoutMatchesOnce(storeDir, dir));
+    }
+    return matched.get(key) ?? [];
+}
+
+function checkoutMatchesOnce(storeDir: string, dir: string): CheckoutMatch[]
 {
     const target = realPath(resolve(dir));
     const here = topOf(target);

@@ -150,9 +150,7 @@ let LANG = "en";
 let THEME = "violet";
 let USER_THEME = "";
 
-// Returns whether this fold rendered a different viewer than the one already
-// on disk — the caller uses it to bring every other project's pages forward.
-export function writeViews(storeDir: string, model: ProjectModel, config: StoreConfig, verdicts: Record<string, Verdict> = {}): boolean
+export function writeViews(storeDir: string, model: ProjectModel, config: StoreConfig, verdicts: Record<string, Verdict> = {}): void
 {
     LANG = config.lang ?? "en";
     THEME = config.theme ?? "violet";
@@ -194,7 +192,6 @@ export function writeViews(storeDir: string, model: ProjectModel, config: StoreC
     writeFileSync(join(workDir, "events.html"), renderEventsPage(model, feed, rail(1, model.slug)));
     writeFileSync(join(workDir, "artifacts.html"), renderArtifactsPage(model, rail(1, model.slug)));
     writeFileSync(join(dir, "workspace.html"), renderWorkspacePage(summaries, rail(0)));
-    return chromeMoved(dir);
 }
 
 // The viewer is code baked into every page at the moment its project was last
@@ -202,16 +199,25 @@ export function writeViews(storeDir: string, model: ProjectModel, config: StoreC
 // is not rewriting have fallen behind. The stamp is this module's own bytes:
 // hashing the stylesheet alone missed changes to the markup around it, and a
 // hand-bumped revision is a step someone eventually forgets.
-function chromeMoved(dir: string): boolean
+//
+// Asking and claiming are two functions because only a workspace sweep may
+// claim: an event append rewrites one project's pages, so if it wrote the
+// stamp it would swallow the one signal that tells the next sweep the other
+// projects are still on the old viewer (#128).
+function chromeStamp(): string
 {
-    const stamp = createHash("sha256").update(viewerSource()).digest("hex").slice(0, 16);
-    const file = join(dir, CHROME_FILE);
-    if (existsSync(file) && readFileSync(file, "utf8").trim() === stamp)
-    {
-        return false;
-    }
-    writeFileSync(file, stamp + "\n");
-    return true;
+    return createHash("sha256").update(viewerSource()).digest("hex").slice(0, 16);
+}
+
+export function chromeStale(storeDir: string): boolean
+{
+    const file = join(storeDir, VIEW_DIR, CHROME_FILE);
+    return !existsSync(file) || readFileSync(file, "utf8").trim() !== chromeStamp();
+}
+
+export function claimChrome(storeDir: string): void
+{
+    writeFileSync(join(ensureDir(join(storeDir, VIEW_DIR)), CHROME_FILE), chromeStamp() + "\n");
 }
 
 // Falls back to the stylesheet if this module cannot be read as a file, so a
