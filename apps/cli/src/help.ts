@@ -530,6 +530,34 @@ export const COMMANDS: CommandHelp[] = [
         ]
     },
     {
+        name: "evidence",
+        usage: [
+            {
+                syntax: "evidence compile <manifest> [--out <name>] [--pin]",
+                description: ["compile a source-pinned evidence bundle from recorded state"]
+            },
+            {
+                syntax: "evidence verify <bundle> | show <bundle>",
+                description: ["recheck a bundle against the store, or read one"]
+            }
+        ],
+        detail: [
+            "compile the decisions, work, reports, milestones and commits a manifest",
+            "names into one canonical JSON bundle, so a later reader can recheck which",
+            "project state supported a claim. The same pinned inputs always give the",
+            "same bytes and the same digest; a source that moved, a selector that",
+            "matches nothing or matches several, and content the profile does not",
+            "carry all refuse instead of compiling something quieter. Nothing here",
+            "writes project state.",
+            "",
+            "  --out <name>    the file name to write, in the current directory",
+            "  --pin           write a manifest with this store's head and log hash",
+            "                  filled in, instead of compiling",
+            "  --pretty        force the terminal render of `show`",
+            "  --plain         force the piped render of `show`"
+        ]
+    },
+    {
         name: "convention",
         usage: [{ syntax: 'convention add "<text>" | drop <event-id>', description: ["record or retire a convention"] }],
         detail: ["record a rule this project works by, or retire one by its event id."]

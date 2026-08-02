@@ -50,16 +50,21 @@ ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
 ## Subsystems
 
 A subsystem owns a directory. Today: `attempt/` (runner supervision), `spec/`
-(work specs), `daemon/` (the supervisor loop). `integration/` is the next one
-(#88); until it exists, the train cluster is flat at the top level.
+(work specs), `daemon/` (the supervisor loop), `evidence/` (evidence bundles).
+`integration/` is the next one (#88); until it exists, the train cluster is flat
+at the top level.
 
 Dependencies between subsystems are one-way, verified on `main`:
 
 ```text
-daemon/  →  attempt/ + spec/  →  core
-spec/    →  attempt/          →  core
-attempt/ →  core
+daemon/   →  attempt/ + spec/  →  core
+spec/     →  attempt/          →  core
+attempt/  →  core
+evidence/ →  core
 ```
+
+`evidence/` is the read-only one: it compiles recorded state into a file and
+appends nothing, so it never reaches `pipeline.ts` and owns no event namespace.
 
 - No subsystem imports a subsystem above it. `attempt/` imports core modules
   only; it never reaches into `spec/` or `daemon/`.
@@ -205,5 +210,7 @@ entry with no issue behind it says so. Do not use any of these as precedent.
   judged by, including the result-envelope contract.
 - [docs/integration-train.md](docs/integration-train.md) — the change-set,
   receipt, lease, and merge contract.
+- [docs/evidence-bundle.md](docs/evidence-bundle.md) — the manifest and bundle
+  formats, the canonical serialization, and the versioning policy.
 - [docs/strategy/problem-definition.md](docs/strategy/problem-definition.md) —
   the state architecture the CLI implements.
