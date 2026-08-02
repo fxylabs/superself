@@ -243,16 +243,52 @@ interface Word
 // nobody could get past. So the flag is honoured only inside an env invocation,
 // found by the same basename judgement the rest of this module uses — which is
 // why `/usr/bin/env` and a bare `env` behind `sudo` or `xargs` are all covered.
-const SPLIT_FLAG = /^-[a-zA-Z]*S[a-zA-Z]*$/;
 const SPLIT_INLINE = /^--split-string=([\s\S]*)$/;
-const SPLIT_LONG = "--split-string";
 const ENV = "env";
 
-// env's own arguments, which is how far forward its `-S` may be found: its
-// options, and the NAME=value assignments it exists to set. The first token
-// that is neither is the program env will exec, and from there the flags belong
-// to that program.
+// env's own option grammar, modelled rather than approximated. Three earlier
+// readings guessed at it and each guess was wrong in both directions at once,
+// so this states the machine:
+//
+//   The window OPENS only where env is the program being run — argv[0], or the
+//   program token of a launcher that execs it. A token that merely says "env"
+//   somewhere in a command's arguments opens nothing: `echo env -S "release
+//   notes"` and `git log env -S "release notes"` are ordinary commands.
+//
+//   Inside it, env's options are read the way env reads them. A flag that takes
+//   a separate value consumes the next token, and that token is neither the
+//   program nor a packed script — missing this let `env -u FOO -S "…"` walk
+//   straight past the gate, because the value cleared the window before the
+//   split flag was reached.
+//
+//   The window CLOSES at `--`, after which the next token is the program
+//   whatever it looks like, and at the first token that is neither an option,
+//   an option's consumed value, nor a NAME=value assignment. After it closes a
+//   `-S` belongs to the program: `env -- -S "release notes"` runs a program
+//   called `-S`, and `git -S` signs a commit.
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+// env's long options, by whether they take a value and how.
+const ENV_LONG_VALUE = ["--unset", "--chdir", "--block-signal", "--default-signal", "--ignore-signal"];
+const ENV_LONG_BARE = ["--ignore-environment", "--null", "--debug", "--help", "--version"];
+const SPLIT_LONG = "--split-string";
+
+// env's short options. `u` and `C` take a value — the rest of the cluster when
+// there is one, the next token when there is not — and `S` takes the packed
+// command line the same way.
+const ENV_SHORT_VALUE = "uC";
+const ENV_SHORT_SPLIT = "S";
+const ENV_SHORT_BARE = "i0v";
+
+// The launchers verified to hand their program through as separate tokens. They
+// are named here only to answer "is the token after them a program position",
+// never to decide what is forbidden — that stays positional, so a launcher
+// nobody listed still cannot hide a shell.
+const LAUNCHERS = ["sudo", "doas", "xargs", "timeout", "nohup", "setsid", "stdbuf", "nice", "ionice", "chrt", "command", "time", "env"];
+
+// A launcher operand that is a number or a duration — `timeout 30`, `nice 10`.
+// Anything else bare in front of the program position is the program.
+const OPERAND = /^[0-9]+(\.[0-9]+)?[smhd]?$/;
 
 // Bounds on the work this reading may do. Neither is a licence to stop caring
 // about what is past it: overflowing either one is reported as unread text and
@@ -267,57 +303,171 @@ function respliced(initial: Word[]): { words: Word[]; unread: string | null }
 {
     let words = initial;
     let unread: string | null = null;
-    for (let pass = 0; pass < MAX_SPLIT_DEPTH; pass++)
+    for (let splices = 0; splices < MAX_SPLIT_DEPTH; splices++)
     {
         const step = splitOnce(words);
-        words = step.words;
         unread = unread ?? step.unread;
         if (!step.split)
         {
-            return { words, unread };
+            return { words: step.words, unread };
         }
+        words = step.words;
     }
-    // The bound ran out with a packed launcher still in the vector. Whatever is
-    // inside it was never read, and this is the answer that says so.
-    return { words, unread: unread ?? TOO_DEEP };
+    // The allowed splices are spent. Asked rather than assumed: a chain that
+    // needed exactly this many is fully read, and refusing it was the
+    // off-by-one that turned a bound into a false refusal.
+    const remaining = splitOnce(words);
+    return { words, unread: unread ?? (remaining.split ? TOO_DEEP : remaining.unread) };
 }
 
-// One pass over the vector, splicing the words out of every packed env
-// argument it finds.
+// One pass over the vector, splicing the words out of the packed argument of
+// every env invocation it finds.
 function splitOnce(words: Word[]): { words: Word[]; split: boolean; unread: string | null }
 {
-    const out: Word[] = [];
-    let split = false;
-    let unread: string | null = null;
-    // Whether the tokens being walked are still env's own arguments.
-    let inEnv = false;
+    // Every env in the vector, not only the first. One env launching another is
+    // what a packed chain looks like once its outer layer has been spliced, and
+    // stopping at the first one left every layer after it unread.
+    for (let after = -1; ; )
+    {
+        const at = envProgram(words, after);
+        if (at === -1)
+        {
+            return { words: [...words], split: false, unread: null };
+        }
+        const packed = packedArgument(words, at);
+        if (packed !== null)
+        {
+            const split = shellWords(packed.text);
+            const out = [...words];
+            out.splice(packed.from, packed.count, ...split.words);
+            return { words: out, split: true, unread: split.unread };
+        }
+        // This env runs an ordinary program. The search moves past it, and it
+        // strictly increases, so the walk terminates.
+        after = at;
+    }
+}
+
+// Where the next env after `after` is the program being run, or -1. Everything
+// before it has to be a launcher, a launcher's option, or a launcher's numeric
+// operand: `sudo env` and `timeout 30 env` are env in program position, and
+// `echo env` is the word "env" being printed.
+function envProgram(words: Word[], after: number): number
+{
+    let launched = false;
     for (let index = 0; index < words.length; index++)
     {
         const text = words[index].text;
-        const inline = inEnv ? SPLIT_INLINE.exec(text) : null;
+        const name = judged(text);
+        if (name === ENV)
+        {
+            if (index > after)
+            {
+                return index;
+            }
+            // An env already looked at is a launcher for whatever follows it.
+            launched = true;
+            continue;
+        }
+        if (LAUNCHERS.includes(name))
+        {
+            launched = true;
+            continue;
+        }
+        if (text.startsWith("-") || ASSIGNMENT.test(text) || (launched && OPERAND.test(text)))
+        {
+            continue;
+        }
+        // The program, and it is not env.
+        return -1;
+    }
+    return -1;
+}
+
+// The packed command line inside one env invocation: which tokens to replace
+// and with what. Null when this env runs an ordinary program.
+function packedArgument(words: Word[], at: number): { from: number; count: number; text: string } | null
+{
+    let index = at + 1;
+    while (index < words.length)
+    {
+        const text = words[index].text;
+        // The option terminator. Whatever follows is the program, `-S` or not.
+        if (text === "--")
+        {
+            return null;
+        }
+        const inline = SPLIT_INLINE.exec(text);
         if (inline !== null)
         {
-            const packed = shellWords(inline[1]);
-            out.push(...packed.words);
-            unread = unread ?? packed.unread;
-            split = true;
-            inEnv = false;
+            return { from: index, count: 1, text: inline[1] };
         }
-        else if (inEnv && (text === SPLIT_LONG || SPLIT_FLAG.test(text)) && index + 1 < words.length)
+        if (text === SPLIT_LONG)
         {
-            const packed = shellWords(words[++index].text);
-            out.push(...packed.words);
-            unread = unread ?? packed.unread;
-            split = true;
-            inEnv = false;
+            return index + 1 < words.length ? { from: index, count: 2, text: words[index + 1].text } : null;
         }
-        else
+        const step = envOption(text);
+        if (step === null)
         {
-            out.push(words[index]);
-            inEnv = judged(text) === ENV || (inEnv && (text.startsWith("-") || ASSIGNMENT.test(text)));
+            // Not an option and not an assignment: the program env will exec.
+            return null;
+        }
+        if (step.split)
+        {
+            return index + 1 < words.length ? { from: index, count: 2, text: words[index + 1].text } : null;
+        }
+        index += step.consumes;
+    }
+    return null;
+}
+
+// How one of env's own option tokens is read: how many tokens it takes, and
+// whether it is the one that packs a command line. Null means the token is not
+// an option of env's at all.
+function envOption(text: string): { consumes: number; split: boolean } | null
+{
+    if (ASSIGNMENT.test(text))
+    {
+        return { consumes: 1, split: false };
+    }
+    if (text.startsWith("--"))
+    {
+        const name = text.split("=")[0];
+        if (ENV_LONG_VALUE.includes(name))
+        {
+            return { consumes: text.includes("=") ? 1 : 2, split: false };
+        }
+        return ENV_LONG_BARE.includes(name) ? { consumes: 1, split: false } : null;
+    }
+    if (!text.startsWith("-") || text.length < 2)
+    {
+        return null;
+    }
+    return shortCluster(text.slice(1));
+}
+
+// A short cluster, read left to right the way env reads it. `u` and `C` take
+// the rest of the cluster as their value, or the next token when the cluster
+// ends at them; `S` takes the next token as the packed command line.
+function shortCluster(cluster: string): { consumes: number; split: boolean } | null
+{
+    for (let index = 0; index < cluster.length; index++)
+    {
+        const letter = cluster[index];
+        if (ENV_SHORT_SPLIT.includes(letter))
+        {
+            return { consumes: 2, split: true };
+        }
+        if (ENV_SHORT_VALUE.includes(letter))
+        {
+            return { consumes: index + 1 < cluster.length ? 1 : 2, split: false };
+        }
+        if (!ENV_SHORT_BARE.includes(letter))
+        {
+            return null;
         }
     }
-    return { words: out, split, unread };
+    return { consumes: 1, split: false };
 }
 
 // Shell word splitting, for reading only. One forward pass, so it terminates on
@@ -330,7 +480,23 @@ function shellWords(text: string): { words: Word[]; unread: string | null }
     let word = "";
     let quote: string | null = null;
     let started = false;
-    for (let index = 0; index < text.length && words.length < MAX_SPLIT_WORDS; index++)
+    let truncated = false;
+    // A word is only lost when one more actually starts. Marking the bound
+    // itself as unread refused exactly 256 fully parsed words for text that was
+    // read from end to end.
+    const keep = (): boolean =>
+    {
+        if (words.length >= MAX_SPLIT_WORDS)
+        {
+            truncated = true;
+            return false;
+        }
+        words.push({ text: word, split: true });
+        word = "";
+        started = false;
+        return true;
+    };
+    for (let index = 0; index < text.length && !truncated; index++)
     {
         const character = text[index];
         if (character === "\\" && quote !== "'" && index + 1 < text.length)
@@ -351,9 +517,7 @@ function shellWords(text: string): { words: Word[]; unread: string | null }
         {
             if (started)
             {
-                words.push({ text: word, split: true });
-                word = "";
-                started = false;
+                keep();
             }
         }
         else
@@ -362,14 +526,14 @@ function shellWords(text: string): { words: Word[]; unread: string | null }
             started = true;
         }
     }
-    if (started && words.length < MAX_SPLIT_WORDS)
+    if (started && !truncated)
     {
-        words.push({ text: word, split: true });
+        keep();
     }
     // Truncation is a statement about what was not read, not a quiet ceiling.
     // A packed argument of 256 safe words and a forbidden one after them used
     // to come back as "nothing forbidden here".
-    return { words, unread: words.length >= MAX_SPLIT_WORDS ? TOO_MANY_WORDS : null };
+    return { words, unread: truncated ? TOO_MANY_WORDS : null };
 }
 
 // The shells whose -c argument is a script rather than a payload, and the flags
