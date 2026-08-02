@@ -186,6 +186,15 @@ reminders:
   to a project it does not belong to. A write verb has no scope flag: it records
   into the project it runs in, and `--project` on one is an option that command
   never declared, so the argument-parse gate names it instead of dropping it.
+- A recovery pointer a render prints is a type, not a string. Every rendered
+  surface that says "run this for the rest" names the project it is about, or
+  a reader pastes it somewhere else and is answered about their own checkout.
+  `pretty.ts` `Pointer` is branded and minted only by `scoped()`, `fromCheckout()`
+  and `withCheckout()`, so a bare literal handed to a section builder fails
+  typecheck; the verbs with no scope form are the `UnscopedVerb` union, and the
+  constructors that take one also take the `Checkout` sentence that says where
+  to stand, so the note cannot be left off. A pointer written into prose is
+  still a string — `proof/scope-pointers.mjs` holds those.
 - Piped output is a contract. `self context`, `self work` and `self status`
   render for a person only when stdout is a terminal; a pipe, a redirect,
   `--plain`, `TERM=dumb`, and a terminal too narrow for a table all get the

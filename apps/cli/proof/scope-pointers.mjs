@@ -2,6 +2,14 @@
 // verb in a pointer that never reaches `scoped()`, and no verb without a scope
 // form may be named without `fromCheckout()`.
 //
+// What is left for it to do is now the smaller half. `Pointer` is a branded
+// type: every section builder asks for one, and only `scoped()`, `fromCheckout()`
+// and `withCheckout()` mint one, so a bare literal handed to `listSection`,
+// `tableSection`, `moreLine` or `countedOmission` is a compile error before any
+// proof runs. What a type cannot reach is prose — a pointer interpolated into a
+// sentence a row carries is a `string` wherever it is built — and that is what
+// this file still owns.
+//
 // This is structural rather than a line grep. The grep it replaces accepted a
 // literal because some option, or the word `scope-exempt`, appeared anywhere on
 // its line, so a bare pointer beside a scoped one passed and a future exemption
@@ -54,6 +62,16 @@ function stripComments(source)
     return source
         .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "))
         .replace(/(^|[^:])\/\/[^\n]*/g, (match, lead) => lead + " ".repeat(match.length - lead.length));
+}
+
+// A literal in a type declaration names a verb, it does not point at one:
+// `UnscopedVerb` is the union the pointer constructors accept, and it is the
+// reason those verbs are safe rather than a place one could leak from. Blanked
+// like a comment so every index downstream still lines up with the real source.
+function stripTypeDeclarations(source)
+{
+    return source.replace(/^(export )?type [A-Za-z0-9_$]+ =[^;]*;/gm,
+        (match) => match.replace(/[^\n]/g, " "));
 }
 
 // The call expression a literal sits inside: its callee name and its full text.
@@ -121,7 +139,7 @@ const exempted = new Set();
 
 for (const file of FILES)
 {
-    const source = stripComments(readFileSync(join(srcDir, file), "utf8"));
+    const source = stripTypeDeclarations(stripComments(readFileSync(join(srcDir, file), "utf8")));
     const seen = [];
     for (const match of source.matchAll(POINTER))
     {
@@ -130,6 +148,15 @@ for (const file of FILES)
     for (const match of source.matchAll(CHECKOUT_POINTER))
     {
         seen.push({ text: match[1], index: match.index + 1, checkout: true });
+    }
+    // The split form of the same defect: a pointer only a concatenation makes
+    // whole. `"self " + "work"` matches nothing above, because neither half is
+    // a pointer, so the prefix is judged on its own. Nothing in a render has a
+    // reason to hold `self ` as a value — a real sentence carries the verb with
+    // it (#165 review round 5).
+    for (const match of source.matchAll(/["'`](self ?)["'`]/g))
+    {
+        offenders.push(`${file}:${lineOf(source, match.index)} "${match[1]}" — a pointer split across a concatenation`);
     }
     for (const pointer of seen)
     {

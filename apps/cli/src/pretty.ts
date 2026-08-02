@@ -258,7 +258,7 @@ function heading(title: string, counts: string): string
 
 // A section that had to stop short always says how much it left and which
 // command prints the rest, so a glance is never mistaken for the whole list.
-function moreLine(hidden: number, recover: string): string[]
+function moreLine(hidden: number, recover: Pointer): string[]
 {
     return hidden <= 0 ? [] : [dim(`  … +${hidden} more · ${recover}`)];
 }
@@ -293,25 +293,63 @@ const SCOPED_POINTER = [
     /^self search /
 ];
 
+// A recovery pointer a section prints, rather than any string that happens to
+// look like one. The brand is what a section builder asks for, so a bare
+// `"self work"` handed to `listSection` is a type error at the call site
+// instead of a defect a proof has to go looking for afterwards. Concatenation
+// is refused for the same reason: `"self integration plan" + fromCheckout(p)`
+// is a `string`, so the form that reached a render unscoped cannot compile.
+//
+// This is not the whole rule. A pointer interpolated into a sentence — the
+// `· ${scoped(…)}` notes a row carries — is prose, and prose is a `string`
+// wherever it is built; `proof/scope-pointers.mjs` still owns those. What the
+// brand removes is every site that passes a pointer as a pointer.
+declare const POINTER: unique symbol;
+declare const CHECKOUT: unique symbol;
+
+export type Pointer = string & { readonly [POINTER]: true };
+
+// The standing requirement of a verb with no scope form, kept apart from the
+// pointer so a render can put the command inside a code span and the sentence
+// outside it. A reader pastes the first and reads the second.
+export type Checkout = string & { readonly [CHECKOUT]: true };
+
+// The verbs that have no scope form, spelled out. Naming them as a union is
+// what stops the constructors below being a way to launder any other string
+// into a `Pointer`: `"self work"` is not a member, so it cannot take this road
+// around `scoped()`.
+export type UnscopedVerb = "self integration plan" | "self attempt show"
+    | "self decide confirm" | "self work accept";
+
 // A verb with no scope form cannot be run from anywhere: it answers for the
 // checkout it runs in. Every render that points at one says so in the same
 // words, so a reader of another project's output learns where to stand instead
 // of finding out by getting the wrong answer.
-export function fromCheckout(project: string): string
+export function fromCheckout(project: string): Checkout
 {
-    return ` from a checkout of ${project}`;
+    return ` from a checkout of ${project}` as Checkout;
 }
 
-export function scoped(command: string, project: string): string
+// The one-line form, for a render with no code span to keep the sentence out
+// of. Taking the `Checkout` rather than the project is what makes the note
+// unforgettable: there is no arity of this call that omits it.
+export function withCheckout(command: UnscopedVerb, where: Checkout): Pointer
+{
+    return `${command}${where}` as Pointer;
+}
+
+export function scoped(command: string, project: string): Pointer
 {
     if (command.includes("--project "))
     {
-        return command;
+        return command as Pointer;
     }
-    return SCOPED_POINTER.some((form) => form.test(command)) ? `${command} --project ${project}` : command;
+    return (SCOPED_POINTER.some((form) => form.test(command))
+        ? `${command} --project ${project}`
+        : command) as Pointer;
 }
 
-function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: string): string[]
+function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: Pointer): string[]
 {
     if (rows.length === 0)
     {
@@ -324,7 +362,7 @@ function tableSection(title: string, counts: string, spec: Column[], rows: Row[]
     ];
 }
 
-function listSection(title: string, items: string[], recover: string, paint: Paint = plain): string[]
+function listSection(title: string, items: string[], recover: Pointer, paint: Paint = plain): string[]
 {
     if (items.length === 0)
     {
@@ -707,7 +745,8 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
     lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text),
         scoped("self search --type convention", project)));
-    lines.push("", ...listSection("INTEGRATION", trainLines(model), "self integration plan" + fromCheckout(project)));
+    lines.push("", ...listSection("INTEGRATION", trainLines(model),
+        withCheckout("self integration plan", fromCheckout(project))));
     lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     return lines;
 }

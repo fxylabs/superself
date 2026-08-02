@@ -17,14 +17,17 @@ import { contributionsOf, openObjectives, openProposals } from "./objectives.js"
 import { CliContext, ProjectScope, readRegistry, readVerdicts } from "./paths.js";
 import {
     AttemptRow,
+    Checkout,
+    Pointer,
     RenderMode,
+    fromCheckout,
     renderContext,
     renderStatus,
     renderWorkList,
-    fromCheckout,
     renderWorkspace,
     scoped,
-    shellArgument
+    shellArgument,
+    UnscopedVerb
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
 import { blue, dim, displayWidth, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
@@ -251,9 +254,13 @@ function attentionOmission(model: ProjectModel): string[]
 
 // One omission row for a section the budget treats as optional: the count and
 // the command that prints the section in full, or no row when there is
-// nothing to omit. `where` states the standing requirement of a command that
-// has no scope flag, so the row stays honest instead of implying the pointer
-// answers for this project from anywhere.
+// nothing to omit. The two shapes are separate signatures rather than one with
+// an optional argument: a scoped pointer names its project and needs nothing
+// more, and a verb with no scope form cannot be written here without the
+// sentence that says where to stand. The sentence sits outside the code span,
+// because it is prose rather than something to paste.
+function countedOmission(count: number, noun: string, recovery: Pointer): string[];
+function countedOmission(count: number, noun: string, recovery: UnscopedVerb, where: Checkout): string[];
 function countedOmission(count: number, noun: string, recovery: string, where = ""): string[]
 {
     if (count === 0)

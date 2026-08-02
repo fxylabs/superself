@@ -264,6 +264,12 @@ esac
 # to be on its line. That is what holds the rows no fixture reaches cheaply —
 # and what a line grep could not do, since a bare literal beside a scoped one
 # read as scoped (#165 review round 3).
+#
+# It is the smaller half of the rule now. Every section builder takes a branded
+# `Pointer`, so a bare literal passed as a pointer fails `pnpm typecheck` and
+# never reaches a proof; what remains here is prose — a pointer interpolated
+# into a sentence — and the concatenation that assembles one out of halves
+# (#165 review round 5).
 node "$CLI_DIR/proof/scope-pointers.mjs" > /dev/null || fail "a render names a read verb in a pointer that never reaches scoped()"
 
 # ── a read of another project changes nothing in it ───────────────────────
