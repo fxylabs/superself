@@ -11,6 +11,19 @@ CLI_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 ESC="$(printf '\033')"
 
+# Every event, never a window. A presence claim must not depend on how many
+# events the fixture happened to write before it: a window sized near the
+# fixture's own length passes or fails on that number, and CI crossed exactly
+# that edge three events from the boundary (#165). The number is meaningless on
+# its own — it is "larger than any fixture this suite builds" — so it is named
+# once here rather than open-coded wherever a timeline is read.
+WHOLE_TIMELINE=100000
+
+# The windows the merge assertions ask for. The snapshot floor below is derived
+# from these, so moving a window moves its own floor with it.
+WS_WINDOW=3
+WS_NEWEST=1
+
 # pty_run COLUMNS COMMAND — COMMAND under a real pseudo-terminal of the stated
 # width, with its output captured. BSD and util-linux `script` take their
 # command differently.
@@ -59,7 +72,7 @@ DEMO_MID="$(SELF milestone add "demo checkpoint" --objective "$DEMO_OID" --exit 
 SELF work add "demo work the scope reads" > /dev/null
 cd "$ROOT/outside/app"
 OUT_OID="$(SELF objective add "outside objective the scope reads" | tail -1)"
-SELF milestone add "outside checkpoint" --objective "$OUT_OID" --exit "the outside scope resolves" > /dev/null
+OUT_MID="$(SELF milestone add "outside checkpoint" --objective "$OUT_OID" --exit "the outside scope resolves" | tail -1)"
 cd "$DEMO"
 
 # ── the default is the project this directory belongs to ──────────────────
@@ -67,16 +80,16 @@ SELF status | grep -q "^demo — goal: prove two-machine sync" || fail "status d
 SELF context | grep -q "^# demo" || fail "context did not default to this directory's project"
 SELF objective | grep -q "demo objective the scope reads" || fail "objective did not default to this directory's project"
 SELF milestone | grep -q "demo checkpoint" || fail "milestone did not default to this directory's project"
-SELF log | grep -q "demo objective the scope reads" || fail "log did not default to this directory's project"
+SELF log -n "$WHOLE_TIMELINE" | grep -q "demo objective the scope reads" || fail "log did not default to this directory's project"
 SELF objective | grep -q "outside objective" && fail "the default objective list reached another project"
-SELF log | grep -q "outside objective" && fail "the default log reached another project"
+SELF log -n "$WHOLE_TIMELINE" | grep -q "outside objective" && fail "the default log reached another project"
 
 # ── --project answers for another registered project ──────────────────────
 SELF status --project outside | grep -q "^outside — goal: prove out-of-tree projects work" || fail "status --project read the wrong project"
 SELF context --project outside | grep -q "^# outside" || fail "context --project read the wrong project"
 SELF objective --project outside | grep -q "outside objective the scope reads" || fail "objective --project read the wrong project"
 SELF milestone --project outside | grep -q "outside checkpoint" || fail "milestone --project read the wrong project"
-SELF log --project outside | grep -q "outside objective the scope reads" || fail "log --project read the wrong project"
+SELF log --project outside -n "$WHOLE_TIMELINE" | grep -q "outside objective the scope reads" || fail "log --project read the wrong project"
 SELF objective show "$OUT_OID" --project outside | grep -q "outside objective the scope reads" || fail "objective show --project read the wrong project"
 SELF milestone --project outside | grep -q "demo checkpoint" && fail "milestone --project also printed this directory's project"
 # naming this directory's own project is the same answer as naming nothing
@@ -86,7 +99,7 @@ SELF milestone --project outside | grep -q "demo checkpoint" && fail "milestone 
 # directory that belongs to no project at all
 cd "$ROOT"
 SELF status --project demo | grep -q "^demo — goal:" || fail "status --project demanded a project directory"
-SELF log --project demo -n 3 | grep -q "objective.created" || fail "log --project demanded a project directory"
+SELF log --project demo -n "$WHOLE_TIMELINE" | grep -q "objective.created" || fail "log --project demanded a project directory"
 SELF objective --project demo | grep -q "demo objective the scope reads" || fail "objective --project demanded a project directory"
 SELF context --project demo | grep -q "^# demo" || fail "context --project demanded a project directory"
 cd "$DEMO"
@@ -307,16 +320,86 @@ echo "$WS_OBJ" | grep -q "outside objective the scope reads" || fail "objective 
 # they look for are among the oldest this fixture writes, so a window sized near
 # the fixture's own length passes or fails on how many events the run happened
 # to record. It was three events from its edge and CI crossed it.
-WS_ALL="$(SELF log --workspace -n 100000)"
+# A timestamp tie first, so the id half of the merge key has something to order:
+# `work accept` writes work.created, work.linked and work.accepted through one
+# recordEvents call, and makeEvent stamps all three in the same millisecond.
+# Without a tie the merge would sort correctly on timestamps alone and the
+# tiebreak would never be exercised, leaving the order check weaker than it
+# reads.
+cd "$ROOT/outside/app"
+TIE_PROPOSAL="$(SELF work propose "a proposal accepted in one call" --milestone "$OUT_MID" \
+    --value "the id half of the merge key needs a timestamp tie to order" \
+    --success "the tie is in the timeline" --stop "it lapses" --risk none \
+    --capacity "one command" --evidence-plan "this suite reads it back" \
+    --confidence high --expires 2099-01-01 | sed -E 's/.*\[([^]]+)\].*/\1/' | cut -c1-8)"
+SELF work accept "$TIE_PROPOSAL" > /dev/null
+cd "$DEMO"
+
+WS_ALL="$(SELF log --workspace -n "$WHOLE_TIMELINE")"
 echo "$WS_ALL" | grep -q "^demo  .*objective.created" || fail "log --workspace did not lead a demo line with its project"
 echo "$WS_ALL" | grep -q "^outside  .*objective.created" || fail "log --workspace omitted another project's events"
+
+# The snapshot has to outrun the widest window asserted against it, or those
+# assertions prove nothing: an empty snapshot makes both bracket equalities
+# compare "" against "" and pass, and a snapshot exactly the size of the window
+# makes the cut a no-op (#165 review round 11). The floor is derived from the
+# windows themselves — a hardcoded minimum would reintroduce the fixture-length
+# coupling this whole round is about, so moving a window moves its floor.
+WS_WIDEST="$(awk -v first="$WS_WINDOW" -v second="$WS_NEWEST" 'BEGIN { print (first > second) ? first : second }')"
+WS_LINES="$(printf '%s\n' "$WS_ALL" | awk 'NF > 0' | wc -l | tr -d ' ')"
+[ "$WS_LINES" -gt "$WS_WIDEST" ] \
+    || fail "the workspace timeline is $WS_LINES lines, which does not outrun the $WS_WIDEST-line window asserted against it"
+
+# The order the merge claims, read from this output alone. Both windowed
+# comparisons below take tail of this same snapshot, so a reversed merge moves
+# both sides together and neither notices — a reversed compareDated passed every
+# assertion here (#165 review round 11). This notices: it reads the sort key out
+# of the rendered line — `slug  ts  type  [id]  summary` — and asserts the
+# sequence is non-decreasing on the pair compareDated sorts by, timestamp then
+# id. Asserting on the timestamp alone would miss a reversed tiebreak; asserting
+# on the rendered column order would check the renderer rather than the merge.
+#
+# Non-decreasing rather than increasing, because a tie is correct behaviour: the
+# three events above share a timestamp, and that is exactly where the id decides.
+ws_keys()
+{
+    printf '%s\n' "$1" | awk 'NF >= 4 { id = $4; gsub(/[][]/, "", id); print $2 "\t" id }'
+}
+
+WS_KEYS="$(ws_keys "$WS_ALL")"
+# A parse that yielded nothing would make the order check trivially true — the
+# same vacuity as an empty snapshot, one level out — so every line must have
+# produced exactly one key.
+WS_KEY_LINES="$(printf '%s\n' "$WS_KEYS" | awk 'NF > 0' | wc -l | tr -d ' ')"
+[ "$WS_KEY_LINES" = "$WS_LINES" ] \
+    || fail "read $WS_KEY_LINES sort keys out of $WS_LINES workspace log lines — the order check would be judging something else"
+printf '%s\n' "$WS_KEYS" | LC_ALL=C sort -c 2> /dev/null \
+    || fail "log --workspace did not merge in (timestamp, id) order"
+# and the tie is really there, so the id half of the key is really exercised
+[ "$(printf '%s\n' "$WS_KEYS" | awk '{ print $1 }' | sort | uniq -d | wc -l | tr -d ' ')" -gt 0 ] \
+    || fail "no two events share a timestamp, so the id half of the merge key is never exercised"
+
 # and the limit applies to the merge rather than to each project, which is what
 # the windowed reads below are for
-[ "$(SELF log --workspace -n 3 | wc -l | tr -d ' ')" = "3" ] || fail "log --workspace applied the limit per project instead of to the merge"
-[ "$(SELF log --workspace -n 3)" = "$(printf '%s\n' "$WS_ALL" | tail -3)" ] \
+[ "$(SELF log --workspace -n "$WS_WINDOW" | wc -l | tr -d ' ')" = "$WS_WINDOW" ] \
+    || fail "log --workspace applied the limit per project instead of to the merge"
+[ "$(SELF log --workspace -n "$WS_WINDOW")" = "$(printf '%s\n' "$WS_ALL" | tail -n "$WS_WINDOW")" ] \
     || fail "log --workspace cut the newest events instead of the oldest"
 # the merged timeline is sorted, so the last line is the newest event overall
-[ "$(SELF log --workspace -n 1)" = "$(printf '%s\n' "$WS_ALL" | tail -1)" ] || fail "log --workspace did not merge in timestamp order"
+[ "$(SELF log --workspace -n "$WS_NEWEST")" = "$(printf '%s\n' "$WS_ALL" | tail -n "$WS_NEWEST")" ] \
+    || fail "log --workspace did not merge in timestamp order"
+
+# The single-project form windows too. Its presence check above now reads the
+# whole timeline, so this is where `-n` on that form is exercised at all — the
+# window is the newest N of one project's timeline, not a slice of the merge.
+DEMO_ALL="$(SELF log --project demo -n "$WHOLE_TIMELINE")"
+DEMO_LINES="$(printf '%s\n' "$DEMO_ALL" | awk 'NF > 0' | wc -l | tr -d ' ')"
+[ "$DEMO_LINES" -gt "$WS_WINDOW" ] \
+    || fail "the demo timeline is $DEMO_LINES lines, which does not outrun the $WS_WINDOW-line window asserted against it"
+[ "$(SELF log --project demo -n "$WS_WINDOW" | wc -l | tr -d ' ')" = "$WS_WINDOW" ] \
+    || fail "log --project ignored its window"
+[ "$(SELF log --project demo -n "$WS_WINDOW")" = "$(printf '%s\n' "$DEMO_ALL" | tail -n "$WS_WINDOW")" ] \
+    || fail "log --project cut the newest events instead of the oldest"
 # the single-project form is untouched: no project column, same bytes as before
 SELF log -n 3 | grep -q "^demo  " && fail "the single-project log grew a project column"
 
@@ -326,7 +409,7 @@ machine B
 cd "$ROOT/B/ws"
 SELF status --project outside | grep -q "^outside — goal: prove out-of-tree projects work" \
     || fail "a project registered but not linked on this machine could not be read"
-SELF log --project outside -n 60 | grep -q "objective.created" || fail "an unlinked project's log could not be read"
+SELF log --project outside -n "$WHOLE_TIMELINE" | grep -q "objective.created" || fail "an unlinked project's log could not be read"
 SELF objective --project outside | grep -q "outside objective the scope reads" || fail "an unlinked project's objectives could not be read"
 SELF status --workspace | grep -q "^outside — " || fail "--workspace skipped a project this machine never linked"
 machine A
@@ -460,14 +543,14 @@ case "$PROBE" in
         [ "$PLAIN_TTY" = "$(SELF status --workspace)" ] || fail "--plain at a terminal differs from the piped workspace status"
         # the log and objective forms colour at a terminal and stay plain in a
         # pipe, the project column surviving both
-        TTY_LOG="$(pty_run 100 "node $SELF_JS log --workspace -n 60")"
+        TTY_LOG="$(pty_run 100 "node $SELF_JS log --workspace -n $WHOLE_TIMELINE")"
         printf '%s\n' "$TTY_LOG" | grep -q "outside" || fail "the terminal workspace log dropped the project column"
         case "$TTY_LOG" in
             *"$ESC"*) : ;;
             *) fail "a colour-capable terminal got no colour on the workspace log" ;;
         esac
-        NOCOLOR_LOG="$(NO_COLOR=1 pty_run 100 "node $SELF_JS log --workspace -n 60")"
-        [ "$NOCOLOR_LOG" = "$(SELF log --workspace -n 60)" ] || fail "NO_COLOR at a terminal differs from the piped workspace log"
+        NOCOLOR_LOG="$(NO_COLOR=1 pty_run 100 "node $SELF_JS log --workspace -n $WHOLE_TIMELINE")"
+        [ "$NOCOLOR_LOG" = "$(SELF log --workspace -n "$WHOLE_TIMELINE")" ] || fail "NO_COLOR at a terminal differs from the piped workspace log"
         ;;
     *)
         echo "scope: no pseudo-terminal available ($PROBE); terminal detection not exercised"
