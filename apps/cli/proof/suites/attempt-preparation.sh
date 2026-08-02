@@ -36,35 +36,41 @@ cat > "$SRC/prep.mjs" <<'PREP'
 // A preparation step of the project under test. Deterministic, and loud in the
 // exact ways a real one can be: it fails, it hangs, and it prints far more than
 // anything wants to keep.
+//
+// Nothing here calls process.exit on a path that has written to stdout. Eighty
+// kilobytes into a pipe is queued rather than delivered, and exit discards
+// whatever is still queued — a step that truncates its own output cannot prove
+// what the runner kept of it. The exit code is set and the process is left to
+// end when its writes have drained.
 import { appendFileSync, writeFileSync } from "node:fs";
 
 const arg = process.argv[2] ?? "";
 if (arg === "fail")
 {
     process.stderr.write("dependencies could not be installed at this head\n");
-    process.exit(3);
+    process.exitCode = 3;
 }
-if (arg === "sleep")
+else if (arg === "sleep")
 {
     writeFileSync(process.env.AGENT_GATE, "started\n");
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120_000);
-    process.exit(0);
 }
-if (arg === "leak")
+else if (arg === "leak")
 {
     process.stdout.write(`configured with ${process.env.MY_API_KEY ?? "nothing"}\n`);
-    process.exit(0);
 }
-if (arg === "noisy")
+else if (arg === "noisy")
 {
     for (let i = 0; i < 400; i++)
     {
         process.stdout.write("x".repeat(200) + "\n");
     }
     process.stdout.write("api_key=sk-live-AAAABBBBCCCCDDDDEEEEFFFF00001111\n");
-    process.exit(0);
 }
-appendFileSync("prep-order.txt", arg + "\n");
+else
+{
+    appendFileSync("prep-order.txt", arg + "\n");
+}
 PREP
 
 template()
@@ -124,6 +130,11 @@ template <<'T'
 { "steps": [{ "name": "leaky", "command": ["node", "prep.mjs", "leak"], "timeoutMs": 30000 }] }
 T
 SHA_LEAK="$(commit_at "a step that echoes back what it was configured with")"
+
+template <<'T'
+{ "steps": [{ "name": "release", "command": ["pnpm", "run", "publish"], "timeoutMs": 30000 }] }
+T
+SHA_FORBIDDEN="$(commit_at "a template that smuggles a forbidden action through an allowed binary")"
 
 template <<'T'
 { "steps": [{ "name": "hang", "command": ["node", "prep.mjs", "sleep"], "timeoutMs": 120000 }] }
@@ -312,6 +323,21 @@ AT_TOOL="$(last_attempt)"
 [ -f "$(spool_of "$AT_TOOL")/preparation.jsonl" ] && fail "a step outside the allowlist ran anyway"
 no_worktree_left "$AT_TOOL" "a step outside the tools allowlist"
 
+# The allowlist is not the whole of what a step is judged by. `pnpm` is in
+# nobody's forbidden vocabulary, so a template that runs a package script named
+# `publish` through it would have reached the categorical list only if the whole
+# argv is read — which is how a plan's own command is read.
+plan "$ROOT/p-forbidden.json" "provisionRepo=$SRC" "provisionHead=$SHA_FORBIDDEN" "tools=node,git,pnpm" "marker=$ROOT/ran-forbidden"
+FORBIDDEN="$(SELF attempt run "$ROOT/p-forbidden.json" 2>&1 || true)"
+echo "$FORBIDDEN" | grep -q 'preparation step 1 of the template at this head declares "publish", which is publish' \
+    || fail "a forbidden package script smuggled through an allowed binary was not refused: $FORBIDDEN"
+echo "$FORBIDDEN" | grep -q "no overnight policy can grant one" || fail "the forbidden refusal did not read like every other one"
+AT_FORBIDDEN="$(last_attempt)"
+[ "$(attempt_state "$AT_FORBIDDEN")" = "preflight-failed" ] || fail "a forbidden preparation step did not fail the preflight"
+[ -f "$(spool_of "$AT_FORBIDDEN")/preparation.jsonl" ] && fail "a forbidden preparation step ran anyway"
+[ -f "$ROOT/ran-forbidden" ] && fail "the provider ran despite a forbidden preparation step"
+no_worktree_left "$AT_FORBIDDEN" "a forbidden preparation step"
+
 # ---------------------------------------------------------------------------
 # A malformed template names the field that is wrong, and starts nothing.
 # ---------------------------------------------------------------------------
@@ -366,17 +392,21 @@ if (!line.output.includes("api_key=")) { console.error("the step record kept no 
 grep -q "sk-live-AAAABBBB" "$(spool_of "$AT_NOISY")/preparation.jsonl" && fail "a credential a preparation step printed reached the spool"
 no_worktree_left "$AT_NOISY" "a noisy preparation"
 
-# A value no pattern recognises, declared as a secret by the plan. Only the
-# declared scope can catch this one, and the step record has to travel with it.
+# A value no pattern recognises, declared as a secret by the plan and supplied
+# by the plan itself. MY_API_KEY is deliberately unset in this shell: the value
+# exists only in boundary.env, which is the half a scope read out of the
+# runner's own environment cannot see — while the step receives it and echoes
+# it, and plan.json carries it too.
 DECLARED="PLAINPROOFLITERALVALUE"
+[ -z "${MY_API_KEY:-}" ] || fail "the declared-secret case needs MY_API_KEY unset in the runner environment"
 plan "$ROOT/p-leak.json" "provisionRepo=$SRC" "provisionHead=$SHA_LEAK" "dest=$ROOT/dest/leak.md" \
     "secrets=MY_API_KEY" "envsecret=$DECLARED"
-export MY_API_KEY="$DECLARED"
 SELF attempt run "$ROOT/p-leak.json" > /dev/null || fail "the declared-secret case did not complete"
-unset MY_API_KEY
 AT_LEAK="$(last_attempt)"
 grep -q "$DECLARED" "$(spool_of "$AT_LEAK")/preparation.jsonl" && fail "a declared secret a preparation step echoed reached the spool"
 grep -q "configured with" "$(spool_of "$AT_LEAK")/preparation.jsonl" || fail "the step record kept none of the step's output"
+grep -q "$DECLARED" "$(spool_of "$AT_LEAK")/plan.json" && fail "a declared secret the plan supplied literally reached the spooled plan"
+grep -rq "$DECLARED" "$(spool_of "$AT_LEAK")" && fail "a declared secret the plan supplied literally reached the spool somewhere"
 no_worktree_left "$AT_LEAK" "a step that echoed a declared secret"
 
 # ---------------------------------------------------------------------------
@@ -408,5 +438,25 @@ wait "$RUNPID" 2>/dev/null || true
 SELF attempt recover > /dev/null
 [ "$(attempt_state "$AT_SLEEP")" = "exited-unreconciled" ] || fail "an attempt that died mid-preparation was not recovered"
 no_worktree_left "$AT_SLEEP" "recovery of an attempt that died mid-preparation"
+
+# ---------------------------------------------------------------------------
+# The same crash during `self attempt register`. A registered attempt owns no
+# process and is deliberately not recoverable — but while it is preparing it
+# owns a worktree, and a registration that died in that window would otherwise
+# leave the checkout and its git administrative entry behind for ever.
+# ---------------------------------------------------------------------------
+rm -f "$ROOT/prep-started"
+plan "$ROOT/p-regcrash.json" "provisionRepo=$SRC" "provisionHead=$SHA_SLEEP" "gate=$ROOT/prep-started"
+SELF attempt register "$ROOT/p-regcrash.json" > /dev/null 2>&1 &
+REGPID=$!
+await '[ -f "$ROOT/prep-started" ]' 120 || fail "the registration's preparation step never started"
+AT_REGCRASH="$(last_attempt)"
+[ -d "$(spool_of "$AT_REGCRASH")/workdir" ] || fail "the crashing registration was never provisioned"
+[ "$(attempt_state "$AT_REGCRASH")" = "preflight" ] || fail "a registration preparing a worktree is not visible to recovery as driven"
+crash_runner "$AT_REGCRASH"
+wait "$REGPID" 2>/dev/null || true
+SELF attempt recover > /dev/null
+[ "$(attempt_state "$AT_REGCRASH")" = "exited-unreconciled" ] || fail "a registration that died mid-preparation was not recovered"
+no_worktree_left "$AT_REGCRASH" "recovery of a registration that died mid-preparation"
 
 echo "proof OK: attempt-preparation"

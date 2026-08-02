@@ -3,10 +3,10 @@ import { CliContext } from "../paths.js";
 import { identityOf } from "./boundary.js";
 import { classify } from "./classify.js";
 import { NO_ENVELOPE, ResultEnvelope } from "./gate.js";
-import { AttemptPlan } from "./plan.js";
+import { AttemptPlan, planScope } from "./plan.js";
 import { adapterOf, runPreflight } from "./preflight.js";
-import { redact, scopeFor } from "./redact.js";
-import { AttemptResult, blockOnCapability, childEnv, claimWorkUnit, completeAttempt, failAttempt, localChecks, nextFence, prepareAttempt, prepareSpool, recordAttemptEvent, RunOptions } from "./run.js";
+import { redact } from "./redact.js";
+import { AttemptResult, beat, blockOnCapability, childEnv, claimWorkUnit, completeAttempt, failAttempt, localChecks, nextFence, prepareAttempt, prepareSpool, recordAttemptEvent, RunOptions } from "./run.js";
 import { settling } from "./settlement.js";
 import { AttemptStatus, openSpool, ownerOf, OWNER_FILE, Spool } from "./spool.js";
 import { alive, OwnedTree, ownedTree, processGroup, processStartTime, treeAlive, treeContain } from "./tree.js";
@@ -43,13 +43,54 @@ export async function registerAttempt(ctx: ProjectContext, plan: AttemptPlan, op
     // gate: a launcher of the operator's own is handed a worktree that is
     // already at the pinned head and already prepared, and the environment
     // below names it.
-    await prepareAttempt(ctx, plan, spool, id);
+    //
+    // Driven for the length of it, and only for that length. A registered
+    // attempt owns nothing outside its spool and is deliberately not
+    // recoverable — but while preparation runs it owns a worktree and a git
+    // administrative entry in somebody's repository, and a registration that
+    // died in that window would have left both behind for ever: `registered`
+    // is not a driven state, so recovery skips the spool and retention only
+    // ever deletes the directory. The pid and the heartbeat are what make the
+    // window recoverable by the evidence every other death is judged by,
+    // rather than by a second opinion about registrations.
+    await preparing(spool, plan, () => prepareAttempt(ctx, plan, spool, id));
     // Run 1 by construction: a registered attempt is launched once by whoever
     // registered it, and a replacement run is a launch of its own.
     spool.writeJson(ENV_FILE, childEnv(spool, id, 1, null));
     spool.append("events.jsonl", { event: "run.registered" });
     console.log(id);
     return { attempt: id, state: "registered" };
+}
+
+// The one stretch of a registered attempt that is driven by a process. The
+// state and the pid say who is preparing it and the heartbeat says it is still
+// there, so `self attempt recover` and the supervisor judge a registration that
+// died mid-preparation exactly as they judge any other dead runner — and the
+// attempt goes back to `registered`, owning no process again, the moment there
+// is nothing left that only this process knows about.
+async function preparing(spool: Spool, plan: AttemptPlan, work: () => Promise<void>): Promise<void>
+{
+    // Only when there is something outside the spool to lose. A registration
+    // that provisions nothing has always been a spool and a receipt, and
+    // flipping its state would make an unprovisioned registration that died
+    // recoverable where it never was — a behaviour change nobody asked for on
+    // the path every existing plan takes.
+    if (plan.provision === undefined)
+    {
+        await work();
+        return;
+    }
+    spool.setStatus({ state: "preflight", pid: process.pid });
+    const heart = beat(spool, plan.heartbeatMs);
+    try
+    {
+        await work();
+    }
+    finally
+    {
+        heart.stop();
+    }
+    spool.setStatus({ state: "registered", pid: undefined });
 }
 
 // The launcher naming the process it started. Ownership is claimed the way
@@ -61,7 +102,7 @@ export function claimStarted(ctx: ProjectContext, id: string, pid: number): Atte
     const spool = openSpool(id);
     const status = requireStatus(spool, id);
     const plan = requirePlan(spool, id);
-    spool.setScope(scopeFor(plan.capabilities.secrets));
+    spool.setScope(planScope(plan));
     requireOwningProject(ctx, status);
     if (status.state !== "registered")
     {
@@ -148,7 +189,7 @@ async function exitedUnderLock(ctx: ProjectContext, id: string, code: number, op
     const spool = openSpool(id);
     const status = requireStatus(spool, id);
     const plan = requirePlan(spool, id);
-    spool.setScope(scopeFor(plan.capabilities.secrets));
+    spool.setScope(planScope(plan));
     const owner = requireOwner(spool, id);
     requireOwningProject(ctx, status);
     if (status.state !== "running")

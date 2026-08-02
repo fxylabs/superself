@@ -196,6 +196,15 @@ entry with no issue behind it says so. Do not use any of these as precedent.
 - The integration train cluster is flat: `integration.ts` (1,500 lines),
   `lane.ts`, `train.ts`, `trainutil.ts`, `promote.ts`, `reviews.ts`,
   `envelope.ts` form one subsystem with no directory.
+- `attempt/` reaches up into `daemon/` for the categorical forbidden-action
+  list: `attempt/commands.ts` and `attempt/provision.ts` both import
+  `daemon/forbidden.js`, which is the wrong direction for the subsystem order
+  above. The list is policy vocabulary that answers the same question for a
+  plan's command, a work spec's, and a preparation step's, so it belongs at the
+  top level beside the other shared judgements — but it types its two entry
+  points on `AttemptPlan` and `WorkSpec`, so moving it is the #88 split rather
+  than an import change. Do not add a third reacher; call one of the two that
+  already exist, or move the module.
 - Two core modules reach into `attempt/`: `sanitize.ts` imports
   `attempt/redact.js`, and `views.ts` imports `attempt/spool.js`. `redact`
   belongs at the top level so the event guard depends only on core.

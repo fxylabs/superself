@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Boundary, RunOutcome, runBounded, runBoundedSync } from "./boundary.js";
-import { AttemptPlan, MAX_BOUND, ProvisionPlan } from "./plan.js";
-import { redact, redactSecrets, RedactionScope, scopeFor } from "./redact.js";
+// The same categorical gate `attempt run` puts a plan's command through. The
+// module sits under `daemon/` and `attempt/commands.ts` already reaches into it
+// for the identical question; the misplacement is recorded in ARCHITECTURE's
+// known debt rather than worked around with a second copy of the word list.
+import { forbiddenCommand, forbiddenRefusal } from "../daemon/forbidden.js";
+import { AttemptPlan, MAX_BOUND, planScope, ProvisionPlan } from "./plan.js";
+import { redact, redactSecrets, RedactionScope } from "./redact.js";
 import { PREPARATION_LOG, PROVISION_FILE, Spool, WORKDIR_SUBDIR } from "./spool.js";
 import { CliError } from "../types.js";
 
@@ -257,27 +262,38 @@ function normalizeStep(plan: AttemptPlan, entry: any, index: number): Preparatio
     {
         throw new CliError(`the preparation template field "${PREPARATION_FILE} steps[${index}].timeoutMs" must be a positive number of milliseconds no larger than ${MAX_BOUND}`);
     }
-    requireAllowed(plan, command[0]);
+    requireAllowed(plan, command, index);
     const name = typeof entry.name === "string" && entry.name.trim() !== "" ? entry.name.trim() : command[0];
     return { name, command, timeoutMs };
 }
 
-// A step runs under the attempt's own capability boundary or it does not run.
-// The tools list is what the plan declared it would reach for, and it is the
-// list the forbidden-category gate already judged at admission — so a template
-// that arrives at a head with a step nobody granted is refused here, before the
-// step, rather than discovered by what it did.
-function requireAllowed(plan: AttemptPlan, command: string): void
+// A step runs under the attempt's own capability boundary or it does not run,
+// and it is judged by both of the questions a plan's own command is judged by.
+//
+// The tools list answers the first: what this attempt declared it would reach
+// for. The categorical list answers the second, and reading only argv[0] left
+// it decorative — `pnpm` is in nobody's forbidden vocabulary, so a template
+// step `["pnpm", "run", "publish"]` at a pinned head would have run a package
+// script that publishes, before the attempt clock started and without a person
+// anywhere near it. The whole argv goes to the same gate `attempt run` puts a
+// plan's command through, so a template is not a way around the one list this
+// product has no flag to widen.
+function requireAllowed(plan: AttemptPlan, command: string[], index: number): void
 {
-    if (!plan.capabilities.tools.includes(command))
+    if (!plan.capabilities.tools.includes(command[0]))
     {
-        throw new CliError(`the preparation template at this head runs "${command}", which this attempt's tools allowlist does not carry — a preparation step runs only a command the plan declared`);
+        throw new CliError(`the preparation template at this head runs "${command[0]}", which this attempt's tools allowlist does not carry — a preparation step runs only a command the plan declared`);
+    }
+    const forbidden = forbiddenCommand(command);
+    if (forbidden !== null)
+    {
+        throw new CliError(forbiddenRefusal(forbidden, `preparation step ${index + 1} of the template at this head`));
     }
 }
 
 async function runSteps(plan: AttemptPlan, spool: Spool, steps: PreparationStep[], workdir: string): Promise<void>
 {
-    const scope = scopeFor(plan.capabilities.secrets);
+    const scope = planScope(plan);
     for (const [index, step] of steps.entries())
     {
         const started = Date.now();
@@ -344,7 +360,7 @@ function reason(plan: AttemptPlan, outcome: RunOutcome): string
         return `git could not be started inside this attempt's boundary (${outcome.spawnError.code ?? outcome.spawnError.message})`;
     }
     const line = outcome.stderr.trim().split("\n").pop() ?? `git exited ${outcome.code}`;
-    return redactSecrets(line, scopeFor(plan.capabilities.secrets)).slice(0, DETAIL_TAIL);
+    return redactSecrets(line, planScope(plan)).slice(0, DETAIL_TAIL);
 }
 
 // The attempt's own boundary, pointed at a directory of the runner's choosing.

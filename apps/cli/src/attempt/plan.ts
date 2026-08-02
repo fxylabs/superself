@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
-import { Boundary } from "./boundary.js";
+import { Boundary, boundaryEnv } from "./boundary.js";
+import { RedactionScope, scopeFor } from "./redact.js";
 import { CliError } from "../types.js";
 
 export interface ArtifactPlan
@@ -279,6 +280,20 @@ function normalizeRetry(raw: any): RetryPlan
         throw new CliError("retry.maxRuns above 20 is not a bounded retry policy");
     }
     return retry;
+}
+
+// What this plan declared secret, read from both places a declared value can
+// come from. `scopeFor` looks in the runner's own environment, and that is only
+// half the answer: a plan may supply the value literally in `boundary.env`, and
+// that value is in no environment the runner can see — while the child, the
+// capability probe and every preparation step receive it, and whatever they
+// echo of it reaches the spool.
+//
+// Every writer that redacts under a plan takes its scope from here, so the two
+// halves are read once rather than in each caller.
+export function planScope(plan: AttemptPlan): RedactionScope
+{
+    return scopeFor(plan.capabilities.secrets, boundaryEnv(plan.boundary));
 }
 
 // The identity of what this attempt was allowed to do. Recorded in the

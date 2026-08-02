@@ -1,7 +1,6 @@
 import { bootId } from "../attempt/boundary.js";
-import { AttemptPlan } from "../attempt/plan.js";
+import { AttemptPlan, planScope } from "../attempt/plan.js";
 import { releaseWorkdir } from "../attempt/provision.js";
-import { scopeFor } from "../attempt/redact.js";
 import { nextFence, recordAttemptEvent, settleConfirmedExit } from "../attempt/run.js";
 import { BUSY, trySettling } from "../attempt/settlement.js";
 import { AttemptStatus, deadVerdict, DeadVerdict, DRIVEN_STATES, listSpools, ownerOf, Spool } from "../attempt/spool.js";
@@ -123,7 +122,7 @@ async function takeOver(ctx: ProjectContext, spool: Spool, status: AttemptStatus
 // is that nobody has to be at a terminal for it to be reached.
 async function settleConfirmed(ctx: ProjectContext, spool: Spool, status: AttemptStatus, plan: AttemptPlan, fence: number): Promise<Reconciled>
 {
-    spool.setScope(scopeFor(plan.capabilities.secrets));
+    spool.setScope(planScope(plan));
     spool.setStatus({ fence });
     // The report is idempotent inside the gate, keyed by the attempt id it
     // already carries, so a second observation of the same exit attaches

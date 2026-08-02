@@ -12,10 +12,10 @@ import { classify, FailureClass, FailureSignal, fromDeclaration, isTransient } f
 import { deliverDirectives, inboxPath } from "./directive.js";
 import { alreadyCompleted, alreadyReported, attachReport, NO_ENVELOPE, publishArtifacts, Published, ResultEnvelope, sha256File, unpublish, validatePublished, verifyDeclarations } from "./gate.js";
 import { CliError } from "../types.js";
-import { AttemptPlan, policyDigest } from "./plan.js";
+import { AttemptPlan, planScope, policyDigest } from "./plan.js";
 import { adapterOf, approvalRequest, boundaryDrift, PreflightCheck, PreflightReceipt, runPreflight } from "./preflight.js";
 import { bindingOf, provisionWorkdir, releaseWorkdir } from "./provision.js";
-import { MIN_LITERAL, redact, scopeFor, unredactableSecrets } from "./redact.js";
+import { MIN_LITERAL, redact, unredactableSecrets } from "./redact.js";
 import { admitAttempt, backoffFor, BREAKER_DEFAULT, recordProviderFailure, recordProviderSuccess, sleep } from "./retry.js";
 import { settling } from "./settlement.js";
 import { AttemptState, AttemptStatus, createSpool, liveAttemptFor, Spool } from "./spool.js";
@@ -82,7 +82,7 @@ function currentFence(file: string): number
 // a launcher of the operator's own. One writer, so the two cannot drift apart.
 export function prepareSpool(ctx: ProjectContext, plan: AttemptPlan, id: string, fence: number, state: AttemptState, options: RunOptions): Spool
 {
-    const spool = new Spool(createSpool(id), scopeFor(plan.capabilities.secrets));
+    const spool = new Spool(createSpool(id), planScope(plan));
     const identity = identityOf(plan.boundary);
     spool.claim(fence);
     writeBrief(spool, plan, id);
@@ -794,7 +794,7 @@ function watch(spool: Spool, child: ReturnType<typeof spawn>, plan: AttemptPlan)
 }
 
 // The heartbeat on its own, for the stretch before a child exists to watch.
-function beat(spool: Spool, everyMs: number): { stop: () => void }
+export function beat(spool: Spool, everyMs: number): { stop: () => void }
 {
     guard(() => spool.heartbeat());
     const timer = setInterval(() => guard(() => spool.heartbeat()), everyMs);

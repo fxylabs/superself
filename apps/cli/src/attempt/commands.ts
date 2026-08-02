@@ -5,10 +5,9 @@ import { bootId } from "./boundary.js";
 import { queueDirective } from "./directive.js";
 import { claimStarted, externalExited, externalHeartbeat, registerAttempt } from "./external.js";
 import { forbiddenAction, forbiddenDeclaration, forbiddenRefusal } from "../daemon/forbidden.js";
-import { AttemptPlan, readPlan } from "./plan.js";
+import { AttemptPlan, planScope, readPlan } from "./plan.js";
 import { PreflightReceipt } from "./preflight.js";
 import { bindingOf, releaseWorkdir, StepRecord } from "./provision.js";
-import { scopeFor } from "./redact.js";
 import { readBreaker, resetBreaker } from "./retry.js";
 import { AttemptStatus, deadVerdict, DeadVerdict, listSpools, openSpool, ownerOf, PREPARATION_LOG, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
 import { BUSY, trySettling } from "./settlement.js";
@@ -482,7 +481,7 @@ async function gateSettled(ctx: ProjectContext, spool: Spool, status: AttemptSta
     {
         return null;
     }
-    spool.setScope(scopeFor(plan.capabilities.secrets));
+    spool.setScope(planScope(plan));
     spool.setStatus({ fence });
     return await settleConfirmedExit(ctx, plan, spool, status.attempt);
 }
