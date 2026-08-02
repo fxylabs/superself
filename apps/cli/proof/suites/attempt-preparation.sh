@@ -725,6 +725,11 @@ const generatedCells = new Map();
 // for a 17x4x5 cross-product", which is a cardinality symptom rather than the
 // collision that caused it. Both triples and the value they share are reported
 // here, before the overwrite.
+//
+// What these two checks claim, said exactly: uniqueness WITHIN the cross-product.
+// They never see a hand-written vector, so they say nothing about the family as
+// a whole — and the family genuinely is not unique. What is claimed across the
+// two populations is asserted separately below.
 const firstAt = new Map();
 for (const prefix of PREFIXES)
 {
@@ -787,6 +792,91 @@ for (let index = 0; index < generatedList.length; index++)
     }
 }
 console.log(`populations: ${handWritten.length} hand-written (${REFUSED.length} refused + ${BENIGN.length} benign + ${NESTED_VECTORS.length} nested) + ${cellCount} generated = ${family.length} in the family`);
+
+// Uniqueness across both populations, which is a different claim from the one
+// the insert-time checks make and had to be measured before it could be
+// asserted: the two populations already share four vectors and the hand-written
+// tables already repeat five, so demanding a unique family would fail today for
+// something that is not a defect.
+//
+// The family is deliberately NOT deduplicated. Two equal vectors are two
+// members: agreement, the invariant and the topology walks count both, which is
+// why the denominators add up, and collapsing them would move every count this
+// stream has just finished asserting.
+//
+// The expected sharing is pinned rather than derived, because what makes a
+// shared vector deliberate is that somebody wrote it down twice on purpose —
+// once to pin its named category and once as a generated shape — and intent is
+// not in the data. Nothing distinguishes a deliberate duplicate from an
+// accidental one by inspection, so the honest form is a list with a reason
+// beside each entry. What stops the list from rotting is that each entry is
+// checked to be real: it must still decompose into a cell of the cross-product
+// and must still be present in the hand-written tables, so a stale pin fails
+// naming itself rather than sitting there agreeing with nothing.
+const EXPECTED_SHARED = [
+    { argv: ["env", "mytool", "env", "-S", "npm publish"], why: "REFUSED pins its unreadable category and NESTED asserts both packing directions; the cross-product reaches it from the env-mytool prefix" },
+    { argv: ["env", "mytool", "env", "--split-string=npm publish"], why: "the same shape in the inline split spelling, pinned in REFUSED and generated from the same prefix" },
+    { argv: ["env", "mytool", "xargs", "env", "-S", "npm publish"], why: "the round-11 hidden-token vector, pinned in REFUSED and generated from the env-mytool-xargs prefix" },
+    { argv: ["xargs", "env", "-S", "npm publish"], why: "the launcher case whose category REFUSED pins, generated from the xargs prefix" }
+];
+const generatedSet = new Set([...generatedCells.values()].map((argv) => JSON.stringify(argv)));
+const handWrittenSet = new Set(handWritten.map((argv) => JSON.stringify(argv)));
+const actualShared = [...handWrittenSet].filter((vector) => generatedSet.has(vector)).sort();
+const expectedShared = EXPECTED_SHARED.map((entry) => JSON.stringify(entry.argv)).sort();
+for (const entry of EXPECTED_SHARED)
+{
+    const vector = JSON.stringify(entry.argv);
+    if (!generatedSet.has(vector))
+    {
+        bad++;
+        console.error(`${vector} is listed as a deliberate overlap but the cross-product no longer produces it — the list is stale`);
+    }
+    if (!handWrittenSet.has(vector))
+    {
+        bad++;
+        console.error(`${vector} is listed as a deliberate overlap but no hand-written table holds it any more — the list is stale`);
+    }
+}
+if (JSON.stringify(actualShared) !== JSON.stringify(expectedShared))
+{
+    bad++;
+    for (const vector of actualShared.filter((item) => !expectedShared.includes(item)))
+    {
+        console.error(`${vector} is in both populations and is not one of the ${EXPECTED_SHARED.length} deliberate overlaps — an accidental duplicate`);
+    }
+    for (const vector of expectedShared.filter((item) => !actualShared.includes(item)))
+    {
+        console.error(`${vector} is listed as a deliberate overlap but the two populations no longer share it`);
+    }
+}
+// The hand-written tables repeat vectors too, and that repetition has a shape:
+// the nested family asserts both packing directions of a vector whose category
+// REFUSED already pins, so every repeat is a vector held by both of those two
+// tables. This one is a property rather than a list — an accidental repeat
+// inside a single table fails it.
+const refusedSet = new Set(REFUSED.map((entry) => JSON.stringify(entry[1])));
+const nestedSet = new Set(NESTED_VECTORS.map((argv) => JSON.stringify(argv)));
+const repeats = new Map();
+for (const argv of handWritten)
+{
+    const vector = JSON.stringify(argv);
+    repeats.set(vector, (repeats.get(vector) ?? 0) + 1);
+}
+let handWrittenRepeats = 0;
+for (const [vector, times] of repeats)
+{
+    if (times === 1)
+    {
+        continue;
+    }
+    handWrittenRepeats += times - 1;
+    if (times !== 2 || !refusedSet.has(vector) || !nestedSet.has(vector))
+    {
+        bad++;
+        console.error(`${vector} appears ${times} times in the hand-written tables — the only repetition this proof intends is one vector held by both REFUSED and NESTED_VECTORS`);
+    }
+}
+console.log(`uniqueness: ${generatedSet.size} distinct generated, ${handWrittenSet.size} distinct hand-written with ${handWrittenRepeats} intended repeat(s), ${actualShared.length} shared with the cross-product and all ${EXPECTED_SHARED.length} of them expected`);
 
 // Neither reading may drift from the other. The oracle cannot go wrong quietly
 // because the module contradicts it, and the module cannot go wrong quietly
