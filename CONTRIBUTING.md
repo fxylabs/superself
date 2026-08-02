@@ -139,6 +139,20 @@ against whatever git the host has. Write them checkout-agnostic:
   inheriting it from the environment.
 - Clean up with a `trap ... EXIT` on the temp root.
 
+### Proof-run economy
+
+Proof scripts build scratch repositories and drive the CLI end to end — tens of
+seconds per run. They are a gate, not a development feedback loop. Until #92
+ships tiered suites, budget them:
+
+- While implementing, get feedback from `pnpm typecheck` and direct node
+  invocations of the changed surface, not from the proof harness.
+- While writing a new proof script, run only its minimal single scenario.
+- Run the touched proof sections at most twice per change: once when the
+  implementation is complete, and once after fixing what that run caught.
+- Anything beyond that is CI's job — the verify workflow runs the full sweep on
+  every pull request.
+
 ## Result envelope contract
 
 An agent running under `self attempt run` is judged by the envelope it writes,
