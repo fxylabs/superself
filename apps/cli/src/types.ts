@@ -28,6 +28,11 @@ export interface EventRefs
     // The event this decision is sequenced behind: it cannot be decided until
     // that one settles. Sequencing only — it neither confirms nor supersedes.
     after?: string;
+    // The confirmed decision a `decide retract` withdraws, and the proposal a
+    // `decide decline` turns down. Withdrawal without a successor: neither ref
+    // names a replacement, which is exactly what tells them from `supersedes`.
+    retracts?: string;
+    declines?: string;
 }
 
 export interface SelfEvent

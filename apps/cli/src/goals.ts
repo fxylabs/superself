@@ -8,6 +8,7 @@ import { buildModel, ProjectModel, WorkState } from "./model.js";
 import {
     allMilestones,
     findMilestone,
+    isTerminalObjective,
     MilestoneState,
     ObjectiveState,
     openObjectives,
@@ -28,11 +29,11 @@ import { CliError, EventRefs } from "./types.js";
 const HORIZONS = ["day", "week", "month", "quarter", "year"];
 const CONFIDENCE = ["low", "medium", "high"];
 
-const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | revise <id> --why w | close <id> --as reached|dropped';
-const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> [--criterion c1] --why w';
+const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | decline <id> --why w | revise <id> --why w | close <id> --as reached|dropped [--why w]';
+const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> [--criterion c1] --why w';
 
-const OBJECTIVE_VERBS = ["list", "add", "show", "confirm", "revise", "close"];
-const MILESTONE_VERBS = ["list", "add", "show", "revise", "met", "reach", "recheck"];
+const OBJECTIVE_VERBS = ["list", "add", "show", "confirm", "decline", "revise", "close"];
+const MILESTONE_VERBS = ["list", "add", "show", "revise", "drop", "met", "reach", "recheck"];
 
 // `met` and `recheck` are one intake read twice, so they declare one option set
 // rather than two that can drift apart.
@@ -79,6 +80,7 @@ function objectiveVerb(verb: string, args: string[]): void
         case "show": objectiveShow(args); break;
         case "add": objectiveAdd(args); break;
         case "confirm": confirmObjective(args); break;
+        case "decline": declineObjective(args); break;
         case "revise": objectiveRevise(args); break;
         default: objectiveClose(args); break;
     }
@@ -162,6 +164,21 @@ function confirmObjective(args: string[]): void
     recordEvent(ctx, makeEvent(ctx.project, "objective.confirmed", { objective: objective.id }, undefined, true), objective.outcome);
 }
 
+// The other answer to a proposal. Confirming says the objective is the
+// project's; declining says it is not, and the reason is the whole record.
+function declineObjective(args: string[]): void
+{
+    const { values, positionals } = parseCommand("objective", args, { why: { type: "string" } }, 1);
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
+    const why = requireText(values.why, 'objective decline <id> --why "<why it was turned down>"');
+    if (objective.status !== "proposed")
+    {
+        throw new CliError(`${objective.id} is already ${objective.status} — only a proposed objective can be declined`);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "objective.declined", { objective: objective.id, why }, undefined, true), objective.outcome);
+}
+
 // A revision is the record that the target moved, so it demands a reason and
 // at least one change — an empty revision would only invalidate coverage.
 function objectiveRevise(args: string[]): void
@@ -209,6 +226,20 @@ function objectiveClose(args: string[]): void
     {
         throw new CliError("objective close requires --as reached|dropped");
     }
+    // Dropping is a withdrawal, and every withdrawal in the lifecycle carries
+    // its reason: an objective given up on with no reason recorded leaves the
+    // next reader unable to tell it from one nobody got to. Reaching one needs
+    // no reason — the coverage it was reached on is the record.
+    if (values.as === "dropped")
+    {
+        requireText(values.why, 'objective close <id> --as dropped --why "<why it was given up>"');
+    }
+    // The fold refuses a transition on a terminal objective, so recording one
+    // would print "recorded" and change nothing.
+    if (isTerminalObjective(objective))
+    {
+        throw new CliError(`${objective.id} is already ${objective.status}${objective.closedWhy === undefined ? "" : ` — ${objective.closedWhy}`}`);
+    }
     const open = objective.milestones.filter((milestone) => milestone.state !== "reached" && milestone.state !== "closed");
     if (values.as === "reached" && open.length > 0)
     {
@@ -251,6 +282,7 @@ function milestoneVerb(verb: string, args: string[]): void
         case "show": milestoneShow(args); break;
         case "add": milestoneAdd(args); break;
         case "revise": milestoneRevise(args); break;
+        case "drop": milestoneDrop(args); break;
         case "met": milestoneMet(args); break;
         case "reach": milestoneReach(args); break;
         default: milestoneRecheck(args); break;
@@ -358,6 +390,25 @@ function nextCriteria(milestone: MilestoneState, texts: string[]): { id: string;
 {
     const highest = milestone.exit.reduce((max, criterion) => Math.max(max, Number(criterion.id.slice(1)) || 0), 0);
     return texts.map((text, index) => ({ id: `c${highest + index + 1}`, text }));
+}
+
+// A checkpoint given up on, with nothing taking its place. Revising it would
+// say the target moved; dropping it says nobody is going to reach it, which is
+// the thing a milestone had no way to say.
+function milestoneDrop(args: string[]): void
+{
+    const { values, positionals } = parseCommand("milestone", args, { why: { type: "string" } }, 1);
+    const { ctx, milestone } = milestoneTarget(positionals[0]);
+    const why = requireText(values.why, 'milestone drop <id> --why "<why it is not being reached>"');
+    if (milestone.state === "reached")
+    {
+        throw new CliError(`${milestone.id} was already reached — dropping it would unsay evidence that landed`);
+    }
+    if (milestone.state === "closed")
+    {
+        throw new CliError(`${milestone.id} is already closed — ${milestone.reason}`);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "milestone.dropped", { milestone: milestone.id, why }, undefined, true), `${milestone.id} ${why}`);
 }
 
 function milestoneMet(args: string[]): void
@@ -663,8 +714,8 @@ export function cmdProposalDecision(ctx: ProjectContext, args: string[], accept:
     const proposal = requireProposal(model, positionals[0]);
     if (!accept)
     {
-        const payload = strip({ proposal: proposal.id, why: values.why });
-        recordEvent(ctx, makeEvent(ctx.project, "work.declined", payload, undefined, true), `${proposal.outcome}`);
+        const why = requireText(values.why, 'work decline <proposal-id> --why "<why it was turned down>"');
+        recordEvent(ctx, makeEvent(ctx.project, "work.declined", { proposal: proposal.id, why }, undefined, true), `${proposal.outcome}`);
         return;
     }
     // Creating the unit, pointing it at what it closes, and settling the
@@ -702,7 +753,11 @@ function printObjectives(model: ProjectModel): void
 
 function printMilestones(model: ProjectModel): void
 {
-    const milestones = allMilestones(model.goals);
+    // Closed checkpoints are left out for the same reason every other current
+    // render leaves them out: dropped, superseded, or belonging to a closed
+    // objective, none of them is a checkpoint anybody is working toward.
+    // `self milestone show` and `self search --type milestone` still answer.
+    const milestones = allMilestones(model.goals).filter((milestone) => milestone.state !== "closed");
     if (milestones.length === 0)
     {
         console.log("no milestones — add one with `self milestone add \"<outcome>\" --objective <id> --exit \"<criterion>\"`");

@@ -10,7 +10,11 @@ export const AT_RISK_DAYS = 3;
 // satisfy, and no work transition ever reaches one on its own.
 export type TargetState = "reached" | "missed" | "blocked" | "at-risk" | "unstarted" | "on-track" | "closed";
 
-export type ObjectiveStatus = "proposed" | "active" | "reached" | "dropped" | "superseded";
+// The lifecycle every statement-type record shares, in this type's words:
+// live (`proposed`/`active`), replaced by a linked successor
+// (`superseded`), withdrawn with no successor (`dropped`), turned down
+// as a proposal (`declined`), or finished (`reached`).
+export type ObjectiveStatus = "proposed" | "active" | "reached" | "dropped" | "superseded" | "declined";
 
 export interface Criterion
 {
@@ -56,6 +60,9 @@ export interface MilestoneState
     reached?: Reached;
     reaffirmed?: Reached;
     supersededBy?: string;
+    // Why this checkpoint was given up on. Set only by `milestone drop`: the
+    // withdrawal every other statement type had and this one did not.
+    droppedWhy?: string;
     state: TargetState;
     reason: string;
     met: string[];
@@ -160,10 +167,34 @@ export function applyObjective(goals: GoalState, event: SelfEvent): void
     {
         return;
     }
+    // A terminal objective is finished with. Every transition below is refused
+    // against one, because the fold reads a log it cannot trust the order of:
+    // a union merge puts a stale confirmation after the decline that answered
+    // it, and `reconcileLifecycle` reads every one of these events a second
+    // time. Without this the later line wins and a withdrawn objective comes
+    // back active.
+    if (isTerminalObjective(objective))
+    {
+        return;
+    }
     if (event.type === "objective.confirmed")
     {
-        objective.status = "active";
-        objective.humanConfirmed = event.origin.confirmed;
+        // Confirming answers a proposal. An objective already active was
+        // confirmed once, and saying so again changes nothing.
+        if (objective.status === "proposed")
+        {
+            objective.status = "active";
+            objective.humanConfirmed = event.origin.confirmed;
+        }
+        return;
+    }
+    if (event.type === "objective.declined")
+    {
+        if (objective.status === "proposed")
+        {
+            objective.status = "declined";
+            objective.closedWhy = str(event.payload.why);
+        }
         return;
     }
     if (event.type === "objective.revised")
@@ -176,6 +207,14 @@ export function applyObjective(goals: GoalState, event: SelfEvent): void
         objective.status = event.payload.as === "reached" ? "reached" : "dropped";
         objective.closedWhy = str(event.payload.why);
     }
+}
+
+// The statuses an objective does not leave. `superseded` is applied after the
+// fold by `applySupersededObjectives`, so it cannot be read here — that pass
+// has its own guard for the same reason this one exists.
+export function isTerminalObjective(objective: ObjectiveState): boolean
+{
+    return objective.status === "reached" || objective.status === "dropped" || objective.status === "declined";
 }
 
 function newObjective(event: SelfEvent): ObjectiveState
@@ -244,7 +283,9 @@ export function applySupersededObjectives(goals: GoalState): void
                 continue;
             }
             target.supersededBy = objective.id;
-            if (target.status !== "reached")
+            // A declined proposal never held, so nothing can replace it: the
+            // lineage pointer is worth keeping, the status is not.
+            if (target.status !== "reached" && target.status !== "declined")
             {
                 target.status = "superseded";
             }
@@ -270,9 +311,26 @@ export function applyMilestone(goals: GoalState, event: SelfEvent): void
     {
         return;
     }
+    // Dropping and supersession are terminal, and for the same reason an
+    // objective's terminal statuses are: revising a withdrawn checkpoint,
+    // covering a criterion on it, or reaching it would put it back into the
+    // current renders, and the fold cannot trust the order of a merged log.
+    // Reaching is deliberately not terminal — `milestone recheck` exists to
+    // re-judge a reach a revision left stale.
+    if (isTerminalMilestone(found.milestone) && event.type !== "milestone.dropped")
+    {
+        return;
+    }
     if (event.type === "milestone.revised")
     {
         reviseMilestone(found.milestone, event);
+        return;
+    }
+    // The first withdrawal is the one that happened; a second event naming the
+    // same milestone never rewrites the reason recorded with it.
+    if (event.type === "milestone.dropped")
+    {
+        found.milestone.droppedWhy = found.milestone.droppedWhy ?? String(event.payload.why);
         return;
     }
     if (event.type === "milestone.covered")
@@ -309,6 +367,14 @@ function newReached(event: SelfEvent): Reached
         criteria: list(event.payload.criteria),
         evidence: list(event.payload.evidence)
     };
+}
+
+// Given up on, or replaced by a successor. A reached milestone is absent on
+// purpose: `milestone recheck` re-judges a reach, so reaching is a verdict that
+// can be revisited rather than a state the record never leaves.
+export function isTerminalMilestone(milestone: MilestoneState): boolean
+{
+    return milestone.droppedWhy !== undefined || milestone.supersededBy !== undefined;
 }
 
 function newMilestone(event: SelfEvent): MilestoneState
@@ -374,6 +440,12 @@ export function applyProposal(goals: GoalState, event: SelfEvent): void
     }
     const proposal = goals.proposals.find((item) => item.id === event.payload.proposal);
     if (proposal === undefined)
+    {
+        return;
+    }
+    // Answered once. A proposal that was accepted and then reaches a stale
+    // decline from another clone's log keeps the answer that was given.
+    if (proposal.status !== "open")
     {
         return;
     }
@@ -478,10 +550,13 @@ function milestoneState(milestone: MilestoneState, objective: ObjectiveState, to
     {
         return "reached";
     }
-    if (objective.status === "dropped" || objective.status === "superseded" || milestone.supersededBy !== undefined)
+    if (objective.status === "dropped" || objective.status === "superseded"
+        || milestone.supersededBy !== undefined || milestone.droppedWhy !== undefined)
     {
         return "closed";
     }
+    // Reached is checked above: a milestone whose evidence landed before anyone
+    // dropped it keeps that verdict, and the drop verb refuses it anyway.
     if (milestone.target !== undefined && daysBetween(today, milestone.target) < 0)
     {
         return "missed";
@@ -506,6 +581,10 @@ function milestoneReason(milestone: MilestoneState, total: number, today: string
     }
     if (milestone.state === "closed")
     {
+        if (milestone.droppedWhy !== undefined)
+        {
+            return `dropped — ${milestone.droppedWhy}`;
+        }
         return milestone.supersededBy === undefined
             ? `its objective is closed — ${covered}`
             : `superseded by ${milestone.supersededBy} — ${covered}`;

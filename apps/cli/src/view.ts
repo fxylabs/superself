@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { DecisionState, ProjectModel, WorkState } from "./model.js";
+import { currentConventions, DecisionState, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
@@ -424,7 +424,7 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
                 : table(decisions.slice(0, CAP_DECISIONS).map(decisionCells)),
             more(decisions.length, CAP_DECISIONS, `${model.slug}/decisions.html`, "all decisions")),
         eventPanel(events.slice(0, CAP_EVENTS), events.length, `${model.slug}/events.html`),
-        foldPanel("CONVENTIONS", model.conventions.map((c) => `<div class="dr-dec"><time>${day(c.ts)}</time><p>${esc(c.text)}</p></div>`)),
+        foldPanel("CONVENTIONS", currentConventions(model.conventions).map((c) => `<div class="dr-dec"><time>${day(c.ts)}</time><p>${esc(c.text)}</p></div>`)),
         foldPanel("DONE", done.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}</p></div>`)),
         foldPanel("RETIRED", retired.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}` +
             `${w.retiredWhy === undefined ? "" : ` <i class="dr-prop">${esc(w.retiredWhy)}</i>`}</p></div>`))
@@ -903,16 +903,24 @@ function decisionOrder(decisions: DecisionState[], all = false): DecisionState[]
         .sort((a, b) => b.ts.localeCompare(a.ts));
 }
 
+// The whole-history page shows records the current renders leave out, so each
+// row says what it is now. A confirmed decision is the current state and needs
+// no word for it; every other status is the thing the reader has to see.
+function statusMark(decision: DecisionState): string
+{
+    return decision.status === "confirmed" ? "" : `<i class="dr-prop">${esc(decision.status)}</i>`;
+}
+
 function decisionRow(decision: DecisionState): string
 {
-    const mark = decision.status === "proposed" ? `<i class="dr-prop">proposed</i>` : "";
+    const mark = statusMark(decision);
     return `<div class="dr-dec"><time>${day(decision.ts)}</time><p>${esc(decision.text)}${mark}</p></div>`;
 }
 
 // The main-column form: a date column, the decision, and its reason beneath.
 function decisionCells(decision: DecisionState): string
 {
-    const mark = decision.status === "proposed" ? `<i class="dr-prop">proposed</i>` : "";
+    const mark = statusMark(decision);
     const why = decision.why === undefined ? "" : `<span class="hf-sub">${esc(decision.why)}</span>`;
     return `<tr><td class="n">${day(decision.ts)}</td><td>${esc(decision.text)}${mark}${why}</td></tr>`;
 }

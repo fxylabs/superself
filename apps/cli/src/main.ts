@@ -17,7 +17,7 @@ import { cliVersion, commandUsage, findCommand, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -543,12 +543,20 @@ function cmdGoal(rest: string[]): void
 
 function cmdDecide(rest: string[]): void
 {
-    // `confirm` is the only subcommand: every other first argument is the
-    // decision text, which may itself start with a dash after `--`.
+    // `confirm`, `retract` and `decline` are the only subcommands: every other
+    // first argument is the decision text, which may itself start with a dash
+    // after `--`. Only the withdrawals take `--why`, so asking `confirm` for
+    // one is still named as a flag it does not have.
     if (rest[0] === "confirm")
     {
         const [, prefix] = parseCommand("decide", rest, {}, 2).positionals;
         confirmDecision(requireProject(process.cwd()), prefix);
+        return;
+    }
+    if (rest[0] === "retract" || rest[0] === "decline")
+    {
+        const { values, positionals } = parseCommand("decide", rest, { why: { type: "string" } }, 2);
+        withdrawDecision(requireProject(process.cwd()), rest[0], positionals[1], values.why);
         return;
     }
     const { values, positionals } = parseCommand(
@@ -586,6 +594,53 @@ function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
         throw new CliError(`${target.id} is not a proposed decision`);
     }
     recordEvent(ctx, makeEvent(ctx.project, "decision.confirmed", {}, { confirms: target.id }, true), String(target.payload.text));
+}
+
+// Withdrawal without a successor: `retract` takes back a confirmed decision,
+// `decline` turns down a proposal. One body, because the two differ only in
+// which status they are admitted on and which ref they write — a second copy
+// would drift on the part they share, which is every refusal below.
+function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", prefix: string | undefined, why: string | undefined): void
+{
+    const usage = `decide ${verb} <event-id> --why "<reason>"`;
+    const event = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, usage));
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    // A confirmation event carries no record of its own — the proposal it
+    // confirmed is the record — so naming either id reaches the same decision.
+    const id = event.type === "decision.confirmed" && event.refs?.confirms !== undefined ? event.refs.confirms : event.id;
+    const decision = model.decisions.find((item) => item.id === id);
+    if (decision === undefined)
+    {
+        throw new CliError(`${event.id} is not a decision`);
+    }
+    const admits = verb === "retract" ? "confirmed" : "proposed";
+    if (decision.status !== admits)
+    {
+        throw new CliError(withdrawalRefusal(verb, decision));
+    }
+    // Every lifecycle exit that is not a supersession carries its reason: a
+    // supersession says why by naming its successor, and nothing else does.
+    const payload = { why: requireText(why, usage) };
+    const refs = verb === "retract" ? { retracts: decision.id } : { declines: decision.id };
+    const type = verb === "retract" ? "decision.retracted" : "decision.declined";
+    recordEvent(ctx, makeEvent(ctx.project, type, payload, refs, true), decision.text);
+}
+
+// Each refusal names the state the record is actually in and the verb that
+// fits it, so a person who reached for the wrong one is not left guessing.
+function withdrawalRefusal(verb: "retract" | "decline", decision: DecisionState): string
+{
+    if (decision.status === "retracted" || decision.status === "declined")
+    {
+        return `${decision.id} was already ${decision.status}`;
+    }
+    if (decision.status === "superseded")
+    {
+        return `${decision.id} was already superseded by a later decision — nothing is left to ${verb}`;
+    }
+    return verb === "retract"
+        ? `${decision.id} is a proposed decision, not a confirmed one — turn it down with \`self decide decline ${decision.id}\``
+        : `${decision.id} is a confirmed decision, not a proposal — take it back with \`self decide retract ${decision.id} --why "..."\``;
 }
 
 interface DecisionOptions
@@ -1013,26 +1068,68 @@ function headEvidence(ctx: ProjectContext): string[]
 function cmdConvention(rest: string[]): void
 {
     const sub = subcommand("convention", rest);
-    const [, value] = parseCommand("convention", rest, {}, 2).positionals;
+    const { values, positionals } = parseCommand("convention",
+        rest, { supersedes: { type: "string", multiple: true }, why: { type: "string" } }, 2);
+    const value = positionals[1];
     if (sub === "add")
     {
-        const text = requireText(value, 'convention add "<text>"');
+        const text = requireText(value, 'convention add "<text>" [--supersedes <event-id>]');
+        if (values.why !== undefined)
+        {
+            throw new CliError("convention add takes no --why — the rule is its own statement; --why records why a rule was withdrawn");
+        }
         const ctx = requireProject(process.cwd());
-        recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, undefined, true), text);
+        // A correction is one event: the replacement carries the lineage, so
+        // the rule it replaces never has to be dropped and re-added — which is
+        // how two contradicting conventions used to end up both current.
+        const refs = values.supersedes === undefined ? undefined
+            : { supersedes: currentConventionIds(ctx, values.supersedes) };
+        recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, refs, true), text);
         return;
     }
     if (sub === "drop")
     {
+        // Declared once for the whole verb, so the subcommand that does not
+        // take it says so rather than dropping one convention and ignoring the
+        // id the person expected it to replace.
+        if (values.supersedes !== undefined)
+        {
+            throw new CliError('convention drop takes no --supersedes — to replace a rule, run `convention add "<text>" --supersedes <event-id>`');
+        }
         const ctx = requireProject(process.cwd());
-        const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(value, "convention drop <event-id>"));
+        const usage = 'convention drop <event-id> --why "<why the rule no longer holds>"';
+        const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(value, usage));
+        // Every withdrawal carries its reason. A rule that left the current set
+        // with nothing recorded reads, a year later, exactly like one nobody
+        // ever wrote down.
+        const payload = { why: requireText(values.why, usage) };
+        const refs = { supersedes: currentConventionIds(ctx, [target.id]) };
+        recordEvent(ctx, makeEvent(ctx.project, "convention.dropped", payload, refs, true), String(target.payload.text));
+        return;
+    }
+    throw new CliError('usage: self convention add "<text>" [--supersedes <event-id>] | drop <event-id> --why w');
+}
+
+// The ids of conventions that still hold. A withdrawn one is refused rather
+// than named again: the first withdrawal is what happened, and a second event
+// pointing at it would claim to change a record it cannot.
+function currentConventionIds(ctx: ProjectContext, prefixes: string[]): string[]
+{
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    return prefixes.map((prefix) =>
+    {
+        const target = findEventByPrefix(ctx.storeDir, ctx.project, prefix);
         if (target.type !== "convention.added")
         {
             throw new CliError(`${target.id} is not a convention`);
         }
-        recordEvent(ctx, makeEvent(ctx.project, "convention.dropped", {}, { supersedes: [target.id] }, true), String(target.payload.text));
-        return;
-    }
-    throw new CliError('usage: self convention add "<text>" | drop <event-id>');
+        const state = model.conventions.find((convention) => convention.id === target.id);
+        if (state !== undefined && state.status !== "current")
+        {
+            throw new CliError(`${target.id} was already ${state.status} — it is not a convention that still holds`);
+        }
+        return target.id;
+    });
 }
 
 function cmdLog(rest: string[]): void

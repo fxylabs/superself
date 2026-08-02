@@ -16,6 +16,7 @@ import {
     branchLabel,
     BranchUnshipped,
     branchTotals,
+    currentConventions,
     ProjectModel,
     RecoveryTarget,
     ScopableVerb,
@@ -795,7 +796,7 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
     lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)));
     lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
-    lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text),
+    lines.push("", ...listSection("CONVENTIONS", currentConventions(model.conventions).map((item) => item.text),
         scoped("self search --type convention", project)));
     lines.push("", ...listSection("INTEGRATION", trainLines(model),
         withCheckout("self integration plan", fromCheckout(project))));
