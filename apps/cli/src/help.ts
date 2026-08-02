@@ -126,10 +126,14 @@ export const COMMANDS: CommandHelp[] = [
                 description: ["print an objective, or confirm a proposed one"]
             },
             {
+                syntax: "objective decline <id> --why w",
+                description: ["turn down a proposed objective; it leaves waiting at once"]
+            },
+            {
                 syntax: "objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]",
                 description: ["an empty --target/--horizon/--priority withdraws that field"]
             },
-            { syntax: "objective close <id> --as reached|dropped [--why w]" }
+            { syntax: "objective close <id> --as reached|dropped [--why w]", description: ["--why is required when it is dropped"] }
         ],
         detail: [
             "keep the time-boxed objectives that break the goal down, each with the",
@@ -149,7 +153,7 @@ export const COMMANDS: CommandHelp[] = [
             "  --proposed            record as a proposal the user has not confirmed",
             "  --supersedes <id>     retire an earlier objective",
             "  --as <state>          how `close` ends it: reached or dropped",
-            "  --why <text>          the reason recorded with a revision or a close"
+            "  --why <text>          the reason for a revision or a decline, and for a close that drops"
         ]
     },
     {
@@ -165,6 +169,10 @@ export const COMMANDS: CommandHelp[] = [
                 description: ["print a milestone, its exit criteria, and its coverage"]
             },
             { syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]" },
+            {
+                syntax: 'milestone drop <id> --why "<reason>"',
+                description: ["give up on a checkpoint with nothing replacing it"]
+            },
             { syntax: "milestone met <id> --criterion c1 --why w [--work id] [--evidence c]" },
             { syntax: "milestone reach <id>", description: ["record a milestone as reached once every criterion is covered"] },
             {
@@ -189,20 +197,31 @@ export const COMMANDS: CommandHelp[] = [
             "  --criterion <c>       the criterion `met` or `recheck` speaks about",
             "  --work <id>           the work unit whose evidence covers it",
             "  --evidence <hash>     a commit recorded with the coverage",
-            "  --why <text>          how the evidence covers it, or what was re-judged"
+            "  --why <text>          how the evidence covers it, what was re-judged, or why it was dropped"
         ]
     },
     {
         name: "decide",
         usage: [
             { syntax: 'decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id] [--blocks id] [--after id]' },
-            { syntax: "decide confirm <event-id>", description: ["confirm a proposed decision"] }
+            { syntax: "decide confirm <event-id>", description: ["confirm a proposed decision"] },
+            {
+                syntax: 'decide decline <event-id> --why "<reason>"',
+                description: ["turn down a proposal; it leaves \"waiting on you\" at once"]
+            },
+            {
+                syntax: 'decide retract <event-id> --why "<reason>"',
+                description: [
+                    "take back a confirmed decision with nothing replacing it",
+                    "it stops rendering as current and stays inspectable in search"
+                ]
+            }
         ],
         detail: [
             "record one decision. Confirmed by default: use --proposed for a decision",
             "the user has not agreed to yet, and `decide confirm` when they do.",
             "",
-            "  --why <text>          the reason the decision was made",
+            "  --why <text>          the reason the decision was made, or the reason it was withdrawn",
             "  --proposed            record as a proposal, which never displaces a confirmed decision",
             "  --supersedes <id>     retire an earlier decision, repeatable",
             "  --work <work-id>      attach the decision to a work unit",
@@ -211,7 +230,11 @@ export const COMMANDS: CommandHelp[] = [
             "",
             "--blocks is what ranks a proposal: `self context` and `self status` say",
             "whether confirming it unblocks work, cannot be decided yet, or only",
-            "records a rule the gated work already landed under."
+            "records a rule the gated work already landed under.",
+            "",
+            "--supersedes replaces a decision, `retract` withdraws one with nothing in",
+            "its place, and `decline` answers a proposal. None of the three rewrites",
+            "history: the record keeps its text and gains a status."
         ]
     },
     {
@@ -238,7 +261,7 @@ export const COMMANDS: CommandHelp[] = [
                 description: ["state, or withdraw, what a work unit contributes to"]
             },
             { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r' },
-            { syntax: "work accept|decline <proposal-id>", description: ["act on a goal-gap proposal"] },
+            { syntax: "work accept|decline <proposal-id> [--why w]", description: ["act on a goal-gap proposal; decline states why"] },
             { syntax: 'work require <id> "<what the outcome must cover>"', description: ["declare a requirement; prints its id"] },
             { syntax: 'work revise <id> --requirement r1 --statement "<restated>" --why w', description: ["restate one; its coverage goes stale"] },
             { syntax: "work drop <id> --requirement r1 --why w", description: ["retire one requirement; the unit stays open"] },
@@ -585,8 +608,19 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: "convention",
-        usage: [{ syntax: 'convention add "<text>" | drop <event-id>', description: ["record or retire a convention"] }],
-        detail: ["record a rule this project works by, or retire one by its event id."]
+        usage: [
+            { syntax: 'convention add "<text>" [--supersedes <event-id>]', description: ["record a rule, optionally replacing ones it corrects"] },
+            { syntax: 'convention drop <event-id> --why "<reason>"', description: ["retire a convention with nothing replacing it"] }
+        ],
+        detail: [
+            "record a rule this project works by, or retire one by its event id.",
+            "",
+            "  --supersedes <id>     the convention this one replaces, repeatable",
+            "  --why <text>          why a dropped rule no longer holds; every withdrawal carries one",
+            "",
+            "correcting a rule is one event, not a drop and a re-add: the replacement",
+            "carries the lineage, so the pair can never both read as current."
+        ]
     },
     {
         name: "connect",

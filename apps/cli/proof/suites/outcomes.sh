@@ -255,7 +255,11 @@ MOLD="$(SELF milestone add "draft the migration" --objective "$O2" --exit "a dra
 MNEXT="$(SELF milestone add "run the migration" --objective "$O2" --after "$MOLD" --exit "the migration runs" | tail -1)"
 SELF milestone | grep "$MOLD" | grep -q "critical path" || fail "a milestone another one waits on is not on the critical path"
 MREDO="$(SELF milestone add "run the migration in two passes" --objective "$O2" --supersedes "$MNEXT" --exit "both passes run" | tail -1)"
-SELF milestone | grep "$MNEXT" | grep -q "superseded by $MREDO" || fail "a superseded milestone lost its lineage"
+# The list is current state, so a superseded checkpoint leaves it the way a
+# dropped one does (#166). Its lineage moves to `milestone show`, which is the
+# surface that still answers for a record that is no longer current.
+SELF milestone | grep -q "$MNEXT" && fail "a superseded milestone still lists as a current checkpoint"
+SELF milestone show "$MNEXT" | grep -q "superseded by $MREDO" || fail "a superseded milestone lost its lineage"
 SELF milestone | grep "$MOLD" | grep -q "critical path" && fail "a superseded milestone still claimed the critical path"
 
 # a target date falls due in the workspace zone, never in the one the machine

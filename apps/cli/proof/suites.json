@@ -106,6 +106,12 @@
                 "scope-pointers.mjs"
             ]
         },
+        "lifecycle": {
+            "entry": "suites/lifecycle.sh",
+            "deps": [
+                "lib.sh"
+            ]
+        },
         "pretty": {
             "entry": "suites/pretty.sh",
             "deps": [

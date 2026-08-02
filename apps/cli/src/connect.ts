@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ProjectModel } from "./model.js";
+import { currentConventions, ProjectModel } from "./model.js";
 
 const BEGIN = "<!-- superself:begin -->";
 const END = "<!-- superself:end -->";
@@ -157,10 +157,11 @@ function renderBlock(model: ProjectModel): string
         "- Search past state with `self search <query>`; list work with `self work`.",
         "- Never hand-edit generated state files or anything under `.superself/`."
     ];
-    if (model.conventions.length > 0)
+    const conventions = currentConventions(model.conventions);
+    if (conventions.length > 0)
     {
         lines.push("", "### Conventions", "");
-        for (const convention of model.conventions)
+        for (const convention of conventions)
         {
             lines.push(`- ${convention.text}`);
         }

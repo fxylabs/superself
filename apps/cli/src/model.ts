@@ -32,10 +32,17 @@ export interface DecisionState
     text: string;
     why?: string;
     ts: string;
-    status: "proposed" | "confirmed" | "superseded";
+    // The lifecycle every statement-type record shares: a live record
+    // (`proposed`/`confirmed`), one replaced by a linked successor
+    // (`superseded`), one withdrawn with no successor (`retracted`), and a
+    // proposal turned down (`declined`). Only the live ones render as current.
+    status: "proposed" | "confirmed" | "superseded" | "retracted" | "declined";
     humanConfirmed: boolean;
     expired: boolean;
     supersedes: string[];
+    // Why the record was retracted or declined. Absent on every other status:
+    // a supersession says why by naming its successor.
+    closedWhy?: string;
     // The work unit this decision came out of, when the command said so.
     // Never inferred: a decision recorded during one unit's session is not
     // thereby a decision about it.
@@ -46,6 +53,29 @@ export interface DecisionState
     blocks: string[];
     // The event this decision is sequenced behind.
     after?: string;
+}
+
+// A convention carries the same lifecycle a decision does. `current` is the
+// live status; `superseded` means a later convention was recorded as its
+// replacement, and `dropped` means it was withdrawn with nothing taking its
+// place — the withdraw verb this type has always had.
+export interface ConventionState
+{
+    id: string;
+    ts: string;
+    text: string;
+    status: "current" | "superseded" | "dropped";
+    supersedes: string[];
+    // Why the rule was dropped. Absent on a supersession, which says why by
+    // naming the rule that replaced it.
+    closedWhy?: string;
+}
+
+// The rules that hold now. One site answers it, so no two renderers can
+// disagree about whether a superseded convention still counts.
+export function currentConventions(conventions: ConventionState[]): ConventionState[]
+{
+    return conventions.filter((convention) => convention.status === "current");
 }
 
 export interface ReportEntry
@@ -247,7 +277,10 @@ export interface ProjectModel
     zone: string;
     goals: GoalState;
     decisions: DecisionState[];
-    conventions: { id: string; ts: string; text: string }[];
+    // Every convention ever recorded, current and historical alike, exactly as
+    // `decisions` is kept. A renderer that means "the rules that hold now" says
+    // so through `currentConventions`; history stays foldable for search.
+    conventions: ConventionState[];
     works: WorkState[];
     // The repository integration lane. Parallel work is recorded above; the
     // order it reaches main in is recorded here.
@@ -265,6 +298,135 @@ export interface ProjectModel
     // decided it would answer differently from the next renderer.
     unshipped: BranchUnshipped[];
     health: string[];
+}
+
+// ── the record lifecycle ─────────────────────────────────────────────
+// The statement types, in code, once. A statement-type record is one a person
+// asserts and can later take back, and ARCHITECTURE.md's record-lifecycle rule
+// admits a new one only shipping the whole set of verbs below.
+//
+// This list is not documentation. `search.ts` builds its historical-status
+// markers from `closed`, so a type missing from here silently stops saying
+// which of its records still hold — and `proof/suites/lifecycle.sh` reads this
+// same list out of the built module rather than restating it, so a row can
+// never drift from the verbs the CLI actually has.
+export interface StatementType
+{
+    // The record, and the namespaces its events are written under. The proof
+    // checks these against the namespaces the source actually creates records
+    // in, so a new statement type cannot land without an entry here.
+    type: string;
+    namespaces: string[];
+    // The command its lifecycle is spelled on, and the literal each transition
+    // appears as in that command's help. `decline` is absent for a type with no
+    // proposals — there is nothing to turn down.
+    command: string;
+    supersede: string;
+    withdraw: string;
+    decline?: string;
+    // The records that have left the current set, as id → status. Live records
+    // are omitted: a search over what still holds reads as it always did.
+    closed(model: ProjectModel): [string, string][];
+}
+
+export const STATEMENT_TYPES: StatementType[] = [
+    {
+        type: "decision",
+        namespaces: ["decision"],
+        command: "decide",
+        supersede: "--supersedes <id>",
+        withdraw: "decide retract",
+        decline: "decide decline",
+        closed: (model) => model.decisions
+            .filter((item) => item.status !== "confirmed" && item.status !== "proposed")
+            .map((item) => [item.id, item.status])
+    },
+    {
+        type: "convention",
+        namespaces: ["convention"],
+        command: "convention",
+        supersede: "--supersedes <event-id>",
+        withdraw: "convention drop",
+        closed: (model) => model.conventions
+            .filter((item) => item.status !== "current")
+            .map((item) => [item.id, item.status])
+    },
+    {
+        type: "objective",
+        namespaces: ["objective"],
+        command: "objective",
+        supersede: "--supersedes <id>",
+        withdraw: "objective close",
+        decline: "objective decline",
+        closed: (model) => model.goals.objectives
+            .filter((item) => item.status !== "active" && item.status !== "proposed")
+            .map((item) => [item.id, item.status])
+    },
+    {
+        type: "milestone",
+        namespaces: ["milestone"],
+        command: "milestone",
+        supersede: "--supersedes m",
+        withdraw: "milestone drop",
+        closed: (model) => model.goals.objectives
+            .flatMap((objective) => objective.milestones)
+            .filter((item) => item.state === "closed" || item.state === "reached")
+            .map((item) => [item.id, milestoneStatus(item)])
+    },
+    {
+        type: "work",
+        namespaces: ["work"],
+        command: "work",
+        supersede: "--successor <work-id>",
+        withdraw: "work retire",
+        decline: "work accept|decline",
+        closed: (model) => [
+            ...model.works
+                .filter((item) => item.status === "done" || item.status === "retired")
+                .map((item) => [item.id, item.status] as [string, string]),
+            ...model.goals.proposals
+                .filter((item) => item.status !== "open")
+                .map((item) => [item.id, item.status] as [string, string])
+        ]
+    },
+    {
+        type: "requirement",
+        // A requirement is a record of the work unit that owes it, so its
+        // events are the work namespace's — it has no namespace of its own.
+        namespaces: [],
+        command: "work",
+        supersede: "work revise",
+        withdraw: "work drop",
+        closed: (model) => model.works.flatMap((work) => work.completion.requirements
+            .filter((item) => item.retired === true)
+            .map((item) => [item.id, "dropped"] as [string, string]))
+    }
+];
+
+// A milestone leaves the current set three ways, and a reader who searched for
+// it needs to know which: given up on, replaced, or its evidence landed.
+function milestoneStatus(milestone: { state: string; droppedWhy?: string; supersededBy?: string }): string
+{
+    if (milestone.droppedWhy !== undefined)
+    {
+        return "dropped";
+    }
+    return milestone.supersededBy === undefined ? milestone.state : "superseded";
+}
+
+// Every record that has left the current set, across every statement type, as
+// id → status. One map because one search line asks one question.
+export function closedRecords(model: ProjectModel): Map<string, string>
+{
+    const closed = new Map<string, string>();
+    for (const statement of STATEMENT_TYPES)
+    {
+        for (const [id, status] of statement.closed(model))
+        {
+            closed.set(id, status);
+        }
+    }
+    return closed;
 }
 
 export function buildModel(storeDir: string, slug: string, now: Date): ProjectModel
@@ -285,10 +447,12 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         unshipped: [],
         health: []
     };
-    for (const event of readEvents(storeDir, slug))
+    const events = readEvents(storeDir, slug);
+    for (const event of events)
     {
         applyEvent(model, event);
     }
+    reconcileLifecycle(model, events);
     deriveSignals(model, now);
     // Read once per fold, not once per row: the verdicts are a file, and a fold
     // runs on every event. Both derivations below read the same copy.
@@ -353,15 +517,48 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
         applyAttempt(model, event);
         return;
     }
+    if (event.type.startsWith("convention."))
+    {
+        applyConvention(model, event);
+    }
+}
+
+// One correction is one event: the replacement is recorded and the conventions
+// it names fold to `superseded` in the same pass, so the lineage the old
+// drop-then-add lost is on the record itself.
+function applyConvention(model: ProjectModel, event: SelfEvent): void
+{
     if (event.type === "convention.added")
     {
-        model.conventions.push({ id: event.id, ts: event.ts, text: String(event.payload.text) });
-        return;
+        const supersedes = stringList(event.refs?.supersedes);
+        model.conventions.push({ id: event.id, ts: event.ts, text: String(event.payload.text), status: "current", supersedes });
     }
-    if (event.type === "convention.dropped")
+    linkConvention(model, event);
+}
+
+// The half of a convention event that speaks about a record other than the one
+// it created. Split out because it is the half that has to run again once every
+// event has been read — see `reconcileLifecycle`.
+function linkConvention(model: ProjectModel, event: SelfEvent): void
+{
+    const dropped = event.type === "convention.dropped";
+    const why = dropped && event.payload.why !== undefined ? String(event.payload.why) : undefined;
+    closeConventions(model, stringList(event.refs?.supersedes), dropped ? "dropped" : "superseded", why);
+}
+
+// A convention that already left the current set keeps the status it left
+// under: the first withdrawal is the one that happened, and a later event
+// naming it again never rewrites that.
+function closeConventions(model: ProjectModel, ids: string[], status: "superseded" | "dropped", why?: string): void
+{
+    for (const id of ids)
     {
-        const dropped = event.refs?.supersedes ?? [];
-        model.conventions = model.conventions.filter((convention) => !dropped.includes(convention.id));
+        const target = model.conventions.find((convention) => convention.id === id);
+        if (target !== undefined && target.status === "current")
+        {
+            target.status = status;
+            target.closedWhy = why;
+        }
     }
 }
 
@@ -374,18 +571,31 @@ function applyDecision(model: ProjectModel, event: SelfEvent): void
         model.decisions.push(newDecision(event, "proposed", false));
         return;
     }
-    if (event.type !== "decision.confirmed")
-    {
-        return;
-    }
-    const confirms = event.refs?.confirms;
-    if (confirms === undefined)
+    if (event.type === "decision.confirmed" && event.refs?.confirms === undefined)
     {
         applySupersedes(model, event.refs?.supersedes ?? []);
         model.decisions.push(newDecision(event, "confirmed", event.origin.confirmed));
         return;
     }
-    const target = model.decisions.find((decision) => decision.id === confirms);
+    linkDecision(model, event);
+}
+
+// The half of a decision event that speaks about a record other than the one it
+// created: a confirmation, a retraction, a decline. Every branch is a no-op
+// against a record that is already where the branch would put it, which is what
+// lets `reconcileLifecycle` run it a second time.
+function linkDecision(model: ProjectModel, event: SelfEvent): void
+{
+    if (event.type === "decision.retracted" || event.type === "decision.declined")
+    {
+        withdrawDecision(model, event);
+        return;
+    }
+    if (event.type !== "decision.confirmed")
+    {
+        return;
+    }
+    const target = model.decisions.find((decision) => decision.id === event.refs?.confirms);
     if (target !== undefined && target.status === "proposed")
     {
         applySupersedes(model, target.supersedes);
@@ -395,12 +605,66 @@ function applyDecision(model: ProjectModel, event: SelfEvent): void
     }
 }
 
+// A lifecycle event names a record it did not create, and a union merge of two
+// clones' logs orders lines by neither time nor dependency: a retraction can sit
+// above the decision it withdraws. The first pass creates every record, so a
+// second pass over the same events settles the ones whose target had not been
+// read yet.
+//
+// Only the linking transitions run again, and each is written to be a no-op
+// against a record already in its terminal state — so a record that folded
+// correctly the first time is untouched, and one that could not is not left
+// current forever. Revisions and coverage are deliberately absent: they
+// accumulate rather than settle, and running one twice would count it twice.
+function reconcileLifecycle(model: ProjectModel, events: SelfEvent[]): void
+{
+    for (const event of events)
+    {
+        if (event.type.startsWith("decision."))
+        {
+            linkDecision(model, event);
+        }
+        else if (event.type.startsWith("convention."))
+        {
+            linkConvention(model, event);
+        }
+        else if (event.type === "objective.declined" || event.type === "objective.closed" || event.type === "objective.confirmed")
+        {
+            applyObjective(model.goals, event);
+        }
+        else if (event.type === "milestone.dropped")
+        {
+            applyMilestone(model.goals, event);
+        }
+    }
+}
+
+// Withdrawal with no successor. The record keeps its text, its reason and
+// every ref pointing at it — what changes is that it stops being current, so
+// `--after` and `--blocks` on other records still resolve against history.
+function withdrawDecision(model: ProjectModel, event: SelfEvent): void
+{
+    const refs = event.refs;
+    const retracted = event.type === "decision.retracted";
+    const target = model.decisions.find((decision) => decision.id === (retracted ? refs?.retracts : refs?.declines));
+    // Only a live record is withdrawn: the command refuses the rest, and a log
+    // written by a version that did not would otherwise unsay a supersession.
+    if (target === undefined || (target.status !== "confirmed" && target.status !== "proposed"))
+    {
+        return;
+    }
+    target.status = retracted ? "retracted" : "declined";
+    target.closedWhy = event.payload.why === undefined ? undefined : String(event.payload.why);
+}
+
+// A withdrawn decision is not superseded by a later one: the person said it
+// was taken back, and a successor arriving afterwards does not unsay that.
 function applySupersedes(model: ProjectModel, ids: string[]): void
 {
     for (const id of ids)
     {
         const target = model.decisions.find((decision) => decision.id === id);
-        if (target !== undefined)
+        if (target !== undefined && target.status !== "retracted" && target.status !== "declined")
         {
             target.status = "superseded";
         }
@@ -492,6 +756,16 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     if (event.type === "work.linked" || event.type === "work.unlinked")
     {
         applyLink(work, event);
+        return;
+    }
+    // Retirement is terminal, the way a retracted decision and a dropped
+    // milestone are. `requireOpenWork` already refuses every transition on a
+    // retired unit, so nothing this CLI wrote can reach here — what can is a
+    // stale line merged from a clone that had not pulled the retirement yet.
+    // Done is deliberately not terminal: reopening a finished unit is real
+    // work, and only the withdrawal is the end of the record.
+    if (work.status === "retired" && event.type !== "work.retired")
+    {
         return;
     }
     if (event.type === "work.started" || event.type === "work.unblocked")

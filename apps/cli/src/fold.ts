@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { ChangeSet, findChangeSet, openChangeSets } from "./integration.js";
-import { branchLabel, branchTotals, buildModel, DecisionState, ProjectModel, unshippedBranches, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
 import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
@@ -292,7 +292,7 @@ function renderState(model: ProjectModel): string
     section(lines, "Proposed work", proposalSummaryLines(model));
     section(lines, "Decisions", decisionLines(model.decisions.filter((d) => d.status === "confirmed")));
     section(lines, "Proposed decisions", proposalLines(model.decisions));
-    section(lines, "Conventions", model.conventions.map((c) => `- ${c.text} _(${c.id})_`));
+    section(lines, "Conventions", currentConventions(model.conventions).map((c) => `- ${c.text} _(${c.id})_`));
     section(lines, "Work in progress", model.works.filter((w) => w.status === "active").map(workLine));
     section(lines, "Blocked", model.works.filter((w) => w.status === "blocked").map(blockedLine));
     section(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- **${w.id}** ${w.outcome}`));
