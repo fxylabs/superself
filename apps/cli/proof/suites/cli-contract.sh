@@ -129,6 +129,9 @@ rejects convention convention add "rejected write" --bogus
 rejects convention convention drop ev-nope --bogus
 rejects decide decide "rejected write" --bogus
 rejects decide decide confirm ev-nope --bogus
+rejects decide decide retract ev-nope --bogus
+rejects decide decide decline ev-nope --bogus
+rejects convention convention add "rejected write" --supersedes ev-nope --bogus
 rejects report report "$HWID" "rejected write" --bogus
 rejects report report "$HWID" "rejected write" --artifact "$ROOT/launch.html" --bogus
 rejects connect connect --bogus

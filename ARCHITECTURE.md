@@ -144,6 +144,59 @@ namespace's verbs for the other's records.
 - Enforcement: `model.ts` and the per-domain reducers dispatch on the type
   string, so an unowned namespace folds into nothing. Review catches it earlier.
 
+### The record lifecycle
+
+A *statement-type record* is one a person asserts and can later take back: a
+decision, a convention, an objective, a milestone, a work unit, a requirement.
+Reports are the exception by design — they are append-only history, and nothing
+withdraws a report.
+
+Every statement type ships the same three transitions, inside its own
+namespace, before it is admitted (#166):
+
+| Transition | What it means | Where it renders |
+| --- | --- | --- |
+| supersede | replaced by a linked successor; `--supersedes`, repeatable | predecessor folds to `superseded`, lineage kept |
+| withdraw | taken back with `--why` and no successor | folds to `retracted`/`dropped`; leaves every current render |
+| decline | a proposal turned down with `--why`, beside `accept` and expiry | folds to `declined`; leaves "waiting on you" at once |
+
+The verbs keep each type's existing vocabulary — `decide retract`, `convention
+drop`, `work retire` — but no type may be missing a transition. A withdrawn
+record is never deleted or rewritten: it keeps its text and its refs, so
+`--after` and `--blocks` pointing at it still resolve, and `self search` still
+returns it with its status in the result line.
+
+`--why` is required on every transition but supersede — a supersession says
+why by naming its successor, and nothing else does. That covers `decide
+retract`, `decide decline`, `convention drop`, `objective decline`, `objective
+close --as dropped`, `milestone drop`, `work retire`, `work decline` and
+`work drop`.
+
+A withdrawal is terminal. Once a record is retracted, declined or dropped, a
+later event naming it does not move it back: the fold refuses the transition
+rather than trusting log order, because a log merged from another clone can
+carry a revision written before the withdrawal was pulled.
+
+Lifecycle refs also survive log order. A union merge orders lines by neither
+time nor dependency, so a retraction can sit above the decision it withdraws;
+`model.ts` `reconcileLifecycle` settles the linking transitions in a second
+pass over the same events. Only transitions that are no-ops against a record
+already in its terminal state run there — a revision, which accumulates, does
+not.
+
+- A new statement type is admitted only with the full set. A type that ships
+  `--supersedes` and no withdrawal leaves records that can only be replaced,
+  never taken back, which is the state #166 was opened over.
+- The statement types are declared once in code, as `STATEMENT_TYPES` in
+  `model.ts`. It is load-bearing rather than documentation: `search.ts` builds
+  its historical-status markers from it, so a type missing an entry stops
+  saying which of its records still hold.
+- Enforcement: `proof/suites/lifecycle.sh` reads `STATEMENT_TYPES` out of the
+  built module and fails when an entry's verbs are missing from its command's
+  help, when a namespace that creates records has no entry and is not declared
+  a non-statement namespace, or when a withdrawal does not actually leave the
+  current renders. Review catches it earlier.
+
 ## Fixed naming
 
 Settled by the #35 and #54 re-plans. These are standing rules, not per-issue

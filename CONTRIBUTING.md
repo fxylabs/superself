@@ -127,6 +127,17 @@ incomplete:
 Subcommand dispatch reads through `args.ts` `subcommand`, so `--` means the
 same thing across the whole CLI.
 
+A verb that introduces a new *statement-type record* — something a person
+asserts and can later take back — ships more than those four. It ships the
+whole lifecycle set: supersede with a linked successor, withdraw with `--why`
+and no successor, and decline where the type has proposals. See
+[the record lifecycle](ARCHITECTURE.md#the-record-lifecycle) for what each
+transition has to fold to, and add the type to `STATEMENT_TYPES` in
+`model.ts` — the one declaration of the statement types, which `self search`
+reads and `proof/suites/lifecycle.sh` enumerates. The proof fails when a
+namespace that creates records has no entry there, so a new statement type
+cannot land without its lifecycle.
+
 ## Proof scripts
 
 Proof scripts run on a contributor's macOS laptop and on the ubuntu CI runner,

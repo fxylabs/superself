@@ -9,6 +9,7 @@ import {
     BranchUnshipped,
     branchTotals,
     buildModel,
+    currentConventions,
     ProjectModel,
     WaitingItem,
     WorkState
@@ -156,7 +157,7 @@ function renderProject(model: ProjectModel, options: ProjectContextOptions): str
         : objectiveLines(model));
     pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions,
         scoped("self search --type decision", project)));
-    pushList(lines, "Conventions", model.conventions.map((convention) =>
+    pushList(lines, "Conventions", currentConventions(model.conventions).map((convention) =>
         `- ${detail(convention.text, options.detailLimit, pointerTo({ verb: "search", id: convention.id, type: "convention" }, project))}`));
     pushList(lines, "Integration train", options.compactOptional
         ? countedOmission(openChangeSets(model.integration).length,
@@ -211,7 +212,7 @@ function renderMinimalProject(model: ProjectModel, decisions: string[], omittedD
     lines.push(`Goal: omitted; run \`${recovery}\``, "");
     pushList(lines, "Objectives", countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project)));
     pushList(lines, "Decisions", decisionLines(decisions, omittedDecisions, `self search --type decision --project ${project}`));
-    pushList(lines, "Conventions", [...model.conventions]
+    pushList(lines, "Conventions", [...currentConventions(model.conventions)]
         .sort(compareDated)
         .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
     pushList(lines, "Integration train", countedOmission(openChangeSets(model.integration).length,
@@ -288,6 +289,7 @@ function renderAggregateProject(model: ProjectModel): string
     const active = model.works.filter((work) => work.status === "active").length;
     const blocked = model.works.filter((work) => work.status === "blocked").length;
     const waiting = waitingItems(model).length;
+    const conventions = currentConventions(model.conventions).length;
     const project = shellArgument(model.slug);
     const recovery = `self search --project ${project}`;
     const works = scoped("self work", project);
@@ -296,7 +298,7 @@ function renderAggregateProject(model: ProjectModel): string
         "",
         `Protected context is larger than ${CONTEXT_LIMIT.toLocaleString("en-US")} characters even as identity rows.`,
         `- description/goal: run \`${recovery}\``,
-        `- ${model.conventions.length} convention${model.conventions.length === 1 ? "" : "s"}: run \`${recovery}\``,
+        `- ${conventions} convention${conventions === 1 ? "" : "s"}: run \`${recovery}\``,
         `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`${works}\``,
         `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`${works}\``,
         `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
