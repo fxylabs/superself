@@ -17,6 +17,8 @@ import {
     BranchUnshipped,
     branchTotals,
     ProjectModel,
+    RecoveryTarget,
+    ScopableVerb,
     WorkState
 } from "./model.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
@@ -258,12 +260,148 @@ function heading(title: string, counts: string): string
 
 // A section that had to stop short always says how much it left and which
 // command prints the rest, so a glance is never mistaken for the whole list.
-function moreLine(hidden: number, recover: string): string[]
+function moreLine(hidden: number, recover: Pointer): string[]
 {
     return hidden <= 0 ? [] : [dim(`  … +${hidden} more · ${recover}`)];
 }
 
-function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: string): string[]
+// Recovery commands are pasted into POSIX shells. Always quote a project slug
+// as one literal argument; the '"'"' sequence is the portable way to embed a
+// single quote inside a single-quoted shell word.
+export function shellArgument(value: string): string
+{
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+// Every recovery pointer a rendered surface prints names the project it pulls
+// from. A context or a status is read far from where it was produced — piped
+// into an agent, saved to a file, read at a terminal while standing somewhere
+// else — and `--project other` made that literal: a bare `self work` in that
+// output answers for wherever it is run rather than for what it describes.
+//
+// Only the verbs that have a scope form take one. `self integration plan`,
+// `self attempt show`, `self decide confirm` and `self work accept` have none,
+// so they are left as they are rather than promising a flag that does not
+// exist. Both context renders read this, which is why it lives here: `views.ts`
+// already imports this module, so one direction stays.
+//
+// Which verbs those are is `ScopableVerb` in `model.ts`, and the targets that
+// carry an id are `RecoveryTarget`;
+// and nothing here restates it. A list of patterns beside the types was a
+// second answer to the same question, and the two disagreed: the type admits
+// `self work show ` and `self work show id with space` where the pattern
+// `/^self work show \S+$/` did not, so those left `scoped()` branded and
+// unscoped (#165 review round 7). The type is the only authority now.
+
+// A recovery pointer a section prints, rather than any string that happens to
+// look like one. The brand is what a section builder asks for, so a bare
+// `"self work"` handed to `listSection` is a type error at the call site
+// instead of a defect a proof has to go looking for afterwards. Concatenation
+// is refused for the same reason: `"self integration plan" + fromCheckout(p)`
+// is a `string`, so the form that reached a render unscoped cannot compile.
+//
+// This is not the whole rule. A pointer interpolated into a sentence — the
+// `· ${scoped(…)}` notes a row carries — is prose, and prose is a `string`
+// wherever it is built; `proof/scope-pointers.mjs` still owns those. What the
+// brand removes is every site that passes a pointer as a pointer.
+declare const POINTER: unique symbol;
+declare const CHECKOUT: unique symbol;
+
+export type Pointer = string & { readonly [POINTER]: true };
+
+// The standing requirement of a verb with no scope form, kept apart from the
+// pointer so a render can put the command inside a code span and the sentence
+// outside it. A reader pastes the first and reads the second.
+export type Checkout = string & { readonly [CHECKOUT]: true };
+
+// The verbs that have no scope form, spelled out. Naming them as a union is
+// what stops the constructors below being a way to launder any other string
+// into a `Pointer`: `"self work"` is not a member, so it cannot take this road
+// around `scoped()`.
+export type UnscopedVerb = "self integration plan" | "self attempt show"
+    | "self decide confirm" | "self work accept";
+
+// A verb with no scope form cannot be run from anywhere: it answers for the
+// checkout it runs in. Every render that points at one says so in the same
+// words, so a reader of another project's output learns where to stand instead
+// of finding out by getting the wrong answer.
+export function fromCheckout(project: string): Checkout
+{
+    return ` from a checkout of ${project}` as Checkout;
+}
+
+// The one-line form, for a render with no code span to keep the sentence out
+// of. Taking the `Checkout` rather than the project is what makes the note
+// unforgettable: there is no arity of this call that omits it.
+export function withCheckout(command: UnscopedVerb, where: Checkout): Pointer
+{
+    return `${command}${where}` as Pointer;
+}
+
+// The command's type is what makes the mint safe: `ScopableVerb` is a finite
+// list of exact commands, so appending the project always produces one the CLI
+// parses. Anything carrying an id goes through `pointerTo` instead, because a
+// template member would admit a suffix the append turns into nonsense.
+export function scoped(command: ScopableVerb, project: string): Pointer
+{
+    if (command.includes("--project "))
+    {
+        return command as Pointer;
+    }
+    return `${command} --project ${project}` as Pointer;
+}
+
+// The pointer for a target that carries an id. The caller names what it is
+// pointing at and this writes the command, so there is no suffix for a caller
+// to malform and no place for an empty id to become a verb with no positional.
+export function pointerTo(target: RecoveryTarget, project: string): Pointer
+{
+    if (target.verb === "attempt-show")
+    {
+        // The spool is machine-local, so this one carries no project. An id the
+        // parser would refuse falls back to the surface the signal appears on,
+        // rather than to a project read this target never meant.
+        return usableId(target.id)
+            ? `self attempt show ${target.id}` as Pointer
+            : scoped("self status", project);
+    }
+    if (target.verb === "work-show")
+    {
+        // An id the parser would refuse renders a command that fails when the
+        // reader pastes it: no positional, two positionals, or a leading dash
+        // read as an unknown option. A type cannot say "a usable id", so the
+        // pointer says it, and falls back to the list a reader can act on
+        // (#165 review rounds 8 and 9).
+        return usableId(target.id)
+            ? `self work show ${target.id} --project ${project}` as Pointer
+            : scoped("self work", project);
+    }
+    const named = target.id === undefined || !usableId(target.id) ? "" : ` ${target.id}`;
+    const kind = target.type === undefined || !usableId(target.type) ? "" : ` --type ${target.type}`;
+    return `self search${named}${kind} --project ${project}` as Pointer;
+}
+
+// An id a reader can paste, which is what every id these targets carry already
+// is: the model mints them (`at-`, `w-`, ULIDs) and nothing else reaches here.
+// What it rules out is the shape a type cannot — empty, carrying whitespace
+// that would read as a second positional, leading with a dash the parser reads
+// as an unknown option, or holding a character a shell would act on.
+function usableId(value: string): boolean
+{
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+}
+
+// The workspace render's own pointers. `self status` there IS the command being
+// pointed at, so there is no project to name. This mint takes no project on
+// purpose, and `proof/scope-pointers.mjs` is what keeps it where it belongs: a
+// literal here reads as reaching no `scoped()` anywhere except inside the two
+// workspace helpers its allowlist names.
+export function workspacePointer(command: ScopableVerb): Pointer
+{
+    return command as Pointer;
+}
+
+function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: Pointer): string[]
 {
     if (rows.length === 0)
     {
@@ -276,7 +414,7 @@ function tableSection(title: string, counts: string, spec: Column[], rows: Row[]
     ];
 }
 
-function listSection(title: string, items: string[], recover: string, paint: Paint = plain): string[]
+function listSection(title: string, items: string[], recover: Pointer, paint: Paint = plain): string[]
 {
     if (items.length === 0)
     {
@@ -319,7 +457,7 @@ function workRow(model: ProjectModel, work: WorkState): Row
     // line rather than folded into the state cell.
     if (work.gatedBy.length > 0)
     {
-        notes.push({ text: `gated by ${work.gatedBy.join(", ")} · self status`, paint: yellow });
+        notes.push({ text: `gated by ${work.gatedBy.join(", ")} · ${scoped("self status", shellArgument(model.slug))}`, paint: yellow });
     }
     if (toward !== "")
     {
@@ -423,7 +561,7 @@ function attentionSections(model: ProjectModel): string[]
         const rows = model.attention[group];
         lines.push("", heading(ATTENTION_TITLES[group], String(rows.length)));
         lines.push(...tableLines(attentionColumns(group), rows.slice(0, CONTEXT_ROWS).map(attentionRow), columns()));
-        lines.push(...moreLine(rows.length - CONTEXT_ROWS, "self status"));
+        lines.push(...moreLine(rows.length - CONTEXT_ROWS, scoped("self status", shellArgument(model.slug))));
     }
     return lines;
 }
@@ -438,7 +576,7 @@ const UNSHIPPED_COLUMNS: Column[] = [
 // One row per branch, its units on the row's own lines. Commits are counted
 // rather than listed: a hash truncated at a column boundary cannot be pasted,
 // and the thing a reader acts on here is the branch.
-function unshippedRow(branch: BranchUnshipped): Row
+function unshippedRow(branch: BranchUnshipped, project: string): Row
 {
     const totals = branchTotals(branch);
     const shown = branch.unshipped.slice(0, CONTEXT_ROWS);
@@ -448,7 +586,7 @@ function unshippedRow(branch: BranchUnshipped): Row
     }));
     if (branch.unshipped.length > shown.length)
     {
-        notes.push({ text: `+${branch.unshipped.length - shown.length} more · self work`, paint: dim });
+        notes.push({ text: `+${branch.unshipped.length - shown.length} more · ${scoped("self work", project)}`, paint: dim });
     }
     return {
         cells: [
@@ -472,7 +610,8 @@ function unshippedCounts(model: ProjectModel): string
 function unshippedSection(model: ProjectModel): string[]
 {
     return tableSection("UNSHIPPED BY BRANCH", unshippedCounts(model), UNSHIPPED_COLUMNS,
-        model.unshipped.map(unshippedRow), "self work");
+        model.unshipped.map((branch) => unshippedRow(branch, shellArgument(model.slug))),
+        scoped("self work", shellArgument(model.slug)));
 }
 
 /* ── status ────────────────────────────────────────────────────────── */
@@ -602,6 +741,7 @@ export interface StatusInput extends SurfaceInput
 export function renderStatus(input: StatusInput): string[]
 {
     const { model } = input;
+    const project = shellArgument(model.slug);
     const lines = [`${bold(model.slug)} — ${model.goal === undefined ? dim("(goal not set)") : oneLine(model.goal)}`, ""];
     lines.push(heading("WORK", workCounts(model)));
     if (openObjectives(model.goals).length > 0)
@@ -614,8 +754,8 @@ export function renderStatus(input: StatusInput): string[]
     }
     lines.push(heading("DECISIONS WAITING", attentionCounts(model)));
     lines.push("", ...unshippedSection(model));
-    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), "self context", yellow));
-    lines.push("", ...listSection("HEALTH", model.health, "self status", red));
+    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
+    lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     const tallies = tallyAttempts(input.attempts);
     lines.push("", heading("ATTEMPTS ON THIS MACHINE", String(input.attempts.length)));
     lines.push(...(tallies.length === 0 ? [dim("  none")] : tableLines(ATTEMPT_COLUMNS, tallies.map(attemptRow), columns())));
@@ -638,6 +778,7 @@ const OPEN_FIRST: Record<string, number> = { active: 0, blocked: 1, next: 2 };
 export function renderContext(input: SurfaceInput): string[]
 {
     const { model } = input;
+    const project = shellArgument(model.slug);
     const lines = [bold(model.slug)];
     if (model.description !== undefined)
     {
@@ -647,15 +788,18 @@ export function renderContext(input: SurfaceInput): string[]
     const open = model.works
         .filter((work) => work.status !== "done" && work.status !== "retired")
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));
-    lines.push(...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)), "self work"));
+    lines.push(...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)),
+        scoped("self work", project)));
     lines.push("", ...unshippedSection(model));
     lines.push("", ...attentionSections(model));
-    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), "self context", yellow));
-    lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), "self objective"));
-    lines.push("", ...listSection("DECISIONS", decisionLines(model), "self search --type decision"));
-    lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text), "self search --type convention"));
-    lines.push("", ...listSection("INTEGRATION", trainLines(model), "self integration plan"));
-    lines.push("", ...listSection("HEALTH", model.health, "self status", red));
+    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
+    lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)));
+    lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
+    lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text),
+        scoped("self search --type convention", project)));
+    lines.push("", ...listSection("INTEGRATION", trainLines(model),
+        withCheckout("self integration plan", fromCheckout(project))));
+    lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     return lines;
 }
 
