@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { git } from "./gitutil.js";
+import { git, realPath } from "./gitutil.js";
 import { machineConfigPath } from "./machine.js";
 import { dim, styled } from "./style.js";
 import {
@@ -72,10 +72,15 @@ function workspaceLines(workspaceDir: string | null): string[]
     ];
 }
 
+// What counts as another checkout is decided on the resolved path, never on
+// the spelling the ledger happens to hold: resolution can answer with a path
+// git worked out while the ledger line was written with the one a caller
+// typed, and comparing those two counted one physical checkout twice (#128).
 function projectLine(storeDir: string, slug: string): string
 {
     const active = resolveProjectPath(storeDir, slug) ?? "(not linked on this machine)";
-    const others = (readLinks(storeDir)[slug] ?? []).filter((item) => item.path !== active).length;
+    const here = realPath(active);
+    const others = (readLinks(storeDir)[slug] ?? []).filter((item) => realPath(item.path) !== here).length;
     return `${slug} → ${active}${others > 0 ? ` (+${others} more checkout${others > 1 ? "s" : ""})` : ""}`;
 }
 

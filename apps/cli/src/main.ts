@@ -389,8 +389,8 @@ function projectAdd(args: string[]): void
     }
     appendFileSync(join(ctx.storeDir, "registry.jsonl"), JSON.stringify(entry) + "\n");
     // The registry this process already read no longer says what the file says.
-    // Resolution is cached for the length of one command, so the writer of a
-    // cached file is the one that has to say it moved (#128).
+    // Resolution is cached in memory until something clears it, so the writer
+    // of a cached file is the one that has to say it moved (#128).
     invalidateResolution();
     linkProject(ctx, slug, projectDir);
     ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));

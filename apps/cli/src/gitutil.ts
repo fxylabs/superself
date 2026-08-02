@@ -338,9 +338,11 @@ export function revListExcept(dir: string, oids: string[], exclude: string[]): S
 }
 
 // Every ref this repository holds, plus the HEAD of the working tree the
-// command is standing in — the whole of what a reachability verdict can turn
-// on, in one probe. A branch deletion moves no HEAD and still flips an
-// abandonment verdict, so the branch names have to be in here beside it.
+// command is standing in — the whole of what a reachability verdict reads out
+// of the refs, in one probe. A branch deletion moves no HEAD and still flips
+// an abandonment verdict, so the branch names have to be in here beside it.
+// Object existence is not in here and cannot be: pruning an unreachable commit
+// leaves this listing byte-identical.
 export function refListing(dir: string): string
 {
     const listed = git(dir, "show-ref", "--head");

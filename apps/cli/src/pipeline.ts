@@ -71,8 +71,10 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     appendFileSync(join(dir, "log.jsonl"), events.map((event) => JSON.stringify(event) + "\n").join(""));
     // The store has changed, so nothing derived from it that this process
     // worked out before the write may be reused after it. Resolution is cached
-    // for the length of one command; this is the line that makes a read after a
-    // write in the same command impossible to answer from what came before it.
+    // in memory until something clears it, and a daemon tick appends through
+    // here too; this is the line that makes a read after a write impossible to
+    // answer from what came before it, in a one-shot command and in a tick
+    // alike.
     invalidateResolution();
     // The appended lines are the state change. Everything below them is derived
     // from the log and is redone by the next fold, so a failure there costs a

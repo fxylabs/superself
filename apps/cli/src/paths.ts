@@ -154,12 +154,19 @@ export function ensureDir(path: string): string
 // The cache is deliberately in-process and nothing else. A resolution answer
 // contains, implicitly, the claim that a given repository still stands at a
 // given path; persisting that claim is the #115 bug, where a checkout deleted
-// and replaced went on resolving to the project that used to be there. Living
-// for exactly one command means it cannot outlive the state it summarizes, and
-// a read after a write in another process starts from the files. Inside one
-// process, every writer of those files calls `invalidateResolution` — and so
-// does the event append, so a command that records and then reads can never
-// answer from what it saw before the write.
+// and replaced went on resolving to the project that used to be there. Nothing
+// here is written down, so a read after a write in another process starts from
+// the files.
+//
+// What keeps it from outliving the state it summarizes is not the process:
+// `self daemon start --foreground` is one process running ticks for as long as
+// the supervisor lives. It is that every writer of those files calls
+// `invalidateResolution` — the event append included, before the fold that
+// follows it — and that a daemon tick clears them before it does anything, so
+// a tick reads what the last one left on disk rather than what it summarized
+// an hour ago. State the invariant that way to the next caller: the caches
+// live until the next append or the next tick, never "until this command
+// ends".
 const links = new Map<string, Record<string, LinkedCheckout[]>>();
 const registries = new Map<string, RegistryEntry[]>();
 const matched = new Map<string, CheckoutMatch[]>();
@@ -274,8 +281,11 @@ export function readEvidenceHead(storeDir: string, slug: string): EvidenceHead |
 
 // Written once the exclude is in place, so a store that has never synced
 // cannot commit a machine-local file on its first fold. The exclude is asked
-// for once per process: it costs a git probe, and the answer cannot change
-// under a one-shot command.
+// for once per process, because it costs a git probe and nothing this process
+// does removes the line again. A daemon is one process for as long as it runs,
+// so an exclude taken out from under it stays out of this set — the sync path
+// is where that would matter, and `ensureSyncConfig` writes the line again
+// there rather than trusting this.
 const excluded = new Set<string>();
 
 export function writeEvidenceHead(storeDir: string, slug: string, head: EvidenceHead): void
@@ -400,12 +410,22 @@ export function pruneDeadLinks(storeDir: string): PrunedLink[]
 // one checkout, each probed on every resolution. Every read already asks about
 // `realPath(link.path)`, so recording it resolved is what the file was being
 // read as anyway (#128).
+//
+// Every comparison against an existing line resolves that line too. A ledger
+// written before this change holds whatever spelling was typed then, and
+// comparing a resolved path against a raw one matched neither the stale scan
+// nor the linked check: the re-link printed success, replaced nothing, and
+// appended a second entry for one physical checkout. `pruneDeadLinks` can
+// never remove it, because the path it names does exist — so the extra
+// `existsSync` and identity probe on every resolution stayed forever, which is
+// the cost #128 set out to remove.
 export function recordLink(storeDir: string, slug: string, at: string, repository: string | null): boolean
 {
     const path = realPath(at);
     const file = join(storeDir, LINKS_FILE);
     const entries = readJsonl(file);
-    const stale = entries.filter((entry) => entry.path === path
+    const here = (line: { path?: unknown }): boolean => typeof line.path === "string" && realPath(line.path) === path;
+    const stale = entries.filter((entry) => here(entry)
         && entry.repository !== undefined && repository !== null && String(entry.repository) !== repository);
     const entry = repository === null ? { slug, path } : { slug, path, repository };
     // Whether this path is linked is read off the ledger's resolved state, not
@@ -413,14 +433,14 @@ export function recordLink(storeDir: string, slug: string, at: string, repositor
     // the file, and taking that as "already linked" would make the re-link at a
     // restored path report success and change nothing — the same dead end #115
     // closed for a replaced one.
-    const linked = (readLinks(storeDir)[slug] ?? []).some((item) => item.path === path);
+    const linked = (readLinks(storeDir)[slug] ?? []).some(here);
     if (stale.length > 0)
     {
         // The stale claim goes; what was recorded about the path stays. A prune
         // entry is kept where it stood, so replacing an identity never quietly
         // erases the account of a checkout that went missing first — and the new
         // entry is appended last, so the replay ends with the path linked.
-        const kept = entries.filter((item) => item.path !== path || item.pruned !== undefined).concat([entry]);
+        const kept = entries.filter((item) => !here(item) || item.pruned !== undefined).concat([entry]);
         writeFileSync(file, kept.map((item) => JSON.stringify(item) + "\n").join(""));
         invalidateResolution();
         return true;
@@ -433,9 +453,12 @@ export function recordLink(storeDir: string, slug: string, at: string, repositor
     return false;
 }
 
-// Warned about once per process: the resolution path runs on every command,
-// and a stale link would otherwise print the same line in front of every one
-// of them.
+// Warned about once per process, and deliberately not per tick: the resolution
+// path runs on every command, and a stale link would otherwise print the same
+// line in front of every one of them — or, in a daemon, once every interval
+// into the log for as long as it runs, burying everything else it records. The
+// remedy the line names is a person re-linking the checkout, so repeating it
+// teaches nothing the first one did not.
 const reported = new Set<string>();
 
 // Whether the repository standing at a linked path is still the one that was

@@ -422,15 +422,19 @@ grep -q "cat-file --batch-check" "$ROOT/git-calls" \
 [ "$(grep -c "^cat-file" "$ROOT/git-calls")" = "1" ] \
     || fail "existence was asked more than once per repository"
 
-# ── a verdict already computed is rechecked only when the repo moved ──────
-# Nothing moved between these two folds, so the sweep spends no probe on the
-# commits at all — and a commit whose verdict nothing has computed yet is
-# still always judged, whatever the gate says.
+# ── the walks are rechecked only when the repo moved; existence always ────
+# Nothing moved between these two folds, so the sweep walks no history at all.
+# Existence is still asked, once, because no ref listing carries it: the probe
+# below prunes an object with the refs left byte-identical and the gate has to
+# notice. A commit whose verdict nothing has computed yet is still always
+# judged, whatever the gate says.
 UNCHANGED_CALLS="$(fold_calls)"
 [ "$UNCHANGED_CALLS" -lt "$MANY_CALLS" ] \
     || fail "a fold with nothing moved in the repository re-verified every commit"
-grep -q "cat-file" "$ROOT/git-calls" \
-    && fail "a fold with nothing moved still resolved the commits it had already judged"
+[ "$(grep -c "^cat-file" "$ROOT/git-calls")" = "1" ] \
+    || fail "a fold with nothing moved spent more than one cat-file process on the repository"
+grep -q "rev-list --stdin" "$ROOT/git-calls" \
+    && fail "a fold with nothing moved still walked history for commits it had already judged"
 FLATWORK="$ROOT/A/ws/.superself/projects/flat/work/$WFLAT.md"
 echo new > new.txt && git add . && git commit -qm "a commit nothing has judged"
 NEWHASH="$(git rev-parse --short=12 HEAD)"
@@ -483,6 +487,45 @@ git branch -q -D doomed-gate
 SELF fold > /dev/null
 grep -q "$GATEHASH (unknown)" "$GATEWORK" \
     || fail "deleting the branch left the verdict frozen: the recheck gate does not key on the branch set"
+
+# ── a pruned object flips a verdict without moving a ref ──────────────────
+# Whether the object is still in the database is not derivable from the refs:
+# `git gc` dropping an unreachable commit leaves `show-ref --head`
+# byte-identical. A gate keyed on the listing alone went on answering "unknown"
+# where the truth had become "unverifiable" — and "unverifiable" is the verdict
+# that raises the signal saying recorded evidence has vanished, so the reader
+# stopped being told. A repository whose refs never move never self-heals from
+# it, which is exactly where an auto-`gc` is the only thing that happens (#128).
+mkdir -p "$ROOT/prunecheck/app"
+cd "$ROOT/prunecheck/app"
+git init -q -b main
+SELF project add --name prunecheck --desc "existence is asked even when no ref moved" --no-connect > /dev/null
+echo base > base.txt && git add . && git commit -qm "base on main"
+git checkout -q -b doomed-object
+echo gone > gone.txt && git add . && git commit -qm "work whose object will be pruned"
+PRUNEHASH="$(git rev-parse --short=12 HEAD)"
+WPRUNE="$(SELF work add "a pruned object flips this verdict" | tail -1)"
+SELF work start "$WPRUNE" > /dev/null
+SELF report "$WPRUNE" "reported from the branch that will be deleted" > /dev/null
+git checkout -q main
+git branch -q -D doomed-object
+SELF fold > /dev/null
+PRUNEWORK="$ROOT/A/ws/.superself/projects/prunecheck/work/$WPRUNE.md"
+grep -q "$PRUNEHASH (unknown)" "$PRUNEWORK" \
+    || fail "a commit whose branch was deleted did not read as unknown before its object was pruned"
+git show-ref --head > "$ROOT/refs-before"
+git reflog expire --expire=now --all
+git gc --prune=now --quiet
+git show-ref --head > "$ROOT/refs-after"
+cmp -s "$ROOT/refs-before" "$ROOT/refs-after" \
+    || fail "the prune moved the ref listing, so this proves nothing about what a listing cannot carry"
+git cat-file -e "$PRUNEHASH^{commit}" 2> /dev/null \
+    && fail "the object survived the prune, so this proves nothing about a vanished one"
+SELF fold > /dev/null
+grep -q "$PRUNEHASH (unverifiable)" "$PRUNEWORK" \
+    || fail "a pruned object left the verdict frozen: the recheck gate suppressed the existence probe"
+SELF status | grep -q "$PRUNEHASH no longer resolves" \
+    || fail "evidence whose object was pruned raised no health signal"
 
 # ── an event append folds its own project and nothing else ────────────────
 # The workspace sweep belongs to `self fold` and `self sync`. Carrying it on
@@ -571,6 +614,36 @@ grep -q '"path":"[^"]*/A/ws/fresh-wt","pruned":' "$LINKS" \
 [ "$(grep -c '"path":"[^"]*/A/ws/fresh-wt"' "$LINKS")" = "2" ] \
     || fail "one checkout reached the links ledger under more than one spelling: $(grep -c '"path":"[^"]*/A/ws/fresh-wt"' "$LINKS") entries"
 SELF setup | grep -q "^project    demo" || fail "the replaced checkout did not resolve after the re-link"
+cd "$ROOT/A/ws/demo"
+
+# ── a ledger written before this change holds one checkout, not two ───────
+# The spelling assertion above only proves anything about a ledger this build
+# wrote. `self project link <slug> <path>` used to record whatever the caller
+# typed, so a ledger from before it holds an unresolved spelling — and
+# comparing a resolved path against that raw line matched neither the stale
+# scan nor the linked check. The re-link printed success, replaced nothing, and
+# appended a second entry for one physical checkout; `pruneDeadLinks` can never
+# take it out, because the path it names does exist. Every resolution then pays
+# an extra `existsSync` and identity probe forever, which is the cost #128 set
+# out to remove — and the workspace #128 was measured on is exactly such a
+# ledger. The symlink is made here rather than assumed: `/var` resolving to
+# `/private/var` is a macOS fact, and the runner has no such spelling of its own.
+mkdir -p "$ROOT/legacy/real"
+cd "$ROOT/legacy/real"
+git init -q -b main
+echo legacy > legacy.txt && git add . && git commit -qm "the checkout a legacy ledger line names"
+SELF project add --name legacyled --desc "a ledger written before paths were recorded resolved" --no-connect > /dev/null
+ln -s "$ROOT/legacy/real" "$ROOT/legacy/alias"
+printf '{"slug":"legacyled","path":"%s","repository":"%s"}\n' \
+    "$ROOT/legacy/alias" "0000000000000000000000000000000000000000" >> "$LINKS"
+LEGACY_OUT="$(SELF project link legacyled)"
+echo "$LEGACY_OUT" | grep -q "replacing the repository previously linked at" \
+    || fail "a legacy line under an unresolved spelling was not read as this checkout, so its stale claim was never replaced"
+[ "$(grep -c '"slug":"legacyled"' "$LINKS")" = "1" ] \
+    || fail "one checkout reached the ledger under two spellings: $(grep -c '"slug":"legacyled"' "$LINKS") entries"
+grep -q '"path":"[^"]*/legacy/alias"' "$LINKS" \
+    && fail "the unresolved spelling outlived the replacement, so every resolution still probes two paths for one checkout"
+SELF setup | grep -q "^project    legacyled" || fail "the legacy checkout did not resolve after the re-link"
 cd "$ROOT/A/ws/demo"
 
 # events record the branch they were made on, and one work unit collects every
