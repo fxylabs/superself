@@ -263,6 +263,45 @@ function moreLine(hidden: number, recover: string): string[]
     return hidden <= 0 ? [] : [dim(`  … +${hidden} more · ${recover}`)];
 }
 
+// Recovery commands are pasted into POSIX shells. Always quote a project slug
+// as one literal argument; the '"'"' sequence is the portable way to embed a
+// single quote inside a single-quoted shell word.
+export function shellArgument(value: string): string
+{
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+// Every recovery pointer a rendered surface prints names the project it pulls
+// from. A context or a status is read far from where it was produced — piped
+// into an agent, saved to a file, read at a terminal while standing somewhere
+// else — and `--project other` made that literal: a bare `self work` in that
+// output answers for wherever it is run rather than for what it describes.
+//
+// Only the verbs that have a scope form take one. `self integration plan`,
+// `self attempt show`, `self decide confirm` and `self work accept` have none,
+// so they are left as they are rather than promising a flag that does not
+// exist. Both context renders read this, which is why it lives here: `views.ts`
+// already imports this module, so one direction stays.
+const SCOPED_POINTER = [
+    /^self work show \S+$/,
+    /^self work$/,
+    /^self objective$/,
+    /^self milestone$/,
+    /^self status$/,
+    /^self context$/,
+    /^self log$/,
+    /^self search /
+];
+
+export function scoped(command: string, project: string): string
+{
+    if (command.includes("--project "))
+    {
+        return command;
+    }
+    return SCOPED_POINTER.some((form) => form.test(command)) ? `${command} --project ${project}` : command;
+}
+
 function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: string): string[]
 {
     if (rows.length === 0)
@@ -423,7 +462,7 @@ function attentionSections(model: ProjectModel): string[]
         const rows = model.attention[group];
         lines.push("", heading(ATTENTION_TITLES[group], String(rows.length)));
         lines.push(...tableLines(attentionColumns(group), rows.slice(0, CONTEXT_ROWS).map(attentionRow), columns()));
-        lines.push(...moreLine(rows.length - CONTEXT_ROWS, "self status"));
+        lines.push(...moreLine(rows.length - CONTEXT_ROWS, scoped("self status", shellArgument(model.slug))));
     }
     return lines;
 }
@@ -472,7 +511,7 @@ function unshippedCounts(model: ProjectModel): string
 function unshippedSection(model: ProjectModel): string[]
 {
     return tableSection("UNSHIPPED BY BRANCH", unshippedCounts(model), UNSHIPPED_COLUMNS,
-        model.unshipped.map(unshippedRow), "self work");
+        model.unshipped.map(unshippedRow), scoped("self work", shellArgument(model.slug)));
 }
 
 /* ── status ────────────────────────────────────────────────────────── */
@@ -602,6 +641,7 @@ export interface StatusInput extends SurfaceInput
 export function renderStatus(input: StatusInput): string[]
 {
     const { model } = input;
+    const project = shellArgument(model.slug);
     const lines = [`${bold(model.slug)} — ${model.goal === undefined ? dim("(goal not set)") : oneLine(model.goal)}`, ""];
     lines.push(heading("WORK", workCounts(model)));
     if (openObjectives(model.goals).length > 0)
@@ -614,8 +654,8 @@ export function renderStatus(input: StatusInput): string[]
     }
     lines.push(heading("DECISIONS WAITING", attentionCounts(model)));
     lines.push("", ...unshippedSection(model));
-    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), "self context", yellow));
-    lines.push("", ...listSection("HEALTH", model.health, "self status", red));
+    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
+    lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     const tallies = tallyAttempts(input.attempts);
     lines.push("", heading("ATTEMPTS ON THIS MACHINE", String(input.attempts.length)));
     lines.push(...(tallies.length === 0 ? [dim("  none")] : tableLines(ATTEMPT_COLUMNS, tallies.map(attemptRow), columns())));
@@ -638,6 +678,7 @@ const OPEN_FIRST: Record<string, number> = { active: 0, blocked: 1, next: 2 };
 export function renderContext(input: SurfaceInput): string[]
 {
     const { model } = input;
+    const project = shellArgument(model.slug);
     const lines = [bold(model.slug)];
     if (model.description !== undefined)
     {
@@ -647,15 +688,17 @@ export function renderContext(input: SurfaceInput): string[]
     const open = model.works
         .filter((work) => work.status !== "done" && work.status !== "retired")
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));
-    lines.push(...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)), "self work"));
+    lines.push(...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)),
+        scoped("self work", project)));
     lines.push("", ...unshippedSection(model));
     lines.push("", ...attentionSections(model));
-    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), "self context", yellow));
-    lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), "self objective"));
-    lines.push("", ...listSection("DECISIONS", decisionLines(model), "self search --type decision"));
-    lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text), "self search --type convention"));
+    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
+    lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)));
+    lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
+    lines.push("", ...listSection("CONVENTIONS", model.conventions.map((item) => item.text),
+        scoped("self search --type convention", project)));
     lines.push("", ...listSection("INTEGRATION", trainLines(model), "self integration plan"));
-    lines.push("", ...listSection("HEALTH", model.health, "self status", red));
+    lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     return lines;
 }
 

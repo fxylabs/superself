@@ -15,7 +15,16 @@ import {
 } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, ProjectScope, readRegistry, readVerdicts } from "./paths.js";
-import { AttemptRow, RenderMode, renderContext, renderStatus, renderWorkList, renderWorkspace } from "./pretty.js";
+import {
+    AttemptRow,
+    RenderMode,
+    renderContext,
+    renderStatus,
+    renderWorkList,
+    renderWorkspace,
+    scoped,
+    shellArgument
+} from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
 import { blue, dim, displayWidth, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
 import { SelfEvent } from "./types.js";
@@ -125,36 +134,6 @@ function fillDecisions(model: ProjectModel, options: ProjectContextOptions, conf
         options = candidate;
     }
     return options;
-}
-
-// Every recovery pointer a rendered surface prints names the project it pulls
-// from. A context or a status is read far from where it was produced — piped
-// into an agent, saved to a file, pasted in another project's directory — and
-// `self context --project other` made that literal: a bare `self work` in that
-// output answers for wherever it is pasted rather than for what it describes.
-//
-// Only the verbs that have a scope form take one. `self integration plan`,
-// `self attempt show`, `self decide confirm` and `self work accept` have none,
-// so they are left alone and the line around them says where to stand instead
-// of promising a flag that does not exist.
-const SCOPED_POINTER = [
-    /^self work show \S+$/,
-    /^self work$/,
-    /^self objective$/,
-    /^self milestone$/,
-    /^self status$/,
-    /^self context$/,
-    /^self log$/,
-    /^self search /
-];
-
-function scoped(command: string, project: string): string
-{
-    if (command.includes("--project "))
-    {
-        return command;
-    }
-    return SCOPED_POINTER.some((form) => form.test(command)) ? `${command} --project ${project}` : command;
 }
 
 function renderProject(model: ProjectModel, options: ProjectContextOptions): string
@@ -641,14 +620,6 @@ function contextLength(text: string): number
 function takeCharacters(text: string, count: number): string
 {
     return Array.from(text).slice(0, Math.max(0, count)).join("");
-}
-
-// Context recovery commands are pasted into POSIX shells. Always quote a
-// project slug as one literal argument; the '"'"' sequence is the portable
-// way to embed a single quote inside a single-quoted shell word.
-function shellArgument(value: string): string
-{
-    return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 export function printStatus(ctx: CliContext, render: RenderMode): void
