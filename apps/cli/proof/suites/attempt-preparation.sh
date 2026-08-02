@@ -517,35 +517,126 @@ for (let depth = 0; depth <= 12; depth++)
     }
 }
 
-// The invariant, not the vectors that exposed it. The rule says an env token
-// that is not in program position, with a split flag after it, is never
-// admitted — so that is asserted directly, over every vector in this table and
-// over a generated family of the shapes the class is made of. Closing a named
-// vector is what several readings of this gate each did while the class stayed
-// open; this is the assertion that says the class is closed.
+// The invariant, and the two things that keep it honest.
 //
-// The premise reads the module's own notion of program position rather than
-// restating it. Restating it was wrong: `env env -S "echo hello"` has an env
-// with a non-assignment token in front of it, which a hand-written premise
-// reads as "away from program position" — while that env is exactly the program
-// the outer env runs, and is read correctly. A premise that disagrees with the
-// rule either fires on right behaviour or hides a wrong one as soon as the
-// generated set grows.
+// Round 13 replaced a restated premise with one shared with the module, and
+// each failed the opposite way: a restatement drifts out of agreement silently,
+// and a shared notion goes blind, because forbiddenCommand reaches the same
+// helper through launched() — so a broken notion moves the answer and the
+// coverage together and the check cannot see its own blindness. The answer is
+// both readings plus an assertion that they agree.
 //
-// Sharing the notion is not circular. What is asserted here is the ANSWER —
-// that forbiddenCommand is never null for these vectors — and program position
-// only decides which vectors the assertion covers. If that notion were broken
-// the premise would select nothing and the assertion would go quiet, so the
-// count it selects is printed and floored below, and the whole check is
-// verified to fail when the walk it exists for is reverted.
+// Below: an oracle written from the rule and short enough to be judged by
+// reading it; an assertion that it and the module say the same thing about
+// every env token in every vector; coverage computed from the oracle so a
+// broken module cannot shrink it; and a floor per topology, because a single
+// global count cannot notice a class-shaped hole — a mutation that deleted the
+// env-behind-an-ordinary-program topology entirely still left 205 of 222
+// vectors selected, above the old flat floor of 200.
 const { envProgramPositions } = await import(process.argv[2] + "/dist/daemon/forbidden.js");
 const basename = (token) => /^(?:\.{0,2}|~)\/\S*$/.test(token) ? token.slice(token.lastIndexOf("/") + 1) : token;
 const splitFlag = (token) => token === "--split-string" || /^--split-string=/.test(token) || /^-[a-zA-Z]*S[a-zA-Z]*$/.test(token);
-const packedAwayFromProgram = (argv) =>
+const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+// env's option window, read from env's documented grammar: where does it end,
+// and does it end by packing a command line or by naming a program? -1 means it
+// packs one or runs out of tokens; otherwise the index of the program env execs.
+const BARE_LONG = ["--ignore-environment", "--null", "--debug", "--help", "--version"];
+const VALUE_LONG = ["--unset", "--chdir", "--block-signal", "--default-signal", "--ignore-signal"];
+const oracleProgramToken = (argv, at) =>
 {
-    const programs = new Set(envProgramPositions(argv));
-    return argv.some((token, index) =>
-        basename(token) === "env" && !programs.has(index) && argv.slice(index + 1).some(splitFlag));
+    let index = at + 1;
+    while (index < argv.length)
+    {
+        const token = argv[index];
+        if (token === "--")
+        {
+            return index + 1 < argv.length ? index + 1 : -1;
+        }
+        if (ASSIGN.test(token))
+        {
+            index++;
+        }
+        else if (token === "--split-string" || /^--split-string=/.test(token))
+        {
+            return -1;
+        }
+        else if (token.startsWith("--"))
+        {
+            const name = token.split("=")[0];
+            if (VALUE_LONG.includes(name))
+            {
+                index += token.includes("=") ? 1 : 2;
+            }
+            else if (BARE_LONG.includes(name))
+            {
+                index++;
+            }
+            else
+            {
+                return index;
+            }
+        }
+        else if (token.startsWith("-") && token.length > 1)
+        {
+            const cluster = token.slice(1);
+            let consumes = 1;
+            for (let letter = 0; letter < cluster.length; letter++)
+            {
+                const rest = cluster.slice(letter + 1);
+                if (cluster[letter] === "S")
+                {
+                    return -1;
+                }
+                if (cluster[letter] === "u" || cluster[letter] === "C")
+                {
+                    consumes = rest === "" ? 2 : 1;
+                    break;
+                }
+                if (!"i0v".includes(cluster[letter]))
+                {
+                    return index;
+                }
+            }
+            index += consumes;
+        }
+        else
+        {
+            return index;
+        }
+    }
+    return -1;
+};
+
+// The rule's three cases and nothing else: index 0, behind NAME=value
+// assignments only, or the program token an outer env's window resolved to.
+const oraclePositions = (argv) =>
+{
+    const found = [];
+    let index = 0;
+    while (index < argv.length && ASSIGN.test(argv[index]))
+    {
+        index++;
+    }
+    while (index < argv.length && basename(argv[index]) === "env")
+    {
+        found.push(index);
+        const next = oracleProgramToken(argv, index);
+        if (next === -1)
+        {
+            break;
+        }
+        index = next;
+    }
+    return found;
+};
+
+// Coverage is the oracle's reading, so a module that broke cannot shrink it.
+const awayFromProgram = (argv) =>
+{
+    const programs = new Set(oraclePositions(argv));
+    return argv.filter((token, index) => basename(token) === "env" && !programs.has(index)
+        && argv.slice(index + 1).some(splitFlag)).length > 0;
 };
 
 const PREFIXES = [
@@ -587,22 +678,6 @@ for (const [name, base, forbidden, harmless] of NESTED)
     }
 }
 
-let generated = 0;
-let admitted = 0;
-const holds = (argv) =>
-{
-    if (!packedAwayFromProgram(argv))
-    {
-        return true;
-    }
-    generated++;
-    if (forbiddenCommand(argv) !== null)
-    {
-        return true;
-    }
-    admitted++;
-    return false;
-};
 const family = [...REFUSED.map((c) => c[1]), ...BENIGN.map((c) => c[1]), ...NESTED_VECTORS];
 for (const prefix of PREFIXES)
 {
@@ -614,25 +689,98 @@ for (const prefix of PREFIXES)
         }
     }
 }
+
+// Neither reading may drift from the other. The oracle cannot go wrong quietly
+// because the module contradicts it, and the module cannot go wrong quietly
+// because the oracle does — which is what makes the pair worth more than either
+// alone, and it is checked on every vector rather than argued about.
+let disagreed = 0;
 for (const argv of family)
 {
-    if (!holds(argv))
+    const mine = JSON.stringify(oraclePositions(argv));
+    const theirs = JSON.stringify(envProgramPositions(argv));
+    if (mine !== theirs)
     {
+        disagreed++;
         bad++;
-        console.error(`packs an env away from program position and was admitted: ${JSON.stringify(argv)}`);
+        console.error(`the oracle and the module disagree about program position: ${JSON.stringify(argv)} — oracle ${mine}, module ${theirs}`);
     }
 }
-// A premise that stopped selecting anything would leave this assertion passing
-// against the very defect it exists for, so the count it selects is floored.
-if (generated < 200)
+// Counted rather than claimed, for the reason the invariant line is: a check
+// that announces its own success is one nobody can read the log of.
+console.log(`agreement: ${family.length} vectors compared for every env token, ${disagreed} disagreements between the oracle and the module`);
+
+// The shapes this check exists for, counted apart. A count per topology is what
+// notices a class-shaped hole; a single total cannot.
+const LAUNCHERS = ["xargs", "timeout", "time", "nice", "command", "stdbuf", "nohup", "setsid", "sudo", "doas", "ionice", "chrt"];
+const topology = (argv) =>
 {
-    bad++;
-    console.error(`the invariant only selected ${generated} vectors — its premise has stopped matching the class`);
+    const programs = new Set(oraclePositions(argv));
+    const at = argv.findIndex((token, index) => basename(token) === "env" && !programs.has(index)
+        && argv.slice(index + 1).some(splitFlag));
+    if (at === -1)
+    {
+        if (programs.size > 1)
+        {
+            return "nested env in program position";
+        }
+        return argv.some((token) => basename(token) === "env") ? "an ordinary program whose argument merely names env" : "no env token";
+    }
+    if (argv.slice(0, at).some((token) => LAUNCHERS.includes(basename(token))))
+    {
+        return "env behind a launcher";
+    }
+    return [...programs].some((index) => index < at)
+        ? "env inside an outer env's program arguments"
+        : "env behind an ordinary program";
+};
+// Two numbers per topology: how many vectors the family carries of that shape,
+// and how many of them the invariant actually asserts on. The family floor stops
+// a shape from vanishing when somebody edits the generated set; requiring the
+// three "away" shapes to be covered in full stops one of their vectors from
+// dropping out of the assertion while the totals still look healthy.
+const FLOORS = {
+    "env behind an ordinary program": { family: 30, all: true },
+    "env behind a launcher": { family: 120, all: true },
+    "env inside an outer env's program arguments": { family: 30, all: true },
+    "nested env in program position": { family: 10, all: false },
+    "an ordinary program whose argument merely names env": { family: 50, all: false }
+};
+const counted = {};
+let admitted = 0;
+for (const argv of family)
+{
+    const shape = topology(argv);
+    const seen = counted[shape] ?? { family: 0, covered: 0 };
+    seen.family++;
+    if (awayFromProgram(argv))
+    {
+        seen.covered++;
+        if (forbiddenCommand(argv) === null)
+        {
+            admitted++;
+            bad++;
+            console.error(`packs an env away from program position and was admitted: ${JSON.stringify(argv)}`);
+        }
+    }
+    counted[shape] = seen;
 }
-// Counted rather than claimed: this line used to say "none is admitted"
-// whatever it had just found, which is the shape of a check that reports its
-// own success.
-console.log(`invariant: ${generated} of ${family.length} vectors pack an env away from program position, ${admitted} admitted`);
+for (const [shape, floor] of Object.entries(FLOORS))
+{
+    const seen = counted[shape] ?? { family: 0, covered: 0 };
+    console.log(`  family ${String(seen.family).padStart(4)} / ${String(floor.family).padStart(3)}   covered ${String(seen.covered).padStart(4)}   ${shape}`);
+    if (seen.family < floor.family)
+    {
+        bad++;
+        console.error(`the family has ${seen.family} vectors of the "${shape}" topology, below the ${floor.family} this check needs to mean anything`);
+    }
+    if (floor.all && seen.covered !== seen.family)
+    {
+        bad++;
+        console.error(`only ${seen.covered} of ${seen.family} "${shape}" vectors are covered by the invariant, and every one of them should be`);
+    }
+}
+console.log(`invariant: ${family.length} vectors across ${Object.keys(counted).length} topologies, ${admitted} admitted`);
 
 // A token built to cost the matching pass its budget still has to answer.
 const started = Date.now();
