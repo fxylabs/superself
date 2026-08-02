@@ -294,4 +294,10 @@ case "$NARROW_PROBE" in
         ;;
 esac
 
+# The one-line rendering `self log` and `self search` draw each event with,
+# pinned field by field: the widened summary is intended, so a later change to
+# what it folds has to move this table rather than pass quietly.
+node "$CLI_DIR/proof/event-summary.mjs" > /dev/null \
+    || fail "the one-line event rendering no longer folds the fields it is pinned to"
+
 echo "pretty OK"

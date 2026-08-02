@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { isEventId } from "../ids.js";
 
 export const REDACTED = "«redacted»";
 
@@ -132,9 +133,15 @@ const MIN_RUN = 16;
 const MIN_MIXED_RUN = 8;
 const MIN_MIXED_RUNS = 2;
 
+// An id this store minted is dropped before either reading runs, because it is
+// generated and is supposed to be: a note naming two decisions by their event
+// ids reads exactly like a key to both readings, and the store is the one place
+// those ids belong (#133). Only the id itself is exempt — every other run in
+// the token is judged as before, so a credential travelling beside an id is
+// still refused, and a token that is nothing but ids is what this frees.
 function looksGenerated(token: string): boolean
 {
-    const runs = token.match(/[A-Za-z0-9]+/g) ?? [];
+    const runs = (token.match(/[A-Za-z0-9]+/g) ?? []).filter((run) => !isEventId(run));
     return runs.some(generatedRun) || runs.filter(mixedRun).length >= MIN_MIXED_RUNS;
 }
 

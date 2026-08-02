@@ -112,6 +112,39 @@ SELF milestone recheck "$M1" --criterion c2 --why "still covered after the added
 SELF milestone recheck "$M1" --why "every live criterion is covered at this revision"
 SELF status | grep -q "recheck it" && fail "a settled milestone kept asking for a recheck"
 
+# `milestone met --evidence` reads the one revision guard every other
+# commit-ref intake reads. It wrote whatever was typed straight into
+# refs.commits: prose was stored as a commit and reported later as a rewritten
+# history, and an uppercase object name reached the event guard as a
+# 40-character mixed-case run it refuses as a credential (#132)
+cd "$ROOT/A/ws/demo"
+MGUARD="$(SELF milestone add "evidence on a milestone is an object name" --objective "$OID" --target "$FUTURE" \
+    --exit "the guard runs at this intake too" | tail -1)"
+PROSE="$(SELF milestone met "$MGUARD" --criterion c1 --why "prose is not a commit" --evidence "see the design note" 2>&1 || true)"
+echo "$PROSE" | grep -q "is not a Git object name" || fail "milestone met recorded prose in refs.commits"
+echo "$PROSE" | grep -q "self milestone met" || fail "the refusal did not name the verb the user ran"
+echo "$PROSE" | grep -q "commit:see the design note" \
+    && fail "the refusal offered a typed form this surface does not read"
+grep -q "see the design note" "$LOG_A" && fail "the refused evidence still reached the log"
+git commit -q --allow-empty -m "the commit the guard normalizes"
+GUARDC="$(git rev-parse HEAD)"
+SELF milestone met "$MGUARD" --criterion c1 --why "the same commit, in the case the terminal offered" \
+    --evidence "$(printf %s "$GUARDC" | tr 'a-f' 'A-F')" \
+    || fail "an uppercase object name was refused as milestone evidence"
+grep -q "\"commits\":\[\"$GUARDC\"\]" "$LOG_A" || fail "milestone evidence was not stored as one spelling"
+
+# the guard is shared by `met` and `recheck`, and the refusal names the verb
+# the user actually ran: naming `milestone met` at a recheck sent the reader to
+# a command they had not typed, which is the same defect one surface smaller
+SELF milestone revise "$MGUARD" --why "the ask grew" --exit "the guard runs at a recheck too" > /dev/null
+MRECHECK="$(SELF milestone recheck "$MGUARD" --criterion c1 --why "re-judged at the wider ask" \
+    --evidence "see the design note" 2>&1 || true)"
+echo "$MRECHECK" | grep -q "is not a Git object name" || fail "milestone recheck recorded prose in refs.commits"
+echo "$MRECHECK" | grep -q "self milestone recheck" || fail "the recheck refusal did not name the verb the user ran"
+echo "$MRECHECK" | grep -q "self milestone met" && fail "the recheck refusal named a verb the user did not run"
+grep -q "see the design note" "$LOG_A" && fail "the refused recheck evidence still reached the log"
+SELF milestone recheck "$MGUARD" --criterion c1 --why "the same commit still covers it" --evidence "$GUARDC" > /dev/null
+
 # a target-date boundary is deterministic and closes nothing on its own
 MLATE="$(SELF milestone add "invoices export" --objective "$OID" --target "$PAST" --exit "an export downloads" | tail -1)"
 WLATE="$(SELF work add "build the export" | tail -1)"

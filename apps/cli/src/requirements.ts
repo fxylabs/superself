@@ -1,12 +1,15 @@
 import { parseCommand } from "./args.js";
 import {
+    applyCompletion,
     completionRefusal,
+    emptyCompletion,
     liveRequirements,
     nextRequirementId,
     requirementOf
 } from "./completion.js";
+import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { attemptMarker, confirmHuman } from "./human.js";
-import { findEventByPrefix } from "./logfile.js";
+import { findEventByPrefix, readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { ProjectContext } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
@@ -21,16 +24,43 @@ import { CliError, EventRefs, SelfEvent } from "./types.js";
 // `recheck` re-judges what a revision left stale, and a revision invalidates
 // coverage rather than rewriting it.
 
+// The id printed here is read back out of the fold, not the one computed
+// before the append: two sessions registering against one unit at the same
+// instant both compute the same next value, and only the log can order them.
+// The computed value still travels in the payload, because a store is read by
+// older binaries than the one that wrote it and that is where they look.
 export function cmdWorkRequire(ctx: ProjectContext, args: string[]): void
 {
     const { positionals } = parseCommand("work", args, {}, 2);
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireOpenWork(model, positionals[0]);
     const text = requireText(positionals[1], 'work require <work-id> "<what the outcome must cover>"');
-    const id = nextRequirementId(work.completion);
-    recordEvent(ctx, makeEvent(ctx.project, "work.required", { work: work.id, requirement: id, text }),
-        `${work.id} ${id} ${text}`);
-    console.log(id);
+    const expected = nextRequirementId(work.completion);
+    const event = makeEvent(ctx.project, "work.required", { work: work.id, requirement: expected, text });
+    recordEvent(ctx, event, `${work.id} ${expected} ${text}`);
+    console.log(registeredId(ctx, work.id, event.id) ?? expected);
+}
+
+// Read back from the log, not from a second fold: the id is a function of this
+// unit's `work.required` lines in order and nothing else, so replaying them
+// through the fold's own helper answers identically for one log read instead of
+// a full second model build on the path #128 measured in minutes.
+function registeredId(ctx: ProjectContext, work: string, event: string): string | undefined
+{
+    const state = emptyCompletion();
+    for (const line of readEvents(ctx.storeDir, ctx.project))
+    {
+        if (line.type !== "work.required" || line.payload.work !== work)
+        {
+            continue;
+        }
+        applyCompletion(state, line);
+        if (line.id === event)
+        {
+            return state.requirements[state.requirements.length - 1]?.id;
+        }
+    }
+    return undefined;
 }
 
 // A revision is the record that what the unit has to cover changed, so it
@@ -89,7 +119,7 @@ export function cmdWorkMet(ctx: ProjectContext, args: string[], recheck: boolean
         ? 'work recheck <work-id> --requirement r1 --why "<what you re-judged>"'
         : 'work met <work-id> --requirement r1 --why "<how the evidence covers it>"');
     coverageStateRefusal(work, requirement.id, recheck);
-    const refs = coverageRefs(work, values);
+    const refs = coverageRefs(work, values, recheck ? "work recheck" : "work met");
     const payload: Record<string, unknown> = { work: work.id, requirement: requirement.id, why, requirementRevision: requirement.revision };
     if (values.report !== undefined)
     {
@@ -127,9 +157,19 @@ function coverageStateRefusal(work: WorkState, requirement: string, recheck: boo
 // Coverage names evidence the work unit already carries. A coverage event that
 // cited bytes nobody attached would be prose with a reference in it, which is
 // exactly what this whole check exists to refuse.
-function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRefs
+function coverageRefs(work: WorkState, values: Record<string, unknown>, verb: string): EventRefs
 {
-    const commits = (values.evidence ?? []) as string[];
+    // Normalized where it is typed, through the guard every other commit-ref
+    // entry point reads: what reaches `refs.commits` is the spelling storage
+    // uses, so an uppercase object name is the same evidence rather than a
+    // 40-character mixed-case run the event guard reads as a credential (#132).
+    // The refusal is this surface's own: `--evidence` here is a bare object
+    // name, so the guard's typed `commit:`/`note:` grammar names a form that
+    // would only be refused again. The verb arrives from the caller because
+    // `met` and `recheck` share this intake, and a refusal naming the command
+    // the user did not run is the same defect one surface smaller (#132).
+    const commits = ((values.evidence ?? []) as string[])
+        .map((item) => requireRevision(item, bareRevisionRefusal(verb)));
     const artifacts = (values.artifact ?? []) as string[];
     const report = values.report as string | undefined;
     if (commits.length === 0 && artifacts.length === 0 && report === undefined)
@@ -166,9 +206,15 @@ function coverageRefs(work: WorkState, values: Record<string, unknown>): EventRe
 // used: a report attaches the abbreviated HEAD, and `--evidence` records
 // exactly what was typed. Two ids name the same commit when one is a prefix of
 // the other, which is the only comparison that holds across both.
+//
+// Case is not part of the name. Storage is lowercased at every intake, so a
+// comparison that kept the case refused an uppercase `--evidence` against the
+// very commit the unit carries (#132).
 function sameCommit(attached: string, named: string): boolean
 {
-    return attached.startsWith(named) || named.startsWith(attached);
+    const stored = attached.toLowerCase();
+    const wanted = named.toLowerCase();
+    return stored.startsWith(wanted) || wanted.startsWith(stored);
 }
 
 /* ── approval ──────────────────────────────────────────────────────── */

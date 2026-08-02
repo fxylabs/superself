@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { checkoutTops, realPath, topOf } from "./gitutil.js";
+import { checkoutTops, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
 
@@ -195,32 +195,121 @@ export function readVerdicts(storeDir: string, slug: string): Record<string, Ver
     }
 }
 
+// A path this machine linked, and the repository that stood there when it was
+// linked. The identity is absent on links written before it was recorded, and
+// on a checkout that had no commit yet when it was linked — both are read as
+// "nothing was claimed" rather than as a mismatch.
+export interface LinkedCheckout
+{
+    path: string;
+    repository?: string;
+}
+
 // One slug holds every checkout linked on this machine, not just the newest:
 // parallel worktrees of one repository are normal, and last-wins repointing
 // silently moved where a fold refreshes the managed block.
-export function readLinks(storeDir: string): Record<string, string[]>
+export function readLinks(storeDir: string): Record<string, LinkedCheckout[]>
 {
-    const links: Record<string, string[]> = {};
+    const links: Record<string, LinkedCheckout[]> = {};
     for (const entry of readJsonl(join(storeDir, LINKS_FILE)))
     {
-        const paths = links[entry.slug] ?? (links[entry.slug] = []);
-        if (!paths.includes(entry.path))
+        const linked = links[entry.slug] ?? (links[entry.slug] = []);
+        if (!linked.some((item) => item.path === entry.path))
         {
-            paths.push(entry.path);
+            linked.push(entry.repository === undefined
+                ? { path: entry.path }
+                : { path: entry.path, repository: String(entry.repository) });
         }
     }
     return links;
 }
 
+// Linking a path this machine already linked. Appending a second entry for a
+// path would leave the stale one in front of it, so the entry is replaced —
+// and only when what it claimed is no longer what stands there, which is the
+// one case that needs it. Every read skips a path whose recorded identity
+// stopped matching, so without this the remedy the #115 warning names could
+// not clear the state it warns about and the checkout stayed unusable for
+// good (#115).
+//
+// Deliberate is the point: `self project link` is a user act at that path, so
+// the replacement is something a person asked for rather than resolution
+// quietly deciding the claim was wrong.
+export function recordLink(storeDir: string, slug: string, path: string, repository: string | null): boolean
+{
+    const file = join(storeDir, LINKS_FILE);
+    const entries = readJsonl(file);
+    const stale = entries.filter((entry) => entry.path === path
+        && entry.repository !== undefined && repository !== null && String(entry.repository) !== repository);
+    const entry = repository === null ? { slug, path } : { slug, path, repository };
+    if (stale.length > 0)
+    {
+        const kept = entries.filter((item) => item.path !== path).concat([entry]);
+        writeFileSync(file, kept.map((item) => JSON.stringify(item) + "\n").join(""));
+        return true;
+    }
+    if (!entries.some((item) => item.slug === slug && item.path === path))
+    {
+        appendFileSync(file, JSON.stringify(entry) + "\n");
+    }
+    return false;
+}
+
+// Warned about once per process: the resolution path runs on every command,
+// and a stale link would otherwise print the same line in front of every one
+// of them.
+const reported = new Set<string>();
+
+// Whether the repository standing at a linked path is still the one that was
+// linked there. A checkout deleted and replaced by an unrelated repository at
+// the same path used to resolve silently to the old project — every command in
+// the new repository answered as the old one (#115). A link that claimed no
+// identity is left alone, because there is nothing to compare it against.
+//
+// What stands there arrives as a thunk, because deriving it is a git history
+// walk of ~280 ms: a link that claimed nothing never pays for it, and a caller
+// that already knows every candidate is a working tree of one repository
+// passes one answer for all of them (#128).
+function sameRepository(link: LinkedCheckout, path: string, identity: () => string | null): boolean
+{
+    if (link.repository === undefined || identity() === link.repository)
+    {
+        return true;
+    }
+    if (!reported.has(path))
+    {
+        reported.add(path);
+        console.error(`warning: ${path} is no longer the repository linked there — ignoring the link; ` +
+            `run \`self project link <slug>\` in that checkout to link it to what stands there now`);
+    }
+    return false;
+}
+
+// A link whose path is gone is still this project's — a checkout comes back,
+// and a fold that skipped it would stop refreshing the managed block the
+// moment a worktree was pruned. A link whose path now holds a different
+// repository is not: writing this project's block into it would put one
+// project's state inside another project's repository.
+function standing(link: LinkedCheckout): boolean
+{
+    const path = realPath(link.path);
+    return !existsSync(path) || sameRepository(link, path, () => repositoryIdentity(path));
+}
+
 // Single-path needs resolve to the checkout the command was run from, so a
 // fold never writes into a worktree another session is holding.
+//
+// Standing is asked of the link that is about to be used, never of every link
+// for the slug: `self setup` resolves once per registered project, and probing
+// each of a project's checkouts there put a read command an order of magnitude
+// over #128's half-second budget.
 export function resolveProjectPath(storeDir: string, slug: string, from: string = process.cwd()): string | null
 {
     const linked = readLinks(storeDir)[slug] ?? [];
-    const active = linked.find((path) => contains(path, from));
+    const active = linked.find((link) => contains(link.path, from) && standing(link));
     if (active !== undefined)
     {
-        return active;
+        return active.path;
     }
     // An unlinked checkout is still the one the command ran in; only when the
     // command came from somewhere else does another checkout stand in.
@@ -229,8 +318,23 @@ export function resolveProjectPath(storeDir: string, slug: string, from: string 
     {
         return match.dir;
     }
-    const fallback = linked.filter((path) => existsSync(path)).pop();
-    return fallback ?? readRegistry(storeDir).find((item) => item.slug === slug)?.path ?? null;
+    return lastStanding(linked) ?? readRegistry(storeDir).find((item) => item.slug === slug)?.path ?? null;
+}
+
+// The newest linked checkout that is still there and still holds what was
+// linked. Asked newest first and stopped at the first answer, so the common
+// store pays for one probe rather than one per link.
+function lastStanding(linked: LinkedCheckout[]): string | undefined
+{
+    for (let index = linked.length - 1; index >= 0; index -= 1)
+    {
+        const link = linked[index];
+        if (existsSync(link.path) && standing(link))
+        {
+            return link.path;
+        }
+    }
+    return undefined;
 }
 
 export interface CheckoutMatch
@@ -246,32 +350,66 @@ interface RepositoryLink
     top: string;
 }
 
+// Whether `path` is a working tree of the repository `tops` describes, and
+// which of them it is. The string test rules out the paths that are nowhere
+// near this repository without spending a git call; the top level is what
+// decides, because a path can sit inside the outer working tree and still be
+// a repository of its own.
+function checkoutTop(path: string, tops: string[]): string | null
+{
+    if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path)))
+    {
+        return null;
+    }
+    const top = topOf(path);
+    return top !== null && tops.includes(top) ? top : null;
+}
+
 // Every project this machine has linked inside one of `tops`, the working
-// trees of a single repository. A linked path outside all of them is ruled
-// out on a string comparison; the few that remain are confirmed against their
-// own top level, so a nested repository is never taken for the checkout it
-// sits in.
+// trees of a single repository.
+//
+// The top level decides before the identity does. A repository nested inside
+// another one's working tree passes the path comparison but is not a checkout
+// of it, and judging it against the outer repository's identity called a link
+// that had gone nowhere stale — a warning naming a remedy that recomputes the
+// same identity, finds nothing to replace, and leaves the line printing in
+// front of every command. Not a working tree of this repository is dropped
+// silently: the link says nothing about the repository being resolved.
 function repositoryLinks(storeDir: string, tops: string[]): RepositoryLink[]
 {
     const links = readLinks(storeDir);
+    const identity = repositoryClaim(tops);
     const found: RepositoryLink[] = [];
     for (const entry of readRegistry(storeDir))
     {
         for (const linked of links[entry.slug] ?? [])
         {
-            const path = realPath(linked);
-            if (!existsSync(path) || !tops.some((candidate) => contains(candidate, path)))
-            {
-                continue;
-            }
-            const top = topOf(path);
-            if (top !== null && tops.includes(top))
+            const path = realPath(linked.path);
+            const top = checkoutTop(path, tops);
+            if (top !== null && sameRepository(linked, path, identity))
             {
                 found.push({ slug: entry.slug, path, top });
             }
         }
     }
     return found;
+}
+
+// Every path that reaches this claim is a working tree of one repository, so
+// what stands at it is the same value for all of them: asked once for the
+// repository rather than once per link, and not at all until a link actually
+// claims an identity to compare against (#128).
+function repositoryClaim(tops: string[]): () => string | null
+{
+    let identity: string | null | undefined;
+    return () =>
+    {
+        if (identity === undefined)
+        {
+            identity = tops.length === 0 ? null : repositoryIdentity(tops[0]);
+        }
+        return identity;
+    };
 }
 
 // Where each project registered in this repository sits inside the checkout
@@ -302,9 +440,16 @@ export function checkoutProject(storeDir: string, dir: string): CheckoutMatch | 
     return checkoutMatches(storeDir, target).find((match) => contains(match.dir, target)) ?? null;
 }
 
-// The slug of a project already registered at another checkout of this same
-// repository — the case `self project add` must refuse, because the project
-// is registered already and a second entry would split its state in two.
+// The slug of a project already registered at this same directory in another
+// checkout of this repository — the case `self project add` must refuse,
+// because the project is registered already and a second entry would split its
+// state in two.
+//
+// The position under the top level is what makes it the same directory. A
+// project registered at `apps/foo` says nothing about the repository root
+// beside it: answering for the root there refused a legitimate registration
+// and, through `project link`, linked the root to the subdirectory project
+// (#114).
 export function siblingSlug(storeDir: string, dir: string): string | null
 {
     const target = realPath(resolve(dir));
@@ -313,7 +458,8 @@ export function siblingSlug(storeDir: string, dir: string): string | null
     {
         return null;
     }
-    return repositoryLinks(storeDir, checkoutTops(target)).find((link) => link.top !== here)?.slug ?? null;
+    return repositoryLinks(storeDir, checkoutTops(target))
+        .find((link) => link.top !== here && join(here, relative(link.top, link.path)) === target)?.slug ?? null;
 }
 
 function contains(parent: string, child: string): boolean

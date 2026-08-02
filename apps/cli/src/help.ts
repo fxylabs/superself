@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
+
 // The one place the CLI describes itself. `self` with no arguments prints the
 // whole verb list; `self <command> --help` prints that command's syntax and
 // flags. Both are rendered from the same entries, so a command can never be
 // documented in one place and missing from the other.
+//
+// The version belongs here for the same reason: what the binary answers about
+// itself is one surface, and a per-command special case would be a second one.
 
 interface UsageLine
 {
@@ -626,7 +631,26 @@ function listLines(line: UsageLine): string[]
 
 export function rootUsage(): string
 {
-    return ["usage: self <command>", ""].concat(COMMANDS.flatMap((command) => command.usage.flatMap(listLines))).join("\n");
+    return ["usage: self <command>", ""]
+        .concat(COMMANDS.flatMap((command) => command.usage.flatMap(listLines)))
+        .concat("", listLines(VERSION_LINE))
+        .join("\n");
+}
+
+const VERSION_LINE: UsageLine = {
+    syntax: "--version",
+    description: ["print the version of the package this binary was built from"]
+};
+
+// Read out of the package the running code sits in, never a constant a release
+// could forget to move: an install is verified by asking the binary, and an
+// answer that came from anywhere but its own package would verify nothing.
+// `dist/` sits one directory below the package root in a checkout and in the
+// published tarball alike, so one relative step answers for both.
+export function cliVersion(): string
+{
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    return String(manifest.version);
 }
 
 export function commandUsage(command: CommandHelp): string

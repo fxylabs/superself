@@ -29,7 +29,8 @@ const spec = {
             AGENT_MODE: o.mode ?? "ok",
             ...(o.marker === undefined ? {} : { AGENT_MARKER: o.marker }),
             ...(o.idfile === undefined ? {} : { AGENT_IDFILE: o.idfile }),
-            ...(o.gate === undefined ? {} : { AGENT_GATE: o.gate })
+            ...(o.gate === undefined ? {} : { AGENT_GATE: o.gate }),
+            ...(o.evidence === undefined ? {} : { AGENT_EVIDENCE: o.evidence })
         }
     },
     // What the spec declares it will reach and do. The overnight policy reads
