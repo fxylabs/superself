@@ -358,30 +358,37 @@ export function pointerTo(target: RecoveryTarget, project: string): Pointer
 {
     if (target.verb === "attempt-show")
     {
-        return `self attempt show ${target.id}` as Pointer;
+        // The spool is machine-local, so this one carries no project. An id the
+        // parser would refuse falls back to the surface the signal appears on,
+        // rather than to a project read this target never meant.
+        return usableId(target.id)
+            ? `self attempt show ${target.id}` as Pointer
+            : scoped("self status", project);
     }
     if (target.verb === "work-show")
     {
-        // An id that is empty or carries a space renders a command the argument
-        // parser refuses — `self work show` with no positional, or with two. A
-        // type cannot say "one token", so the pointer falls back to the list a
-        // reader can act on rather than printing something that fails when they
-        // paste it (#165 review round 8).
-        return oneToken(target.id)
+        // An id the parser would refuse renders a command that fails when the
+        // reader pastes it: no positional, two positionals, or a leading dash
+        // read as an unknown option. A type cannot say "a usable id", so the
+        // pointer says it, and falls back to the list a reader can act on
+        // (#165 review rounds 8 and 9).
+        return usableId(target.id)
             ? `self work show ${target.id} --project ${project}` as Pointer
             : scoped("self work", project);
     }
-    const named = target.id === undefined || !oneToken(target.id) ? "" : ` ${target.id}`;
-    const kind = target.type === undefined || !oneToken(target.type) ? "" : ` --type ${target.type}`;
+    const named = target.id === undefined || !usableId(target.id) ? "" : ` ${target.id}`;
+    const kind = target.type === undefined || !usableId(target.type) ? "" : ` --type ${target.type}`;
     return `self search${named}${kind} --project ${project}` as Pointer;
 }
 
-// One shell word and not empty, which is what every id these targets carry
-// already is. What it rules out is the shape a type cannot: a substitution that
-// arrived empty, or one carrying a space that would read as a second argument.
-function oneToken(value: string): boolean
+// An id a reader can paste, which is what every id these targets carry already
+// is: the model mints them (`at-`, `w-`, ULIDs) and nothing else reaches here.
+// What it rules out is the shape a type cannot — empty, carrying whitespace
+// that would read as a second positional, leading with a dash the parser reads
+// as an unknown option, or holding a character a shell would act on.
+function usableId(value: string): boolean
 {
-    return value.length > 0 && !/\s/.test(value);
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
 }
 
 // The workspace render's own pointers. `self status` there IS the command being
