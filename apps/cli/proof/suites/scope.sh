@@ -24,6 +24,35 @@ WHOLE_TIMELINE=100000
 WS_WINDOW=3
 WS_NEWEST=1
 
+# How many lines the render-shape check below samples. Not a window claim — it
+# asserts the single-project form carries no project column, and one line would
+# do — but every other numeric literal in this suite is named, so this one is
+# too rather than reading as a window someone must interpret (#165 review 12).
+SHAPE_SAMPLE=3
+
+# The plain log rendering is parsed here, never by whitespace field index: a
+# slug may contain spaces and a summary may contain newlines, and both shift a
+# field-index parse into passing for the wrong reason. See the file's header.
+LOG_KEYS="$CLI_DIR/proof/log-keys.mjs"
+
+# log_events RENDERING MODE [N] — the rendering read by shape.
+log_events()
+{
+    local rendering="$1"
+    shift
+    printf '%s\n' "$rendering" | node "$LOG_KEYS" "$@" 2> "$ROOT/log-keys.err"
+}
+
+# parses RENDERING WHAT — the rendering must parse: a line carrying a timestamp
+# or an id anywhere but where an event line carries them stops the suite naming
+# that line. Called at top level and never inside a substitution, because `fail`
+# there would exit the subshell and let the run continue past the parse it just
+# refused.
+parses()
+{
+    log_events "$1" count > /dev/null || fail "$2 did not parse: $(cat "$ROOT/log-keys.err")"
+}
+
 # pty_run COLUMNS COMMAND — COMMAND under a real pseudo-terminal of the stated
 # width, with its output captured. BSD and util-linux `script` take their
 # command differently.
@@ -69,7 +98,7 @@ outside_project
 # right or wrong about
 DEMO_OID="$(SELF objective add "demo objective the scope reads" --horizon week --target 2099-01-01 | tail -1)"
 DEMO_MID="$(SELF milestone add "demo checkpoint" --objective "$DEMO_OID" --exit "the scope resolves" | tail -1)"
-SELF work add "demo work the scope reads" > /dev/null
+DEMO_WID="$(SELF work add "demo work the scope reads" | tail -1)"
 cd "$ROOT/outside/app"
 OUT_OID="$(SELF objective add "outside objective the scope reads" | tail -1)"
 OUT_MID="$(SELF milestone add "outside checkpoint" --objective "$OUT_OID" --exit "the outside scope resolves" | tail -1)"
@@ -335,9 +364,56 @@ TIE_PROPOSAL="$(SELF work propose "a proposal accepted in one call" --milestone 
 SELF work accept "$TIE_PROPOSAL" > /dev/null
 cd "$DEMO"
 
+# A summary the render has to wrap, written through the path that produces one:
+# `report --file` reads arbitrary text and sanitize.ts allows LF, so a newline in
+# a summary is one command away rather than hypothetical. It goes in before the
+# timeline is read, so the parse is proved against it instead of meeting it in
+# CI (#165 review round 12). Last, so the wrapped event sits inside the windows
+# asserted below and the event-vs-line distinction is exercised rather than
+# stated.
+printf 'a summary the log has to wrap\nand the continuation line it renders on its own\n' > "$ROOT/wrapped.txt"
+SELF report "$DEMO_WID" --file "$ROOT/wrapped.txt" > /dev/null
+
 WS_ALL="$(SELF log --workspace -n "$WHOLE_TIMELINE")"
 echo "$WS_ALL" | grep -q "^demo  .*objective.created" || fail "log --workspace did not lead a demo line with its project"
 echo "$WS_ALL" | grep -q "^outside  .*objective.created" || fail "log --workspace omitted another project's events"
+echo "$WS_ALL" | grep -q "^and the continuation line it renders on its own$" \
+    || fail "the wrapped summary did not reach the workspace log, so the parse is not proved against one"
+
+# Every event the merge printed, read by shape rather than by field index.
+parses "$WS_ALL" "the workspace timeline"
+WS_EVENTS="$(log_events "$WS_ALL" count)"
+
+# What the merge must contain, from a source that does not move with it: each
+# project's own whole-timeline ids, read through the single-project path. Order
+# and count cannot answer this — a sorted sequence stays sorted when a member is
+# dropped or repeated, and both mutations passed every assertion this suite had
+# (#165 review round 12). The projects are read out of the workspace rather than
+# written down here, so a third one registered later is covered too.
+WS_PROJECTS="$(SELF status --workspace | sed -E 's/ — .*//')"
+: > "$ROOT/union-ids.txt"
+for slug in $WS_PROJECTS
+do
+    PROJECT_ALL="$(SELF log --project "$slug" -n "$WHOLE_TIMELINE")"
+    parses "$PROJECT_ALL" "the timeline of project \"$slug\""
+    log_events "$PROJECT_ALL" ids >> "$ROOT/union-ids.txt"
+done
+UNION_IDS="$(sort "$ROOT/union-ids.txt")"
+UNION_COUNT="$(printf '%s\n' "$UNION_IDS" | awk 'NF > 0' | wc -l | tr -d ' ')"
+
+# Uniqueness first, because it is what makes the equality below mean what it
+# says: if two projects could mint the same event id, a merge that repeated one
+# would still match the union as a multiset. Asserted rather than assumed — if
+# ids ever stop being unique across projects this says so, and the equality
+# would have to become a per-project multiset instead.
+[ "$(printf '%s\n' "$UNION_IDS" | uniq -d | wc -l | tr -d ' ')" = "0" ] \
+    || fail "event ids are not unique across projects, so the completeness check below cannot use a set"
+# and then the two claims that are not the same claim: a deletion shrinks the
+# merge without repeating anything, a duplication repeats without shrinking.
+[ "$(log_events "$WS_ALL" ids | sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
+    || fail "log --workspace printed the same event more than once"
+[ "$(log_events "$WS_ALL" ids | sort)" = "$UNION_IDS" ] \
+    || fail "log --workspace is not exactly the union of every project's own timeline ($WS_EVENTS events merged, $UNION_COUNT across the projects)"
 
 # The snapshot has to outrun the widest window asserted against it, or those
 # assertions prove nothing: an empty snapshot makes both bracket equalities
@@ -346,33 +422,24 @@ echo "$WS_ALL" | grep -q "^outside  .*objective.created" || fail "log --workspac
 # windows themselves — a hardcoded minimum would reintroduce the fixture-length
 # coupling this whole round is about, so moving a window moves its floor.
 WS_WIDEST="$(awk -v first="$WS_WINDOW" -v second="$WS_NEWEST" 'BEGIN { print (first > second) ? first : second }')"
-WS_LINES="$(printf '%s\n' "$WS_ALL" | awk 'NF > 0' | wc -l | tr -d ' ')"
-[ "$WS_LINES" -gt "$WS_WIDEST" ] \
-    || fail "the workspace timeline is $WS_LINES lines, which does not outrun the $WS_WIDEST-line window asserted against it"
+[ "$WS_EVENTS" -gt "$WS_WIDEST" ] \
+    || fail "the workspace timeline is $WS_EVENTS events, which does not outrun the $WS_WIDEST-event window asserted against it"
 
 # The order the merge claims, read from this output alone. Both windowed
-# comparisons below take tail of this same snapshot, so a reversed merge moves
-# both sides together and neither notices — a reversed compareDated passed every
-# assertion here (#165 review round 11). This notices: it reads the sort key out
-# of the rendered line — `slug  ts  type  [id]  summary` — and asserts the
-# sequence is non-decreasing on the pair compareDated sorts by, timestamp then
-# id. Asserting on the timestamp alone would miss a reversed tiebreak; asserting
-# on the rendered column order would check the renderer rather than the merge.
+# comparisons below take the tail of this same snapshot, so a reversed merge
+# moves both sides together and neither notices — a reversed compareDated passed
+# every assertion here (#165 review round 11). This notices: it reads the sort
+# key out of each event line and asserts the sequence is non-decreasing on the
+# pair compareDated sorts by, timestamp then id. Asserting on the timestamp
+# alone would miss a reversed tiebreak; asserting on the rendered column order
+# would check the renderer rather than the merge.
 #
 # Non-decreasing rather than increasing, because a tie is correct behaviour: the
-# three events above share a timestamp, and that is exactly where the id decides.
-ws_keys()
-{
-    printf '%s\n' "$1" | awk 'NF >= 4 { id = $4; gsub(/[][]/, "", id); print $2 "\t" id }'
-}
-
-WS_KEYS="$(ws_keys "$WS_ALL")"
-# A parse that yielded nothing would make the order check trivially true — the
-# same vacuity as an empty snapshot, one level out — so every line must have
-# produced exactly one key.
-WS_KEY_LINES="$(printf '%s\n' "$WS_KEYS" | awk 'NF > 0' | wc -l | tr -d ' ')"
-[ "$WS_KEY_LINES" = "$WS_LINES" ] \
-    || fail "read $WS_KEY_LINES sort keys out of $WS_LINES workspace log lines — the order check would be judging something else"
+# three events `work accept` writes share a timestamp, and that is where the id
+# decides.
+WS_KEYS="$(log_events "$WS_ALL" keys)"
+[ "$(printf '%s\n' "$WS_KEYS" | awk 'NF > 0' | wc -l | tr -d ' ')" = "$WS_EVENTS" ] \
+    || fail "the sort keys and the event count disagree, so the order check would be judging something else"
 printf '%s\n' "$WS_KEYS" | LC_ALL=C sort -c 2> /dev/null \
     || fail "log --workspace did not merge in (timestamp, id) order"
 # and the tie is really there, so the id half of the key is really exercised
@@ -380,28 +447,33 @@ printf '%s\n' "$WS_KEYS" | LC_ALL=C sort -c 2> /dev/null \
     || fail "no two events share a timestamp, so the id half of the merge key is never exercised"
 
 # and the limit applies to the merge rather than to each project, which is what
-# the windowed reads below are for
-[ "$(SELF log --workspace -n "$WS_WINDOW" | wc -l | tr -d ' ')" = "$WS_WINDOW" ] \
+# the windowed reads below are for. The window is counted in events, not lines:
+# the wrapped summary above owns two lines, so `tail -n` would be asking a
+# different question than `-n` answers.
+WS_WINDOWED="$(SELF log --workspace -n "$WS_WINDOW")"
+parses "$WS_WINDOWED" "the windowed workspace timeline"
+[ "$(log_events "$WS_WINDOWED" count)" = "$WS_WINDOW" ] \
     || fail "log --workspace applied the limit per project instead of to the merge"
-[ "$(SELF log --workspace -n "$WS_WINDOW")" = "$(printf '%s\n' "$WS_ALL" | tail -n "$WS_WINDOW")" ] \
+[ "$WS_WINDOWED" = "$(log_events "$WS_ALL" tail "$WS_WINDOW")" ] \
     || fail "log --workspace cut the newest events instead of the oldest"
-# the merged timeline is sorted, so the last line is the newest event overall
-[ "$(SELF log --workspace -n "$WS_NEWEST")" = "$(printf '%s\n' "$WS_ALL" | tail -n "$WS_NEWEST")" ] \
+# the merged timeline is sorted, so the last event is the newest overall
+[ "$(SELF log --workspace -n "$WS_NEWEST")" = "$(log_events "$WS_ALL" tail "$WS_NEWEST")" ] \
     || fail "log --workspace did not merge in timestamp order"
 
 # The single-project form windows too. Its presence check above now reads the
 # whole timeline, so this is where `-n` on that form is exercised at all — the
 # window is the newest N of one project's timeline, not a slice of the merge.
 DEMO_ALL="$(SELF log --project demo -n "$WHOLE_TIMELINE")"
-DEMO_LINES="$(printf '%s\n' "$DEMO_ALL" | awk 'NF > 0' | wc -l | tr -d ' ')"
-[ "$DEMO_LINES" -gt "$WS_WINDOW" ] \
-    || fail "the demo timeline is $DEMO_LINES lines, which does not outrun the $WS_WINDOW-line window asserted against it"
-[ "$(SELF log --project demo -n "$WS_WINDOW" | wc -l | tr -d ' ')" = "$WS_WINDOW" ] \
+parses "$DEMO_ALL" "the demo timeline"
+DEMO_EVENTS="$(log_events "$DEMO_ALL" count)"
+[ "$DEMO_EVENTS" -gt "$WS_WINDOW" ] \
+    || fail "the demo timeline is $DEMO_EVENTS events, which does not outrun the $WS_WINDOW-event window asserted against it"
+[ "$(log_events "$(SELF log --project demo -n "$WS_WINDOW")" count)" = "$WS_WINDOW" ] \
     || fail "log --project ignored its window"
-[ "$(SELF log --project demo -n "$WS_WINDOW")" = "$(printf '%s\n' "$DEMO_ALL" | tail -n "$WS_WINDOW")" ] \
+[ "$(SELF log --project demo -n "$WS_WINDOW")" = "$(log_events "$DEMO_ALL" tail "$WS_WINDOW")" ] \
     || fail "log --project cut the newest events instead of the oldest"
 # the single-project form is untouched: no project column, same bytes as before
-SELF log -n 3 | grep -q "^demo  " && fail "the single-project log grew a project column"
+SELF log -n "$SHAPE_SAMPLE" | grep -q "^demo  " && fail "the single-project log grew a project column"
 
 # ── a project registered here but linked on another machine still reads ───
 clone_machine_b
