@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { bootId, nodeId } from "../attempt/boundary.js";
 import { sleep } from "../attempt/retry.js";
 import { alive, processStartTime } from "../attempt/tree.js";
-import { ProjectContext } from "../paths.js";
+import { invalidateResolution, ProjectContext } from "../paths.js";
 import { CliError } from "../types.js";
 import { claimDaemon, claimUnderLock, daemonDir, DaemonRecord, emptyCounts, liveDaemon, readDaemon, refusal, releaseDaemon, withDaemonLock, withTickLock, writeTick } from "./state.js";
 import { runTick, TickSummary } from "./tick.js";
@@ -95,8 +95,15 @@ export async function tickOnce(ctx: ProjectContext): Promise<TickSummary>
     return withTickLock(() => tickUnderLock(ctx));
 }
 
+// Resolution is cached in memory for as long as the process runs, and a
+// foreground daemon is one process for as long as the supervisor lives — so
+// what a tick summarized an hour ago is not what the next one may answer from.
+// Every append already invalidates before the fold that follows it, which is
+// why no wrong answer is reachable today; clearing here makes the cache's
+// stated lifetime true of the daemon too, at one cleared map per tick.
 async function tickUnderLock(ctx: ProjectContext): Promise<TickSummary>
 {
+    invalidateResolution();
     const now = new Date();
     try
     {

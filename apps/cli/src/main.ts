@@ -10,7 +10,7 @@ import { runDigestCommand } from "./daemon/digest.js";
 import { runEvidenceCommand } from "./evidence/commands.js";
 import { runOvernightCommand } from "./daemon/overnight.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
-import { foldProject, renderWorkBody } from "./fold.js";
+import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
 import { cliVersion, commandUsage, findCommand, rootUsage } from "./help.js";
@@ -23,6 +23,7 @@ import {
     checkoutProject,
     CliContext,
     ensureDir,
+    invalidateResolution,
     isStore,
     LINKS_FILE,
     MARKER_FILE,
@@ -343,10 +344,7 @@ function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
 {
     const config = { ...readStoreConfig(ctx.storeDir), ...patch };
     writeFileSync(join(ctx.storeDir, "config.json"), JSON.stringify(config) + "\n");
-    for (const entry of readRegistry(ctx.storeDir))
-    {
-        foldProject(ctx.storeDir, entry.slug);
-    }
+    foldEveryProject(ctx.storeDir);
     commitAll(ctx.storeDir, message);
 }
 
@@ -392,6 +390,10 @@ function projectAdd(args: string[]): void
         entry.description = values.desc;
     }
     appendFileSync(join(ctx.storeDir, "registry.jsonl"), JSON.stringify(entry) + "\n");
+    // The registry this process already read no longer says what the file says.
+    // Resolution is cached in memory until something clears it, so the writer
+    // of a cached file is the one that has to say it moved (#128).
+    invalidateResolution();
     linkProject(ctx, slug, projectDir);
     ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
     foldProject(ctx.storeDir, slug);
@@ -1086,7 +1088,7 @@ function cmdFold(rest: string[]): void
 {
     parseCommand("fold", rest, {}, 0);
     const ctx = requireProject(process.cwd());
-    foldProject(ctx.storeDir, ctx.project);
+    foldWorkspace(ctx.storeDir, ctx.project);
     commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
     console.log(`refolded ${ctx.project}`);
 }
