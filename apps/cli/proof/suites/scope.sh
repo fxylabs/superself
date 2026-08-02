@@ -302,16 +302,21 @@ echo "$WS_OBJ" | grep -q "^outside$" || fail "objective --workspace omitted a re
 echo "$WS_OBJ" | grep -q "demo objective the scope reads" || fail "objective --workspace omitted demo's objectives"
 echo "$WS_OBJ" | grep -q "outside objective the scope reads" || fail "objective --workspace omitted outside's objectives"
 
-# every project's events on one timeline, each line saying where it happened,
-# and the limit applied to the merge rather than to each project
-WS_LOG="$(SELF log --workspace -n 60)"
-echo "$WS_LOG" | grep -q "^demo  .*objective.created" || fail "log --workspace did not lead a demo line with its project"
-echo "$WS_LOG" | grep -q "^outside  .*objective.created" || fail "log --workspace omitted another project's events"
+# every project's events on one timeline, each line saying where it happened.
+# The presence checks read the whole timeline rather than a window: the events
+# they look for are among the oldest this fixture writes, so a window sized near
+# the fixture's own length passes or fails on how many events the run happened
+# to record. It was three events from its edge and CI crossed it.
+WS_ALL="$(SELF log --workspace -n 100000)"
+echo "$WS_ALL" | grep -q "^demo  .*objective.created" || fail "log --workspace did not lead a demo line with its project"
+echo "$WS_ALL" | grep -q "^outside  .*objective.created" || fail "log --workspace omitted another project's events"
+# and the limit applies to the merge rather than to each project, which is what
+# the windowed reads below are for
 [ "$(SELF log --workspace -n 3 | wc -l | tr -d ' ')" = "3" ] || fail "log --workspace applied the limit per project instead of to the merge"
-[ "$(SELF log --workspace -n 3)" = "$(SELF log --workspace -n 60 | tail -3)" ] \
+[ "$(SELF log --workspace -n 3)" = "$(printf '%s\n' "$WS_ALL" | tail -3)" ] \
     || fail "log --workspace cut the newest events instead of the oldest"
 # the merged timeline is sorted, so the last line is the newest event overall
-[ "$(SELF log --workspace -n 1)" = "$(SELF log --workspace -n 60 | tail -1)" ] || fail "log --workspace did not merge in timestamp order"
+[ "$(SELF log --workspace -n 1)" = "$(printf '%s\n' "$WS_ALL" | tail -1)" ] || fail "log --workspace did not merge in timestamp order"
 # the single-project form is untouched: no project column, same bytes as before
 SELF log -n 3 | grep -q "^demo  " && fail "the single-project log grew a project column"
 
