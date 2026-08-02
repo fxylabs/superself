@@ -371,6 +371,20 @@ cd "$DEMO"
 # CI (#165 review round 12). Last, so the wrapped event sits inside the windows
 # asserted below and the event-vs-line distinction is exercised rather than
 # stated.
+# A slug with spaces in it. The columns of this rendering are separated by two
+# spaces, and a parse that split on whitespace read a slug token as the
+# timestamp and the timestamp as the id — the count still agreed with itself and
+# the order still reported valid while the id half went unchecked (#165 review
+# round 12). Registered so the parse is proved against one rather than against
+# slugs that happen to be single tokens.
+SPACED_SLUG="a project named with spaces"
+mkdir -p "$ROOT/spaced/app"
+cd "$ROOT/spaced/app"
+git init -q -b main
+SELF project add --name "$SPACED_SLUG" --no-connect > /dev/null
+SELF goal set "prove a slug with spaces parses" > /dev/null
+cd "$DEMO"
+
 printf 'a summary the log has to wrap\nand the continuation line it renders on its own\n' > "$ROOT/wrapped.txt"
 SELF report "$DEMO_WID" --file "$ROOT/wrapped.txt" > /dev/null
 
@@ -390,14 +404,20 @@ WS_EVENTS="$(log_events "$WS_ALL" count)"
 # dropped or repeated, and both mutations passed every assertion this suite had
 # (#165 review round 12). The projects are read out of the workspace rather than
 # written down here, so a third one registered later is covered too.
-WS_PROJECTS="$(SELF status --workspace | sed -E 's/ — .*//')"
+SELF status --workspace | sed -E 's/ — .*//' > "$ROOT/ws-projects.txt"
 : > "$ROOT/union-ids.txt"
-for slug in $WS_PROJECTS
+# Read from a file rather than through a pipe: a `while` on the right of a pipe
+# runs in a subshell, where `fail` would exit only that subshell and let the run
+# continue past a parse it had just refused. IFS is cleared for the same reason
+# the parse exists — a slug may contain spaces, and word splitting would ask for
+# a project named after its first token.
+while IFS= read -r slug
 do
+    [ -n "$slug" ] || continue
     PROJECT_ALL="$(SELF log --project "$slug" -n "$WHOLE_TIMELINE")"
     parses "$PROJECT_ALL" "the timeline of project \"$slug\""
     log_events "$PROJECT_ALL" ids >> "$ROOT/union-ids.txt"
-done
+done < "$ROOT/ws-projects.txt"
 UNION_IDS="$(sort "$ROOT/union-ids.txt")"
 UNION_COUNT="$(printf '%s\n' "$UNION_IDS" | awk 'NF > 0' | wc -l | tr -d ' ')"
 
