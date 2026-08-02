@@ -1,5 +1,6 @@
 import { bootId } from "../attempt/boundary.js";
 import { AttemptPlan } from "../attempt/plan.js";
+import { releaseWorkdir } from "../attempt/provision.js";
 import { scopeFor } from "../attempt/redact.js";
 import { nextFence, recordAttemptEvent, settleConfirmedExit } from "../attempt/run.js";
 import { BUSY, trySettling } from "../attempt/settlement.js";
@@ -161,6 +162,13 @@ function markUnreconciled(ctx: ProjectContext, spool: Spool, status: AttemptStat
     spool.append("events.jsonl", { event: "run.recovered", detail: verdict.reason, exitSource: verdict.exitSource });
     if (plan !== null)
     {
+        // The spool is kept as it is; a provisioned worktree is not spool
+        // output. The verdict is terminal, so the checkout this attempt was
+        // given belongs to nobody — including one that died in the middle of
+        // its own preparation and never ran at all. `self attempt recover`
+        // answers this the same way, and a supervised machine must not be the
+        // one that accumulates checkouts nobody owns.
+        releaseWorkdir(plan, spool);
         recordAttemptEvent(ctx, plan, "run.failed", status.attempt, { failure: "unknown", detail: verdict.reason, exitSource: verdict.exitSource });
     }
     return { attempt: status.attempt, work: status.work, disposition: "unreconciled", detail: verdict.reason };

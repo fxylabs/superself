@@ -11,6 +11,14 @@
                 "spool-chunks.mjs"
             ]
         },
+        "attempt-preparation": {
+            "entry": "suites/attempt-preparation.sh",
+            "deps": [
+                "attempt-plan.mjs",
+                "lib.sh",
+                "prep-agent.mjs"
+            ]
+        },
         "integration": {
             "entry": "integration.sh",
             "deps": [

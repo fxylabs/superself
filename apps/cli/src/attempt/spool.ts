@@ -57,6 +57,20 @@ export const ATTEMPTS_SUBDIR = "attempts";
 // is the identity of whatever is driving it.
 export const OWNER_FILE = "owner.json";
 
+// The provisioned worktree, when the plan asked for one. It sits inside the
+// spool so that one attempt id names one checkout — two attempts of the same
+// work can never be handed the same directory — and so that retention reclaims
+// the disk with the rest of the attempt.
+export const WORKDIR_SUBDIR = "workdir";
+
+// Where the runner records what it bound this attempt to: the repository, the
+// remote, the head, and the digest of the three. `attempt/provision.ts` is the
+// only writer.
+export const PROVISION_FILE = "provision.json";
+
+// The ordered record of the preparation steps that ran, one line each.
+export const PREPARATION_LOG = "preparation.jsonl";
+
 export function attemptsRoot(): string
 {
     return join(runnerStateDir(), ATTEMPTS_SUBDIR);
@@ -505,11 +519,20 @@ function touchedAt(dir: string): number
     }
 }
 
+// What this attempt spooled, which is not what its provisioned worktree holds.
+// The worktree is a checkout plus whatever preparation installed into it — a
+// dependency tree runs to six figures of files — and walking it would turn
+// `self attempt show` into a multi-second directory crawl over bytes the spool
+// does not own.
 export function spoolBytes(dir: string): number
 {
     let total = 0;
     for (const entry of readdirSync(dir, { withFileTypes: true }))
     {
+        if (entry.name === WORKDIR_SUBDIR)
+        {
+            continue;
+        }
         const path = join(dir, entry.name);
         total += entry.isDirectory() ? spoolBytes(path) : statSync(path).size;
     }

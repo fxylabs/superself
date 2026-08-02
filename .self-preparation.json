@@ -1,0 +1,10 @@
+{
+    "version": 1,
+    "steps": [
+        {
+            "name": "install",
+            "command": ["pnpm", "install", "--frozen-lockfile"],
+            "timeoutMs": 600000
+        }
+    ]
+}

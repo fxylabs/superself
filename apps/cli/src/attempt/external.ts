@@ -6,7 +6,7 @@ import { NO_ENVELOPE, ResultEnvelope } from "./gate.js";
 import { AttemptPlan } from "./plan.js";
 import { adapterOf, runPreflight } from "./preflight.js";
 import { redact, scopeFor } from "./redact.js";
-import { AttemptResult, blockOnCapability, childEnv, claimWorkUnit, completeAttempt, failAttempt, localChecks, nextFence, prepareSpool, recordAttemptEvent, RunOptions } from "./run.js";
+import { AttemptResult, blockOnCapability, childEnv, claimWorkUnit, completeAttempt, failAttempt, localChecks, nextFence, prepareAttempt, prepareSpool, recordAttemptEvent, RunOptions } from "./run.js";
 import { settling } from "./settlement.js";
 import { AttemptStatus, openSpool, ownerOf, OWNER_FILE, Spool } from "./spool.js";
 import { alive, OwnedTree, ownedTree, processGroup, processStartTime, treeAlive, treeContain } from "./tree.js";
@@ -39,6 +39,11 @@ export async function registerAttempt(ctx: ProjectContext, plan: AttemptPlan, op
     {
         return blockOnCapability(ctx, plan, spool, id, receipt);
     }
+    // The same provisioning the runner does for its own child, through the same
+    // gate: a launcher of the operator's own is handed a worktree that is
+    // already at the pinned head and already prepared, and the environment
+    // below names it.
+    await prepareAttempt(ctx, plan, spool, id);
     // Run 1 by construction: a registered attempt is launched once by whoever
     // registered it, and a replacement run is a launch of its own.
     spool.writeJson(ENV_FILE, childEnv(spool, id, 1, null));

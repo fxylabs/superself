@@ -7,9 +7,10 @@ import { claimStarted, externalExited, externalHeartbeat, registerAttempt } from
 import { forbiddenAction, forbiddenDeclaration, forbiddenRefusal } from "../daemon/forbidden.js";
 import { AttemptPlan, readPlan } from "./plan.js";
 import { PreflightReceipt } from "./preflight.js";
+import { bindingOf, releaseWorkdir, StepRecord } from "./provision.js";
 import { scopeFor } from "./redact.js";
 import { readBreaker, resetBreaker } from "./retry.js";
-import { AttemptStatus, deadVerdict, DeadVerdict, listSpools, openSpool, ownerOf, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
+import { AttemptStatus, deadVerdict, DeadVerdict, listSpools, openSpool, ownerOf, PREPARATION_LOG, pruneSpools, readRunnerConfig, Spool, spoolBytes, writeRunnerConfig } from "./spool.js";
 import { BUSY, trySettling } from "./settlement.js";
 import { AttemptResult, nextFence, runAttempt, settleAttempt, settleConfirmedExit } from "./run.js";
 import { treeAlive, treeContain, treeTerminate } from "./tree.js";
@@ -199,6 +200,7 @@ function cmdShow(args: string[]): void
     console.log(`runs       ${status.runs} of this attempt, fence ${status.fence}`);
     console.log(`node       ${status.nodeId} boot ${status.bootId}${status.pid === undefined ? "" : ` pid ${status.pid}`}`);
     console.log(`spool      ${spool.dir} (${spoolBytes(spool.dir)} bytes)`);
+    printPreparation(spool);
     printReceipt(spool);
     for (const line of spool.readLines<Record<string, unknown>>("runs.jsonl"))
     {
@@ -209,6 +211,24 @@ function cmdShow(args: string[]): void
     {
         console.log("");
         console.log(readFileSync(request, "utf8").trimEnd());
+    }
+}
+
+// What the runner bound this attempt to and what preparation it ran there. An
+// operator reading a failed attempt has to be able to tell a bad build from a
+// preparation that never finished, and the steps are where that is said.
+function printPreparation(spool: Spool): void
+{
+    const binding = bindingOf(spool);
+    if (binding === null)
+    {
+        return;
+    }
+    console.log(`workdir    ${binding.workdir} — ${binding.repo} at ${binding.head.slice(0, 12)}${binding.released ? " (released)" : ""}`);
+    console.log(`binding    ${binding.digest.slice(0, 12)}  template ${binding.template ?? "none"}  ${binding.steps} step(s)`);
+    for (const step of spool.readLines<StepRecord>(PREPARATION_LOG))
+    {
+        console.log(`  prep ${step.step}  ${step.name}  ${step.timedOut ? "timed out" : `exit ${step.exit}`}  ${step.durationMs}ms`);
     }
 }
 
@@ -436,6 +456,14 @@ async function recoverOne(ctx: ProjectContext, spool: Spool, status: AttemptStat
         fence
     });
     spool.append("events.jsonl", { event: "run.recovered", detail: verdict.reason, exitSource: verdict.exitSource });
+    // The verdict is terminal, so whatever this attempt was provisioned with is
+    // nobody's any more — including an attempt that died in the middle of its
+    // own preparation and never ran at all.
+    const plan = spool.readJson<AttemptPlan>("plan.json");
+    if (plan !== null)
+    {
+        releaseWorkdir(plan, spool);
+    }
     recordRecovery(ctx, status, verdict.reason);
     return "unreconciled";
 }
