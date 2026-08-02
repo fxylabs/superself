@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { helpHint, parseCommand, subcommand, unknownOption } from "./args.js";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
@@ -11,13 +11,14 @@ import { runOvernightCommand } from "./daemon/overnight.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldProject, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
-import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit } from "./gitutil.js";
-import { commandUsage, findCommand, rootUsage } from "./help.js";
+import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
+import { cliVersion, commandUsage, findCommand, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import {
+    checkoutMatches,
     checkoutProject,
     CliContext,
     ensureDir,
@@ -26,10 +27,10 @@ import {
     MARKER_FILE,
     ProjectContext,
     projectStateDir,
-    readLinks,
     readRegistry,
     readStoreConfig,
     readVerdicts,
+    recordLink,
     requireProject,
     requireWorkspace,
     siblingSlug,
@@ -61,6 +62,14 @@ import { CliError, EventRefs } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
 {
+    // Asked of the binary itself, so it stands where a verb would rather than
+    // inside one: `self work --version` is a flag `work` never declared, and
+    // naming it there is the answer that surface owes.
+    if (argv[0] === "--version" || argv[0] === "-V")
+    {
+        console.log(cliVersion());
+        return;
+    }
     const help = helpText(argv);
     if (help !== null)
     {
@@ -402,10 +411,7 @@ function projectLink(args: string[]): void
     {
         throw new CliError(`"${projectDir}" does not exist`);
     }
-    // Omitting the slug is the worktree case: the repository already answers
-    // which project this checkout belongs to. Linking it only saves the probe.
-    const inferred = checkoutProject(ctx.storeDir, projectDir)?.slug ?? siblingSlug(ctx.storeDir, projectDir);
-    const slug = wanted ?? requireText(inferred ?? undefined, "project link <slug> [path]");
+    const slug = wanted ?? inferredSlug(ctx.storeDir, projectDir);
     if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
@@ -413,6 +419,31 @@ function projectLink(args: string[]): void
     linkProject(ctx, slug, projectDir);
     foldProject(ctx.storeDir, slug);
     console.log(`project "${slug}" linked to ${projectDir}`);
+}
+
+// Omitting the slug is the worktree case: the repository already answers which
+// project this checkout belongs to, and linking it only saves the probe. It
+// answers for this directory only when a registered project sits at it or
+// above it. At a monorepo root the registered projects sit *below* it, and
+// inferring one there linked the whole worktree to a subdirectory project,
+// which then claimed every checkout of the repository on the machine (#114).
+// The candidates are named instead — which of them was meant is the one thing
+// the repository cannot say.
+function inferredSlug(storeDir: string, projectDir: string): string
+{
+    const here = checkoutProject(storeDir, projectDir);
+    if (here !== null)
+    {
+        return here.slug;
+    }
+    const below = checkoutMatches(storeDir, projectDir).filter((match) => match.dir.startsWith(projectDir + sep));
+    if (below.length > 0)
+    {
+        throw new CliError(`"${projectDir}" is the root of a repository whose registered projects sit below it ` +
+            `(${below.map((match) => `${match.slug} at ${match.dir}`).join(", ")}) — ` +
+            `name the one you mean, or run \`self project link\` from its directory`);
+    }
+    return requireText(undefined, "project link <slug> [path]");
 }
 
 function cmdView(rest: string[]): void
@@ -426,12 +457,17 @@ function cmdView(rest: string[]): void
     openFile(ctx, viewFile(ctx.storeDir, slug));
 }
 
+// The link records which repository stood here, not the path alone: a path is
+// reused by whatever is created at it next, and resolution has to be able to
+// tell the linked checkout from its replacement. Re-linking a path whose
+// recorded repository is gone replaces the claim, so this verb is the remedy
+// the stale-link warning names rather than a no-op that reports success (#115).
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
     excludeLocally(ctx.storeDir, LINKS_FILE);
-    if (!(readLinks(ctx.storeDir)[slug] ?? []).includes(projectDir))
+    if (recordLink(ctx.storeDir, slug, projectDir, repositoryIdentity(projectDir)))
     {
-        appendFileSync(join(ctx.storeDir, LINKS_FILE), JSON.stringify({ slug, path: projectDir }) + "\n");
+        console.log(`replacing the repository previously linked at ${projectDir}`);
     }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);

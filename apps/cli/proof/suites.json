@@ -92,6 +92,7 @@
         "pretty": {
             "entry": "suites/pretty.sh",
             "deps": [
+                "event-summary.mjs",
                 "lib.sh",
                 "pretty-terminal.mjs",
                 "pretty-width.mjs"

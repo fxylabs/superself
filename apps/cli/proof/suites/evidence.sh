@@ -144,6 +144,22 @@ cd "$ROOT/A/ws/mono-wt"
 ROOTERR="$(SELF work 2>&1 || true)"
 echo "$ROOTERR" | grep -q 'registered project "foo" is at' || fail "the worktree root claimed a project registered below it"
 echo "$ROOTERR" | grep -q "/A/ws/mono-wt/apps/foo" || fail "the message did not name the mapped directory in this checkout"
+# a slugless link at the root of that repository has two answers and no way to
+# choose between them, so it names the candidates instead of inferring one:
+# linking the root to a subdirectory project would make that project claim
+# every checkout of the repository on this machine
+cd "$ROOT/A/ws/mono-wt"
+ROOTLINK="$(SELF project link 2>&1 || true)"
+echo "$ROOTLINK" | grep -q "registered projects sit below it" || fail "a slugless link at the repository root inferred a subdirectory project"
+echo "$ROOTLINK" | grep -q "foo at " || fail "the refusal did not name the candidate it declined to infer"
+[ -f "$ROOT/A/ws/mono-wt/.self" ] && fail "the refused link still wrote a marker at the repository root"
+grep -q '"path":"'"$ROOT"'/A/ws/mono-wt"' "$ROOT/A/ws/.superself/links.jsonl" && fail "the refused link still linked the repository root"
+# naming the slug is still the way to link a checkout of a project that is
+# registered below the root
+cd "$ROOT/A/ws/mono-wt/apps/foo"
+SELF project link foo > /dev/null
+[ -f .self ] || fail "a named link inside the mapped directory was refused"
+
 cd "$ROOT/A/ws/mono"
 SELF project add --name mono --desc "the repository root beside apps/foo" --no-connect > /dev/null
 SELF goal set "prove the repository root is its own project"
@@ -151,6 +167,177 @@ cd "$ROOT/A/ws/mono-wt"
 SELF setup | grep -q "^project    mono" || fail "the worktree root did not resolve to the root project"
 cd "$ROOT/A/ws/mono-wt/apps/foo"
 SELF setup | grep -q "^project    foo" || fail "the shallower project won over the directory the command ran in"
+cd "$ROOT/A/ws/demo"
+
+# a linked path is a claim about a repository, and a path outlives the checkout
+# that was linked at it: a new, unrelated repository created where a linked
+# checkout used to be must not answer as the project that stood there
+mkdir -p "$ROOT/A/ws/replaced"
+cd "$ROOT/A/ws/replaced"
+git init -q -b main
+echo one > one.txt && git add . && git commit -qm "the repository that was linked"
+SELF project add --name replaced --desc "linked, then deleted" --no-connect > /dev/null
+SELF goal set "prove a replaced checkout stops resolving" > /dev/null
+grep -q '"slug":"replaced".*"repository":"' "$ROOT/A/ws/.superself/links.jsonl" \
+    || fail "the link recorded no repository identity to compare against"
+cd "$ROOT/A/ws"
+rm -rf "$ROOT/A/ws/replaced"
+mkdir -p "$ROOT/A/ws/replaced"
+cd "$ROOT/A/ws/replaced"
+git init -q -b main
+echo two > two.txt && git add . && git commit -qm "an unrelated repository at the same path"
+STALE="$(SELF work 2>&1 || true)"
+echo "$STALE" | grep -q "not inside a registered project" \
+    || fail "a new repository at a deleted checkout's path still resolved to the old project"
+echo "$STALE" | grep -q "no longer the repository linked there" \
+    || fail "the stale link was ignored without saying so"
+
+# the remedy that warning names has to clear the state it warns about. A link
+# only ever appended, so re-linking a path already in the file reported success
+# and changed nothing: every read went on skipping the path, `self setup` read
+# the project unlinked for good, and the warning printed in front of every
+# command in that checkout forever, with no supported way out. A deliberate
+# re-link at the path replaces the claim the deleted checkout left (#115)
+echo "$STALE" | grep -q "self project link" || fail "the warning named no remedy"
+cd "$ROOT/A/ws/replaced"
+RELINK="$(SELF project link replaced 2>&1)"
+echo "$RELINK" | grep -q "replacing the repository previously linked" \
+    || fail "re-linking a replaced checkout did not say it replaced the stale claim"
+[ "$(grep -c '"path":"[^"]*/A/ws/replaced"' "$ROOT/A/ws/.superself/links.jsonl")" = "1" ] \
+    || fail "the re-link left two entries for one path"
+grep -q '"slug":"replaced","path":"[^"]*/A/ws/replaced","repository":"' "$ROOT/A/ws/.superself/links.jsonl" \
+    || fail "the replaced entry recorded no identity for what stands there now"
+SELF work > /dev/null 2>&1 || fail "the re-linked checkout still did not resolve to its project"
+cd "$ROOT/A/ws"
+FIXED="$(SELF setup 2>&1)"
+echo "$FIXED" | grep -q "no longer the repository linked there" \
+    && fail "the re-linked checkout still warns about an identity it no longer claims"
+echo "$FIXED" | grep -q "replaced → .*/A/ws/replaced" \
+    || fail "the re-linked checkout still read as unlinked on this machine"
+# an honest re-link changes nothing: running it again neither rewrites the
+# file nor claims to have replaced anything
+LINKS_BEFORE="$(cat "$ROOT/A/ws/.superself/links.jsonl")"
+cd "$ROOT/A/ws/replaced"
+SELF project link replaced | grep -q "replacing the repository" \
+    && fail "a re-link at an honest path claimed to replace a stale identity"
+[ "$LINKS_BEFORE" = "$(cat "$ROOT/A/ws/.superself/links.jsonl")" ] \
+    || fail "a re-link at an honest path rewrote the links file"
+# a repository nested inside another one's working tree is not a checkout of
+# it. Judging the nested link against the outer repository's identity called a
+# link that had gone nowhere stale, and the remedy that warning names is a
+# no-op there — the identity recomputes to the same value, nothing is replaced,
+# and the line prints in front of every command in the outer checkout with no
+# way out. The top level decides before the identity does (#115)
+mkdir -p "$ROOT/A/ws/outer"
+cd "$ROOT/A/ws/outer"
+git init -q -b main
+echo outer > outer.txt && git add . && git commit -qm "the repository a vendored checkout sits in"
+SELF project add --name outer --desc "a working tree with a repository nested in it" --no-connect > /dev/null
+SELF goal set "prove a nested repository is not judged as this one" > /dev/null
+mkdir -p "$ROOT/A/ws/outer/vendorrepo"
+cd "$ROOT/A/ws/outer/vendorrepo"
+git init -q -b main
+echo vendored > vendored.txt && git add . && git commit -qm "a repository of its own, nested in outer"
+SELF project add --name vendorpkg --desc "its own repository, nested in outer" --no-connect > /dev/null
+SELF goal set "prove the nested checkout still answers for itself" > /dev/null
+cd "$ROOT/A/ws/outer"
+NESTED="$(SELF setup 2>&1)"
+echo "$NESTED" | grep -q "no longer the repository linked there" \
+    && fail "a nested repository's own link was reported stale against the repository it sits in"
+echo "$NESTED" | grep -q "^project    outer" || fail "the outer checkout stopped resolving to its own project"
+cd "$ROOT/A/ws/outer/vendorrepo"
+SELF setup | grep -q "^project    vendorpkg" || fail "the nested checkout stopped resolving to its own project"
+# the true positive the ordering must not cost: a checkout genuinely replaced
+# at its own path is still a working tree of the repository being resolved, so
+# it still warns, and the re-link still clears it — proven here in the layout
+# the false warning came from
+cd "$ROOT/A/ws"
+rm -rf "$ROOT/A/ws/outer"
+mkdir -p "$ROOT/A/ws/outer"
+cd "$ROOT/A/ws/outer"
+git init -q -b main
+echo other > other.txt && git add . && git commit -qm "an unrelated repository where outer stood"
+OUTERSTALE="$(SELF work 2>&1 || true)"
+echo "$OUTERSTALE" | grep -q "no longer the repository linked there" \
+    || fail "a checkout replaced at its own path stopped warning once the top level decided first"
+SELF project link outer 2>&1 | grep -q "replacing the repository previously linked" \
+    || fail "re-linking the replaced outer checkout did not replace the stale claim"
+SELF setup | grep -q "^project    outer" || fail "the re-linked outer checkout did not resolve to its project"
+# and the nested repository, restored under it, is still not judged as its host
+mkdir -p "$ROOT/A/ws/outer/vendorrepo"
+cd "$ROOT/A/ws/outer/vendorrepo"
+git init -q -b main
+echo vendored > vendored.txt && git add . && git commit -qm "the vendored repository, restored"
+SELF project link vendorpkg > /dev/null
+cd "$ROOT/A/ws/outer"
+SELF setup 2>&1 | grep -q "no longer the repository linked there" \
+    && fail "a re-linked nested repository was reported stale against the repository it sits in"
+
+# the same repository through another of its working trees still resolves: the
+# identity is the repository's, not the path's
+cd "$ROOT/A/ws/demo"
+git worktree add -q "$ROOT/A/ws/demo-identity" -b identity-side
+cd "$ROOT/A/ws/demo-identity"
+SELF setup | grep -q "^project    demo" || fail "a worktree of the linked repository stopped resolving"
+cd "$ROOT/A/ws/demo"
+
+# what stands at a linked path is a git history walk to the root commit, and
+# asking it once per link put `self setup` an order of magnitude over the
+# half-second a read command gets (#128). The cost arrives one link at a time
+# as checkouts are re-linked, so no before/after on today's store would show
+# it — the bound is relative instead: resolving a project does not ask more
+# often because it has more checkouts. Counted, not timed, so a loaded runner
+# cannot make it flake.
+SHIM="$ROOT/shim"
+mkdir -p "$SHIM"
+REAL_GIT="$(command -v git)"
+cat > "$SHIM/git" <<EOF
+#!/bin/sh
+if [ -n "\$GIT_PROBE_LOG" ]
+then
+    for arg in "\$@"
+    do
+        if [ "\$arg" = "--max-parents=0" ]
+        then
+            echo probe >> "\$GIT_PROBE_LOG"
+            break
+        fi
+    done
+fi
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SHIM/git"
+
+# identity probes spent by one `self setup` from the workspace root
+identity_probes()
+{
+    : > "$ROOT/git-probes"
+    (
+        cd "$ROOT/A/ws"
+        export GIT_PROBE_LOG="$ROOT/git-probes"
+        export PATH="$SHIM:$PATH"
+        SELF setup > /dev/null 2>&1
+    )
+    wc -l < "$ROOT/git-probes" | tr -d ' '
+}
+
+link_worktrees()
+{
+    for n in $1
+    do
+        git -C "$ROOT/A/ws/demo" worktree add -q "$ROOT/A/ws/scale-$n" -b "scale-$n"
+        (cd "$ROOT/A/ws/scale-$n" && SELF project link demo > /dev/null)
+    done
+}
+
+link_worktrees "1 2"
+FEW="$(identity_probes)"
+link_worktrees "3 4 5 6 7 8"
+MANY="$(identity_probes)"
+[ "$MANY" -le "$FEW" ] \
+    || fail "resolution asked what stands at a path more often with more links: $FEW probes at 2 extra checkouts, $MANY at 8"
+grep -c '"slug":"demo"' "$ROOT/A/ws/.superself/links.jsonl" | grep -qv '^[012]$' \
+    || fail "the scale probe did not actually link the checkouts it measures"
 cd "$ROOT/A/ws/demo"
 
 # events record the branch they were made on, and one work unit collects every

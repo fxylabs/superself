@@ -19,6 +19,25 @@ export function ulid(): string
     return timePart + randPart;
 }
 
+// The grammar of a minted event id, kept beside the minting so the two can
+// never drift: 26 Crockford characters, the first ten of them a millisecond
+// timestamp. The timestamp is what makes this a recognition rather than a
+// character-class guess — a generated credential of the same length and
+// alphabet lands inside the plausible window about one time in four hundred.
+const ULID = new RegExp(`^[${CROCKFORD}]{26}$`);
+const EARLIEST = Date.UTC(2015, 0, 1);
+const LATEST = Date.UTC(2100, 0, 1);
+
+export function isEventId(value: string): boolean
+{
+    if (!ULID.test(value))
+    {
+        return false;
+    }
+    const time = [...value.slice(0, 10)].reduce((total, char) => total * 32 + CROCKFORD.indexOf(char), 0);
+    return time >= EARLIEST && time < LATEST;
+}
+
 export function workId(): string
 {
     return "w-" + shortId();

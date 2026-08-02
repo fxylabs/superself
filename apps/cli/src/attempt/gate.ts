@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { commitStaged, stageArtifacts } from "../artifact.js";
+import { requireRevision } from "../gitutil.js";
 import { readEvents } from "../logfile.js";
 import { makeEvent, recordEvent } from "../pipeline.js";
 import { CliContext } from "../paths.js";
@@ -208,7 +209,13 @@ export function attachReport(ctx: ProjectContext, plan: AttemptPlan, attemptId: 
     }
     const text = redact(envelope.summary?.trim() || `attempt ${attemptId} completed`);
     const refs: EventRefs = { work: plan.work, attempt: attemptId };
-    const commits = (envelope.evidence ?? []).filter((item) => item.kind === "commit").map((item) => item.ref);
+    // Through the same revision guard the report verb declares its evidence
+    // to: an envelope naming a commit is making the claim `commit:` makes on
+    // the command line, and a ref that reached refs.commits without it was
+    // either prose the fold would later report as a rewritten history, or an
+    // uppercase object name the event guard refuses after the work is done
+    // (#132). One reading of "is this a commit", at the boundary.
+    const commits = (envelope.evidence ?? []).filter((item) => item.kind === "commit").map((item) => requireRevision(item.ref));
     const payload: Record<string, unknown> = { text };
     if (commits.length > 0)
     {

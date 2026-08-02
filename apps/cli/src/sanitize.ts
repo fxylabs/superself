@@ -102,6 +102,7 @@ function walk(value: unknown, at: string, declared: DeclaredSecret[]): void
 // recorded.
 function assertValue(text: string, at: string, declared: DeclaredSecret[]): void
 {
+    assertNoControlBytes(text, at);
     if (redactHome(text) !== text)
     {
         throw new CliError(`refusing to record ${at} — it holds an absolute path under this machine's home directory, which names the person holding the clone and resolves to nothing in another one`);
@@ -127,6 +128,42 @@ function assertValue(text: string, at: string, declared: DeclaredSecret[]): void
     if (found !== null)
     {
         throw new CliError(`refusing to record ${at} — its value is shaped like a credential (rule ${found.rule}, matched ${found.preview})`);
+    }
+}
+
+// Tab, newline and carriage return are the three a recorded text legitimately
+// carries — a report written from a file arrives with all of them — and every
+// renderer already folds them. The rest of C0, DEL, and C1 are terminal
+// control, and an ESC among them moves the cursor of whatever draws the value
+// while the width table charges it nothing, which is a cell boundary in every
+// table under it (#138).
+//
+// Judged by code point rather than written as a character class: a control
+// byte typed into a source file is invisible to every editor that would have
+// to review the rule it defines.
+const ALLOWED_CONTROL = [0x09, 0x0a, 0x0d];
+
+function isControl(point: number): boolean
+{
+    return (point < 0x20 && !ALLOWED_CONTROL.includes(point)) || point === 0x7f || (point >= 0x80 && point <= 0x9f);
+}
+
+// Refused rather than stripped, like everything else this gate judges: a
+// control byte in recorded text is either an accident whose author wants to
+// know, or an attempt to draw with somebody else's terminal, and silently
+// rewriting the value would hide both. The refusal names the code point,
+// which is what the writer has to go and remove — never the value.
+function assertNoControlBytes(text: string, at: string): void
+{
+    for (let index = 0; index < text.length; index += 1)
+    {
+        const point = text.charCodeAt(index);
+        if (isControl(point))
+        {
+            throw new CliError(`refusing to record ${at} — it holds the terminal control character ` +
+                `U+${point.toString(16).toUpperCase().padStart(4, "0")} at offset ${index}, ` +
+                `which every surface that renders this value would obey instead of showing`);
+        }
     }
 }
 

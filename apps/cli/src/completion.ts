@@ -25,6 +25,10 @@ export interface Requirement
     // a requirement that changed reads as uncovered until it is judged again.
     revision: number;
     retired?: boolean;
+    // The registration this requirement was folded from. A session that just
+    // recorded one reads its own id back through this rather than trusting the
+    // value it guessed before the append.
+    event: string;
 }
 
 // What a requirement was covered by, and the revision it was judged against.
@@ -122,11 +126,45 @@ export function isCompletionEvent(type: string): boolean
     return COMPLETION_EVENTS.includes(type);
 }
 
+// The id a registration folds to, fixed the moment its line lands in the log.
+//
+// Stored `work.covered`, `work.rechecked`, `work.requirement-revised` and
+// `work.requirement-retired` events name a requirement by the value its
+// registering session was told, so re-deriving that value from the fold's
+// order re-points every one of them: a retirement written against `r2`
+// attached to a different statement, silently retiring a live requirement the
+// author never dropped and letting `work done` pass against the wrong set. So
+// the declared value is kept whenever it is free.
+//
+// Two sessions racing `work require` against one unit both read the same next
+// value and both write it (#110). Only the colliding registration is renamed,
+// and only against the registrations already ahead of it in an append-only
+// log, so its id cannot move afterwards either. The suffixed form is outside
+// the `r<n>` sequence `nextRequirementId` draws from, so no later registration
+// can claim an id that is already spoken for.
+function mintRequirementId(state: CompletionState, event: SelfEvent): string
+{
+    const declared = str(event.payload.requirement) ?? `r${state.requirements.length + 1}`;
+    let id = declared;
+    let attempt = 1;
+    while (state.requirements.some((item) => item.id === id))
+    {
+        attempt += 1;
+        id = `${declared}-${attempt}`;
+    }
+    return id;
+}
+
 export function applyCompletion(state: CompletionState, event: SelfEvent): void
 {
     if (event.type === "work.required")
     {
-        state.requirements.push({ id: String(event.payload.requirement), text: String(event.payload.text), revision: 1 });
+        state.requirements.push({
+            id: mintRequirementId(state, event),
+            text: String(event.payload.text),
+            revision: 1,
+            event: event.id
+        });
         return;
     }
     if (event.type === "work.approval-required")

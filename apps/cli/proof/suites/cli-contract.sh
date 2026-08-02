@@ -57,9 +57,19 @@ SELF integration lease acquire --help | grep -q "^usage: self integration" || fa
 [ "$(wc -l < "$LOG_A")" = "$LOG_BEFORE" ] || fail "help wrote an event"
 [ "$(git -C "$ROOT/A/ws/.superself" rev-list --count HEAD)" = "$STORE_BEFORE" ] || fail "help committed derived state"
 
+# the binary answers what it is, out of the package it was built from: an
+# install is verified by asking the binary, and an answer from anywhere but its
+# own package would verify nothing
+PKG_VERSION="$(node -e 'process.stdout.write(require("'"$CLI_DIR"'/package.json").version)')"
+[ "$(SELF --version)" = "$PKG_VERSION" ] || fail "self --version did not print the built package's version"
+[ "$(SELF -V)" = "$PKG_VERSION" ] || fail "self -V did not print the built package's version"
+SELF | grep -q -- "--version" || fail "the root list does not name the version flag"
+[ "$(wc -l < "$LOG_A")" = "$LOG_BEFORE" ] || fail "asking the version wrote an event"
+
 # help answers on a machine that has no workspace at all, and creates none
 machine H
 cd "$ROOT"
+SELF --version | grep -q "^[0-9]" || fail "the version demanded a workspace"
 SELF report --help | grep -q "^usage: self report" || fail "report help demanded a workspace"
 SELF init --help | grep -q "^usage: self init" || fail "init help demanded a workspace"
 SELF attempt --help | grep -q "^usage: self attempt" || fail "attempt help demanded a workspace"
