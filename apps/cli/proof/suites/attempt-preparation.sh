@@ -859,30 +859,77 @@ if (JSON.stringify(actualShared) !== JSON.stringify(expectedShared))
         console.error(`${vector} is listed as a deliberate overlap but the two populations no longer share it`);
     }
 }
-// The hand-written tables repeat vectors too, and that repetition has a shape:
-// the nested family asserts both packing directions of a vector whose category
-// REFUSED already pins, so every repeat is a vector held by both of those two
-// tables. This one is a property rather than a list — an accidental repeat
-// inside a single table fails it.
+// The hand-written tables repeat vectors too, and that repetition is pinned the
+// same way the overlap is, for the same reason it had to be: a loop over the
+// repeats it happens to find validates the ones that are there and says nothing
+// about one that left. Editing REFUSED[26] so it no longer matched its nested
+// counterpart removed a repeat and the suite reported four of them and exited 0
+// — the third time in this stream that an assertion iterating what it finds has
+// failed to notice its own set shrinking.
+const EXPECTED_REPEATS = [
+    { argv: ["env", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "REFUSED pins the category and NESTED asserts both packing directions of the same shape" },
+    { argv: ["env", "FOO=1", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the assignment spelling of the same pairing" },
+    { argv: ["env", "--", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the terminator spelling of the same pairing" },
+    { argv: ["env", "env", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the one-level-deeper spelling of the same pairing" },
+    { argv: ["env", "mytool", "env", "-S", "npm publish"], tables: ["REFUSED", "NESTED"], why: "the unreadable case, which is also the vector both populations share" }
+];
 const repeats = new Map();
 for (const argv of handWritten)
 {
     const vector = JSON.stringify(argv);
     repeats.set(vector, (repeats.get(vector) ?? 0) + 1);
 }
-let handWrittenRepeats = 0;
-for (const [vector, times] of repeats)
+const actualRepeats = [...repeats.entries()].filter(([, times]) => times > 1).map(([vector]) => vector).sort();
+const expectedRepeats = EXPECTED_REPEATS.map((entry) => JSON.stringify(entry.argv)).sort();
+for (const entry of EXPECTED_REPEATS)
 {
-    if (times === 1)
-    {
-        continue;
-    }
-    handWrittenRepeats += times - 1;
-    if (times !== 2 || !refusedVectors.has(vector) || !nestedVectors.has(vector))
+    const vector = JSON.stringify(entry.argv);
+    if ((repeats.get(vector) ?? 0) !== entry.tables.length)
     {
         bad++;
-        console.error(`${vector} appears ${times} times in the hand-written tables — the only repetition this proof intends is one vector held by both REFUSED and NESTED_VECTORS`);
+        console.error(`${vector} is listed as an intended repeat held by ${JSON.stringify(entry.tables)} but appears ${repeats.get(vector) ?? 0} time(s) in the hand-written tables — the list is stale`);
     }
+    for (const [name, held] of Object.entries(holders))
+    {
+        if (entry.tables.includes(name) !== held.has(vector))
+        {
+            bad++;
+            console.error(`${vector} is listed as an intended repeat held by ${JSON.stringify(entry.tables)}, but ${name} ${held.has(vector) ? "also holds" : "no longer holds"} it — the list is stale`);
+        }
+    }
+}
+if (JSON.stringify(actualRepeats) !== JSON.stringify(expectedRepeats))
+{
+    bad++;
+    for (const vector of actualRepeats.filter((item) => !expectedRepeats.includes(item)))
+    {
+        console.error(`${vector} is repeated in the hand-written tables and is not one of the ${EXPECTED_REPEATS.length} intended repeats — an accidental duplicate`);
+    }
+    for (const vector of expectedRepeats.filter((item) => !actualRepeats.includes(item)))
+    {
+        console.error(`${vector} is listed as an intended repeat but the hand-written tables no longer repeat it`);
+    }
+}
+const handWrittenRepeats = actualRepeats.length;
+// Round 21 put every printed count through this and the line added in round 23
+// was never taken through it. Each of its four numbers is derived: the generated
+// distinct count from the cross-product, the hand-written distinct count from
+// its length less the repeats it is pinned to have, and the repeat and shared
+// counts from the two expected sets.
+if (generatedSet.size !== cellCount)
+{
+    bad++;
+    console.error(`the generated population holds ${generatedSet.size} distinct vectors for a ${PREFIXES.length}x${ENVS.length}x${SPLITS.length} cross-product`);
+}
+if (handWrittenSet.size !== handWritten.length - handWrittenRepeats)
+{
+    bad++;
+    console.error(`the hand-written population holds ${handWrittenSet.size} distinct vectors across ${handWritten.length} positions with ${handWrittenRepeats} repeat(s) — those do not add up`);
+}
+if (handWrittenRepeats !== EXPECTED_REPEATS.length || actualShared.length !== EXPECTED_SHARED.length)
+{
+    bad++;
+    console.error(`${handWrittenRepeats} repeat(s) and ${actualShared.length} shared vector(s) against ${EXPECTED_REPEATS.length} and ${EXPECTED_SHARED.length} expected`);
 }
 console.log(`uniqueness: ${generatedSet.size} distinct generated, ${handWrittenSet.size} distinct hand-written with ${handWrittenRepeats} intended repeat(s), ${actualShared.length} shared with the cross-product and all ${EXPECTED_SHARED.length} of them expected`);
 
@@ -971,7 +1018,11 @@ const FLOORS = {
     "env behind a launcher": { family: 120, all: true },
     "env inside an outer env's program arguments": { family: 30, all: true },
     "nested env in program position": { family: 10, all: false },
-    "an ordinary program whose argument merely names env": { family: 20, all: false }
+    "an ordinary program whose argument merely names env": { family: 20, all: false },
+    // Found by this round's sweep rather than by a review: the remainder bucket
+    // had no floor, so the family could lose every env-free vector — the plain
+    // `sh -c` and prose cases — and nothing would have said anything.
+    "no env token": { family: 10, all: false }
 };
 const counted = {};
 let admitted = 0;
@@ -1132,6 +1183,14 @@ for (const prefix of PREFIXES)
 // so it cannot depend on which spelling of env or of the split flag the cell
 // happens to use. A cell that disagrees with its prefix's siblings means one of
 // the three dimensions stopped meaning what it means.
+// Anchored to the declared prefixes rather than to whatever the cell walk
+// happened to record, so a prefix dropping out of the map is a failure instead
+// of one fewer check.
+if (coverageByPrefix.size !== PREFIXES.length)
+{
+    bad++;
+    console.error(`coverage was recorded for ${coverageByPrefix.size} prefixes, not the ${PREFIXES.length} declared`);
+}
 for (const [shape, answers] of coverageByPrefix)
 {
     if (answers.size !== 1)
