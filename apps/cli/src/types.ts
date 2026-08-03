@@ -33,6 +33,10 @@ export interface EventRefs
     // names a replacement, which is exactly what tells them from `supersedes`.
     retracts?: string;
     declines?: string;
+    // On a paired demotion (#202): the record the demotion makes room for.
+    // The confirm surface reads it back, so a cap-driven pair is one
+    // confirmable unit rather than two halves that can deadlock.
+    admits?: string;
 }
 
 export interface SelfEvent
