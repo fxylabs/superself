@@ -72,7 +72,7 @@ body:
       label: Naming
       description: Event namespaces, command verbs, ids, and exported types this touches or adds. Write "None" if it introduces no new name. New events extend an owned namespace; they never mint a sibling.
       placeholder: |
-        - Namespace: extends `work.*`; adds `work.deferred`.
+        - Namespace: extends `entity.*` with one new verb; no sibling namespace.
         - Verb: `self work defer <id>`; ids unchanged.
     validations:
       required: true

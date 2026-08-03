@@ -36,8 +36,8 @@ npm install -g superself
 self --help
 ```
 
-The current alpha does not expose `self --version`. Seeing the command families
-from `self --help` is the installation check for this release.
+`self --version` prints the installed version; seeing the command families
+from `self --help` confirms the installation works.
 
 ## 2. Understand the two repositories
 
@@ -85,10 +85,10 @@ records. Machine-level agent onboarding is optional. If you want to request it
 without the prompt, use:
 
 ```bash
-self init --lang en --agents
+self init --lang <code> --agents
 ```
 
-Replace `en` with the view language you want. This can modify agent instruction
+Replace `<code>` with the view language you want, such as `en`. This can modify agent instruction
 files on your machine, so inspect the paths printed by the command.
 
 `self setup` should now show the workspace, its `.superself` store, and `no
@@ -155,12 +155,16 @@ self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
 ```
 
-`self work add` prints a work id such as `w-abc12`. Copy the id printed in your
-terminal; ids in documentation are examples, not values to reuse.
+Each command answers with the event it recorded — a line such as
+`entity.confirmed recorded [<event-id>]` — and `self work add` additionally
+prints a work id such as `w-abc12`. Copy the id printed in your terminal; ids
+in documentation are examples, not values to reuse.
 
-These are not notes appended to a prompt. Each command records an event,
-refolds the current project state, and commits the change to the workspace
-store's Git history.
+These are not notes appended to a prompt. Each command records an event under
+one shared grammar — a goal, a decision, and a work unit are all placed
+entities, differing in label and default placement — then refolds the current
+project state and commits the change to the workspace store's Git history.
+`self state list` shows the merged record set with each entity's placement.
 
 ## 6. Verify that another session can resume
 

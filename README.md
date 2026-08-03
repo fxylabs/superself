@@ -71,8 +71,23 @@ as operating outcomes and separates it from what is not complete.
   of a registered git repository, including a worktree cut for a new branch,
   resolves from the repository itself, so there is no marker to restore and
   nothing to link before the first command works;
-- typed event verbs — `goal set`, `decide`, `work add/start/block/unblock/done`,
-  `report`, `convention add` — append to a per-project JSONL log;
+- every asserted record folds into one entity — text, free labels, typed
+  links, reserved metadata (`target`, `criteria`), and placement — recorded
+  through one shared `entity.*` event grammar in a per-project JSONL log;
+- the preset verbs — `goal set`, `objective add`, `milestone add`,
+  `convention add`, `decide`, `work add` — are sugar over that entity: each
+  resolves its label and default placement through a user-editable alias
+  table (`self alias`), `self state` is the raw verb for free-labeled
+  records, and `self alias add <verb>` makes a custom verb of any label;
+- placement is scope × priority × exposure: a workspace-scoped entity renders
+  in every project's context, priority orders the render, and exposure picks
+  full text, one line, or a search pointer — `self state place` moves any of
+  the three, demotions record why, and demotion out of full waits for a
+  person to confirm;
+- retention caps bound the always-rendered set (defaults: 4,000 characters of
+  full text and 50 index entities, per scope) — adding past a cap is refused
+  until `--demote` names what frees the room, so an agent lands the pair as
+  proposals a person confirms;
 - the outcome layer above work — `objective add/revise/close`, `milestone
   add/revise/met/reach/recheck`, `work link/unlink`, and `work
   propose/accept/decline` — connects the goal to verified progress: a milestone
@@ -199,16 +214,19 @@ machine.
 ### Working foundations
 
 - **Durable state.** Goals, decisions, conventions, objectives, milestones,
-  work, requirements, reports, and artifacts are typed events in an
-  append-only log. Every event immediately refolds canonical views and lands
-  as one commit in the workspace's own git history.
+  and work fold into one placed entity record; reports and artifacts attach to
+  it — all as typed events in an append-only log. Every event immediately
+  refolds canonical views and lands as one commit in the workspace's own git
+  history.
 - **Cross-session pickup.** `self context`, `self work show`, and `self search`
   give agents a generated view of current state and a pull path into full
   history. Managed blocks in `AGENTS.md` and `CLAUDE.md` teach terminal agents
   to load and maintain that state.
 - **Outcome links.** Work can contribute to objectives and milestones and
-  attach reports and immutable artifacts; done is a judgment whose evidence
-  lives in the unit's reports.
+  attach reports and immutable artifacts; done is a judgment whose claim must
+  carry evidence — a report with a commit or an artifact, or a done-time
+  report of what verifiably happened — and declared criteria gate it until
+  each is covered.
 - **The process ledger.** A work unit maps to the agent process running it —
   pid, started-at, running, stale, or exited, judged at read time by the OS on
   the recording machine. Merge control is deliberately left to GitHub PR
@@ -351,6 +369,7 @@ reports, and evidence-backed completion.
 Run `self --help` for the full command surface. The main families are:
 
 - project state: `goal`, `decide`, `convention`, `objective`, `milestone`;
+- the entity grammar underneath them: `state`, `alias`;
 - work and evidence: `work`, `report`, `artifact`;
 - the process ledger: `work started`, `work exited`;
 - context and inspection: `context`, `status`, `search`, `view`;

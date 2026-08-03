@@ -365,7 +365,7 @@ Decisions taken while scoping:
   self-contained HTML). Git history preserves the code.
 - **Log schema.** One event per JSONL line with six fields: `id` (ULID —
   events reference events), `ts` (ISO 8601 UTC), `type` (namespaced, e.g.
-  `decision.confirmed`), `origin` (`actor`, optional `session`, `confirmed`
+  `entity.confirmed`), `origin` (`actor`, optional `session`, `confirmed`
   flag for human confirmation), `project`, `payload` (type-specific), plus
   optional `refs` (`confirms`, `supersedes`, `work`, `commits`, `artifacts`).
   Work ids are short random slugs (`w-xxxxx`) so parallel agents never

@@ -34,6 +34,15 @@ Every verb appends an event to an append-only log inside the workspace store
 project state, work briefs, HTML views — are derived from the log by `self
 fold` and never hand-edited.
 
+Underneath the verbs is one record kind: every assertion folds into an entity
+with a label and a placement — scope (`project` or `workspace`), priority
+(render order), and exposure (`full`, `index`, or `search`). The preset verbs
+are rows in a user-editable alias table (`self alias`), `self state` records
+and moves raw entities, and retention caps keep the always-rendered set
+bounded: adding past a cap is refused until `--demote` names what frees the
+room. `self work done` refuses a bare claim — the evidence is a report with a
+commit or an artifact, or a done-time `--report` of what verifiably happened.
+
 ## What agents get
 
 `self context` prints the project's current truth — goal, active decisions,
@@ -65,8 +74,8 @@ live workspace or project page; `self theme` switches the accent
 ## All commands
 
 Run `self` with no arguments for the full verb list: workspaces, projects,
-goals, decisions, work units, reports, artifacts, conventions, sync, views,
-search, and the fold. `self <command> --help` prints one command's syntax and
+goals, decisions, work units, reports, artifacts, conventions, the raw state
+and alias verbs, sync, views, search, and the fold. `self <command> --help` prints one command's syntax and
 flags; help reads state from nowhere and writes none, so it answers in any
 directory.
 

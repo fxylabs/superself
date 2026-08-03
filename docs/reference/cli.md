@@ -9,8 +9,8 @@ families and record contracts; the scoped help output remains the authority
 for every option and subcommand.
 
 The current alpha installs the `superself` package and exposes the `self`
-command. It does not expose `self --version`; use `self --help` as the
-installation check for this release.
+command. `self --version` prints the version of the package the binary was
+built from.
 
 ## Command surface
 
@@ -23,7 +23,8 @@ prints them during the same run.
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
 | Projects and state remotes | `project add [path] [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal set "<text>"`, `objective ...`, `milestone ...` |
-| Decisions and conventions | `decide ...`, `convention add "<text>"`, `convention drop <event-id>` |
+| Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
+| The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `artifact ...` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
@@ -33,10 +34,32 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone project remote sync clone
-goal objective milestone decide work report artifact convention connect view
-context status setup
+goal objective milestone decide work report artifact convention state alias
+connect view context status setup
 log search fold
 ```
+
+Beyond that list, the alias table dispatches its own verbs: `self idea add`
+and `self roadmap add` ship as built-in rows with no dedicated command, and
+`self alias add <verb>` makes any user-added row callable the same way.
+
+### The entity grammar
+
+Every asserted record — goal, decision, convention, objective, milestone,
+work, or a free-labeled entity — folds into one record kind with placement:
+
+- `state add "<text>"` records an entity under any label; `state list` and
+  `state show <id>` read every asserted record back, presets included.
+- `state place <id>` moves an entity's placement — priority, exposure
+  (`full|index|search`), scope (`project|workspace`). A demotion records
+  `--why`; demotion out of full is proposed by agents and confirmed by a
+  person (`state confirm`).
+- Retention caps (`fullCap` and `indexCap` in the store's `config.json`;
+  defaults 4,000 characters of full text and 50 index entities, per scope)
+  gate `state add` and `state place` into a tier: past a cap the verb refuses
+  until `--demote <id>` names what frees the room.
+- `alias` prints and edits the table the preset verbs read their label and
+  default placement from; built-in rows can be overridden and restored.
 
 ### Outcome and work commands
 
@@ -50,8 +73,11 @@ log search fold
   awaiting confirmation; `decide confirm <event-id>` confirms it.
 - `work` creates and moves outcomes, links them to objectives or milestones,
   records the process running a unit, and shows its evidence and recovery
-  path. `work done` is the judgment that the outcome was reached; the evidence
-  lives in the unit's reports.
+  path. `work done` is the judgment that the outcome was reached, and the
+  claim must carry evidence: a report with a commit or an artifact, or a
+  done-time `--report` stating what verifiably happened. A bare claim is
+  refused, and declared criteria gate done until each carries a coverage
+  claim.
 - `report` attaches a progress report, optional commit evidence, and optional
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
@@ -72,12 +98,13 @@ The full work transitions and flags are in the `work` declaration of
 
 ### Context and inspection commands
 
-`self context` is the agent-facing projection of current project truth. A pipe,
-redirect, `--plain`, `TERM=dumb`, or a terminal too narrow for a table receives
-the plain render. A sufficiently wide interactive terminal receives the ruled
-render; `--pretty` forces the ruled render. The plain project context
-is capped at 12,000 characters, and omissions name the command that recovers
-the omitted state.
+`self context` is the agent-facing projection of current project truth: placed
+entities in priority order — full text, then the derived live state, then the
+index lines — with pointers to what stays behind. A pipe, redirect, `--plain`,
+`TERM=dumb`, or a terminal too narrow for a table receives the plain render. A
+sufficiently wide interactive terminal receives the ruled render; `--pretty`
+forces the ruled render. The plain project context is capped at 12,000
+characters, and omissions name the command that recovers the omitted state.
 
 `self status` is the shorter attention and health projection. `self work show
 <id>` is the pull path for one unit's complete recovery line. `self search`
@@ -115,8 +142,19 @@ Every canonical state change is a `SelfEvent` in the event log:
 
 `refs` is optional. Its other supported links include confirmation and
 supersession, work, branch, blocked work, and decision sequencing.
-Event namespaces are owned; the current owners and names are listed in
-[`ARCHITECTURE.md`](../../ARCHITECTURE.md#event-namespaces).
+
+The CLI writes one shared event grammar. Every asserted record uses the
+`entity.*` namespace — `entity.proposed`, `entity.confirmed`,
+`entity.superseded`, `entity.retracted`, `entity.placed`, `entity.linked`,
+`entity.unlinked`, `entity.covered` — and the execution facts
+`entity.started`, `entity.blocked`, `entity.unblocked`, `entity.done`,
+`entity.retired`. Beside them, `report.added` records progress and
+`work.run-started` / `work.run-exited` record process transitions. Event
+namespaces are owned; the current owners are listed in
+[`ARCHITECTURE.md`](../../ARCHITECTURE.md#event-namespaces), and the
+pre-cutover legacy names are read forever but written by no verb — see the
+legacy-interpretation table in
+[Company State and context](../concepts/company-state-and-context.md#legacy-records-read-as-entities).
 
 ### Derived work and report records
 
@@ -145,3 +183,20 @@ When this page and scoped help disagree, the checked-out implementation-owned
 help is authoritative and the page needs maintenance. Claims about whether a
 workflow is shipped, partial, or future belong to the
 [roadmap](../roadmap.md), not to an illustrative command example.
+
+Three of this page's claims are checked mechanically by the test tier rather
+than by reading:
+
+- the top-level verb catalogue above must match the typed command contract
+  exactly;
+- event names this documentation set mentions must belong to the vocabulary
+  the CLI actually writes — legacy names may appear only under a heading that
+  contains the word "legacy";
+- concrete command examples in the user-facing documents are executed against
+  a scratch workspace. A ```` ```bash ```` or ```` ```sh ```` line starting
+  with `self ` runs, in order per document, and must succeed — unless its
+  trailing comment contains `# refused`, in which case it must be refused.
+  Lines carrying a placeholder (`<...>` or an `xxxxx` id) and the network
+  verbs `remote`, `sync`, and `clone` are excluded by rule; `cd` lines steer
+  the scratch working directory, and every directory an example enters exists
+  as a git repository before the run.

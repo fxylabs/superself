@@ -86,20 +86,43 @@ above.
 
 | Capability | State | What works now | Open operating gap |
 | --- | --- | --- | --- |
-| Durable project state | Shipped foundation | Goals, decisions, objectives, milestones, work, reports, artifacts, and history are event-sourced | Broader company scope and stronger migration guarantees |
+| Durable project state | Shipped foundation | Every asserted record — goal, decision, convention, objective, milestone, work — folds into one placed entity under a shared `entity.*` event grammar; reports, artifacts, and history are event-sourced | Broader company scope and stronger migration guarantees |
+| Placed, bounded context | Shipped foundation | Entities render by priority and exposure under user-set retention caps; workspace-scoped entities enter every project's context; the preset verbs are a user-editable alias table | Preset cap gating, logical org levels, and general retrieval budgets (see below) |
 | Cross-session recovery | Shipped foundation | `context`, `work show`, `search`, and managed agent blocks let another session resume | General context selection and retrieval budgets at every scope |
-| Outcome and evidence model | Shipped foundation | Work and milestones link to evidence; a milestone is reached only when every exit criterion is covered | Wider automatic evidence collection and adapter contracts |
+| Outcome and evidence model | Shipped foundation | Done claims are gated on evidence and declared criteria; a milestone is reached only when every exit criterion is covered | Wider automatic evidence collection and adapter contracts |
 | Executable work contract | Direction | Removed with the governance layer (decision 01kz2nczhtde554qx5tqpqzrt3); a work brief attaches via `report --file` | A stable public contract from intent through a versioned work graph |
 | Process visibility | Shipped foundation | The pid ledger maps a unit to its agent process; running, stale, and exited are judged at read time | A control plane that supervises work across projects |
 | Scheduling and supervision | Direction | Removed with the daemon; dispatch is a person or a session starting agents | A supervisor that enumerates and schedules several projects |
 | Resource allocation | Direction | Removed with the daemon and circuit breakers | Cross-project priority, deadline, quota, observed capacity, reservation, and fair allocation |
 | Authorization | Direction | A person merging the GitHub PR is the approval; in-tool approvals were removed | Policy-derived authorization and a general action escalation/resume protocol |
-| Completion | Shipped foundation | Done is a judgment: one gate admits it, and the evidence lives in the unit's reports | A controller does not yet record `work.done` and continue dependencies automatically |
+| Completion | Shipped foundation | Done is a judgment: one gate admits it, and the claim must carry evidence | A controller does not yet record `entity.done` and continue dependencies automatically |
 | Attention and reporting | Partial | Status with per-unit process state and a read-only viewer exist | One cross-project surface for running, queued, capacity, failure, and exact next actions |
 | Extension boundary | Direction | Provider-neutral execution and some MCP foundations exist | A trusted, namespaced capability registry and lifecycle |
 
 `Shipped foundation` does not mean the whole capability is finished. It means
 the next outcome can depend on a working, tested primitive.
+
+### Deliberately unshipped edges of the entity model
+
+The Company State Engine redesign (#197) shipped its four phases. What the
+user-facing documents describe as shipped stops exactly here; the following
+edges are target state, named so a reader does not infer them:
+
+- **Preset cap gating** (work `w-wdhg4`): the retention caps gate `state add`,
+  `state place`, and the alias verbs today. The dedicated preset commands —
+  `goal set`, `objective add`, `milestone add`, `convention add`, `decide` —
+  do not yet route through the cap gate, so they can still land a record in a
+  tier that is over its cap.
+- **WorkSpec machinery**: dispatch and execution contracts are out of the
+  engine's scope by ruling — their boundary with the engine identity needs a
+  dedicated review before any design lands.
+- **Logical org levels**: entity scope stops at `project` versus `workspace`.
+  Levels between and above them are a target of the placement model, not a
+  shipped axis.
+- **Destructive-verb disclosure gate**
+  ([#173](https://github.com/fxylabs/superself/issues/173)): a confirmation
+  boundary for verbs that discard state is accepted direction, not shipped
+  behavior.
 
 ## Roadmap horizons
 
