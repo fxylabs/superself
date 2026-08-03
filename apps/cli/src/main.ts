@@ -1,11 +1,13 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { ALIAS_COMMAND, presetRow, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
 import { helpHint, parseCommand, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
+import { isLive } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
@@ -70,12 +72,29 @@ async function main(argv: string[]): Promise<void>
         return;
     }
     const resolved = resolveCommand(COMMANDS, argv);
-    if (resolved === null)
+    if (resolved !== null)
+    {
+        await runLeaf(resolved);
+        return;
+    }
+    // A first token no command owns resolves against the alias table (#207
+    // A1): `self idea`, `self roadmap`, and every user-added verb dispatch
+    // through the same contract machinery as a composed command. No table
+    // row — or no workspace to read one from — keeps the unknown-command
+    // refusal exactly as it was (A6).
+    const alias = resolveAliasCommand(process.cwd(), argv[0]);
+    if (alias === null)
     {
         cmdUnknown(argv[0] ?? "");
         return;
     }
-    await runLeaf(resolved);
+    const aliased = resolveCommand([alias], argv);
+    if (aliased === null)
+    {
+        cmdUnknown(argv[0] ?? "");
+        return;
+    }
+    await runLeaf(aliased);
 }
 
 // The one parse in the CLI: the option set and the positional count come from
@@ -112,15 +131,23 @@ function cmdUnknown(cmd: string): void
 }
 
 // Help is answered before any command runs, so asking for it needs no
-// workspace, writes no event, and always exits successfully.
+// workspace, writes no event, and always exits successfully. An alias verb's
+// page is looked up best-effort — where no workspace or no row answers, the
+// root list does, exactly as before.
 function helpText(argv: string[]): string | null
 {
     if (argv[0] !== "help" && !asksForHelp(argv))
     {
         return null;
     }
-    const command = findCommandByName(COMMANDS, argv[0] === "help" ? argv[1] : argv[0]);
-    return command === undefined ? rootUsage(COMMANDS) : commandUsage(command);
+    const name = argv[0] === "help" ? argv[1] : argv[0];
+    const command = findCommandByName(COMMANDS, name);
+    if (command !== undefined)
+    {
+        return commandUsage(command);
+    }
+    const alias = name === undefined ? null : resolveAliasCommand(process.cwd(), name);
+    return alias === null ? rootUsage(COMMANDS) : commandUsage(alias);
 }
 
 // After `--` a flag is a positional the user meant literally, not a request.
@@ -207,7 +234,11 @@ const REPORT_OPTIONS = {
 
 // Declared once for the whole verb, so the subcommand that does not take one
 // of these says so itself rather than dropping the flag.
-const CONVENTION_OPTIONS = { supersedes: { type: "string", multiple: true }, why: { type: "string" } } as const;
+const CONVENTION_OPTIONS = {
+    supersedes: { type: "string", multiple: true },
+    why: { type: "string" },
+    workspace: { type: "boolean" }
+} as const;
 
 const SCOPED_RENDER_OPTIONS = { ...SCOPE_OPTIONS, ...RENDER_OPTIONS } as const;
 
@@ -217,10 +248,12 @@ const LOG_OPTIONS = { lines: { type: "string", short: "n" }, ...WORKSPACE_SCOPE_
 
 const SEARCH_OPTIONS = { type: { type: "string" }, project: { type: "string" } } as const;
 
+// The shared execution grammar (#207 B14): a work verb records the same
+// `entity.*` fact the raw state verbs record, whichever kind of unit it moves.
 const WORK_TRANSITIONS: [string, string][] = [
-    ["start", "work.started"],
-    ["block", "work.blocked"],
-    ["unblock", "work.unblocked"]
+    ["start", "entity.started"],
+    ["block", "entity.blocked"],
+    ["unblock", "entity.unblocked"]
 ];
 
 // Done is not a transition like the others: it is the claim that the outcome
@@ -537,7 +570,7 @@ export const COMMANDS: Command[] = [
     {
         name: "convention",
         usage: [
-            { syntax: 'convention add "<text>" [--supersedes <event-id>]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
+            { syntax: 'convention add "<text>" [--supersedes <event-id>] [--workspace]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
             { syntax: 'convention drop <event-id> --why "<reason>"', description: ["retire a convention with nothing replacing it"], verbs: ["drop"] }
         ],
         detail: [
@@ -545,6 +578,8 @@ export const COMMANDS: Command[] = [
             "",
             "  --supersedes <id>     the convention this one replaces, repeatable",
             "  --why <text>          why a dropped rule no longer holds; every withdrawal carries one",
+            "  --workspace           record at workspace scope: the rule renders in every",
+            "                        project's context; its record stays in this project's store",
             "",
             "correcting a rule is one event, not a drop and a re-add: the replacement",
             "carries the lineage, so the pair can never both read as current."
@@ -552,7 +587,7 @@ export const COMMANDS: Command[] = [
         node: branch({
             name: "convention",
             unnamed: "refuse",
-            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] | drop <event-id> --why w',
+            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w',
             children: [
                 leaf("add", CONVENTION_OPTIONS, 1, conventionAdd),
                 leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop)
@@ -560,6 +595,7 @@ export const COMMANDS: Command[] = [
         })
     },
     STATE_COMMAND,
+    ALIAS_COMMAND,
     {
         name: "connect",
         usage: [
@@ -672,6 +708,10 @@ export const COMMANDS: Command[] = [
         node: leaf("", {}, 0, cmdFold)
     }
 ];
+
+// The composed names are what `alias add` refuses as reserved (#207 A5); the
+// preset verbs among them are table rows, which the registration filters out.
+registerReservedVerbs(COMMANDS.map((command) => command.name));
 
 /* ── the workspace and project verbs this module implements ────────── */
 
@@ -921,56 +961,116 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
     excludeLocally(projectDir, MARKER_FILE);
 }
 
+// Every preset write is an entity write now (#207 B): the verb keeps its
+// vocabulary and its refusals, the recorded event is the shared grammar's,
+// and the printed line names the entity event it recorded (ruling ②). The
+// entity id is the creation event's own id, exactly the id a goal or a
+// decision has always answered to.
+function presetEntityEvent(
+    ctx: ProjectContext,
+    verb: string,
+    text: string,
+    extra: Record<string, unknown>,
+    refs: EventRefs | undefined,
+    proposed: boolean
+): void
+{
+    const row = presetRow(ctx.storeDir, verb);
+    const event = makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", {}, refs, !proposed);
+    const payload: Record<string, unknown> = {
+        entity: event.id,
+        text,
+        labels: [row.label],
+        links: [],
+        criteria: [],
+        exposure: row.exposure,
+        scope: "project",
+        ...extra
+    };
+    if (row.priority !== undefined && payload.priority === undefined)
+    {
+        payload.priority = row.priority;
+    }
+    event.payload = payload;
+    recordEvent(ctx, event, text);
+}
+
 function cmdGoalSet(value: string | undefined): void
 {
     const text = requireText(value, 'goal set "<text>"');
     const ctx = requireProject(process.cwd());
-    recordEvent(ctx, makeEvent(ctx.project, "goal.set", { text }, undefined, true), text);
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    // The latest goal wins, as it always has: the new statement supersedes
+    // every live goal record, legacy-derived and native alike.
+    const live = model.entities.filter((item) => item.source === "goal" && isLive(item));
+    presetEntityEvent(ctx, "goal", text, {
+        links: live.map((item) => ({ type: "supersedes", target: item.id }))
+    }, undefined, false);
 }
 
 function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
     const text = requireText(positionals[0], 'decide "<decision>" [--why w] [--proposed]');
-    const payload: Record<string, unknown> = { text };
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const extra: Record<string, unknown> = {};
     if (values.why !== undefined)
     {
-        payload.why = values.why;
+        extra.why = values.why;
+    }
+    if (values.supersedes !== undefined && values.supersedes.length > 0)
+    {
+        extra.links = values.supersedes.map((prefix) => ({ type: "supersedes", target: requireDecision(model, prefix).id }));
     }
     // The work link is stated, never inferred from what happens to be open:
     // most decisions belong to the project, not to a unit of work.
-    const refs = decisionRefs(ctx, values);
-    const type = values.proposed === true ? "decision.proposed" : "decision.confirmed";
-    recordEvent(ctx, makeEvent(ctx.project, type, payload, refs, values.proposed !== true), text);
+    presetEntityEvent(ctx, "decide", text, extra, decisionRefs(ctx, values), values.proposed === true);
+}
+
+// Exact id first, then a unique prefix, over the folded records — legacy
+// decisions and native decision entities answer through one lookup.
+function requireDecision(model: ProjectModel, prefix: string | undefined): DecisionState
+{
+    const wanted = requireText(prefix, "decide … <decision-id>");
+    const exact = model.decisions.find((item) => item.id === wanted);
+    if (exact !== undefined)
+    {
+        return exact;
+    }
+    const matches = model.decisions.filter((item) => item.id.startsWith(wanted));
+    if (matches.length > 1)
+    {
+        throw new CliError(`decision id "${wanted}" is ambiguous (${matches.length} matches) — spell more of it`);
+    }
+    if (matches.length === 0)
+    {
+        throw new CliError(`${wanted} is not a decision`);
+    }
+    return matches[0];
 }
 
 function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
 {
-    const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, "decide confirm <event-id>"));
-    if (target.type !== "decision.proposed")
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const decision = requireDecision(model, requireText(prefix, "decide confirm <event-id>"));
+    if (decision.status !== "proposed")
     {
-        throw new CliError(`${target.id} is not a proposed decision`);
+        throw new CliError(`${decision.id} is not a proposed decision`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "decision.confirmed", {}, { confirms: target.id }, true), String(target.payload.text));
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: decision.id }, { confirms: decision.id }, true), decision.text);
 }
 
 // Withdrawal without a successor: `retract` takes back a confirmed decision,
 // `decline` turns down a proposal. One body, because the two differ only in
 // which status they are admitted on and which ref they write — a second copy
-// would drift on the part they share, which is every refusal below.
+// would drift on the part they share, which is every refusal below. Both
+// record the shared grammar's one withdrawal event; the declined proposal
+// keeps its distinct marker in the folded record (#207 B4).
 function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", prefix: string | undefined, why: string | undefined): void
 {
     const usage = `decide ${verb} <event-id> --why "<reason>"`;
-    const event = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, usage));
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    // A confirmation event carries no record of its own — the proposal it
-    // confirmed is the record — so naming either id reaches the same decision.
-    const id = event.type === "decision.confirmed" && event.refs?.confirms !== undefined ? event.refs.confirms : event.id;
-    const decision = model.decisions.find((item) => item.id === id);
-    if (decision === undefined)
-    {
-        throw new CliError(`${event.id} is not a decision`);
-    }
+    const decision = requireDecision(model, requireText(prefix, usage));
     const admits = verb === "retract" ? "confirmed" : "proposed";
     if (decision.status !== admits)
     {
@@ -978,10 +1078,9 @@ function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", pref
     }
     // Every lifecycle exit that is not a supersession carries its reason: a
     // supersession says why by naming its successor, and nothing else does.
-    const payload = { why: requireText(why, usage) };
+    const payload = { entity: decision.id, why: requireText(why, usage) };
     const refs = verb === "retract" ? { retracts: decision.id } : { declines: decision.id };
-    const type = verb === "retract" ? "decision.retracted" : "decision.declined";
-    recordEvent(ctx, makeEvent(ctx.project, type, payload, refs, true), decision.text);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", payload, refs, true), decision.text);
 }
 
 // Each refusal names the state the record is actually in and the verb that
@@ -1003,7 +1102,6 @@ function withdrawalRefusal(verb: "retract" | "decline", decision: DecisionState)
 
 interface DecisionOptions
 {
-    supersedes?: string[];
     work?: string;
     blocks?: string[];
     after?: string;
@@ -1011,14 +1109,11 @@ interface DecisionOptions
 
 // Every id a decision names is resolved before the event is written, so a
 // typo is refused here rather than folding into a relation that points at
-// nothing on every machine that pulls it.
+// nothing on every machine that pulls it. Supersession travels as an entity
+// link now; these are the work-graph refs the attention band reads.
 function decisionRefs(ctx: ProjectContext, options: DecisionOptions): EventRefs | undefined
 {
     const refs: EventRefs = {};
-    if (options.supersedes !== undefined && options.supersedes.length > 0)
-    {
-        refs.supersedes = options.supersedes.map((prefix) => findEventByPrefix(ctx.storeDir, ctx.project, prefix).id);
-    }
     if (options.work !== undefined)
     {
         refs.work = requireKnownWork(ctx, options.work);
@@ -1040,8 +1135,22 @@ function cmdWorkAdd(value: string | undefined): void
 {
     const outcome = requireText(value, 'work add "<required outcome>"');
     const ctx = requireProject(process.cwd());
+    const row = presetRow(ctx.storeDir, "work");
     const id = workId();
-    recordEvent(ctx, makeEvent(ctx.project, "work.created", { work: id, outcome }), `${id} ${outcome}`);
+    const payload: Record<string, unknown> = {
+        entity: id,
+        text: outcome,
+        labels: [row.label],
+        links: [],
+        criteria: [],
+        exposure: row.exposure,
+        scope: "project"
+    };
+    if (row.priority !== undefined)
+    {
+        payload.priority = row.priority;
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", payload), `${id} ${outcome}`);
     console.log(id);
 }
 
@@ -1150,8 +1259,8 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
         return;
     }
     const why = requireText(values.why, 'work retire <work-id> --why "<why the outcome was given up or moved>" [--successor <work-id>]');
-    const payload = { work: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
-    recordEvent(ctx, makeEvent(ctx.project, "work.retired", payload, undefined, true), `${work.id} ${why}`);
+    const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
+    recordEvent(ctx, makeEvent(ctx.project, "entity.retired", payload, undefined, true), `${work.id} ${why}`);
 }
 
 // The unit a retirement speaks about: known, and not already closed as done.
@@ -1236,8 +1345,8 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
 {
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
-    const payload: Record<string, unknown> = { work: work.id };
-    if (type === "work.blocked")
+    const payload: Record<string, unknown> = { entity: work.id };
+    if (type === "entity.blocked")
     {
         if (values.on !== "decision" && values.on !== "dependency" && values.on !== "external")
         {
@@ -1269,14 +1378,14 @@ function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>)
     {
         throw new CliError(refusal);
     }
-    const payload: Record<string, unknown> = { work: work.id };
+    const payload: Record<string, unknown> = { entity: work.id };
     if (values.why !== undefined)
     {
         payload.why = values.why;
     }
     const events = report === undefined ? []
         : [makeEvent(ctx.project, "report.added", { text: report }, { work: work.id })];
-    events.push(makeEvent(ctx.project, "work.done", payload));
+    events.push(makeEvent(ctx.project, "entity.done", payload));
     recordEvents(ctx, events, `${work.id} ${work.outcome}`);
 }
 
@@ -1379,18 +1488,29 @@ function headEvidence(ctx: ProjectContext): string[]
 
 function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
 {
-    const text = requireText(positionals[0], 'convention add "<text>" [--supersedes <event-id>]');
+    const text = requireText(positionals[0], 'convention add "<text>" [--supersedes <event-id>] [--workspace]');
     if (values.why !== undefined)
     {
         throw new CliError("convention add takes no --why — the rule is its own statement; --why records why a rule was withdrawn");
     }
     const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const extra: Record<string, unknown> = {};
     // A correction is one event: the replacement carries the lineage, so
     // the rule it replaces never has to be dropped and re-added — which is
     // how two contradicting conventions used to end up both current.
-    const refs = values.supersedes === undefined ? undefined
-        : { supersedes: currentConventionIds(ctx, values.supersedes) };
-    recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, refs, true), text);
+    if (values.supersedes !== undefined)
+    {
+        extra.links = currentConventionIds(model, values.supersedes)
+            .map((target) => ({ type: "supersedes", target }));
+    }
+    if (values.workspace === true)
+    {
+        // A placement value, not a read scope (#207 D6): the rule renders in
+        // every project's context while its record stays in this store.
+        extra.scope = "workspace";
+    }
+    presetEntityEvent(ctx, "convention", text, extra, undefined, false);
 }
 
 function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
@@ -1402,36 +1522,45 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     {
         throw new CliError('convention drop takes no --supersedes — to replace a rule, run `convention add "<text>" --supersedes <event-id>`');
     }
+    if (values.workspace === true)
+    {
+        throw new CliError("convention drop takes no --workspace — a rule is dropped wherever it renders; --workspace states a new rule's scope");
+    }
     const ctx = requireProject(process.cwd());
     const usage = 'convention drop <event-id> --why "<why the rule no longer holds>"';
-    const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(positionals[0], usage));
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const id = currentConventionIds(model, [requireText(positionals[0], usage)])[0];
     // Every withdrawal carries its reason. A rule that left the current set
     // with nothing recorded reads, a year later, exactly like one nobody
     // ever wrote down.
-    const payload = { why: requireText(values.why, usage) };
-    const refs = { supersedes: currentConventionIds(ctx, [target.id]) };
-    recordEvent(ctx, makeEvent(ctx.project, "convention.dropped", payload, refs, true), String(target.payload.text));
+    const payload = { entity: id, why: requireText(values.why, usage) };
+    const text = model.conventions.find((item) => item.id === id)?.text ?? id;
+    recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", payload, { retracts: id }, true), text);
 }
 
-// The ids of conventions that still hold. A withdrawn one is refused rather
-// than named again: the first withdrawal is what happened, and a second event
-// pointing at it would claim to change a record it cannot.
-function currentConventionIds(ctx: ProjectContext, prefixes: string[]): string[]
+// The ids of conventions that still hold, legacy and native alike. A
+// withdrawn one is refused rather than named again: the first withdrawal is
+// what happened, and a second event pointing at it would claim to change a
+// record it cannot.
+function currentConventionIds(model: ProjectModel, prefixes: string[]): string[]
 {
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
     return prefixes.map((prefix) =>
     {
-        const target = findEventByPrefix(ctx.storeDir, ctx.project, prefix);
-        if (target.type !== "convention.added")
+        const matches = model.conventions.filter((item) => item.id === prefix || item.id.startsWith(prefix));
+        if (matches.length === 0)
         {
-            throw new CliError(`${target.id} is not a convention`);
+            throw new CliError(`${prefix} is not a convention`);
         }
-        const state = model.conventions.find((convention) => convention.id === target.id);
-        if (state !== undefined && state.status !== "current")
+        if (matches.length > 1 && !matches.some((item) => item.id === prefix))
         {
-            throw new CliError(`${target.id} was already ${state.status} — it is not a convention that still holds`);
+            throw new CliError(`convention id "${prefix}" is ambiguous (${matches.length} matches) — spell more of it`);
         }
-        return target.id;
+        const state = matches.find((item) => item.id === prefix) ?? matches[0];
+        if (state.status !== "current")
+        {
+            throw new CliError(`${state.id} was already ${state.status} — it is not a convention that still holds`);
+        }
+        return state.id;
     });
 }
 

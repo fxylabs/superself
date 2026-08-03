@@ -1,0 +1,6 @@
+01kz41gfs4067wp4y8bfcxxyps  confirmed  (from convention)
+text: four spaces, semicolons
+labels: convention
+placement: project · full · priority 30
+link: supersedes 01kz41gf27bk44jsp0mcv74emn
+recorded: 2026-08-03

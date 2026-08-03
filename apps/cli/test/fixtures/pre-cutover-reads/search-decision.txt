@@ -1,0 +1,2 @@
+demo  2026-08-03  decision.confirmed [superseded]  [01kz41ga6pj4pwzt6db7vzmcky]  ship weekly
+demo  2026-08-03  decision.confirmed  [01kz41gawfbxxbewh23ffnazr0]  ship daily

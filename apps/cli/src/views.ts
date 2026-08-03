@@ -1,4 +1,4 @@
-import { EntityState, orderEntities, pendingSummary } from "./entities.js";
+import { EntityState, isCurrent, orderEntities, pendingSummary } from "./entities.js";
 import { judgeProcess } from "./ledger.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import {
@@ -70,7 +70,19 @@ export function printContext(ctx: CliContext, render: RenderMode): void
         console.log(renderContext({ model, waiting: unrankedWaitingLines(model) }).join("\n"));
         return;
     }
-    writeContext(renderProjectContext(model));
+    writeContext(renderProjectContext(model, foreignWorkspaceEntities(ctx)));
+}
+
+// A workspace-scoped entity renders in every project's context (#197 §3,
+// #207 D1) while its events stay in its home store — so the collect step
+// reads every other registered project's fold and carries only the
+// workspace-scoped, current records into this render.
+function foreignWorkspaceEntities(ctx: CliContext): EntityState[]
+{
+    return readRegistry(ctx.storeDir)
+        .filter((entry) => entry.slug !== ctx.project)
+        .flatMap((entry) => buildModel(ctx.storeDir, entry.slug, new Date()).entities)
+        .filter((entity) => entity.scope === "workspace" && entity.status === "confirmed" && isCurrent(entity));
 }
 
 // The placement projection (#197 §6, #202): collect the live entities, order
@@ -86,13 +98,18 @@ interface ContextSection
     omission: (count: number) => string;
 }
 
-function renderProjectContext(model: ProjectModel): string
+function renderProjectContext(model: ProjectModel, foreign: EntityState[] = []): string
 {
     const project = shellArgument(model.slug);
-    // Collect is scope-aware: a workspace-scoped entity enters every
-    // project's context, so both scopes render here. Collecting them across
-    // stores arrives with workspace-scoped creation (phase 4).
-    const placed = orderEntities(model.entities.filter((item) => item.status === "confirmed"));
+    // Collect is scope-aware (#197 §6): this project's current records plus
+    // every other store's workspace-scoped ones, in one priority ordering —
+    // workspace and project entities interleave rather than sectioning. Work
+    // records are deliberately absent: the derived live state below is the
+    // render a work unit gets (#197 §7 — "live state shows the active ones").
+    const placed = orderEntities([
+        ...model.entities.filter((item) => item.status === "confirmed" && isCurrent(item)),
+        ...foreign
+    ].filter((item) => item.source !== "work"));
     const sections = [
         descriptionSection(model, project),
         fullSection(placed, project),
@@ -231,7 +248,7 @@ function entityWaitingRows(model: ProjectModel): string[]
 function deadlineRows(model: ProjectModel): string[]
 {
     return model.entities
-        .filter((item) => item.status === "confirmed" && item.target !== undefined)
+        .filter((item) => item.status === "confirmed" && isCurrent(item) && item.target !== undefined)
         .sort((left, right) => (left.target ?? "").localeCompare(right.target ?? "") || left.id.localeCompare(right.id))
         .map((item) => `- ${item.target}: ${entityLabel(item)}${oneLine(item.text)}`);
 }

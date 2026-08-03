@@ -78,54 +78,81 @@ test("a dropped convention reads retracted with its why; a correction supersedes
     assert.ok(must(box, demo, ["state", "show", corrected]).out.includes("placement: project · full · priority 30"));
 });
 
-test("objective create, revise and close fold to one full-exposure objective entity", () =>
+// The objective and milestone legacy interpretations are asserted over
+// hand-appended `objective.*`/`milestone.*` lines: the verbs write the shared
+// entity grammar since the cutover (#207 B), and only a pre-cutover log
+// carries these event types — which the fold keeps reading forever (spec §8).
+function appendLegacy(lines)
 {
-    const objective = shortIdIn(must(box, demo, ["objective", "add", "reach preview", "--target", "2030-01-01"]).out, "o");
-    let shown = must(box, demo, ["state", "show", objective]).out;
+    const log = join(box.root, "ws", ".superself", "projects", "demo", "log.jsonl");
+    appendFileSync(log, lines.map((line) => JSON.stringify(line) + "\n").join(""));
+    must(box, demo, ["fold"]);
+}
+
+test("legacy objective create, revise and close fold to one full-exposure objective entity", () =>
+{
+    appendLegacy([
+        { id: "01hz0000000000000000000o01", ts: "2025-01-02T00:00:00.000Z", type: "objective.created", project: "demo", payload: { objective: "o-lega1", outcome: "reach preview", target: "2030-01-01", success: [], stop: [] }, refs: {}, origin: {} }
+    ]);
+    let shown = must(box, demo, ["state", "show", "o-lega1"]).out;
     assert.ok(shown.includes("labels: objective"));
     assert.ok(shown.includes("placement: project · full · priority 10"));
     assert.ok(shown.includes("target: 2030-01-01"));
-    must(box, demo, ["objective", "revise", objective, "--why", "slipped", "--target", "2030-06-30"]);
-    assert.ok(must(box, demo, ["state", "show", objective]).out.includes("target: 2030-06-30"),
+    appendLegacy([
+        { id: "01hz0000000000000000000o02", ts: "2025-01-02T00:01:00.000Z", type: "objective.revised", project: "demo", payload: { objective: "o-lega1", why: "slipped", target: "2030-06-30" }, refs: {}, origin: {} }
+    ]);
+    assert.ok(must(box, demo, ["state", "show", "o-lega1"]).out.includes("target: 2030-06-30"),
         "a revision's target did not reach the entity view");
-    must(box, demo, ["objective", "close", objective, "--as", "dropped", "--why", "descoped"]);
-    shown = must(box, demo, ["state", "show", objective]).out;
+    appendLegacy([
+        { id: "01hz0000000000000000000o03", ts: "2025-01-02T00:02:00.000Z", type: "objective.closed", project: "demo", payload: { objective: "o-lega1", as: "dropped", why: "descoped" }, refs: {}, origin: {} }
+    ]);
+    shown = must(box, demo, ["state", "show", "o-lega1"]).out;
     assert.ok(shown.includes("retracted"));
     assert.ok(shown.includes("closed: descoped"));
     assert.ok(!must(box, demo, ["state", "list"]).out.includes("reach preview"));
 });
 
-test("a reached objective and a declined proposal both leave the live entity set", () =>
+test("a reached legacy objective and a declined legacy proposal both leave the live entity set", () =>
 {
-    const reached = shortIdIn(must(box, demo, ["objective", "add", "land the tier"]).out, "o");
-    must(box, demo, ["objective", "close", reached, "--as", "reached"]);
-    const closed = must(box, demo, ["state", "show", reached]).out;
+    appendLegacy([
+        { id: "01hz0000000000000000000o04", ts: "2025-01-02T00:03:00.000Z", type: "objective.created", project: "demo", payload: { objective: "o-lega2", outcome: "land the tier", success: [], stop: [] }, refs: {}, origin: {} },
+        { id: "01hz0000000000000000000o05", ts: "2025-01-02T00:04:00.000Z", type: "objective.closed", project: "demo", payload: { objective: "o-lega2", as: "reached" }, refs: {}, origin: {} }
+    ]);
+    const closed = must(box, demo, ["state", "show", "o-lega2"]).out;
     assert.ok(closed.includes("retracted"));
     assert.ok(closed.includes("closed: reached"));
-    const proposed = shortIdIn(must(box, demo, ["objective", "add", "maybe someday", "--proposed"]).out, "o");
+    appendLegacy([
+        { id: "01hz0000000000000000000o06", ts: "2025-01-02T00:05:00.000Z", type: "objective.created", project: "demo", payload: { objective: "o-lega3", outcome: "maybe someday", proposed: true, success: [], stop: [] }, refs: {}, origin: {} }
+    ]);
     assert.ok(must(box, demo, ["state", "list"]).out.includes("maybe someday"), "a proposed objective is a live entity");
-    must(box, demo, ["objective", "decline", proposed, "--why", "off goal"]);
+    appendLegacy([
+        { id: "01hz0000000000000000000o07", ts: "2025-01-02T00:06:00.000Z", type: "objective.declined", project: "demo", payload: { objective: "o-lega3", why: "off goal" }, refs: {}, origin: {} }
+    ]);
     assert.ok(!must(box, demo, ["state", "list"]).out.includes("maybe someday"));
-    assert.ok(must(box, demo, ["state", "show", proposed]).out.includes("closed: off goal"));
+    assert.ok(must(box, demo, ["state", "show", "o-lega3"]).out.includes("closed: off goal"));
 });
 
-test("a milestone folds to an index entity with criteria and its objective grouping", () =>
+test("a legacy milestone folds to an index entity with criteria and its objective grouping", () =>
 {
-    const objective = shortIdIn(must(box, demo, ["objective", "add", "preview quality"]).out, "o");
-    const milestone = shortIdIn(must(box, demo, ["milestone", "add", "suite green", "--objective", objective,
-        "--exit", "all tests pass", "--exit", "docs updated"]).out, "m");
-    const shown = must(box, demo, ["state", "show", milestone]).out;
+    appendLegacy([
+        { id: "01hz0000000000000000000o08", ts: "2025-01-02T00:07:00.000Z", type: "objective.created", project: "demo", payload: { objective: "o-lega4", outcome: "preview quality", success: [], stop: [] }, refs: {}, origin: {} },
+        { id: "01hz0000000000000000000m01", ts: "2025-01-02T00:08:00.000Z", type: "milestone.created", project: "demo", payload: { objective: "o-lega4", milestone: "m-lega1", outcome: "suite green", exit: [{ id: "c1", text: "all tests pass" }, { id: "c2", text: "docs updated" }] }, refs: {}, origin: {} }
+    ]);
+    const shown = must(box, demo, ["state", "show", "m-lega1"]).out;
     assert.ok(shown.includes("labels: milestone"));
     assert.ok(shown.includes("placement: project · index · priority 20"));
     assert.ok(shown.includes("criterion: all tests pass"));
     assert.ok(shown.includes("criterion: docs updated"));
-    assert.ok(shown.includes(`link: member-of ${objective}`));
-    const successor = shortIdIn(must(box, demo, ["milestone", "add", "suite green on ci", "--objective", objective,
-        "--exit", "ci green", "--supersedes", milestone]).out, "m");
-    assert.ok(must(box, demo, ["state", "show", milestone]).out.includes(`superseded by: ${successor}`));
-    assert.ok(must(box, demo, ["state", "show", successor]).out.includes(`link: supersedes ${milestone}`));
-    must(box, demo, ["milestone", "drop", successor, "--why", "checkpoint removed"]);
-    const droppedShown = must(box, demo, ["state", "show", successor]).out;
+    assert.ok(shown.includes("link: member-of o-lega4"));
+    appendLegacy([
+        { id: "01hz0000000000000000000m02", ts: "2025-01-02T00:09:00.000Z", type: "milestone.created", project: "demo", payload: { objective: "o-lega4", milestone: "m-lega2", outcome: "suite green on ci", exit: [{ id: "c1", text: "ci green" }], supersedes: "m-lega1" }, refs: {}, origin: {} }
+    ]);
+    assert.ok(must(box, demo, ["state", "show", "m-lega1"]).out.includes("superseded by: m-lega2"));
+    assert.ok(must(box, demo, ["state", "show", "m-lega2"]).out.includes("link: supersedes m-lega1"));
+    appendLegacy([
+        { id: "01hz0000000000000000000m03", ts: "2025-01-02T00:10:00.000Z", type: "milestone.dropped", project: "demo", payload: { milestone: "m-lega2", why: "checkpoint removed" }, refs: {}, origin: {} }
+    ]);
+    const droppedShown = must(box, demo, ["state", "show", "m-lega2"]).out;
     assert.ok(droppedShown.includes("retracted"));
     assert.ok(droppedShown.includes("closed: checkpoint removed"));
 });

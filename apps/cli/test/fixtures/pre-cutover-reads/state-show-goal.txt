@@ -1,0 +1,6 @@
+01kz41g9fesqqfs59ftf889m3d  confirmed  (from decision)
+text: keep sqlite
+labels: decision
+placement: project · index · priority 40
+why: simple
+recorded: 2026-08-03

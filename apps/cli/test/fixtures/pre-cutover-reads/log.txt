@@ -1,0 +1,46 @@
+2026-08-03T14:47:32.208Z  goal.set  [01kz41g83gv09h6pkmn726kyzh]  first direction
+2026-08-03T14:47:32.923Z  goal.set  [01kz41g8sv00dfkp216h92cmxv]  steady direction
+2026-08-03T14:47:33.614Z  decision.confirmed  [01kz41g9fesqqfs59ftf889m3d]  keep sqlite
+2026-08-03T14:47:34.358Z  decision.confirmed  [01kz41ga6pj4pwzt6db7vzmcky]  ship weekly
+2026-08-03T14:47:35.055Z  decision.confirmed  [01kz41gawfbxxbewh23ffnazr0]  ship daily
+2026-08-03T14:47:35.840Z  decision.confirmed  [01kz41gbn0qkkx2h9p8b5atyyr]  temp rule
+2026-08-03T14:47:36.556Z  decision.retracted  [01kz41gcbbmg70x1vdbjw1afhc]  walked back
+2026-08-03T14:47:37.251Z  decision.proposed  [01kz41gd13hbqebt8h12mhqk4d]  maybe queue
+2026-08-03T14:47:37.945Z  decision.declined  [01kz41gdps7r7mxaq7b0kv5nx0]  not now
+2026-08-03T14:47:38.647Z  convention.added  [01kz41gecqab9snmnr9ztp5nsk]  events only
+2026-08-03T14:47:39.335Z  convention.added  [01kz41gf27bk44jsp0mcv74emn]  four spaces
+2026-08-03T14:47:40.068Z  convention.added  [01kz41gfs4067wp4y8bfcxxyps]  four spaces, semicolons
+2026-08-03T14:47:40.753Z  convention.added  [01kz41ggehnjxbrjxp2qwycger]  tabs everywhere
+2026-08-03T14:47:41.447Z  convention.dropped  [01kz41gh47k1wsyn787g92p9we]  spaces won
+2026-08-03T14:47:42.149Z  objective.created  [01kz41ght5h1vjn2efdqxzc4wk]  o-yfxat reach preview
+2026-08-03T14:47:42.840Z  milestone.created  [01kz41gjfrfwsvewhxxvvqg1pj]  o-yfxat m-48nbn suite green
+2026-08-03T14:47:43.528Z  milestone.covered  [01kz41gk580y1esb5em9j7sc6f]  m-48nbn c1 suite ran green
+2026-08-03T14:47:44.200Z  milestone.created  [01kz41gkt8gxfjktxxm96j9pvf]  o-yfxat m-5fcfn docs shipped
+2026-08-03T14:47:44.911Z  objective.created  [01kz41gmgfwbdgg8bczbv9qngr]  o-93cg3 later maybe
+2026-08-03T14:47:45.590Z  objective.created  [01kz41gn5pdnvaarv40a903wzd]  o-hftpd off the goal
+2026-08-03T14:47:46.282Z  objective.declined  [01kz41gnva4amc0m47nmzhhs8d]  o-hftpd off goal
+2026-08-03T14:47:46.957Z  objective.created  [01kz41gpgd866wafj4phb5gkqn]  o-tvmtf old target
+2026-08-03T14:47:47.623Z  objective.revised  [01kz41gq56rneg3szppkh5syqd]  o-tvmtf slipped
+2026-08-03T14:47:48.322Z  objective.created  [01kz41gqv25g5hbqzn41cd14yr]  o-pwwrs dead end
+2026-08-03T14:47:49.226Z  objective.closed  [01kz41grqaxc7rqrzs7jcqf241]  o-pwwrs descoped
+2026-08-03T14:47:49.938Z  work.created  [01kz41gsdjm415g9bcngqe7gw0]  w-2hcs1 carry the tier
+2026-08-03T14:47:50.635Z  work.linked  [01kz41gt3anmcfz5j4apr0srae]  w-2hcs1 m-48nbn
+2026-08-03T14:47:51.320Z  work.created  [01kz41gtrr74akx8hyyzhvgk00]  w-sc46n parked on vendor
+2026-08-03T14:47:51.976Z  work.blocked  [01kz41gvd8az4feag3tc465v25]  w-sc46n upstream api missing
+2026-08-03T14:47:53.067Z  work.created  [01kz41gwfbrb60c0wee2018jq8]  w-0q8c9 needs a ruling
+2026-08-03T14:47:54.088Z  work.blocked  [01kz41gxf8c2g2838w8hkketd1]  w-0q8c9 pricing undecided
+2026-08-03T14:47:54.831Z  work.created  [01kz41gy6fqcrv0czpge3nq7v7]  w-8x0th already delivered
+2026-08-03T14:47:55.600Z  report.added  [01kz41gyygh0fgrw5rdvmktqm6]  delivered as planned
+2026-08-03T14:47:56.512Z  report.added  [01kz41gzv059b72h3j13gkg61h]  delivered and verified
+2026-08-03T14:47:56.513Z  work.done  [01kz41gzv1t18s0cmb34dbn738]  w-8x0th
+2026-08-03T14:47:57.265Z  work.created  [01kz41h0jhxwpddghw17gry2v3]  w-ea6vf a direction given up
+2026-08-03T14:47:58.021Z  work.retired  [01kz41h1a4bwfq4egwjky65tp7]  w-ea6vf superseded by the tier
+2026-08-03T14:47:58.740Z  work.proposed  [01kz41h20mtyytk9dt7ay013bd]  o-yfxat a proposed direction
+2026-08-03T14:47:59.432Z  entity.confirmed  [01kz41h2p8nmdv5hk25j1fjx42]  raw standing note
+2026-08-03T14:48:00.152Z  entity.confirmed  [01kz41h3cr7eagd5ba77d4v0kq]  raw index note
+2026-08-03T14:48:00.860Z  entity.placed  [01kz41h42w5nd9x1k5098geepp]  
+2026-08-03T14:48:01.547Z  entity.confirmed  [01kz41h4rbz0s5sq82jvbwmdny]  raw searchable
+2026-08-03T14:48:02.256Z  entity.proposed  [01kz41h5eghh3t155d2v98z5wt]  proposed raw
+2026-08-03T14:48:03.001Z  entity.confirmed  [01kz41h65sq6qdgnfnsgad9pdc]  short lived
+2026-08-03T14:48:03.814Z  entity.retracted  [01kz41h6z645w8d2repsrx6dp5]  done with it
+2026-08-03T14:48:04.531Z  entity.placed  [01kz41h7nkn398v584pn63ewf9]  too broad for full
