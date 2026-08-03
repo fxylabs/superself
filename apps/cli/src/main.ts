@@ -45,6 +45,7 @@ import { completionRefusal } from "./completion.js";
 import { recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
+import { STATE_COMMAND } from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
@@ -541,6 +542,7 @@ export const COMMANDS: Command[] = [
             ]
         })
     },
+    STATE_COMMAND,
     {
         name: "connect",
         usage: [

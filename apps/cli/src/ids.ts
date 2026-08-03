@@ -53,6 +53,11 @@ export function objectiveId(): string
     return "o-" + shortId();
 }
 
+export function entityId(): string
+{
+    return "e-" + shortId();
+}
+
 export function milestoneId(): string
 {
     return "m-" + shortId();
