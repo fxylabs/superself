@@ -192,11 +192,15 @@ function liveSections(model: ProjectModel, project: string): ContextSection[]
 }
 
 // Work in progress and approval waits render as full rows; all other open
-// work is a count with the command that lists it (#197 §6).
+// work is a count with the command that lists it (#197 §6, #205 table C) —
+// including a unit blocked on a dependency or an external wait, which is
+// parked, not moving, and not waiting on the reader. A unit blocked on a
+// decision is excluded here because it renders as a full waiting row.
 function otherOpenRows(model: ProjectModel, project: string): string[]
 {
-    const next = model.works.filter((work) => work.status === "next").length;
-    return next === 0 ? [] : [`- ${plural(next, "more open work item")}; run \`${scoped("self work", project)}\``];
+    const other = model.works.filter((work) => work.status === "next"
+        || (work.status === "blocked" && work.blockedOn !== "decision")).length;
+    return other === 0 ? [] : [`- ${plural(other, "more open work item")}; run \`${scoped("self work", project)}\``];
 }
 
 // The entity grammar's own approval waits: a proposed entity, and a placement
@@ -232,10 +236,13 @@ function deadlineRows(model: ProjectModel): string[]
         .map((item) => `- ${item.target}: ${entityLabel(item)}${oneLine(item.text)}`);
 }
 
+// Full rows for the work actually moving, and nothing else (#205 table C): a
+// unit blocked on a dependency or an external wait left this block for the
+// open-work count, and a unit blocked on a decision renders under "waiting".
 function inProgressLines(model: ProjectModel): string[]
 {
     const project = shellArgument(model.slug);
-    const active = model.works.filter((w) => w.status === "active").map((work) =>
+    return model.works.filter((w) => w.status === "active").map((work) =>
     {
         const latest = [...work.reports].sort(compareDated).at(-1);
         const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, project);
@@ -243,10 +250,6 @@ function inProgressLines(model: ProjectModel): string[]
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
         return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
     });
-    const blocked = model.works
-        .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
-        .map((work) => `- ${work.id} ${work.outcome} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`);
-    return [...active, ...blocked];
 }
 
 // A report can be pages; its row carries a bounded excerpt and the command

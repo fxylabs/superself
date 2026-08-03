@@ -45,12 +45,16 @@ test("a dropped convention leaves the render and stays in search", () =>
     assert.ok(must(box, demo, ["search", "state changes go through"]).out.includes("state changes"), "a dropped convention vanished from history");
 });
 
-test("the work spine: add, start, report, done as a judgment", () =>
+test("the work spine: add, start, report, evidenced done as a judgment", () =>
 {
     const work = workIdIn(must(box, demo, ["work", "add", "ship the fast tier"]).out);
     must(box, demo, ["work", "start", work]);
     must(box, demo, ["report", work, "tier landed, suite green"]);
-    const done = self(["work", "done", work]);
+    // The scratch repo has no commits, so the report is a bare summary and the
+    // done claim owes its evidence at done time (#205, ruling ②).
+    const bare = self(["work", "done", work]);
+    assert.notEqual(bare.code, 0, "a bare-summary report satisfied the done evidence gate");
+    const done = self(["work", "done", work, "--report", "fast tier merged, 83 tests green"]);
     assert.equal(done.code, 0, done.out);
     assert.ok(!must(box, demo, ["work"]).out.includes("ship the fast tier"), "a done unit still lists as open");
     assert.ok(must(box, demo, ["work", "show", work]).out.includes("tier landed"), "the report history left the record");

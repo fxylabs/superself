@@ -112,6 +112,7 @@ export interface Completable
     id: string;
     completion: CompletionState;
     attempts: { id: string; state: string; model?: string }[];
+    reports: { commits: string[]; artifacts: unknown[] }[];
 }
 
 /* ── fold ──────────────────────────────────────────────────────────── */
@@ -294,18 +295,46 @@ function revisionOf(state: CompletionState, requirement: string): number
 
 // The one function that decides whether a work unit may be called done. Every
 // caller reaches it: `self work done` before it records the event, and the
-// runner and the daemon at the moment they settle an attempt.
+// model when it derives what an open unit still owes.
 //
-// Done is a judgment, not a checklist: the requirement-coverage, approval,
-// model-policy and fresh-review conditions were removed with the governance
-// layer (decision 01kz2nczhtde554qx5tqpqzrt3). The gate stays so every caller
-// keeps one answer, and so a refusal can return here without a second path if
-// one is ever owed again. Requirement and policy records from older logs still
-// fold and render; they no longer hold a unit open.
-export function completionRefusal(work: Completable): string | null
+// The evidence gate (#205, user-ruled 2026-08-03): done requires at least one
+// checkable item — a report carrying a commit, a report carrying an artifact,
+// or a text report supplied at done time that states what verifiably
+// happened. A bare summary never satisfies (ruling ②): prose that offered
+// nothing checkable when it was written does not become evidence because the
+// unit is being closed. Declared criteria additionally gate the claim,
+// refusing with the uncovered ones named; the approval, model-policy and
+// fresh-review conditions stay removed (decision 01kz2nczhtde554qx5tqpqzrt3).
+//
+// The gate applies at verb write time only. The fold never refuses history:
+// a legacy evidence-free `work.done` in the log keeps folding as done.
+export function completionRefusal(work: Completable, doneReport?: string): string | null
 {
-    void work;
-    return null;
+    const uncovered = liveRequirements(work.completion)
+        .filter((item) => !work.completion.covered.includes(item.id));
+    if (uncovered.length > 0)
+    {
+        return `${work.id} carries uncovered criteria — `
+            + uncovered.map((item) => `${item.id} ${item.text}`).join("; ")
+            + ` — done is gated on covering every declared criterion; see \`self work show ${work.id}\``;
+    }
+    if (work.reports.some((report) => report.commits.length > 0 || report.artifacts.length > 0))
+    {
+        return null;
+    }
+    if (doneReport !== undefined && doneReport.trim() !== "")
+    {
+        return null;
+    }
+    if (work.reports.length === 0)
+    {
+        return `${work.id} has no evidence for done — attach a report first `
+            + `(\`self report ${work.id} "<summary>" --evidence <commit>\` or \`--artifact <path>\`), `
+            + `or state what verifiably happened with \`self work done ${work.id} --report "<what happened>"\``;
+    }
+    return `${work.id}'s reports carry no commit or artifact evidence, and a bare summary never satisfies done — `
+        + `state what verifiably happened with \`self work done ${work.id} --report "<what happened>"\`, `
+        + `or attach evidence with \`self report ${work.id} "<summary>" --evidence <commit>\``;
 }
 
 export function implementers(work: Completable): { id: string; state: string; model?: string }[]
