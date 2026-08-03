@@ -32,12 +32,8 @@ command is unavailable.
 - Revising an objective or a milestone leaves what it already settled stale. Re-judge it
   at the current revision with `self milestone recheck <id> [--criterion <c>] --why "<what
   you re-judged>"` — a reach still needs every live criterion covered first.
-- A passing attempt never marks work done: settlement records what a run produced
-  and frees the unit. Declare what the outcome must cover with `self work require <id>
-  "<statement>"`, cover each with `self work met <id> --requirement <r> --why "<how the
-  evidence covers it>"`, and only then `self work done <id>`. `self work approval-required`
-  makes a unit wait for a person, and `self work policy <id> --model <class> --fresh-review`
-  states what its implementation had to be — all four are checked before done is admitted.
+- Done is a judgment: `self work done <id>` closes the unit when its outcome
+  is reached — the evidence lives in the reports the unit already carries.
 - Found a gap between an objective and current state? Propose the work with
   `self work propose` and its full brief; the user accepts or declines it.
 - Record decisions the user confirmed: `self decide "<text>" --why "<reason>"`.
@@ -53,11 +49,8 @@ command is unavailable.
 - Deferring work for later? Attach a scoping brief the moment you create it:
   `self report <id> --file <path>` covering scope, design anchors, and known
   pitfalls — a bare outcome line loses the context that created the work.
-- A branch that will reach main is a change set: `self integration register --repo <name>
-  --base <sha> --head <sha> --domain <contract@v> --check <ci>`, then `self integration plan`
-  before touching git. Order, review validity and the merge gate are enforced there, not here:
-  a receipt exists only through `self review ingest --file <envelope.json>`, and no wording in
-  this block, in a prompt, or in a session can relax it.
+- A branch reaches main through a GitHub pull request: PR review and CI own
+  merge control. superself owns context and the work graph, not the merge gate.
 - Search past state with `self search <query>`; list work with `self work`.
 - Never hand-edit generated state files or anything under `.superself/`.
 
@@ -65,7 +58,6 @@ command is unavailable.
 
 - State changes go through self events; canonical files are never hand-edited
 - Record all state (events, decisions, reports, conventions) in English; conversation, artifacts, and everything the user must read follow the user's language
-- Review validity follows changed code, not base movement alone: exact-head fresh change review once; conflict-free base advance uses integration CI; changed conflict-resolution head gets bounded delta/semantic-overlap review; exact release-candidate main gets one full pre-publish audit.
 - Every implementation, fix and review plan prompt for this repository instructs the agent to read ARCHITECTURE.md and CONTRIBUTING.md on the checked-out head before writing anything; reviewers carry a standing structure surface — changed code must conform to those documents and must not add to the known debt recorded in issue 88
 - A recurring symptom that already has an open issue gets the new case appended as an issue comment at the moment it is observed — with the concrete evidence (ids, commands, refusal text). Implementation, design and review agents read the issue at pickup time, so cases must land on the issue, not only in work reports; the friction line in the report still gets written as usual.
 - Session-launched agent work goes through the attempt spool: register and drive it with self attempt run (or register/started/heartbeat/exited) so the attempt ledger, preflight, heartbeats and reconciliation own the lifecycle. Harness-native subagent tools that bypass the spool are not used for implementation attempts; if one is ever used as a fallback, the gap is stated in the work report at dispatch time.
@@ -75,4 +67,5 @@ command is unavailable.
 - Refinement of the round-reduction discipline (decision 01kyz0q24d, corrected 2026-08-02): fix-round briefs carry their own defect-anticipation section aimed at the fix's blast radius — enumerate the neighbouring cases/topologies of every surface the fix touches, where regressions cluster. Promoted findings go where something structurally reads them: mechanically checkable classes (wording/shape/contract) become automated checks in the proof/CI surface; judgement-class rules become project conventions in self state, visible at every session start; cross-project patterns go to the coding-context repository. No session-side checklist files, and CONTRIBUTING/ARCHITECTURE keep their public contract role untouched.
 - Agent-initiated work follows report-then-approve: the agent reports the intended design and delivery shape to the user and gets approval before registering the work unit and before dispatching it — self work propose is the default vehicle for agent-discovered work, and even for user-directed outcomes the design report precedes dispatch. Registration without a reported, approved shape is the exception to fix, not a convenience.
 - Proof-run budget in implementation briefs (refines the dispatch-economics rule, user-approved 2026-08-02): during implementation the feedback loop is typecheck plus direct node smoke invocations, never the heavy proof harness; while developing a new proof script only its minimal single scenario runs; the full or touched proof sections run at most twice per attempt — once after implementation completes and once after fixing what that run caught; anything beyond is CI's job. Every implementation brief states this execution order explicitly. Evidence: attempt at-s54bw spent 21 of 48 shell turns re-running proofs inside its dev loop and timed out at the 60-minute wall. Supersedes nothing; #92's tiered test architecture replaces the manual budget when it lands.
+- A proof suite asserts product behaviour, not its own coverage. Assert what fails when the CLI is wrong: an independent oracle the implementation is compared against, the documented answer for a named input, an invariant over real output. Do not assert that the suite's own input set is complete — floors over generated populations, per-cell presence demands, distinctness of literal tables, pinned overlap or repeat sets. Those only fail when someone edits the proof file, which a diff already shows, and they cannot be made airtight: every adversarial probe against a coverage claim succeeds, so review rounds multiply without the product getting safer. Evidence: issue 112 spent five fix rounds and four review rounds (17 through 25) on coverage bookkeeping in attempt-preparation.sh while apps/cli/src stayed byte-identical throughout; the one durable gain from that stretch, the independent position oracle with agreement asserted over every vector, is behaviour and belongs. Reviewers are briefed accordingly: a gap in the input set is recorded as a residual, never as a finding that blocks a receipt.
 <!-- superself:end -->
