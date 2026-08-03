@@ -47,6 +47,18 @@ export function unknownOption(arg: string, cmd: string | undefined): string
     return `unknown option '${arg}' — ${helpHint(cmd)}`;
 }
 
+// The empty-argument refusal every command spells the same way. `main.ts` and
+// `goals.ts` still carry private copies (see Known debt); this is the shared
+// home new surfaces import instead of adding another one.
+export function requireText(value: string | undefined, usage: string): string
+{
+    if (value === undefined || value.trim() === "")
+    {
+        throw new CliError(`usage: self ${usage}`);
+    }
+    return value;
+}
+
 // Point at the scoped help when a command is named, the root list otherwise.
 // Every caller passes a root command name the contract already resolved, so
 // the name is not checked against the command list a second time here.
