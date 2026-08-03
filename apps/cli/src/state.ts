@@ -21,11 +21,12 @@ import {
     LINK_TYPES,
     LinkType,
     orderEntities,
+    PendingPlacement,
     pendingSummary
 } from "./entities.js";
 import { entityId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
+import { ProjectContext, readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { countCharacters } from "./style.js";
 import { CliError, SelfEvent } from "./types.js";
@@ -146,8 +147,10 @@ function stateAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS>): vo
     const text = requireText(positionals[0], ADD_USAGE);
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const exposure = validExposure(values.exposure ?? "index");
+    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
     const demotions = demotionsFor(model, values.demote ?? [], cappedTier(exposure), undefined, ADD_USAGE);
-    requireRoom(model, retentionCaps(readStoreConfig(ctx.storeDir)), cappedTier(exposure), countCharacters(text), demotions);
+    requireRoom(model, caps, cappedTier(exposure), countCharacters(text), demotions);
+    requireDemotionRoom(model, caps, demotions, false);
     const id = entityId();
     const proposed = values.proposed === true;
     const events = [
@@ -193,9 +196,11 @@ function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>)
     const exposure = values.exposure === undefined ? undefined : validExposure(values.exposure);
     requirePlacementChange(entity, priority, exposure);
     const why = requireDemotionWhy(entity, exposure, values.why);
+    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
     const tier = enteredTier(entity, exposure);
     const demotions = demotionsFor(model, values.demote ?? [], tier, entity.id, PLACE_USAGE);
-    requireRoom(model, retentionCaps(readStoreConfig(ctx.storeDir)), tier, countCharacters(entity.text), demotions);
+    requireRoom(model, caps, tier, countCharacters(entity.text), demotions);
+    requireDemotionRoom(model, caps, demotions, entity.exposure === "index");
     const proposed = values.proposed === true;
     const events = [
         makeEvent(ctx.project, "entity.placed", placePayload(entity.id, priority, exposure, why, proposed), undefined, !proposed),
@@ -277,19 +282,22 @@ function requireDemotionWhy(entity: EntityState, exposure: Exposure | undefined,
 /* ── the retention caps (#197 §4) ──────────────────────────────────── */
 
 // The tiers the caps guard. Search is unbounded by design — it renders
-// nothing — so an add into it, or any demotion, passes without gating: the
-// demotion is the remedy the caps demand, and gating it would deadlock a
-// store that legacy folds already carried over a cap.
+// nothing — so an add into it, and any move toward it, passes without
+// gating. That open floor is what keeps a store past its caps from ever
+// wedging: a chain of demotions always terminates at search.
 function cappedTier(exposure: Exposure): "full" | "index" | undefined
 {
     return exposure === "search" ? undefined : exposure;
 }
 
-// Which capped tier a placement moves its record into: a promotion's target.
-// Same-tier moves and demotions enter none.
+// Which capped tier a placement moves its record into. Direction does not
+// matter: a full → index demotion enters index exactly as a promotion does
+// and can overfill it the same way, so both are gated. A full → index move
+// past the index cap names an index → search demotion beside it, and
+// index → search itself enters nothing.
 function enteredTier(entity: EntityState, exposure: Exposure | undefined): "full" | "index" | undefined
 {
-    if (exposure === undefined || exposure === entity.exposure || isDemotion(entity.exposure, exposure) || exposure === "search")
+    if (exposure === undefined || exposure === entity.exposure || exposure === "search")
     {
         return undefined;
     }
@@ -352,6 +360,61 @@ function requireIndexRoom(model: ProjectModel, cap: number, demotions: EntitySta
         throw new CliError(`still ${over} over the ${cap}-entity index cap after `
             + `${demotions.length} named demotion${demotions.length === 1 ? "" : "s"} — name more with --demote`);
     }
+}
+
+// A named full → index demotion enters the index tier itself — the gating
+// rule has no exception for the remedy — so the pair is refused while its
+// destination lacks room, toward the drain that always fits: index → search.
+// `vacates` is the seat the placed record itself frees when it leaves index
+// for full, so a swap at an exactly-full cap still passes.
+function requireDemotionRoom(model: ProjectModel, caps: RetentionCaps, demotions: EntityState[], vacates: boolean): void
+{
+    const entering = demotions.filter((item) => item.exposure === "full").length;
+    if (entering === 0)
+    {
+        return;
+    }
+    const after = indexTierCount(model.entities, "project") + entering - (vacates ? 1 : 0);
+    if (after > caps.index)
+    {
+        throw new CliError(`the named demotion${entering === 1 ? "" : "s"} would put the project index tier at `
+            + `${after} of ${caps.index} entities — free index room first with `
+            + '`self state place <id> --exposure search --why "<reason>"`');
+    }
+}
+
+// What a confirm admits must fit at confirm time (review F2): the proposal
+// was recorded against an older tier state, and the person answers it
+// against today's — under the same counts the write verbs gate on.
+function requireConfirmRoom(model: ProjectModel, caps: RetentionCaps, entity: EntityState, destination: Exposure): void
+{
+    const tier = cappedTier(destination);
+    if (tier === undefined)
+    {
+        return;
+    }
+    const usage = tier === "full" ? fullTierCharacters(model.entities, "project") : indexTierCount(model.entities, "project");
+    const cap = tier === "full" ? caps.full : caps.index;
+    const after = tier === "full" ? usage + countCharacters(entity.text) : usage + 1;
+    if (after > cap)
+    {
+        throw new CliError(`confirming ${entity.id} would put the project ${tier} tier over its cap `
+            + `(${usage} of ${cap} ${tier === "full" ? "characters" : "entities"} held) — ${confirmRoomRemedy(model, entity, tier)}`);
+    }
+}
+
+// The remedy half of the capacity refusal: the paired demotion when one
+// waits — found by the why that names this record — and the direct drain
+// otherwise. One rule for pairs and lone proposals alike.
+function confirmRoomRemedy(model: ProjectModel, entity: EntityState, tier: "full" | "index"): string
+{
+    const companion = model.entities.find((item) =>
+        item.pending?.why !== undefined && item.pending.why.includes(`admit ${entity.id} under`));
+    if (companion !== undefined)
+    {
+        return `confirm the paired demotion first: \`self state confirm ${companion.id}\``;
+    }
+    return `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``;
 }
 
 // A demotion named where no cap demands one would demote a record as a side
@@ -431,12 +494,13 @@ function stateConfirm({ positionals }: CommandInput): void
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const entity = requireEntity(model, positionals[0], "state confirm <id>");
+    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
     // A placement proposal waiting on the record answers to the entity's own
     // id — the same confirm a proposed entity takes, and the placement axis
     // is entity-owned, so this holds for the preset record kinds too.
     if (entity.status === "confirmed" && entity.pending !== undefined)
     {
-        recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: entity.id }, { confirms: entity.pending.event }, true), entity.text);
+        confirmPendingPlacement(ctx, model, caps, entity, entity.pending);
         return;
     }
     if (entity.status !== "proposed")
@@ -449,7 +513,19 @@ function stateConfirm({ positionals }: CommandInput): void
     {
         throw new CliError(`${entity.id} is a ${entity.source} record — run \`self ${entity.source === "decision" ? "decide" : entity.source} confirm ${entity.id}\``);
     }
+    // A proposed record takes its seat only now, so the seat is judged now
+    // (review F2): the same rule as a pending placement, one rule for both.
+    requireConfirmRoom(model, caps, entity, entity.exposure);
     recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: entity.id }, { confirms: entity.id }, true), entity.text);
+}
+
+function confirmPendingPlacement(ctx: ProjectContext, model: ProjectModel, caps: RetentionCaps, entity: EntityState, pending: PendingPlacement): void
+{
+    if (pending.exposure !== undefined && pending.exposure !== entity.exposure)
+    {
+        requireConfirmRoom(model, caps, entity, pending.exposure);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: entity.id }, { confirms: pending.event }, true), entity.text);
 }
 
 function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>): void

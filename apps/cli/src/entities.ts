@@ -468,7 +468,7 @@ export function isDemotion(from: Exposure, to: Exposure): boolean
 
 // Where a record named by --demote goes: one tier less rendered than the one
 // it frees. Search has nothing below it, which is why nothing demotes out of
-// search and the caps never gate it.
+// search and an entry into search is never capped.
 export const DEMOTION_TARGET: Record<"full" | "index", Exposure> = { full: "index", index: "search" };
 
 // What a waiting placement proposal asks to change, in the words the person

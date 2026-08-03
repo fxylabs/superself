@@ -129,17 +129,35 @@ test("the full cap counts characters, and naming too little to free is refused w
     assert.ok(must(capBox, capDemo, ["state", "show", small]).out.includes("placement: project · index"));
 });
 
-test("a demotion is never cap-gated, and --demote outside a cap crossing is refused", () =>
+test("a demotion into a capped tier is gated, and the chain always terminates at search", () =>
 {
     setCaps(capBox, { indexCap: 1, fullCap: 30 });
     const fullOne = must(capBox, capDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*full)/)[0];
     const needless = capSelf(["state", "add", "searched only", "--exposure", "search", "--demote", fullOne]);
     assert.notEqual(needless.code, 0);
     assert.match(needless.out, /this command enters none/);
-    // The index tier already stands past its cap of 1; the full → index
-    // demotion must still pass — it is the remedy the caps demand.
-    must(capBox, capDemo, ["state", "place", fullOne, "--exposure", "index", "--why", "full is crowded"]);
+    // The index tier stands at 2 of 1: a full → index demotion enters index,
+    // so it is gated exactly like an add (review F1) — with the destination
+    // cap, the usage, and the chained-demotion shape in one refusal.
+    const over = capSelf(["state", "place", fullOne, "--exposure", "index", "--why", "full is crowded"]);
+    assert.notEqual(over.code, 0);
+    assert.match(over.out, /the project index tier holds 2 of 1 entities/);
+    assert.match(over.out, /self state place <id> --exposure search --why/);
+    const short = capSelf(["state", "place", fullOne, "--exposure", "index", "--why", "full is crowded",
+        "--demote", must(capBox, capDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*index)/)[0]]);
+    assert.notEqual(short.code, 0);
+    assert.match(short.out, /still 1 over the 1-entity index cap/);
+    // Never wedged: index → search enters no capped tier, so an over-cap
+    // store always drains toward search, then the full → index move fits.
+    const indexIds = [...must(capBox, capDemo, ["state", "list"]).out.matchAll(/\be-[0-9a-z]{5}\b(?=.*index)/g)].map((m) => m[0]);
+    must(capBox, capDemo, ["state", "place", indexIds[0], "--exposure", "search", "--why", "drained"]);
+    must(capBox, capDemo, ["state", "place", fullOne, "--exposure", "index", "--why", "full is crowded", "--demote", indexIds[1]]);
     assert.ok(must(capBox, capDemo, ["state", "show", fullOne]).out.includes("placement: project · index"));
+    assert.ok(must(capBox, capDemo, ["state", "show", indexIds[1]]).out.includes("placement: project · search"));
+    // The place column, not the free text, says which tier a row holds.
+    const seats = must(capBox, capDemo, ["state", "list"]).out.split("\n")
+        .filter((line) => line.split("  ")[2]?.startsWith("index")).length;
+    assert.equal(seats, 1, "the index tier ended past its cap of 1");
 });
 
 // A third machine for the paired proposal, so exactly one record holds the
@@ -159,8 +177,15 @@ test("an agent adding past a cap lands a proposed add paired with a proposed dem
     const context = must(pairBox, pairDemo, ["context"]).out;
     assert.ok(context.includes(`proposed entity ${added}: wants the seat (confirm with \`self state confirm ${added}\`)`));
     assert.ok(context.includes(`proposed placement of ${holder}: exposure search (demoted to admit ${added} under the index cap)`));
-    must(pairBox, pairDemo, ["state", "confirm", added]);
+    // Confirming the admitted half first would overfill the seat (review F2):
+    // capacity is rechecked at confirm time, and the refusal names the
+    // companion demotion to confirm first.
+    const early = pairSelf(["state", "confirm", added]);
+    assert.notEqual(early.code, 0);
+    assert.match(early.out, /would put the project index tier over its cap \(1 of 1 entities held\)/);
+    assert.match(early.out, new RegExp(`confirm the paired demotion first: \`self state confirm ${holder}\``));
     must(pairBox, pairDemo, ["state", "confirm", holder]);
+    must(pairBox, pairDemo, ["state", "confirm", added]);
     assert.ok(must(pairBox, pairDemo, ["state", "show", added]).out.includes("confirmed"));
     assert.ok(must(pairBox, pairDemo, ["state", "show", holder]).out.includes("placement: project · search"));
 });
@@ -182,4 +207,100 @@ test("--demote validates its target in user terms", () =>
     const itself = pairSelf(["state", "place", searched, "--exposure", "index", "--demote", searched]);
     assert.notEqual(itself.code, 0);
     assert.match(itself.out, /names the record being placed/);
+});
+
+// A clean machine for the reviewer's two reproductions, landed verbatim.
+const reviewBox = machine();
+const reviewDemo = demoWorkspace(reviewBox).demo;
+const reviewSelf = (args) => selfIn(reviewBox, reviewDemo, args);
+
+test("review F1: a demotion cannot overfill the index tier", () =>
+{
+    setCaps(reviewBox, { indexCap: 1 });
+    const seat = entityIn(must(reviewBox, reviewDemo, ["state", "add", "seat holder"]).out);
+    const dweller = entityIn(must(reviewBox, reviewDemo, ["state", "add", "full dweller", "--exposure", "full"]).out);
+    const over = reviewSelf(["state", "place", dweller, "--exposure", "index", "--why", "leave full"]);
+    assert.notEqual(over.code, 0, "a demotion past the index cap was accepted");
+    assert.match(over.out, /the project index tier holds 1 of 1 entities/);
+    assert.match(over.out, /--demote <id>/);
+    must(reviewBox, reviewDemo, ["state", "place", dweller, "--exposure", "index", "--why", "leave full", "--demote", seat]);
+    assert.ok(must(reviewBox, reviewDemo, ["state", "show", seat]).out.includes("placement: project · search"));
+    assert.ok(must(reviewBox, reviewDemo, ["state", "show", dweller]).out.includes("placement: project · index"));
+    // Chain termination: index → search enters no capped tier, at any usage.
+    must(reviewBox, reviewDemo, ["state", "place", dweller, "--exposure", "search", "--why", "drained"]);
+});
+
+test("review F2: confirming a promotion past the full cap is refused until its demotion lands", () =>
+{
+    setCaps(reviewBox, { fullCap: 10, indexCap: 50 });
+    const eight = entityIn(must(reviewBox, reviewDemo, ["state", "add", "8 chars!", "--exposure", "full"]).out);
+    const five = entityIn(must(reviewBox, reviewDemo, ["state", "add", "5char"]).out);
+    must(reviewBox, reviewDemo, ["state", "place", five, "--exposure", "full", "--proposed", "--demote", eight]);
+    const early = reviewSelf(["state", "confirm", five]);
+    assert.notEqual(early.code, 0, "the promotion half landed past the full cap");
+    assert.match(early.out, /would put the project full tier over its cap \(8 of 10 characters held\)/);
+    assert.match(early.out, new RegExp(`confirm the paired demotion first: \`self state confirm ${eight}\``));
+    must(reviewBox, reviewDemo, ["state", "confirm", eight]);
+    must(reviewBox, reviewDemo, ["state", "confirm", five]);
+    assert.ok(must(reviewBox, reviewDemo, ["state", "show", five]).out.includes("placement: project · full"));
+    assert.ok(must(reviewBox, reviewDemo, ["state", "show", eight]).out.includes("placement: project · index"));
+});
+
+// A machine for the fix's own blast radius: retracted pair halves, a lone
+// pending placement the store outgrew, and a paired demotion whose own
+// destination lacks room.
+const edgeBox = machine();
+const edgeDemo = demoWorkspace(edgeBox).demo;
+const edgeSelf = (args) => selfIn(edgeBox, edgeDemo, args);
+
+test("a lone pending placement the store outgrew gets the same capacity refusal", () =>
+{
+    setCaps(edgeBox, { fullCap: 30 });
+    must(edgeBox, edgeDemo, ["state", "add", "tiny map", "--exposure", "full"]);
+    const twenty = entityIn(must(edgeBox, edgeDemo, ["state", "add", "12345678901234567890"]).out);
+    must(edgeBox, edgeDemo, ["state", "place", twenty, "--exposure", "full", "--proposed"]);
+    const thirteen = entityIn(must(edgeBox, edgeDemo, ["state", "add", "13 characters", "--exposure", "full"]).out);
+    const outgrown = edgeSelf(["state", "confirm", twenty]);
+    assert.notEqual(outgrown.code, 0, "a pending promotion landed past a cap the store grew into");
+    assert.match(outgrown.out, /would put the project full tier over its cap \(21 of 30 characters held\)/);
+    assert.match(outgrown.out, /free room first with `self state place <id> --exposure index --why/);
+    must(edgeBox, edgeDemo, ["state", "place", thirteen, "--exposure", "index", "--why", "make room"]);
+    must(edgeBox, edgeDemo, ["state", "confirm", twenty]);
+    assert.ok(must(edgeBox, edgeDemo, ["state", "show", twenty]).out.includes("placement: project · full"));
+});
+
+test("retracting either half of a pair leaves the other confirmable and the caps honest", () =>
+{
+    setCaps(edgeBox, { fullCap: 4000, indexCap: 2 });
+    const rowA = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row a"]).out);
+    const rowB = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row b", "--proposed", "--demote", rowA]).out);
+    // The demotion half's record is retracted: its seat frees, so the add
+    // half confirms without the demotion.
+    must(edgeBox, edgeDemo, ["state", "retract", rowA, "--why", "obsolete"]);
+    must(edgeBox, edgeDemo, ["state", "confirm", rowB]);
+    assert.ok(must(edgeBox, edgeDemo, ["state", "show", rowB]).out.includes("placement: project · index"));
+    // The add half is retracted: the pending demotion stays confirmable —
+    // a move toward search always fits — just no longer forced.
+    const rowC = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row c", "--proposed", "--demote", rowB]).out);
+    must(edgeBox, edgeDemo, ["state", "retract", rowC, "--why", "withdrawn"]);
+    must(edgeBox, edgeDemo, ["state", "confirm", rowB]);
+    assert.ok(must(edgeBox, edgeDemo, ["state", "show", rowB]).out.includes("placement: project · search"));
+});
+
+test("a paired full demotion is refused while its own index destination lacks room", () =>
+{
+    setCaps(edgeBox, { fullCap: 25, indexCap: 1 });
+    // From the tests above: full holds "tiny map" (8) and the twenty-character
+    // row; index holds exactly one record ("row b" left toward search).
+    const list = must(edgeBox, edgeDemo, ["state", "list"]).out;
+    const thirteen = list.match(/\be-[0-9a-z]{5}\b(?=.*index)/)[0];
+    // The 20-character full row is the one whose departure frees enough.
+    const twenty = list.split("\n").find((line) => line.includes("12345678901234567890")).match(/\be-[0-9a-z]{5}\b/)[0];
+    const blocked = edgeSelf(["state", "add", "ten chars!", "--exposure", "full", "--demote", twenty]);
+    assert.notEqual(blocked.code, 0, "a paired demotion overfilled the index tier");
+    assert.match(blocked.out, /would put the project index tier at 2 of 1 entities/);
+    assert.match(blocked.out, /free index room first with `self state place <id> --exposure search --why/);
+    must(edgeBox, edgeDemo, ["state", "place", thirteen, "--exposure", "search", "--why", "drained"]);
+    must(edgeBox, edgeDemo, ["state", "add", "ten chars!", "--exposure", "full", "--demote", twenty]);
+    assert.ok(must(edgeBox, edgeDemo, ["state", "show", twenty]).out.includes("placement: project · index"));
 });
