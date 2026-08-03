@@ -279,8 +279,8 @@ export function shellArgument(value: string): string
 // else — and `--project other` made that literal: a bare `self work` in that
 // output answers for wherever it is run rather than for what it describes.
 //
-// Only the verbs that have a scope form take one. `self attempt show`,
-// `self decide confirm` and `self work accept` have none,
+// Only the verbs that have a scope form take one. `self decide confirm`
+// and `self work accept` have none,
 // so they are left as they are rather than promising a flag that does not
 // exist. Both context renders read this, which is why it lives here: `views.ts`
 // already imports this module, so one direction stays.
@@ -318,8 +318,7 @@ export type Checkout = string & { readonly [CHECKOUT]: true };
 // what stops the constructors below being a way to launder any other string
 // into a `Pointer`: `"self work"` is not a member, so it cannot take this road
 // around `scoped()`.
-export type UnscopedVerb = "self attempt show"
-    | "self decide confirm" | "self work accept";
+export type UnscopedVerb = "self decide confirm" | "self work accept";
 
 // A verb with no scope form cannot be run from anywhere: it answers for the
 // checkout it runs in. Every render that points at one says so in the same
@@ -356,15 +355,6 @@ export function scoped(command: ScopableVerb, project: string): Pointer
 // to malform and no place for an empty id to become a verb with no positional.
 export function pointerTo(target: RecoveryTarget, project: string): Pointer
 {
-    if (target.verb === "attempt-show")
-    {
-        // The spool is machine-local, so this one carries no project. An id the
-        // parser would refuse falls back to the surface the signal appears on,
-        // rather than to a project read this target never meant.
-        return usableId(target.id)
-            ? `self attempt show ${target.id}` as Pointer
-            : scoped("self status", project);
-    }
     if (target.verb === "work-show")
     {
         // An id the parser would refuse renders a command that fails when the

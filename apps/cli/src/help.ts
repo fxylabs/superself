@@ -260,6 +260,10 @@ export const COMMANDS: CommandHelp[] = [
             { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r' },
             { syntax: "work accept|decline <proposal-id> [--why w]", description: ["act on a goal-gap proposal; decline states why"] },
             {
+                syntax: "work started <id> --pid N | exited <id> [--code N]",
+                description: ["record the agent process running a unit, and how it ended", "liveness is judged at read time from the pid on this machine"]
+            },
+            {
                 syntax: "work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]",
                 description: [
                     "retire the unit itself: its outcome was given up or moved, not reached",
@@ -310,53 +314,6 @@ export const COMMANDS: CommandHelp[] = [
             "                      resolves, else a note; commit:<v>/note:<v> force it",
             "  --artifact <path>   copy a file into the store and attach it, repeatable",
             "  --next <text>       what the next session should pick up"
-        ]
-    },
-    {
-        name: "attempt",
-        usage: [
-            { syntax: "attempt run <plan.json>", description: ["preflight a work attempt's capabilities, then run and spool it"] },
-            { syntax: "attempt register <plan.json>", description: ["preflight and spool an attempt a launcher of your own will start"] },
-            {
-                syntax: "attempt started <id> --pid N | heartbeat <id> | exited <id> [--code N]",
-                description: ["drive a registered attempt from the launcher that owns its process"]
-            },
-            { syntax: "attempt list [--work id] [--json]", description: ["list this machine's attempts and the state each reached"] },
-            { syntax: "attempt show <attempt-id>", description: ["print one attempt's durable record and capability receipt"] },
-            {
-                syntax: 'attempt directive <id> "<text>" | cancel <id>',
-                description: ["deliver a follow-up or a cancellation through the spool"]
-            },
-            {
-                syntax: "attempt propose <id> --action <kind>",
-                description: ["record what a running attempt is asking to do, and refuse a forbidden one"]
-            },
-            { syntax: "attempt settle <id>", description: ["settle an attempt the runner finished but never settled"] },
-            { syntax: "attempt recover", description: ["reconcile attempts a crash or restart left running"] },
-            {
-                syntax: "attempt prune [--days N] | retention [<days>] | breaker <provider> [--reset]",
-                description: ["manage spool retention and the provider circuit breaker"]
-            }
-        ],
-        detail: [
-            "run a work attempt through its durable spool and manage what the spool",
-            "keeps: preflight the plan's capabilities, run it, deliver directives, and",
-            "recover or prune what earlier runs left behind. A launcher of your own",
-            "registers an attempt and then drives it through started, heartbeat, and",
-            "exited.",
-            "",
-            "An action a running attempt proposes is recorded and waits for a person.",
-            "One in a forbidden category — publication, outreach, payment, purchase,",
-            "provisioning, destructive action, policy change — is refused where it",
-            "arrives rather than queued, and the refusal is what reaches the digest.",
-            "",
-            "  --work <work-id>    only attempts of this work unit",
-            "  --action <kind>     what a running attempt is asking to be allowed to do",
-            "  --json              machine-readable listing",
-            "  --pid <pid>         the process id the launcher started",
-            "  --code <n>          the exit code the launched process reported",
-            "  --days <n>          prune spools untouched for this many days",
-            "  --reset             close the named provider's circuit breaker"
         ]
     },
     {
@@ -448,8 +405,8 @@ export const COMMANDS: CommandHelp[] = [
         ],
         detail: [
             "print what waits on you, what is moving, and any health signals.",
-            "on a terminal this machine's open attempts are rolled up per work unit;",
-            "piped output keeps one line per attempt.",
+            "an open unit with a recorded process shows its state — running, stale,",
+            "or exited — judged on this machine at read time.",
             "",
             "  --project <slug>    summarize this registered project instead of this directory's",
             "  --workspace         one line per registered project, from anywhere"

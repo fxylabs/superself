@@ -25,7 +25,7 @@ You will record that outcome as a hierarchy of state:
 Goal
 └─ Objective
    └─ Milestone + exit criteria
-      └─ Work + requirements
+      └─ Work + reports
 ```
 
 This is not a task tree. A goal holds enduring direction; an objective names a
@@ -94,18 +94,7 @@ Create one work unit for the release proof:
 self work add "The beta release candidate passes the critical-flow proof and has a verified rollback path"
 ```
 
-The command prints a work id such as `w-xxxxx`. Declare what completion must
-cover:
-
-```bash
-self work require w-xxxxx \
-  "The end-to-end proof passes against the exact release candidate"
-
-self work require w-xxxxx \
-  "The rollback procedure is exercised and its result is attached"
-```
-
-Each requirement prints an id such as `r1` or `r2`. Link the work to the
+The command prints a work id such as `w-xxxxx`. Link the work to the
 milestone it contributes to, then start it:
 
 ```bash
@@ -166,7 +155,7 @@ Before acting, the new session should be able to answer:
 5. What was the last evidence-backed result, and what happens next?
 
 If one of those answers exists only in the old transcript, the handoff is not
-durable yet. Add the missing decision, requirement, or report before continuing.
+durable yet. Add the missing decision or report before continuing.
 
 `self context` is a bounded current projection with recovery pointers, not the
 entire project history. `self work show` and `self search` are the pull path
@@ -183,33 +172,18 @@ self report w-xxxxx \
   --evidence <commit-sha> \
   --artifact path/to/critical-flow-result.json \
   --artifact path/to/rollback-receipt.json \
-  --next "Cover the work requirements and milestone criteria"
+  --next "Cover the milestone criteria"
 ```
 
 Replace the paths with files the work produced; missing files are refused. Run
 `self artifact list --work w-xxxxx` to retrieve their stored ids.
 
-Cover each work requirement with evidence already attached to the unit:
-
 ```bash
-self work met w-xxxxx \
-  --requirement r1 \
-  --why "The attached critical-flow result covers the exact candidate" \
-  --evidence <commit-sha> \
-  --artifact <critical-flow-artifact-id>
-
-self work met w-xxxxx \
-  --requirement r2 \
-  --why "The rollback receipt records a successful exercise" \
-  --evidence <commit-sha> \
-  --artifact <rollback-artifact-id>
-
 self work done w-xxxxx
 ```
 
-`self work done` is a gate, not a status shortcut. It refuses completion while
-a live requirement lacks coverage, a required approval is missing, or the
-work's completion policy is not satisfied.
+`self work done` is the judgment that the outcome was reached; the evidence
+for it lives in the reports the unit carries.
 
 Now cover the milestone's separate exit criteria:
 
@@ -235,10 +209,9 @@ and its evidence covers the milestone checkpoint.
 ## 7. Revise current truth without erasing history
 
 Plans change at different levels. `self objective revise` moves the result;
-`self milestone revise` moves a checkpoint or its criteria; and
-`self work revise <id> --requirement <r> ...` restates one requirement, not the
-work unit. Each leaves affected coverage stale. Add new evidence, or use
-`self work recheck` or `self milestone recheck` only when earlier evidence applies.
+`self milestone revise` moves a checkpoint or its criteria. Each leaves
+affected coverage stale — use `self milestone recheck` only when earlier
+evidence applies.
 Replace a judgment with `self decide ... --supersedes <decision-event-id>`;
 never rewrite the old decision.
 
@@ -257,7 +230,7 @@ not yet complete the entire Company State Runtime loop:
 
 Those are target-contract responsibilities. Existing WorkSpec, attempt,
 daemon, and integration foundations are outside this state-continuity guide.
-Continue with [governing one agent execution](governing-agent-execution.md) to
+Continue with the process ledger (`self work started/exited`) to
 bind a run to capabilities and evidence. The
 [governed conversion example](../examples/governed-conversion-improvement.md)
 shows how the complete operating contract is intended to compose, while the

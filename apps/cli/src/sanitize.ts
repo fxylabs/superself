@@ -1,4 +1,4 @@
-import { findCredential, namesSecret, redactHome, redactLiterals, RedactionScope, scopeFor, secretEnvNames } from "./attempt/redact.js";
+import { findCredential, namesSecret, redactHome, redactLiterals, RedactionScope, scopeFor, secretEnvNames } from "./redact.js";
 import { CliError, SelfEvent } from "./types.js";
 
 // An event is committed, pushed, pulled, and read on machines that were never
@@ -25,9 +25,9 @@ import { CliError, SelfEvent } from "./types.js";
 // is the leak — there is no sanitized way to sync a pid or a prompt.
 //
 // A name only belongs here when it has no legitimate synced meaning in this
-// product. `command` is the counter-example that sets the bar: the integration
-// train records the commands an attempt ran on purpose, so a command line is
-// judged by what it says, not refused for what it is called.
+// product. `command` is the counter-example that sets the bar: a report may
+// name the command a run executed on purpose, so a command line is judged by
+// what it says, not refused for what it is called.
 //
 // What is listed is the concept, and it is matched against the whole name and
 // against each word inside it: `env`, `envVars` and `environmentVariables` are
