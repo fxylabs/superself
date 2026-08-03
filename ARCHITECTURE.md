@@ -22,7 +22,7 @@ it. The layers, lowest first:
 | Layer | Modules | Owns |
 | --- | --- | --- |
 | Types | `types.ts` | the event and context shapes; imports nothing local |
-| CLI surface | `args.ts`, `help.ts`, `human.ts` | how a command reads its arguments, describes itself, and confirms a human; `help.ts` and `human.ts` import nothing local |
+| CLI surface | `args.ts`, `contract.ts`, `help.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, and confirms a human; `human.ts` imports nothing local, `contract.ts` imports only `args.ts` and `types.ts`, and `help.ts` renders the contract rather than keeping a list of its own |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`) |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts` | per-domain state shapes and their reducers |
@@ -73,7 +73,7 @@ widen that.
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess` | the one writer and the one reader of the machine-local pid ledger; a pid never reaches a synced event |
-| Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). Required of every new or migrated command surface |
+| Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Required of every new or migrated command surface |
 
 Unknown flags are named CLI-wide even in the surfaces that still call
 `node:util` `parseArgs` directly, because `main.ts` `userMessage` translates

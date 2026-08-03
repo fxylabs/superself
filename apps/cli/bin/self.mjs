@@ -1,2 +1,3 @@
 #!/usr/bin/env node
-import "../dist/main.js";
+import { runCli } from "../dist/main.js";
+await runCli(process.argv.slice(2));

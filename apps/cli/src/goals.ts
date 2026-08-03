@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { parseCommand, subcommand } from "./args.js";
+import { branch, Command, CommandInput, CommandLeaf, leaf, rawLeaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
@@ -32,9 +32,6 @@ const CONFIDENCE = ["low", "medium", "high"];
 const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | decline <id> --why w | revise <id> --why w | close <id> --as reached|dropped [--why w]';
 const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> [--criterion c1] --why w';
 
-const OBJECTIVE_VERBS = ["list", "add", "show", "confirm", "decline", "revise", "close"];
-const MILESTONE_VERBS = ["list", "add", "show", "revise", "drop", "met", "reach", "recheck"];
-
 // `met` and `recheck` are one intake read twice, so they declare one option set
 // rather than two that can drift apart.
 const COVERAGE_OPTIONS = {
@@ -44,51 +41,129 @@ const COVERAGE_OPTIONS = {
     evidence: { type: "string", multiple: true }
 } as const;
 
+const WHY_OPTION = { why: { type: "string" } } as const;
+
+const OBJECTIVE_ADD_OPTIONS = {
+    horizon: { type: "string" },
+    target: { type: "string" },
+    success: { type: "string", multiple: true },
+    stop: { type: "string", multiple: true },
+    priority: { type: "string" },
+    proposed: { type: "boolean" },
+    supersedes: { type: "string", multiple: true }
+} as const;
+
+const OBJECTIVE_REVISE_OPTIONS = {
+    outcome: { type: "string" },
+    horizon: { type: "string" },
+    target: { type: "string" },
+    priority: { type: "string" },
+    success: { type: "string", multiple: true },
+    stop: { type: "string", multiple: true },
+    why: { type: "string" }
+} as const;
+
+const OBJECTIVE_CLOSE_OPTIONS = { as: { type: "string" }, why: { type: "string" } } as const;
+
+const MILESTONE_ADD_OPTIONS = {
+    objective: { type: "string" },
+    target: { type: "string" },
+    exit: { type: "string", multiple: true },
+    after: { type: "string", multiple: true },
+    supersedes: { type: "string" }
+} as const;
+
+const MILESTONE_REVISE_OPTIONS = {
+    outcome: { type: "string" },
+    target: { type: "string" },
+    exit: { type: "string", multiple: true },
+    "drop-exit": { type: "string", multiple: true },
+    why: { type: "string" }
+} as const;
+
 /* ── objectives ────────────────────────────────────────────────────── */
 
 // Listing and showing are reads, so they answer for any project the workspace
 // knows; every verb that writes still records into the project this directory
 // belongs to, and resolves it only once the arguments are known to be good. A
-// bare `--` is not a listing flag — subcommand() explains it.
-export function cmdObjective(rest: string[]): void
-{
-    if (rest.length === 0 || (rest[0] !== "--" && rest[0].startsWith("--")))
-    {
-        objectiveList(rest);
-        return;
-    }
-    const verb = subcommand("objective", rest) ?? "list";
-    if (verb === "list")
-    {
-        objectiveList(rest.slice(1));
-        return;
-    }
+// bare `--` is not a listing flag — the contract's unnamed "options" form
+// keeps it a subcommand mistake that `subcommand()` explains.
+export const OBJECTIVE_COMMAND: Command = {
+    name: "objective",
+    usage: [
+        {
+            syntax: "objective [--project <slug>] [--workspace]",
+            description: [
+                "list objectives and their milestones",
+                "(--project reads another project, --workspace every registered one)"
+            ],
+            verbs: ["", "list"]
+        },
+        {
+            syntax: 'objective add "<outcome>" [--horizon week|month|quarter|year] [--target d]',
+            description: ["create a time-boxed objective under the goal"],
+            verbs: ["add"]
+        },
+        {
+            syntax: "objective show <id> [--project <slug>] | confirm <id>",
+            description: ["print an objective, or confirm a proposed one"],
+            verbs: ["show", "confirm"]
+        },
+        {
+            syntax: "objective decline <id> --why w",
+            description: ["turn down a proposed objective; it leaves waiting at once"],
+            verbs: ["decline"]
+        },
+        {
+            syntax: "objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]",
+            description: ["an empty --target/--horizon/--priority withdraws that field"],
+            verbs: ["revise"]
+        },
+        { syntax: "objective close <id> --as reached|dropped [--why w]", description: ["--why is required when it is dropped"], verbs: ["close"] }
+    ],
+    detail: [
+        "keep the time-boxed objectives that break the goal down, each with the",
+        "reason for its state. Progress is never a percentage.",
+        "",
+        "list and show read: without a scope flag they answer for the project this",
+        "directory belongs to. add, confirm, revise and close write, so they take no",
+        "scope flag at all and record into the project they run in.",
+        "",
+        "  --project <slug>      read this registered project instead of this directory's",
+        "  --workspace           list every registered project's objectives (list only)",
+        "  --horizon <span>      week, month, quarter, or year",
+        "  --target <date>       the date the outcome is judged on",
+        "  --success <text>      what reached looks like",
+        "  --stop <text>         the condition that ends it early",
+        "  --priority <n>        smaller sorts first",
+        "  --proposed            record as a proposal the user has not confirmed",
+        "  --supersedes <id>     retire an earlier objective",
+        "  --as <state>          how `close` ends it: reached or dropped",
+        "  --why <text>          the reason for a revision or a decline, and for a close that drops"
+    ],
+    guard: rejectManualProgress,
     // An unknown verb is answered before the id is resolved: telling someone
     // who mistyped a verb that they are missing an id sends them looking for
     // the wrong thing, and hides the list of verbs they wanted.
-    if (!OBJECTIVE_VERBS.includes(verb))
-    {
-        throw new CliError(OBJECTIVE_USAGE);
-    }
-    objectiveVerb(verb, rest.slice(1));
-}
+    node: branch({
+        name: "objective",
+        unnamed: "options",
+        refusal: OBJECTIVE_USAGE,
+        children: [
+            leaf("", WORKSPACE_SCOPE_OPTIONS, 0, objectiveList),
+            leaf("list", WORKSPACE_SCOPE_OPTIONS, 0, objectiveList),
+            leaf("add", OBJECTIVE_ADD_OPTIONS, 1, objectiveAdd),
+            leaf("show", SCOPE_OPTIONS, 1, objectiveShow),
+            leaf("confirm", {}, 1, confirmObjective),
+            leaf("decline", WHY_OPTION, 1, declineObjective),
+            leaf("revise", OBJECTIVE_REVISE_OPTIONS, 1, objectiveRevise),
+            leaf("close", OBJECTIVE_CLOSE_OPTIONS, 1, objectiveClose)
+        ]
+    })
+};
 
-function objectiveVerb(verb: string, args: string[]): void
+function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>): void
 {
-    switch (verb)
-    {
-        case "show": objectiveShow(args); break;
-        case "add": objectiveAdd(args); break;
-        case "confirm": confirmObjective(args); break;
-        case "decline": declineObjective(args); break;
-        case "revise": objectiveRevise(args); break;
-        default: objectiveClose(args); break;
-    }
-}
-
-function objectiveList(args: string[]): void
-{
-    const { values } = parseCommand("objective", args, WORKSPACE_SCOPE_OPTIONS, 0);
     const scopes = readScopes(process.cwd(), values);
     if (values.workspace !== true)
     {
@@ -102,9 +177,8 @@ function objectiveList(args: string[]): void
     });
 }
 
-function objectiveShow(args: string[]): void
+function objectiveShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("objective", args, SCOPE_OPTIONS, 1);
     const objective = requireObjective(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
     console.log(markdownHeadings(renderObjectiveBody(objective).trimEnd()));
 }
@@ -122,22 +196,8 @@ function scopeModel(scope: ProjectScope): ProjectModel
     return buildModel(scope.storeDir, scope.project, new Date());
 }
 
-function objectiveAdd(args: string[]): void
+function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "objective",
-        args,
-        {
-            horizon: { type: "string" },
-            target: { type: "string" },
-            success: { type: "string", multiple: true },
-            stop: { type: "string", multiple: true },
-            priority: { type: "string" },
-            proposed: { type: "boolean" },
-            supersedes: { type: "string", multiple: true }
-        },
-        1
-    );
     const { ctx, model } = writeTarget();
     const outcome = requireText(positionals[0], 'objective add "<desired outcome>"');
     const id = objectiveId();
@@ -152,9 +212,8 @@ function objectiveAdd(args: string[]): void
     console.log(id);
 }
 
-function confirmObjective(args: string[]): void
+function confirmObjective({ positionals }: CommandInput): void
 {
-    const { positionals } = parseCommand("objective", args, {}, 1);
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
     if (objective.status !== "proposed")
@@ -166,9 +225,8 @@ function confirmObjective(args: string[]): void
 
 // The other answer to a proposal. Confirming says the objective is the
 // project's; declining says it is not, and the reason is the whole record.
-function declineObjective(args: string[]): void
+function declineObjective({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
 {
-    const { values, positionals } = parseCommand("objective", args, { why: { type: "string" } }, 1);
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
     const why = requireText(values.why, 'objective decline <id> --why "<why it was turned down>"');
@@ -181,22 +239,8 @@ function declineObjective(args: string[]): void
 
 // A revision is the record that the target moved, so it demands a reason and
 // at least one change — an empty revision would only invalidate coverage.
-function objectiveRevise(args: string[]): void
+function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "objective",
-        args,
-        {
-            outcome: { type: "string" },
-            horizon: { type: "string" },
-            target: { type: "string" },
-            priority: { type: "string" },
-            success: { type: "string", multiple: true },
-            stop: { type: "string", multiple: true },
-            why: { type: "string" }
-        },
-        1
-    );
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
     const why = requireText(values.why, 'objective revise <id> --why "<what changed and why>"');
@@ -217,9 +261,8 @@ function objectiveRevise(args: string[]): void
     recordEvent(ctx, makeEvent(ctx.project, "objective.revised", strip(payload), undefined, true), `${objective.id} ${why}`);
 }
 
-function objectiveClose(args: string[]): void
+function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_CLOSE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("objective", args, { as: { type: "string" }, why: { type: "string" } }, 1);
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
     if (values.as !== "reached" && values.as !== "dropped")
@@ -255,49 +298,79 @@ function objectiveClose(args: string[]): void
 // hangs under an objective, so `self objective --workspace` is the
 // workspace-wide roll-up and a second one here would print the same state
 // stripped of what gives it meaning.
-export function cmdMilestone(rest: string[]): void
-{
-    if (rest.length === 0 || (rest[0] !== "--" && rest[0].startsWith("--")))
-    {
-        milestoneList(rest);
-        return;
-    }
-    const verb = subcommand("milestone", rest) ?? "list";
-    if (verb === "list")
-    {
-        milestoneList(rest.slice(1));
-        return;
-    }
-    if (!MILESTONE_VERBS.includes(verb))
-    {
-        throw new CliError(MILESTONE_USAGE);
-    }
-    milestoneVerb(verb, rest.slice(1));
-}
+export const MILESTONE_COMMAND: Command = {
+    name: "milestone",
+    usage: [
+        {
+            syntax: "milestone [--project <slug>]",
+            description: ["list milestones with state, reason, and linked work"],
+            verbs: ["", "list"]
+        },
+        { syntax: 'milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]', verbs: ["add"] },
+        {
+            syntax: "milestone show <id> [--project <slug>]",
+            description: ["print a milestone, its exit criteria, and its coverage"],
+            verbs: ["show"]
+        },
+        { syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]", verbs: ["revise"] },
+        {
+            syntax: 'milestone drop <id> --why "<reason>"',
+            description: ["give up on a checkpoint with nothing replacing it"],
+            verbs: ["drop"]
+        },
+        { syntax: "milestone met <id> --criterion c1 --why w [--work id] [--evidence c]", verbs: ["met"] },
+        { syntax: "milestone reach <id>", description: ["record a milestone as reached once every criterion is covered"], verbs: ["reach"] },
+        {
+            syntax: "milestone recheck <id> [--criterion c1] --why w",
+            description: ["re-judge coverage, or a reach, a revision left stale"],
+            verbs: ["recheck"]
+        }
+    ],
+    detail: [
+        "keep the checkpoints under an objective. A milestone is reached only when",
+        "every exit criterion is covered by evidence — finishing work never",
+        "reaches one on its own.",
+        "",
+        "list and show read and take --project; every other verb writes into the",
+        "project it runs in. There is no --workspace form: a milestone hangs under",
+        "an objective, so `self objective --workspace` is the workspace-wide roll-up.",
+        "",
+        "  --project <slug>      read this registered project instead of this directory's",
+        "  --objective <id>      the objective the milestone belongs to",
+        "  --exit <criterion>    an exit criterion, repeatable",
+        "  --target <date>       the date the checkpoint is judged on",
+        "  --after <id>          order it after another milestone",
+        "  --criterion <c>       the criterion `met` or `recheck` speaks about",
+        "  --work <id>           the work unit whose evidence covers it",
+        "  --evidence <hash>     a commit recorded with the coverage",
+        "  --why <text>          how the evidence covers it, what was re-judged, or why it was dropped"
+    ],
+    guard: rejectManualProgress,
+    node: branch({
+        name: "milestone",
+        unnamed: "options",
+        refusal: MILESTONE_USAGE,
+        children: [
+            leaf("", SCOPE_OPTIONS, 0, milestoneList),
+            leaf("list", SCOPE_OPTIONS, 0, milestoneList),
+            leaf("add", MILESTONE_ADD_OPTIONS, 1, milestoneAdd),
+            leaf("show", SCOPE_OPTIONS, 1, milestoneShow),
+            leaf("revise", MILESTONE_REVISE_OPTIONS, 1, milestoneRevise),
+            leaf("drop", WHY_OPTION, 1, milestoneDrop),
+            leaf("met", COVERAGE_OPTIONS, 1, milestoneMet),
+            leaf("reach", {}, 1, milestoneReach),
+            leaf("recheck", COVERAGE_OPTIONS, 1, milestoneRecheck)
+        ]
+    })
+};
 
-function milestoneVerb(verb: string, args: string[]): void
+function milestoneList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
-    switch (verb)
-    {
-        case "show": milestoneShow(args); break;
-        case "add": milestoneAdd(args); break;
-        case "revise": milestoneRevise(args); break;
-        case "drop": milestoneDrop(args); break;
-        case "met": milestoneMet(args); break;
-        case "reach": milestoneReach(args); break;
-        default: milestoneRecheck(args); break;
-    }
-}
-
-function milestoneList(args: string[]): void
-{
-    const { values } = parseCommand("milestone", args, SCOPE_OPTIONS, 0);
     printMilestones(scopeModel(readScopes(process.cwd(), values)[0]));
 }
 
-function milestoneShow(args: string[]): void
+function milestoneShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("milestone", args, SCOPE_OPTIONS, 1);
     const found = requireMilestone(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
     console.log(markdownHeadings(renderMilestoneBody(found.milestone, found.objective).trimEnd()));
 }
@@ -318,20 +391,8 @@ function milestoneTarget(id: string | undefined): MilestoneTarget
     return { ctx, model, ...requireMilestone(model, id) };
 }
 
-function milestoneAdd(args: string[]): void
+function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "milestone",
-        args,
-        {
-            objective: { type: "string" },
-            target: { type: "string" },
-            exit: { type: "string", multiple: true },
-            after: { type: "string", multiple: true },
-            supersedes: { type: "string" }
-        },
-        1
-    );
     const { ctx, model } = writeTarget();
     const outcome = requireText(positionals[0], 'milestone add "<outcome>" --objective <id> --exit "<criterion>"');
     const objective = requireObjective(model, requireText(values.objective, 'milestone add … --objective <id>'));
@@ -353,20 +414,8 @@ function milestoneAdd(args: string[]): void
     console.log(id);
 }
 
-function milestoneRevise(args: string[]): void
+function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "milestone",
-        args,
-        {
-            outcome: { type: "string" },
-            target: { type: "string" },
-            exit: { type: "string", multiple: true },
-            "drop-exit": { type: "string", multiple: true },
-            why: { type: "string" }
-        },
-        1
-    );
     const { ctx, milestone } = milestoneTarget(positionals[0]);
     const why = requireText(values.why, 'milestone revise <id> --why "<what changed and why>"');
     const payload: Record<string, unknown> = {
@@ -395,9 +444,8 @@ function nextCriteria(milestone: MilestoneState, texts: string[]): { id: string;
 // A checkpoint given up on, with nothing taking its place. Revising it would
 // say the target moved; dropping it says nobody is going to reach it, which is
 // the thing a milestone had no way to say.
-function milestoneDrop(args: string[]): void
+function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
 {
-    const { values, positionals } = parseCommand("milestone", args, { why: { type: "string" } }, 1);
     const { ctx, milestone } = milestoneTarget(positionals[0]);
     const why = requireText(values.why, 'milestone drop <id> --why "<why it is not being reached>"');
     if (milestone.state === "reached")
@@ -411,9 +459,8 @@ function milestoneDrop(args: string[]): void
     recordEvent(ctx, makeEvent(ctx.project, "milestone.dropped", { milestone: milestone.id, why }, undefined, true), `${milestone.id} ${why}`);
 }
 
-function milestoneMet(args: string[]): void
+function milestoneMet({ values, positionals }: CommandInput<typeof COVERAGE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("milestone", args, COVERAGE_OPTIONS, 1);
     const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const criterion = requireCriterion(milestone, requireText(values.criterion, "milestone met <id> --criterion <c1>"));
     const why = requireText(values.why, 'milestone met <id> --criterion c1 --why "<how the evidence covers it>"');
@@ -457,9 +504,8 @@ function coverageRefs(
 // judgment someone makes deliberately, at the revision standing now — never a
 // side effect of another verb, and never an assertion that skips the gate the
 // first reach had to pass.
-function milestoneRecheck(args: string[]): void
+function milestoneRecheck({ values, positionals }: CommandInput<typeof COVERAGE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("milestone", args, COVERAGE_OPTIONS, 1);
     const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const why = requireText(values.why, 'milestone recheck <id> [--criterion c1] --why "<what you re-judged>"');
     if (values.criterion === undefined)
@@ -520,9 +566,8 @@ function currentAlready(what: string, objective: ObjectiveState, milestone: Mile
 
 // Work reaching done is not a milestone being reached: the exit criteria are
 // the gate, and they are checked here rather than inferred from a transition.
-function milestoneReach(args: string[]): void
+function milestoneReach({ positionals }: CommandInput): void
 {
-    const { positionals } = parseCommand("milestone", args, {}, 1);
     const { ctx, milestone, objective } = milestoneTarget(positionals[0]);
     if (milestone.reached !== undefined)
     {
@@ -563,11 +608,39 @@ function reachPayload(milestone: MilestoneState, objective: ObjectiveState): Rec
 
 /* ── work links ────────────────────────────────────────────────────── */
 
-export function cmdWorkLink(ctx: ProjectContext, args: string[], link: boolean): void
+// The work verbs this module owns, grafted under `self work` by the
+// dispatcher's declaration. Their handlers still parse with node's parseArgs
+// directly — the second argument-parse path recorded as debt (#111) — so they
+// are declared raw, over the same option objects those parsers read.
+const LINK_OPTIONS = { objective: { type: "string" }, milestone: { type: "string" } } as const;
+
+const PROPOSAL_OPTIONS = {
+    objective: { type: "string" },
+    milestone: { type: "string" },
+    value: { type: "string" },
+    success: { type: "string", multiple: true },
+    stop: { type: "string", multiple: true },
+    depends: { type: "string", multiple: true },
+    risk: { type: "string" },
+    capacity: { type: "string" },
+    "evidence-plan": { type: "string" },
+    confidence: { type: "string" },
+    expires: { type: "string" }
+} as const;
+
+export const WORK_GOAL_LEAVES: CommandLeaf[] = [
+    rawLeaf("link", LINK_OPTIONS, (args) => cmdWorkLink(requireProject(process.cwd()), args, true)),
+    rawLeaf("unlink", LINK_OPTIONS, (args) => cmdWorkLink(requireProject(process.cwd()), args, false)),
+    rawLeaf("propose", PROPOSAL_OPTIONS, (args) => cmdPropose(requireProject(process.cwd()), args), ["depends"]),
+    rawLeaf("accept", WHY_OPTION, (args) => cmdProposalDecision(requireProject(process.cwd()), args, true)),
+    rawLeaf("decline", WHY_OPTION, (args) => cmdProposalDecision(requireProject(process.cwd()), args, false))
+];
+
+function cmdWorkLink(ctx: ProjectContext, args: string[], link: boolean): void
 {
     const { values, positionals } = parseArgs({
         args,
-        options: { objective: { type: "string" }, milestone: { type: "string" } },
+        options: LINK_OPTIONS,
         allowPositionals: true
     });
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
@@ -600,23 +673,11 @@ const PROPOSAL_FIELDS: [string, string][] = [
     ["expires", "YYYY-MM-DD after which the proposal is stale"]
 ];
 
-export function cmdPropose(ctx: ProjectContext, args: string[]): void
+function cmdPropose(ctx: ProjectContext, args: string[]): void
 {
     const { values, positionals } = parseArgs({
         args,
-        options: {
-            objective: { type: "string" },
-            milestone: { type: "string" },
-            value: { type: "string" },
-            success: { type: "string", multiple: true },
-            stop: { type: "string", multiple: true },
-            depends: { type: "string", multiple: true },
-            risk: { type: "string" },
-            capacity: { type: "string" },
-            "evidence-plan": { type: "string" },
-            confidence: { type: "string" },
-            expires: { type: "string" }
-        },
+        options: PROPOSAL_OPTIONS,
         allowPositionals: true
     });
     const outcome = requireText(positionals[0], 'work propose "<required outcome>" --milestone <id> …');
@@ -707,9 +768,9 @@ function normalize(text: string): string
     return text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-export function cmdProposalDecision(ctx: ProjectContext, args: string[], accept: boolean): void
+function cmdProposalDecision(ctx: ProjectContext, args: string[], accept: boolean): void
 {
-    const { values, positionals } = parseArgs({ args, options: { why: { type: "string" } }, allowPositionals: true });
+    const { values, positionals } = parseArgs({ args, options: WHY_OPTION, allowPositionals: true });
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const proposal = requireProposal(model, positionals[0]);
     if (!accept)
@@ -907,7 +968,7 @@ function validPriority(value: string): number
 
 // Progress is derived from covered exit criteria and evidence, so a bare
 // percentage has nothing behind it and is refused at the door.
-export function rejectManualProgress(args: string[]): void
+function rejectManualProgress(args: string[]): void
 {
     if (args.some((arg) => arg === "--progress" || arg.startsWith("--progress=")))
     {
