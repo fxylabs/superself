@@ -1,10 +1,10 @@
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { parseCommand, subcommand } from "./args.js";
+import { branch, Command, leaf } from "./contract.js";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
 import { digestFile } from "./repo.js";
-import { CliContext, readRegistry } from "./paths.js";
+import { CliContext, readRegistry, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
 
@@ -294,28 +294,45 @@ function summaryOf(event: { type: string; payload: Record<string, unknown> }): s
 
 // The workspace is resolved only once the arguments check out, so a typo is
 // named the same way on a machine that has no workspace at all.
-export function runArtifact(workspace: () => CliContext, rest: string[]): void
+export const ARTIFACT_COMMAND: Command = {
+    name: "artifact",
+    usage: [
+        {
+            syntax: "artifact list [--work id] [--project slug]",
+            description: ["list artifacts from the derived registry"],
+            verbs: ["list"]
+        },
+        {
+            syntax: "artifact search <query> | open <id> [--project slug]",
+            description: ["find an artifact, or open it with the OS default app at a terminal"],
+            verbs: ["search", "open"]
+        }
+    ],
+    detail: [
+        "browse the files reports have attached. Artifacts are ingested by",
+        "`self report --artifact`, never registered on their own. Without an",
+        "interactive terminal, `open` prints the resolved path and launches nothing.",
+        "",
+        "  --work <work-id>    only artifacts attached to this work unit",
+        "  --project <slug>    only artifacts of this project, instead of the current one"
+    ],
+    node: branch({
+        name: "artifact",
+        unnamed: "refuse",
+        refusal: "usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]",
+        children: [
+            leaf("list", { work: { type: "string" }, project: { type: "string" } }, 0, ({ values }) =>
+                printRecords(scopedRecords(workspace(), values.work, values.project))),
+            leaf("search", {}, 1, ({ positionals }) => searchArtifacts(workspace(), positionals[0])),
+            leaf("open", { project: { type: "string" } }, 1, ({ values, positionals }) =>
+                openArtifact(workspace(), positionals[0], values.project))
+        ]
+    })
+};
+
+function workspace(): CliContext
 {
-    const sub = subcommand("artifact", rest);
-    if (sub === "list")
-    {
-        const { values } = parseCommand("artifact", rest.slice(1), { work: { type: "string" }, project: { type: "string" } }, 0);
-        printRecords(scopedRecords(workspace(), values.work, values.project));
-        return;
-    }
-    if (sub === "search")
-    {
-        const [, query] = parseCommand("artifact", rest, {}, 2).positionals;
-        searchArtifacts(workspace(), query);
-        return;
-    }
-    if (sub === "open")
-    {
-        const { values, positionals } = parseCommand("artifact", rest, { project: { type: "string" } }, 2);
-        openArtifact(workspace(), positionals[1], values.project);
-        return;
-    }
-    throw new CliError("usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]");
+    return requireWorkspace(process.cwd());
 }
 
 function scopedRecords(ctx: CliContext, work: string | undefined, project: string | undefined): ArtifactRecord[]

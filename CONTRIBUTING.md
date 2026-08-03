@@ -114,11 +114,13 @@ pnpm build
 A new verb ships as a set. A pull request that adds one without all five is
 incomplete:
 
-1. A `parseCommand` guard in the command module, declaring its options and how
-   many positionals it accepts.
-2. A `COMMANDS` entry in `help.ts` with usage and detail — that file is the one
-   place the CLI describes itself, so `self` and `self <cmd> --help` stay in
-   sync.
+1. A `leaf` in the owning command's contract declaration, stating its options
+   and how many positionals it accepts — the dispatcher hands them to
+   `parseCommand`, so nothing a command accepts is declared anywhere else.
+2. A usage line and detail in that same `Command` declaration — the one place
+   the CLI describes itself, so `self` and `self <cmd> --help` stay in sync,
+   and `test/contract.test.mjs` fails a verb that is documented without being
+   dispatchable or the other way around.
 3. Every refusal as a one-line `CliError` that says what was refused and why,
    in the user's terms. A refusal that only names a rule teaches nothing.
 4. Test coverage under `apps/cli/test/` for the behavior the verb adds,
@@ -126,7 +128,7 @@ incomplete:
    logic, a case in the integration tests where it is a CLI contract.
 5. A statement of the scope it answers for. A read verb defaults to the project
    the directory resolves to, accepts `--project <slug>`, and either offers a
-   `--workspace` form or says in its `help.ts` detail why it has none. A write
+   `--workspace` form or says in its command's help detail why it has none. A write
    verb states that it takes neither and records into the project it runs in.
    Both resolve through `paths.ts` `readScope`/`readScopes` rather than reading
    the registry themselves — see the scope contract in

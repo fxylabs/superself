@@ -4,19 +4,31 @@
 // it took effect, and a swallowed flag on a write leaves state they did not ask
 // for. Parsing also gives every command the same `--` contract, after which an
 // option-looking argument is text the user meant literally.
+//
+// What a command states is no longer stated here: `contract.ts` holds the one
+// declaration of each command's options and positional count, and the
+// dispatcher hands it to `parseCommand`. This module is the gate, not the
+// catalogue.
 
 import { parseArgs } from "node:util";
-import { findCommand } from "./help.js";
 import { CliError } from "./types.js";
 
-interface OptionSpec
+export interface OptionSpec
 {
     type: "string" | "boolean";
     multiple?: boolean;
     short?: string;
 }
 
-export function parseCommand<T extends Record<string, OptionSpec>>(cmd: string, args: string[], options: T, accepts: number)
+export type OptionSpecs = Record<string, OptionSpec>;
+
+export interface ParsedArguments
+{
+    values: Record<string, string | boolean | (string | boolean)[] | undefined>;
+    positionals: string[];
+}
+
+export function parseCommand(cmd: string, args: string[], options: OptionSpecs, accepts: number): ParsedArguments
 {
     const parsed = parseArgs({ args, options, strict: true, allowPositionals: true });
     const extra = parsed.positionals[accepts];
@@ -24,7 +36,10 @@ export function parseCommand<T extends Record<string, OptionSpec>>(cmd: string, 
     {
         throw new CliError(`unexpected argument '${extra}' — ${helpHint(cmd)}`);
     }
-    return parsed;
+    // The option set arrives from the contract rather than from a literal at
+    // this call site, so node infers the widest value type it has; the shape
+    // every command reads is the uniform one.
+    return { values: parsed.values as ParsedArguments["values"], positionals: parsed.positionals };
 }
 
 export function unknownOption(arg: string, cmd: string | undefined): string
@@ -32,11 +47,12 @@ export function unknownOption(arg: string, cmd: string | undefined): string
     return `unknown option '${arg}' — ${helpHint(cmd)}`;
 }
 
-// Point at the scoped help when the command is known, the root list otherwise.
+// Point at the scoped help when a command is named, the root list otherwise.
+// Every caller passes a root command name the contract already resolved, so
+// the name is not checked against the command list a second time here.
 export function helpHint(cmd: string | undefined): string
 {
-    const command = findCommand(cmd);
-    return `run \`self ${command === undefined ? "" : command.name + " "}--help\` for the syntax`;
+    return `run \`self ${cmd === undefined ? "" : cmd + " "}--help\` for the syntax`;
 }
 
 // Every command that dispatches on a subcommand reads it through here, so `--`
