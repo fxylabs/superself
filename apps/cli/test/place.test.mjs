@@ -177,22 +177,24 @@ test("an agent adding past a cap lands a proposed add paired with a proposed dem
     const context = must(pairBox, pairDemo, ["context"]).out;
     assert.ok(context.includes(`proposed entity ${added}: wants the seat (confirm with \`self state confirm ${added}\`)`));
     assert.ok(context.includes(`proposed placement of ${holder}: exposure search (demoted to admit ${added} under the index cap)`));
-    // Confirming the admitted half first would overfill the seat (review F2):
-    // capacity is rechecked at confirm time, and the refusal names the
-    // companion demotion to confirm first.
-    const early = pairSelf(["state", "confirm", added]);
-    assert.notEqual(early.code, 0);
-    assert.match(early.out, /would put the project index tier over its cap \(1 of 1 entities held\)/);
-    assert.match(early.out, new RegExp(`confirm the paired demotion first: \`self state confirm ${holder}\``));
-    must(pairBox, pairDemo, ["state", "confirm", holder]);
-    must(pairBox, pairDemo, ["state", "confirm", added]);
-    assert.ok(must(pairBox, pairDemo, ["state", "show", added]).out.includes("confirmed"));
+    // A cap-driven pair is one confirmable unit (review F3): either half's id
+    // lands both in one append, so the seat never stands double-booked and
+    // no confirm ordering exists to get wrong.
+    const swap = must(pairBox, pairDemo, ["state", "confirm", added]);
+    assert.equal([...swap.out.matchAll(/entity\.confirmed/g)].length, 2, `the pair did not land as one unit:\n${swap.out}`);
+    assert.ok(must(pairBox, pairDemo, ["state", "show", added]).out.includes("placement: project · index"));
     assert.ok(must(pairBox, pairDemo, ["state", "show", holder]).out.includes("placement: project · search"));
+    const again = pairSelf(["state", "confirm", holder]);
+    assert.notEqual(again.code, 0);
+    assert.match(again.out, /already confirmed/);
 });
+
+let seated;
+let floating;
 
 test("--demote validates its target in user terms", () =>
 {
-    const seated = must(pairBox, pairDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*index)/)[0];
+    seated = must(pairBox, pairDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*index)/)[0];
     const searched = must(pairBox, pairDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*search)/)[0];
     const wrongTier = pairSelf(["state", "add", "next seat", "--demote", searched]);
     assert.notEqual(wrongTier.code, 0);
@@ -200,13 +202,22 @@ test("--demote validates its target in user terms", () =>
     const repeated = pairSelf(["state", "add", "next seat", "--demote", seated, "--demote", seated]);
     assert.notEqual(repeated.code, 0);
     assert.match(repeated.out, /is repeated/);
-    const proposed = entityIn(must(pairBox, pairDemo, ["state", "add", "floating proposal", "--proposed", "--demote", seated]).out);
-    const unheld = pairSelf(["state", "add", "next seat", "--demote", proposed]);
+    floating = entityIn(must(pairBox, pairDemo, ["state", "add", "floating proposal", "--proposed", "--demote", seated]).out);
+    const unheld = pairSelf(["state", "add", "next seat", "--demote", floating]);
     assert.notEqual(unheld.code, 0);
     assert.match(unheld.out, /still proposed — it holds no place in the index tier/);
     const itself = pairSelf(["state", "place", searched, "--exposure", "index", "--demote", searched]);
     assert.notEqual(itself.code, 0);
     assert.match(itself.out, /names the record being placed/);
+});
+
+test("confirming the demotion half lands the whole pair too", () =>
+{
+    const swap = must(pairBox, pairDemo, ["state", "confirm", seated]);
+    assert.equal([...swap.out.matchAll(/entity\.confirmed/g)].length, 2, `the pair did not land as one unit:\n${swap.out}`);
+    assert.ok(must(pairBox, pairDemo, ["state", "show", floating]).out.includes("confirmed"));
+    assert.ok(must(pairBox, pairDemo, ["state", "show", floating]).out.includes("placement: project · index"));
+    assert.ok(must(pairBox, pairDemo, ["state", "show", seated]).out.includes("placement: project · search"));
 });
 
 // A clean machine for the reviewer's two reproductions, landed verbatim.
@@ -230,20 +241,22 @@ test("review F1: a demotion cannot overfill the index tier", () =>
     must(reviewBox, reviewDemo, ["state", "place", dweller, "--exposure", "search", "--why", "drained"]);
 });
 
-test("review F2: confirming a promotion past the full cap is refused until its demotion lands", () =>
+test("review F2: confirming the promotion half cannot leave the full tier over its cap", () =>
 {
     setCaps(reviewBox, { fullCap: 10, indexCap: 50 });
     const eight = entityIn(must(reviewBox, reviewDemo, ["state", "add", "8 chars!", "--exposure", "full"]).out);
     const five = entityIn(must(reviewBox, reviewDemo, ["state", "add", "5char"]).out);
     must(reviewBox, reviewDemo, ["state", "place", five, "--exposure", "full", "--proposed", "--demote", eight]);
-    const early = reviewSelf(["state", "confirm", five]);
-    assert.notEqual(early.code, 0, "the promotion half landed past the full cap");
-    assert.match(early.out, /would put the project full tier over its cap \(8 of 10 characters held\)/);
-    assert.match(early.out, new RegExp(`confirm the paired demotion first: \`self state confirm ${eight}\``));
-    must(reviewBox, reviewDemo, ["state", "confirm", eight]);
-    must(reviewBox, reviewDemo, ["state", "confirm", five]);
+    // The F2 property: no single verb leaves full past 10 characters. The
+    // pair is one unit, so the promotion's confirm lands the demotion with
+    // it — full ends at 5 of 10, never at 13.
+    const swap = must(reviewBox, reviewDemo, ["state", "confirm", five]);
+    assert.equal([...swap.out.matchAll(/entity\.confirmed/g)].length, 2, `the pair did not land as one unit:\n${swap.out}`);
     assert.ok(must(reviewBox, reviewDemo, ["state", "show", five]).out.includes("placement: project · full"));
     assert.ok(must(reviewBox, reviewDemo, ["state", "show", eight]).out.includes("placement: project · index"));
+    const again = reviewSelf(["state", "confirm", eight]);
+    assert.notEqual(again.code, 0);
+    assert.match(again.out, /already confirmed/);
 });
 
 // A machine for the fix's own blast radius: retracted pair halves, a lone
@@ -285,6 +298,29 @@ test("retracting either half of a pair leaves the other confirmable and the caps
     must(edgeBox, edgeDemo, ["state", "retract", rowC, "--why", "withdrawn"]);
     must(edgeBox, edgeDemo, ["state", "confirm", rowB]);
     assert.ok(must(edgeBox, edgeDemo, ["state", "show", rowB]).out.includes("placement: project · search"));
+});
+
+// A clean machine for the reviewer's third reproduction: the exact swap
+// whose two tiers are both full, so neither half may land alone.
+const f3Box = machine();
+const f3Demo = demoWorkspace(f3Box).demo;
+const f3Self = (args) => selfIn(f3Box, f3Demo, args);
+
+test("review F3: an exact-swap pair confirms as one unit instead of deadlocking", () =>
+{
+    setCaps(f3Box, { fullCap: 8, indexCap: 1 });
+    const dweller = entityIn(must(f3Box, f3Demo, ["state", "add", "12345678", "--exposure", "full"]).out);
+    const idx = entityIn(must(f3Box, f3Demo, ["state", "add", "idx"]).out);
+    must(f3Box, f3Demo, ["state", "place", idx, "--exposure", "full", "--proposed", "--demote", dweller]);
+    // Both tiers are exactly full: only the pair's net effect fits, so the
+    // confirm applies both halves in one append — from either half's id.
+    const swap = must(f3Box, f3Demo, ["state", "confirm", idx]);
+    assert.equal([...swap.out.matchAll(/entity\.confirmed/g)].length, 2, `the pair did not land as one unit:\n${swap.out}`);
+    assert.ok(must(f3Box, f3Demo, ["state", "show", idx]).out.includes("placement: project · full"));
+    assert.ok(must(f3Box, f3Demo, ["state", "show", dweller]).out.includes("placement: project · index"));
+    const again = f3Self(["state", "confirm", dweller]);
+    assert.notEqual(again.code, 0);
+    assert.match(again.out, /already confirmed/);
 });
 
 test("a paired full demotion is refused while its own index destination lacks room", () =>

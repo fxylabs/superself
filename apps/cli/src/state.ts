@@ -21,12 +21,11 @@ import {
     LINK_TYPES,
     LinkType,
     orderEntities,
-    PendingPlacement,
     pendingSummary
 } from "./entities.js";
 import { entityId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { ProjectContext, readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
+import { readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { countCharacters } from "./style.js";
 import { CliError, SelfEvent } from "./types.js";
@@ -383,38 +382,62 @@ function requireDemotionRoom(model: ProjectModel, caps: RetentionCaps, demotions
     }
 }
 
-// What a confirm admits must fit at confirm time (review F2): the proposal
-// was recorded against an older tier state, and the person answers it
-// against today's — under the same counts the write verbs gate on.
-function requireConfirmRoom(model: ProjectModel, caps: RetentionCaps, entity: EntityState, destination: Exposure): void
+// One seat movement a confirm would apply: where the record stands now (a
+// proposed record stands nowhere), and where it would sit.
+interface SeatMove
 {
-    const tier = cappedTier(destination);
-    if (tier === undefined)
+    from?: Exposure;
+    to: Exposure;
+    characters: number;
+}
+
+function unitMoves(unit: ConfirmMember[]): SeatMove[]
+{
+    return unit.flatMap((member): SeatMove[] =>
+    {
+        const characters = countCharacters(member.entity.text);
+        if (member.kind === "record")
+        {
+            return [{ to: member.entity.exposure, characters }];
+        }
+        const to = member.entity.pending?.exposure;
+        return to === undefined || to === member.entity.exposure
+            ? []
+            : [{ from: member.entity.exposure, to, characters }];
+    });
+}
+
+// What a confirm admits must fit at confirm time (review F2), judged as the
+// unit's net movement (review F3): a tier the unit enters must end within
+// its cap, credited with every seat the unit itself vacates there — the
+// same crediting the write path does — under the same counts the write
+// verbs gate on. A tier the unit only drains is never gated, so an over-cap
+// store keeps its way down.
+function requireUnitRoom(model: ProjectModel, caps: RetentionCaps, unit: ConfirmMember[]): void
+{
+    for (const tier of ["full", "index"] as const)
+    {
+        requireTierRoom(model, caps, tier, unitMoves(unit));
+    }
+}
+
+function requireTierRoom(model: ProjectModel, caps: RetentionCaps, tier: "full" | "index", moves: SeatMove[]): void
+{
+    const weigh = (move: SeatMove): number => tier === "full" ? move.characters : 1;
+    const entering = moves.filter((move) => move.to === tier).reduce((sum, move) => sum + weigh(move), 0);
+    if (entering === 0)
     {
         return;
     }
     const usage = tier === "full" ? fullTierCharacters(model.entities, "project") : indexTierCount(model.entities, "project");
     const cap = tier === "full" ? caps.full : caps.index;
-    const after = tier === "full" ? usage + countCharacters(entity.text) : usage + 1;
-    if (after > cap)
+    const leaving = moves.filter((move) => move.from === tier).reduce((sum, move) => sum + weigh(move), 0);
+    if (usage + entering - leaving > cap)
     {
-        throw new CliError(`confirming ${entity.id} would put the project ${tier} tier over its cap `
-            + `(${usage} of ${cap} ${tier === "full" ? "characters" : "entities"} held) — ${confirmRoomRemedy(model, entity, tier)}`);
+        throw new CliError(`confirming this would put the project ${tier} tier over its cap `
+            + `(${usage} of ${cap} ${tier === "full" ? "characters" : "entities"} held) — `
+            + `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
     }
-}
-
-// The remedy half of the capacity refusal: the paired demotion when one
-// waits — found by the why that names this record — and the direct drain
-// otherwise. One rule for pairs and lone proposals alike.
-function confirmRoomRemedy(model: ProjectModel, entity: EntityState, tier: "full" | "index"): string
-{
-    const companion = model.entities.find((item) =>
-        item.pending?.why !== undefined && item.pending.why.includes(`admit ${entity.id} under`));
-    if (companion !== undefined)
-    {
-        return `confirm the paired demotion first: \`self state confirm ${companion.id}\``;
-    }
-    return `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``;
 }
 
 // A demotion named where no cap demands one would demote a record as a side
@@ -476,9 +499,10 @@ function requireDemotable(model: ProjectModel, value: string, tier: "full" | "in
 }
 
 // The paired demotion, appended in the same write as the add or placement it
-// makes room for: its why names the admitted record, which is the
-// cross-reference a person confirms the pair by. --proposed marks both
-// halves, so neither applies until a person answers each.
+// makes room for: `refs.admits` is the machine-readable pairing the confirm
+// surface applies the pair as one unit by, and the why says the same thing
+// to the person reading it. --proposed marks both halves, so neither applies
+// until a person answers.
 function demotionEvents(project: string, demotions: EntityState[], admit: string, proposed: boolean): SelfEvent[]
 {
     return demotions.map((entity) => makeEvent(project, "entity.placed", {
@@ -486,7 +510,7 @@ function demotionEvents(project: string, demotions: EntityState[], admit: string
         exposure: DEMOTION_TARGET[entity.exposure as "full" | "index"],
         why: `demoted to admit ${admit} under the ${entity.exposure} cap`,
         ...(proposed ? { proposed: true } : {})
-    }, undefined, !proposed));
+    }, { admits: admit }, !proposed));
 }
 
 function stateConfirm({ positionals }: CommandInput): void
@@ -494,38 +518,74 @@ function stateConfirm({ positionals }: CommandInput): void
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const entity = requireEntity(model, positionals[0], "state confirm <id>");
-    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
-    // A placement proposal waiting on the record answers to the entity's own
-    // id — the same confirm a proposed entity takes, and the placement axis
-    // is entity-owned, so this holds for the preset record kinds too.
-    if (entity.status === "confirmed" && entity.pending !== undefined)
+    const unit = confirmableUnit(model, entity);
+    requireUnitRoom(model, retentionCaps(readStoreConfig(ctx.storeDir)), unit);
+    recordEvents(ctx, unit.map((member) => confirmEvent(ctx.project, member)), entity.text);
+}
+
+// One confirmable thing a record carries: its own proposal, or a placement
+// pending on it. A confirm answers to the entity's own id either way, and
+// the placement axis is entity-owned, so this holds for the preset record
+// kinds too.
+interface ConfirmMember
+{
+    entity: EntityState;
+    kind: "record" | "placement";
+}
+
+function waitingMember(entity: EntityState | undefined): ConfirmMember | null
+{
+    if (entity === undefined)
     {
-        confirmPendingPlacement(ctx, model, caps, entity, entity.pending);
-        return;
+        return null;
     }
-    if (entity.status !== "proposed")
+    if (entity.status === "proposed")
+    {
+        return { entity, kind: "record" };
+    }
+    return entity.status === "confirmed" && entity.pending !== undefined ? { entity, kind: "placement" } : null;
+}
+
+// A cap-driven pair is one confirmable unit (review F3): from either half's
+// id, the admitted record and every demotion still paired to it land in one
+// append. No ordering exists to get wrong, no in-between state exists for a
+// cap to be exceeded in, and an exact swap of two full tiers cannot
+// deadlock. A demotion whose admitted record already landed — or left by
+// retraction or supersession — confirms alone.
+function confirmableUnit(model: ProjectModel, entity: EntityState): ConfirmMember[]
+{
+    const own = waitingMember(entity);
+    if (own === null)
     {
         throw new CliError(`${entity.id} is already ${entity.status}`);
     }
     // Only a decision or an objective can stand proposed among the legacy
     // readings, so the remedy below always has a confirm verb to name.
-    if (entity.source !== undefined)
+    if (own.kind === "record" && entity.source !== undefined)
     {
         throw new CliError(`${entity.id} is a ${entity.source} record — run \`self ${entity.source === "decision" ? "decide" : entity.source} confirm ${entity.id}\``);
     }
-    // A proposed record takes its seat only now, so the seat is judged now
-    // (review F2): the same rule as a pending placement, one rule for both.
-    requireConfirmRoom(model, caps, entity, entity.exposure);
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: entity.id }, { confirms: entity.id }, true), entity.text);
+    const admitted = own.kind === "placement" && entity.pending?.admits !== undefined
+        ? waitingMember(model.entities.find((item) => item.id === entity.pending?.admits))
+        : null;
+    const centre = own.kind === "placement" && entity.pending?.admits !== undefined ? admitted ?? own : own;
+    const members = new Map<string, ConfirmMember>([[centre.entity.id, centre]]);
+    for (const item of model.entities)
+    {
+        const paired = item.pending?.admits === centre.entity.id ? waitingMember(item) : null;
+        if (paired !== null)
+        {
+            members.set(item.id, paired);
+        }
+    }
+    members.set(entity.id, own);
+    return [...members.values()];
 }
 
-function confirmPendingPlacement(ctx: ProjectContext, model: ProjectModel, caps: RetentionCaps, entity: EntityState, pending: PendingPlacement): void
+function confirmEvent(project: string, member: ConfirmMember): SelfEvent
 {
-    if (pending.exposure !== undefined && pending.exposure !== entity.exposure)
-    {
-        requireConfirmRoom(model, caps, entity, pending.exposure);
-    }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: entity.id }, { confirms: pending.event }, true), entity.text);
+    const confirms = member.kind === "record" ? member.entity.id : member.entity.pending?.event ?? member.entity.id;
+    return makeEvent(project, "entity.confirmed", { entity: member.entity.id }, { confirms }, true);
 }
 
 function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>): void

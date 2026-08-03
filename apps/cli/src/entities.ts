@@ -38,6 +38,10 @@ export interface PendingPlacement
     priority?: number;
     exposure?: Exposure;
     why?: string;
+    // The record this demotion makes room for, when the placement is the
+    // demotion half of a cap-driven pair: the confirm surface applies the
+    // whole pair as one unit through this reference.
+    admits?: string;
 }
 
 // Which preset record kind a legacy-derived entity is the reading of. Absent
@@ -93,6 +97,7 @@ interface PlacementEvent
     exposure?: Exposure;
     scope?: EntityScope;
     why?: string;
+    admits?: string;
     proposed: boolean;
 }
 
@@ -298,6 +303,7 @@ function collectPlacement(fold: EntityFold, event: SelfEvent): void
         exposure: readExposureOptional(event.payload.exposure),
         scope: event.payload.scope === "project" || event.payload.scope === "workspace" ? event.payload.scope : undefined,
         why: str(event.payload.why),
+        admits: str(event.refs?.admits),
         proposed: event.payload.proposed === true
     });
 }
@@ -397,7 +403,13 @@ function applyPlacements(entities: EntityState[], fold: EntityFold): void
         }
         if (placement.proposed && !fold.confirmations.has(placement.event))
         {
-            target.pending = { event: placement.event, priority: placement.priority, exposure: placement.exposure, why: placement.why };
+            target.pending = {
+                event: placement.event,
+                priority: placement.priority,
+                exposure: placement.exposure,
+                why: placement.why,
+                admits: placement.admits
+            };
             continue;
         }
         applyPlacement(target, placement);
