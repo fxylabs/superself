@@ -3,7 +3,6 @@ import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { helpHint, parseCommand, subcommand, unknownOption } from "./args.js";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
-import { runAttemptCommand } from "./attempt/commands.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
@@ -41,7 +40,8 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
-import { doneEvent } from "./requirements.js";
+import { completionRefusal } from "./completion.js";
+import { recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
@@ -87,7 +87,6 @@ async function main(argv: string[]): Promise<void>
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
         case "artifact": cmdArtifact(rest); break;
-        case "attempt": await runAttemptCommand(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
@@ -707,10 +706,15 @@ function cmdWork(rest: string[]): void
         cmdWorkRetireUnit(rest.slice(1));
         return;
     }
+    if (sub === "started" || sub === "exited")
+    {
+        cmdWorkProcess(rest.slice(1), sub === "started");
+        return;
+    }
     const type = TRANSITIONS[sub as string];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|retire|link|unlink|propose|accept|decline`);
+        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|accept|decline`);
     }
     transitionWork(type, rest.slice(1));
 }
@@ -879,6 +883,38 @@ function successorRef(ctx: ProjectContext, source: string, successor: string | u
     return { successor: found.work.id, successorProject: found.slug };
 }
 
+// The process ledger's two verbs. The synced event carries the transition and
+// never the pid — a pid is machine-local, and the sanitization gate refuses
+// it by design — so the pid lands in the machine ledger beside the event.
+function cmdWorkProcess(args: string[], started: boolean): void
+{
+    const { values, positionals } = parseCommand("work", args, { pid: { type: "string" }, code: { type: "string" } }, 1);
+    const ctx = requireProject(process.cwd());
+    const work = requireOpenWork(ctx, positionals[0]);
+    if (started)
+    {
+        const pid = Number(values.pid);
+        if (!Number.isInteger(pid) || pid <= 0)
+        {
+            throw new CliError("work started records the process running this unit — pass its id: work started <work-id> --pid <N>");
+        }
+        recordProcess({ work: work.id, project: ctx.project, pid, startedAt: new Date().toISOString() });
+        recordEvent(ctx, makeEvent(ctx.project, "work.run-started", { work: work.id }), `${work.id} ${work.outcome}`);
+        return;
+    }
+    const payload: Record<string, unknown> = { work: work.id };
+    if (values.code !== undefined)
+    {
+        const code = Number(values.code);
+        if (!Number.isInteger(code) || code < 0)
+        {
+            throw new CliError("work exited takes the process exit status: work exited <work-id> [--code <N>]");
+        }
+        payload.code = code;
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "work.run-exited", payload), `${work.id} ${work.outcome}`);
+}
+
 function transitionWork(type: string, args: string[]): void
 {
     const { values, positionals } = parseCommand("work", args, { on: { type: "string" }, why: { type: "string" } }, 1);
@@ -888,7 +924,17 @@ function transitionWork(type: string, args: string[]): void
     // outcome was reached, and the completion check is what admits it.
     if (type === "work.done")
     {
-        recordEvent(ctx, doneEvent(ctx, work, values.why), `${work.id} ${work.outcome}`);
+        const refusal = completionRefusal(work);
+        if (refusal !== null)
+        {
+            throw new CliError(refusal);
+        }
+        const payload: Record<string, unknown> = { work: work.id };
+        if (values.why !== undefined)
+        {
+            payload.why = values.why;
+        }
+        recordEvent(ctx, makeEvent(ctx.project, "work.done", payload), `${work.id} ${work.outcome}`);
         return;
     }
     const payload: Record<string, unknown> = { work: work.id };
@@ -1150,7 +1196,7 @@ function requireText(value: string | undefined, usage: string): string
 // A bad flag is a user mistake, not a defect: node reports it by throwing from
 // parseArgs, and without this it would surface as an internal stack trace.
 // Commands here parse through parseCommand; the modules that call parseArgs
-// directly — goals, integration, review, attempt — are answered the same way.
+// directly — goals — are answered the same way.
 function userMessage(error: unknown, argv: string[]): string | null
 {
     if (error instanceof CliError)

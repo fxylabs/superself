@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isEventId } from "../ids.js";
+import { isEventId } from "./ids.js";
 
 export const REDACTED = "«redacted»";
 

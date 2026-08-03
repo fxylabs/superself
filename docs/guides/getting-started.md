@@ -301,7 +301,7 @@ Create an empty private remote, then run `self remote add <url>` before trying
 - Follow [Running a long-term project](running-a-long-term-project.md) to add
   objectives, milestones, requirements, reports, artifacts, and
   evidence-backed completion.
-- Follow [Governing agent execution](governing-agent-execution.md) to bind one
+- Record agent processes with `self work started/exited` to bind one
   agent run to explicit providers, capabilities, artifacts, validation,
   cancellation, and recovery.
 - Read the [governed conversion improvement example](../examples/governed-conversion-improvement.md)

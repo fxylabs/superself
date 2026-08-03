@@ -1,8 +1,7 @@
-import { AttemptStatus, listSpools } from "./attempt/spool.js";
+import { judgeProcess } from "./ledger.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import {
     AttentionRow,
-    ATTEMPT_FAILURE_DAYS,
     ATTENTION_ORDER,
     branchLabel,
     BranchUnshipped,
@@ -623,7 +622,7 @@ export function printStatus(ctx: CliContext, render: RenderMode): void
             model,
             waiting: unrankedWaitingLines(model),
             objectives: objectiveCountLine(model),
-            attempts: openAttempts(ctx.project)
+            attempts: openProcesses(ctx.project, model)
         }).join("\n"));
         return;
     }
@@ -637,34 +636,32 @@ export function printStatus(ctx: CliContext, render: RenderMode): void
         console.log(attentionLine(model));
     }
     console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
-    printAttempts(ctx.project);
+    printProcesses(ctx.project, model);
 }
 
-// Attempt state is machine-local: it says what this machine is running right
-// now, which is not something the synced store can answer. Only unfinished
-// attempts are listed — a completed one has already become a report.
-//
-// And only recent ones. A spool lives until retention prunes it, thirty days
-// by default, so without an age gate a failed attempt from three weeks ago
-// keeps a line here forever — the same slow accumulation the folded model gates
-// on, one surface over, and gated on the same window. `self attempt list`
-// remains the surface that shows every spool.
-function openAttempts(project: string): AttemptRow[]
+// Process state on an open unit, judged at read time: the folded transition
+// is the synced truth, and the machine ledger refines running into stale
+// where this machine recorded the pid. A closed unit's process is history a
+// report already carries, so only open units speak here.
+function openProcesses(project: string, model: ProjectModel): AttemptRow[]
 {
-    const cutoff = Date.now() - ATTEMPT_FAILURE_DAYS * 86_400_000;
-    return listSpools()
-        .map((spool) => spool.status())
-        .filter((status): status is AttemptStatus => status !== null && status.project === project && status.state !== "completed")
-        .filter((status) => new Date(status.updated).getTime() > cutoff)
-        .map((status) => ({ attempt: status.attempt, work: status.work, state: status.state, failure: status.failure }));
-}
-
-function printAttempts(project: string): void
-{
-    for (const status of openAttempts(project))
+    const rows: AttemptRow[] = [];
+    for (const work of model.works.filter((item) => item.status === "active" || item.status === "blocked"))
     {
-        const failure = status.failure === undefined ? "" : ` (${status.failure})`;
-        console.log(`attempt ${status.attempt} ${status.work}: ${status.state}${failure}`);
+        const judged = judgeProcess(project, work.id, work.process);
+        if (judged !== null)
+        {
+            rows.push({ attempt: judged, work: work.id, state: judged.split(" ")[0] });
+        }
+    }
+    return rows;
+}
+
+function printProcesses(project: string, model: ProjectModel): void
+{
+    for (const row of openProcesses(project, model))
+    {
+        console.log(`process ${row.work}: ${row.attempt}`);
     }
 }
 

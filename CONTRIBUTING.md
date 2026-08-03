@@ -92,11 +92,9 @@ pnpm build
 - Allman braces: the opening brace of every block goes on its own line.
 - Four spaces, semicolons required.
 - Reuse the helper that exists; do not re-derive it locally. Current shared
-  homes: `trainutil.ts` exports `requireText`; `args.ts` exports `parseCommand`,
-  `subcommand`, `unknownOption`, and `helpHint`; `ids.ts` mints every id;
-  `attempt/spool.ts` owns the machine-local spool. `strip` and the `str`/`list`
-  payload coercers are duplicated today and are unified by #88 — import the
-  survivor rather than adding a fourth copy.
+  homes: `args.ts` exports `parseCommand`, `subcommand`, `unknownOption`, and
+  `helpHint`; `ids.ts` mints every id; `ledger.ts` owns the machine-local
+  process ledger. Import the survivor rather than adding another copy.
 - Comments explain why a rule exists, not what the next line does. The existing
   modules set the density; match them.
 - No behavior change smuggled into a move. A refactor pull request leaves the
@@ -160,95 +158,6 @@ the host has. Write them checkout-agnostic:
 Assert product behavior, never the suite's own coverage: what fails when the
 CLI is wrong, not whether the test file still lists every case a diff would
 already show.
-
-## Result envelope contract
-
-An agent running under `self attempt run` is judged by the envelope it writes,
-not by its exit code or its summary. This is the durable statement of that
-contract (#63); `attempt/gate.ts` is its implementation.
-
-Stage artifacts under `$SUPERSELF_ATTEMPT_OUT`, then write the envelope as JSON
-to `$SUPERSELF_ATTEMPT_RESULT`:
-
-```json
-{
-  "status": "completed",
-  "summary": "one line describing what the attempt produced",
-  "artifacts": [
-    { "name": "impl-report.json", "sha256": "<64 hex chars>", "bytes": 12051 }
-  ]
-}
-```
-
-Rules the gate enforces:
-
-- The key is `name`, never `path`. It is the declared artifact name from the
-  plan, not a filesystem location.
-- `sha256` and `bytes` are computed over the exact staged file, after the last
-  write to it:
-
-  ```bash
-  ART="$SUPERSELF_ATTEMPT_OUT/impl-report.json"
-  shasum -a 256 "$ART" | cut -d' ' -f1     # sha256
-  stat -f %z "$ART"                        # bytes, macOS
-  stat -c %s "$ART"                        # bytes, Linux
-  wc -c < "$ART"                           # bytes, either
-  ```
-
-  Hand-computing a hash before the final write is the common way to fail this
-  gate. Compute both fields last.
-- `status` must be `completed` for the attempt to pass. Anything else is a
-  failed or blocked attempt, and the gate treats it as one.
-- A missing envelope is a failed attempt. An exit code alone is not a result.
-- Every artifact the plan declares must be claimed in the envelope, exist, hash
-  to what was claimed, and match the claimed byte count. One mismatch refuses the
-  whole attempt. The gate walks the plan, so an extra artifact in the envelope
-  that the plan never declared is ignored rather than verified — do not treat it
-  as a way to publish something.
-
-The same `{name, sha256, bytes}` shape appears in `AttemptSummary.artifacts`
-after the fold. Keep them identical.
-
-## Attempt preparation template
-
-Preparation is runner code, not brief instructions. When a plan pins a head,
-`self attempt run` and `self attempt register` cut a worktree of that head
-before the attempt clock starts, run this repository's preparation template in
-it, and take the worktree back when the attempt settles. An agent never
-provisions, re-verifies or cleans up a checkout of its own; it works in
-`$SUPERSELF_ATTEMPT_WORKDIR`.
-
-The template is `.self-preparation.json` at the repository root. It is read out
-of the provisioned worktree at the pinned head, so a lockfile-era template rides
-the commit that needs it and a template change is reviewed like any other change:
-
-```json
-{
-  "version": 1,
-  "steps": [
-    { "name": "install", "command": ["pnpm", "install", "--frozen-lockfile"], "timeoutMs": 600000 }
-  ]
-}
-```
-
-- `steps` runs in order, each with the provisioned worktree as its working
-  directory and the attempt plan's own boundary and passthrough environment.
-- `command` is argv, not a shell line. `argv[0]` must appear in the plan's
-  tools allowlist; a step naming anything else is refused at preflight.
-- `timeoutMs` is optional and defaults to ten minutes.
-- `name` is optional and labels the step in `self attempt show`.
-- No `.self-preparation.json` at that head means no steps — worktree
-  provisioning alone, which is a complete answer for a project that installs
-  nothing.
-
-A step that exits non-zero or runs past its timeout is a preflight failure: the
-attempt never starts, no run is spent, and each step's command, exit, duration
-and a bounded, redacted output tail are in the spool as `preparation.jsonl`. A
-malformed template is refused the same way, naming the field that is wrong.
-
-When settlement takes the worktree back it first records what was left
-uncommitted there. Ignored preparation output is not residue; an attempt that
-stopped before finalizing its outputs shows up in that count.
 
 ## Branches
 
