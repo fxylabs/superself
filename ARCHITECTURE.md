@@ -22,7 +22,7 @@ it. The layers, lowest first:
 | Layer | Modules | Owns |
 | --- | --- | --- |
 | Types | `types.ts` | the event and context shapes; imports nothing local |
-| CLI surface | `args.ts`, `contract.ts`, `help.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, and confirms a human; `human.ts` imports nothing local, `contract.ts` imports only `args.ts`, and `help.ts` renders the contract rather than keeping a list of its own |
+| CLI surface | `args.ts`, `contract.ts`, `help.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, and confirms a human; `human.ts` imports nothing local, `contract.ts` imports only `args.ts` and `types.ts`, and `help.ts` renders the contract rather than keeping a list of its own |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`) |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts` | per-domain state shapes and their reducers |

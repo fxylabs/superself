@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMANDS } from "../dist/main.js";
-import { branch, checkContract, commandLeaves, leaf } from "../dist/contract.js";
+import { branch, checkContract, commandLeaves, leaf, resolveCommand } from "../dist/contract.js";
 import { commandUsage, rootUsage } from "../dist/help.js";
 
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
@@ -60,13 +60,17 @@ test("every declared command answers scoped help with the contract's rendering",
     }
 });
 
-test("every declared leaf resolves — an option contract nothing can reach fails", () =>
+test("the resolver reaches every declared leaf at its declared path", () =>
 {
     for (const command of COMMANDS)
     {
         for (const entry of commandLeaves(command))
         {
-            assert.ok(entry.leaf.kind === "leaf", `${command.name} "${entry.verb}" is not a leaf`);
+            const argv = entry.verb === "" ? [command.name] : [command.name, ...entry.verb.split(" ")];
+            const resolved = resolveCommand(COMMANDS, argv);
+            assert.ok(resolved !== null, `\`self ${argv.join(" ")}\` resolved to no command`);
+            assert.equal(resolved.command, command, `\`self ${argv.join(" ")}\` resolved into another command`);
+            assert.equal(resolved.leaf, entry.leaf, `\`self ${argv.join(" ")}\` resolved to a different leaf than it declares`);
         }
     }
 });
