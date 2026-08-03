@@ -73,9 +73,8 @@ directory.
 A flag a command does not take is refused before the command runs — the
 mistake is named, the exit is non-zero, and nothing is recorded and nothing
 is written. A typoed verb (`self reprot`) is refused the same way. Most
-commands also refuse an argument they have no room for; the multi-verb
-families — `objective`, `milestone`, `integration`, `review`, and the `work`
-linking and proposal verbs — still ignore a surplus positional.
+commands also refuse an argument they have no room for; the `work`
+linking and proposal verbs still ignore a surplus positional.
 
 To pass text that starts with a dash, put it after `--`:
 `self goal set -- "--help is the goal"`. Before `--`, a `--help` standing

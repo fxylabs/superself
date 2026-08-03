@@ -24,12 +24,12 @@ Closes #
 - [ ] I consulted [ARCHITECTURE.md](https://github.com/fxylabs/superself/blob/main/ARCHITECTURE.md) before writing code
 - [ ] No module imports from a layer above it; no new import cycle
 - [ ] No new flat top-level subsystem — a new subsystem owns a directory with a `commands.ts`
-- [ ] No core module gained an import from a subsystem directory (`attempt/`, `spec/`, `daemon/`)
-- [ ] No new path around a single gate (event append, sanitization, completion refusal, attempt gate); any new or migrated command surface in this PR parses through `args.ts` `parseCommand`
+- [ ] No core module gained an import from a subsystem directory
+- [ ] No new path around a single gate (event append, sanitization, completion refusal, process ledger); any new or migrated command surface in this PR parses through `args.ts` `parseCommand`
 - [ ] New events extend an owned namespace rather than minting a sibling
 - [ ] Helpers reused, not re-derived; functions within 20-30 lines
-- [ ] Proof scripts are checkout-agnostic: no assumed default branch, no assumed local `main`, no assumed git config, no macOS-only tools
-- [ ] Result-envelope contract honored where touched: `{name, sha256, bytes}`, `name` not `path`
+- [ ] Tests are checkout-agnostic: no assumed default branch, no assumed local `main`, no assumed git config, no macOS-only tools
+- [ ] Artifact shape honored where touched: `{name, sha256, bytes}`, `name` not `path`
 
 ## Verification
 

@@ -96,9 +96,8 @@ deliberately stated. In the current project model this includes:
 - the long-term goal, time-boxed objectives, and milestone outcomes;
 - confirmed or proposed decisions and conventions;
 - work outcomes, status transitions, proposals, and contribution links;
-- requirements, approval requirements, and implementation policy;
 - reports and references to commits or artifacts;
-- attempt results and integration, review, lease, and promotion events.
+- process transitions — a run started, a run exited — for the unit they name.
 
 An assertion is not automatically correct or authorized. Its type, origin,
 confirmation posture, revision, and references determine how the fold may use
@@ -114,7 +113,7 @@ include:
 - whether an objective is on track or a milestone lacks linked work;
 - which proposal or decision is waiting for a person;
 - whether work looks stalled or referenced evidence has become unhealthy; and
-- which change set may move next through an integration train.
+- whether a unit's recorded process is running, stale, or exited.
 
 No command writes a second copy of these answers. Every surface reads the same
 fold or the same single gate so the answer cannot drift by interface.
@@ -126,7 +125,7 @@ State can cite something outside its prose:
 - a source-code commit and the branch on which it was reported;
 - an immutable copied artifact and its id;
 - a declared output with its name, hash, and byte count; or
-- a review or integration approval receipt bound to an exact subject.
+- a merged pull request whose review and CI live in the code host.
 
 The reference connects the state assertion to inspectable proof. The evidence
 does not grant itself authority: a commit existing does not prove an outcome,
@@ -137,14 +136,13 @@ and a process exiting successfully does not prove semantic completion.
 Some facts must not enter the synced semantic record:
 
 - absolute checkout paths and the machine's selected workspace pointer;
-- process ids, heartbeats, and live ownership;
-- raw provider stdout and stderr;
-- runtime material not admitted to semantic state, including the attempt
-  spool; and
+- process ids and live ownership — the pid ledger, judged only on the machine
+  that recorded it;
+- raw provider stdout and stderr; and
 - local capability or provider process state.
 
-When an attempt settles, sanitized semantic results and artifact declarations
-may fold into project state. The raw execution channel remains machine-local.
+Sanitized semantic results and artifact declarations fold into project state
+through reports. The raw execution channel remains machine-local.
 This keeps a syncable company record from becoming a copy of every provider
 transcript or host detail.
 
@@ -230,10 +228,10 @@ actions do not allow its prose to promote itself into governing truth.
 Superself preserves distinctions such as:
 
 - proposed versus confirmed decisions;
-- a report versus requirement coverage;
-- a completed attempt versus completed work;
+- a report versus the judgment that the outcome was reached;
+- an exited process versus completed work;
 - evidence existence versus a gate accepting that evidence; and
-- an exact approval or receipt versus a similar-looking later subject.
+- an exact subject versus a similar-looking later one.
 
 These distinctions let execution move between models and sessions without
 moving authority into the model's private memory. Context tells an agent what
