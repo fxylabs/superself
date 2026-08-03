@@ -97,8 +97,8 @@ SELF context --pretty | node "$CLI_DIR/proof/pretty-width.mjs" > /dev/null \
 
 # An empty section says so on one line instead of drawing an empty box.
 CONTEXT_PRETTY="$(SELF context --pretty)"
-echo "$CONTEXT_PRETTY" | grep -q "^INTEGRATION (0)$" || fail "the context render has no counted integration heading"
-echo "$CONTEXT_PRETTY" | grep -A1 "^INTEGRATION (0)$" | grep -q "^  none$" \
+echo "$CONTEXT_PRETTY" | grep -q "^OBJECTIVES (0)$" || fail "the context render has no counted objectives heading"
+echo "$CONTEXT_PRETTY" | grep -A1 "^OBJECTIVES (0)$" | grep -q "^  none$" \
     || fail "an empty section did not render exactly one none line under its heading"
 echo "$CONTEXT_PRETTY" | grep -q "^WORK (1 active · 1 blocked · 2 next · 1 done)$" \
     || fail "the work heading did not count the bands"

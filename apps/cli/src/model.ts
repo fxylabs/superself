@@ -389,18 +389,6 @@ export const STATEMENT_TYPES: StatementType[] = [
                 .map((item) => [item.id, item.status] as [string, string])
         ]
     },
-    {
-        type: "requirement",
-        // A requirement is a record of the work unit that owes it, so its
-        // events are the work namespace's — it has no namespace of its own.
-        namespaces: [],
-        command: "work",
-        supersede: "work revise",
-        withdraw: "work drop",
-        closed: (model) => model.works.flatMap((work) => work.completion.requirements
-            .filter((item) => item.retired === true)
-            .map((item) => [item.id, "dropped"] as [string, string]))
-    }
 ];
 
 // A milestone leaves the current set three ways, and a reader who searched for
@@ -910,7 +898,6 @@ function stringList(value: unknown): string[]
 function deriveSignals(model: ProjectModel, now: Date): void
 {
     model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
-    model.health.push(...deriveIntegration(model.integration, now));
     for (const objective of model.goals.objectives.filter((item) => item.status === "proposed"))
     {
         noteWaiting(model, {
@@ -932,14 +919,6 @@ function deriveSignals(model: ProjectModel, now: Date): void
         // Derived for every unit, including the ones already done: a unit
         // closed before a requirement was revised still says what it owes.
         work.owes = completionRefusal(work) ?? undefined;
-        if (work.status !== "done" && work.status !== "retired" && approvalPending(work))
-        {
-            noteWaiting(model, {
-                full: `${work.id} is waiting on human approval: ${work.completion.approvalRequired?.why ?? work.outcome}`,
-                identity: `approval wait on ${work.id}`,
-                recovery: { verb: "work-show", id: work.id }
-            });
-        }
         if (work.status === "blocked" && work.blockedOn === "decision")
         {
             noteWaiting(model, {

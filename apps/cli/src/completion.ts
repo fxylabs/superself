@@ -294,65 +294,18 @@ function revisionOf(state: CompletionState, requirement: string): number
 
 // The one function that decides whether a work unit may be called done. Every
 // caller reaches it: `self work done` before it records the event, and the
-// runner and the daemon at the moment they settle an attempt — which is how a
-// passing attempt reports what the unit still owes instead of closing it.
+// runner and the daemon at the moment they settle an attempt.
 //
-// Null means nothing stands in the way. A string is the whole refusal, in one
-// line, naming what is missing rather than that something is.
+// Done is a judgment, not a checklist: the requirement-coverage, approval,
+// model-policy and fresh-review conditions were removed with the governance
+// layer (decision 01kz2nczhtde554qx5tqpqzrt3). The gate stays so every caller
+// keeps one answer, and so a refusal can return here without a second path if
+// one is ever owed again. Requirement and policy records from older logs still
+// fold and render; they no longer hold a unit open.
 export function completionRefusal(work: Completable): string | null
 {
-    return uncoveredRefusal(work)
-        ?? approvalRefusal(work)
-        ?? modelRefusal(work)
-        ?? reviewRefusal(work);
-}
-
-// Open and stale are one answer: a requirement whose coverage was judged
-// against a revision that has since moved is a requirement nobody has judged as
-// it now reads, and the check may not tell the two apart.
-function uncoveredRefusal(work: Completable): string | null
-{
-    const state = work.completion;
-    const uncovered = [...state.open, ...state.stale.map((item) => item.requirement)];
-    if (uncovered.length === 0)
-    {
-        return null;
-    }
-    const named = uncovered.map((id) => `${id} ${textOf(state, id)}`).join("; ");
-    return `${work.id} has uncovered requirement(s) — ${named} — cover each with ` +
-        `\`self work met ${work.id} --requirement <id> --why "<how the evidence covers it>"\``;
-}
-
-function approvalRefusal(work: Completable): string | null
-{
-    const state = work.completion;
-    if (state.approvalRequired === undefined || state.approvals.some((item) => item.humanConfirmed))
-    {
-        return null;
-    }
-    return `${work.id} requires human approval before it can be done${state.approvalRequired.why === undefined ? "" : ` (${state.approvalRequired.why})`} — ` +
-        `grant it from an interactive terminal with \`self work approve ${work.id}\``;
-}
-
-// A settled attempt is one that reached the completion gate. What it ran under
-// is the model the generation it was admitted under pinned, recorded on its own
-// run.started event: an attempt nobody dispatched from a work spec carries no
-// model at all, and cannot satisfy a policy that names one.
-function modelRefusal(work: Completable): string | null
-{
-    const wanted = work.completion.policy?.model;
-    if (wanted === undefined)
-    {
-        return null;
-    }
-    const settled = implementers(work);
-    if (settled.some((attempt) => matchesModel(attempt.model, wanted)))
-    {
-        return null;
-    }
-    const ran = settled.map((attempt) => `${attempt.id} ${attempt.model ?? "no model recorded"}`).join(", ");
-    return `${work.id} declares a "${wanted}" completion policy and no settled attempt ran under it — ` +
-        `settled: ${ran === "" ? "none" : ran}`;
+    void work;
+    return null;
 }
 
 export function implementers(work: Completable): { id: string; state: string; model?: string }[]
@@ -373,29 +326,6 @@ export function matchesModel(model: string | undefined, wanted: string): boolean
     const name = model.toLowerCase();
     const want = wanted.toLowerCase();
     return name === want || name.split(/[^a-z0-9]+/).includes(want) || name.startsWith(`${want}-`);
-}
-
-// Fresh means somebody other than the run that did the work looked at it. The
-// session an attempt records is its own id — the runner sets it on every child
-// it starts — so a receipt whose reviewer session is one of this unit's own
-// attempts is the implementer reviewing itself.
-//
-// The verdict is deliberately not read here: what may land on main is the
-// integration lane's gate, and this policy is about who reviewed, not about
-// what they concluded.
-function reviewRefusal(work: Completable): string | null
-{
-    if (work.completion.policy?.freshReview !== true)
-    {
-        return null;
-    }
-    const own = new Set(work.attempts.map((attempt) => attempt.id));
-    if (work.completion.reviews.some((review) => review.session !== undefined && !own.has(review.session)))
-    {
-        return null;
-    }
-    return `${work.id} declares a fresh-session review policy and carries no review receipt from a session other than its own attempts — ` +
-        "ingest one with `self review ingest --file <envelope.json>`";
 }
 
 // What the daemon's wake path reads. An approval that has not been granted is
@@ -423,11 +353,6 @@ export function nextRequirementId(state: CompletionState): string
 {
     const highest = state.requirements.reduce((max, item) => Math.max(max, Number(item.id.slice(1)) || 0), 0);
     return `r${highest + 1}`;
-}
-
-function textOf(state: CompletionState, id: string): string
-{
-    return state.requirements.find((item) => item.id === id)?.text ?? "";
 }
 
 function str(value: unknown): string | undefined

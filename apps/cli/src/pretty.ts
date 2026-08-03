@@ -8,7 +8,6 @@
 // red for what failed, with ids dimmed. A fourth colour would have to carry a
 // fourth meaning, and none of these surfaces has one.
 
-import { openChangeSets } from "./integration.js";
 import {
     AttentionGroup,
     ATTENTION_ORDER,
@@ -280,8 +279,8 @@ export function shellArgument(value: string): string
 // else — and `--project other` made that literal: a bare `self work` in that
 // output answers for wherever it is run rather than for what it describes.
 //
-// Only the verbs that have a scope form take one. `self integration plan`,
-// `self attempt show`, `self decide confirm` and `self work accept` have none,
+// Only the verbs that have a scope form take one. `self attempt show`,
+// `self decide confirm` and `self work accept` have none,
 // so they are left as they are rather than promising a flag that does not
 // exist. Both context renders read this, which is why it lives here: `views.ts`
 // already imports this module, so one direction stays.
@@ -319,7 +318,7 @@ export type Checkout = string & { readonly [CHECKOUT]: true };
 // what stops the constructors below being a way to launder any other string
 // into a `Pointer`: `"self work"` is not a member, so it cannot take this road
 // around `scoped()`.
-export type UnscopedVerb = "self integration plan" | "self attempt show"
+export type UnscopedVerb = "self attempt show"
     | "self decide confirm" | "self work accept";
 
 // A verb with no scope form cannot be run from anywhere: it answers for the
@@ -735,7 +734,6 @@ export interface SurfaceInput
 export interface StatusInput extends SurfaceInput
 {
     objectives: string;
-    integration: string;
     attempts: AttemptRow[];
 }
 
@@ -748,10 +746,6 @@ export function renderStatus(input: StatusInput): string[]
     if (openObjectives(model.goals).length > 0)
     {
         lines.push(heading("OBJECTIVES", input.objectives));
-    }
-    if (model.integration.changeSets.length > 0)
-    {
-        lines.push(heading("INTEGRATION", input.integration));
     }
     lines.push(heading("DECISIONS WAITING", attentionCounts(model)));
     lines.push("", ...unshippedSection(model));
@@ -798,8 +792,6 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
     lines.push("", ...listSection("CONVENTIONS", currentConventions(model.conventions).map((item) => item.text),
         scoped("self search --type convention", project)));
-    lines.push("", ...listSection("INTEGRATION", trainLines(model),
-        withCheckout("self integration plan", fromCheckout(project))));
     lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     return lines;
 }
@@ -816,12 +808,6 @@ function decisionLines(model: ProjectModel): string[]
         .filter((decision) => decision.status === "confirmed")
         .map((decision) => decision.text)
         .reverse();
-}
-
-function trainLines(model: ProjectModel): string[]
-{
-    return openChangeSets(model.integration).map((changeSet) =>
-        `${changeSet.id} — ${changeSet.phase}: ${changeSet.reason}`);
 }
 
 /* ── workspace ─────────────────────────────────────────────────────── */

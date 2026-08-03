@@ -251,10 +251,7 @@ export const COMMANDS: CommandHelp[] = [
             },
             {
                 syntax: "work start|block|unblock|done <id>",
-                description: [
-                    "move a work unit (block: --on decision|dependency|external [--why w])",
-                    "done is refused while anything the completion check asks for is missing"
-                ]
+                description: ["move a work unit (block: --on decision|dependency|external [--why w])"]
             },
             {
                 syntax: "work link|unlink <id> --objective o | --milestone m",
@@ -262,47 +259,26 @@ export const COMMANDS: CommandHelp[] = [
             },
             { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r' },
             { syntax: "work accept|decline <proposal-id> [--why w]", description: ["act on a goal-gap proposal; decline states why"] },
-            { syntax: 'work require <id> "<what the outcome must cover>"', description: ["declare a requirement; prints its id"] },
-            { syntax: 'work revise <id> --requirement r1 --statement "<restated>" --why w', description: ["restate one; its coverage goes stale"] },
-            { syntax: "work drop <id> --requirement r1 --why w", description: ["retire one requirement; the unit stays open"] },
             {
                 syntax: "work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]",
                 description: [
                     "retire the unit itself: its outcome was given up or moved, not reached",
                     "history stays inspectable; the unit stops counting as open work"
                 ]
-            },
-            {
-                syntax: "work met <id> --requirement r1 --why w [--evidence c] [--artifact a] [--report e]",
-                description: ["cover a requirement with evidence the unit already carries"]
-            },
-            { syntax: "work recheck <id> --requirement r1 --why w", description: ["re-judge coverage a revision left stale"] },
-            { syntax: "work approval-required <id> [--why w]", description: ["make this unit wait for a person before dispatch and done"] },
-            { syntax: "work approve <id> [--by name]", description: ["grant it, from an interactive terminal only"] },
-            { syntax: "work policy <id> [--model class] [--fresh-review] [--why w]", description: ["what its implementation had to be"] }
+            }
         ],
         detail: [
             "create and move units of work, and state what each contributes to.",
             "`work add` prints the new id.",
             "",
-            "a unit is done only when every live requirement is covered by evidence,",
-            "any approval it waits on has been granted at a terminal, and its",
-            "completion policy is satisfied. A passing attempt never marks work done:",
-            "settlement records what the run produced and frees the unit.",
+            "done is the judgment that the outcome was reached; the evidence for it",
+            "lives in the unit's reports.",
             "",
             "  --project <slug>      list or show against this project, from any directory",
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
             "  --why <text>          detail recorded with the block, a revision, or the done",
-            "  --requirement <id>    the requirement `met`, `recheck`, `revise` or `drop` speaks about",
             "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
             "  --successor-project <slug>  the successor's project when its id is ambiguous",
-            "  --statement <text>    the restated requirement a revision records",
-            "  --evidence <hash>     a commit already attached to the unit that covers it",
-            "  --artifact <id>       an artifact already attached to the unit that covers it",
-            "  --report <event-id>   a report already attached to the unit that covers it",
-            "  --model <class>       the model class its implementation attempts had to run under",
-            "  --fresh-review        a review receipt from a session other than the implementer's",
-            "  --by <name>           who granted the approval",
             "  --objective <id>      the objective a linked unit contributes to",
             "  --milestone <id>      the milestone a linked or proposed unit contributes to",
             "  --value <text>        why the proposed work matters",
@@ -334,76 +310,6 @@ export const COMMANDS: CommandHelp[] = [
             "                      resolves, else a note; commit:<v>/note:<v> force it",
             "  --artifact <path>   copy a file into the store and attach it, repeatable",
             "  --next <text>       what the next session should pick up"
-        ]
-    },
-    {
-        name: "integration",
-        usage: [
-            { syntax: "integration [status]", description: ["compact status of every repository's integration train"] },
-            { syntax: "integration register --repo r --base b --head h [--pr n] [--work id] [--domain name@ver]" },
-            { syntax: "integration show|list|plan [--json]", description: ["machine-readable train, receipts, and blockers"] },
-            { syntax: "integration declare <id> [--depends cs] [--consolidates cs --why w] [--domain d] [--check c]" },
-            { syntax: "integration head <id> --head h", description: ["record an author's new head; a changed digest owes a review"] },
-            { syntax: "integration lease acquire|release|show --repo r [--holder h] [--fence N]" },
-            { syntax: "integration attempt start <id> --fence N --action rebase|resolve|merge" },
-            { syntax: "integration attempt finish <attempt> --outcome completed|conflict|failed [--head h]" },
-            { syntax: "integration observe ci|main|target --repo r --head h [--check c] [--conclusion x] [--at iso] [--dedupe k]" },
-            { syntax: "integration target --repo r [--branch b]", description: ["configure the autonomous integration branch merges land on"] },
-            {
-                syntax: "integration approve <id> --head h",
-                description: ["the human gate on a merge that lands on main (interactive terminal);",
-                    "binds the head and its digest, and carries to the conflict-free squash of those exact bytes"]
-            },
-            { syntax: "integration merge <id> --fence N --merge-commit m --main-before a --main-after b" },
-            {
-                syntax: "integration promote request|approve|record|show",
-                description: ["the only lane into main: release review + human approval, exact candidate"]
-            },
-            { syntax: "integration reconcile [--repo r]", description: ["converge leases and in-flight attempts, idempotently"] }
-        ],
-        detail: [
-            "run each repository's integration train: register a change set, keep its",
-            "head and reviews current, and drive the lease, attempt, and merge steps",
-            "an integrator takes. `register` also accepts --depends, --supersedes,",
-            "--check, --rank, and --diff-digest.",
-            "",
-            "run `self integration` for the compact status, and `self integration plan`",
-            "for the machine-readable order, receipts, and blockers."
-        ]
-    },
-    {
-        name: "review",
-        usage: [
-            { syntax: "review request <id> --scope change|integration_delta|release" },
-            { syntax: "review ingest --file <envelope.json>", description: ["the only way a review receipt comes into being"] },
-            { syntax: "review list [<id>] | contract", description: ["receipts on record, or the runner's result contract"] }
-        ],
-        detail: [
-            "request the review a change set owes and ingest the envelope the runner",
-            "returns. A receipt exists only through `review ingest`.",
-            "",
-            "  --scope <scope>     what the request covers: change, integration_delta, or release",
-            "  --file <path>       the result envelope to ingest",
-            "  --json              machine-readable listing"
-        ]
-    },
-    {
-        name: "spec",
-        usage: [
-            { syntax: "spec validate <workspec.json>", description: ["check a work spec without touching project state"] },
-            { syntax: "spec apply <workspec.json>", description: ["seal a work spec as an immutable generation and move its HEAD"] },
-            { syntax: "spec dispatch <work-spec-id>", description: ["compile the current generation and run it as one attempt"] },
-            {
-                syntax: "spec list [--json] | show <id> [--json]",
-                description: ["work specs, their generations, and the attempts pinned to them"]
-            }
-        ],
-        detail: [
-            "keep a work unit's desired state as immutable, content-addressed",
-            "generations, and materialize the current one as a runner attempt pinned",
-            "to the exact generation it was admitted under.",
-            "",
-            "  --json              machine-readable listing"
         ]
     },
     {
@@ -454,110 +360,6 @@ export const COMMANDS: CommandHelp[] = [
         ]
     },
     {
-        name: "daemon",
-        usage: [
-            { syntax: "daemon start [--interval ms] [--foreground]", description: ["supervise this project's attempts without a chat turn"] },
-            { syntax: "daemon stop | status [--json]", description: ["stop the supervisor, or report what it has done"] },
-            { syntax: "daemon tick [--json]", description: ["run exactly one supervision pass in the foreground"] },
-            { syntax: "daemon circuits [--json]", description: ["provider circuit state and any capacity reset"] }
-        ],
-        detail: [
-            "run the supervision loop over this project's attempts: reconcile what is",
-            "still being driven against what has exited, settle a confirmed exit",
-            "through the completion gate, release the work unit it held, and wake",
-            "ready approved work that has a work spec.",
-            "",
-            "One supervisor per machine, supervising the project it was started in.",
-            "It is not one per project: a start from another project's checkout is",
-            "refused while this one runs, and that project's attempts are left",
-            "unsupervised until it stops.",
-            "",
-            "`tick` is one iteration of exactly that, in the foreground — running it",
-            "twice in a row does nothing the second time.",
-            "",
-            "  --interval <ms>     how long the loop waits between ticks (default 5000)",
-            "  --foreground        run the loop in this process instead of detaching it",
-            "  --json              machine-readable status, tick, or circuit listing"
-        ]
-    },
-    {
-        name: "overnight",
-        usage: [
-            {
-                syntax: "overnight set [--from 22:00] [--to 07:00] [--auto-dispatch] [--risk r] [--kind k]",
-                description: ["record the policy the daemon may dispatch under while nobody watches"]
-            },
-            { syntax: "overnight show [--json] | off", description: ["print the policy in force, or revoke it"] }
-        ],
-        detail: [
-            "grant the supervisor a bounded, versioned, revocable autonomy. Outside",
-            "the window, and with no policy at all, the daemon still reconciles,",
-            "settles and releases — it dispatches nothing new. Inside it, a work",
-            "spec is woken only if the policy allows its project, its risk class,",
-            "its work kind, its provider and its model, and only within the",
-            "concurrency cap, the declared-cost ceiling and the stop condition.",
-            "",
-            "A policy narrows and never widens. It cannot exempt a unit from its",
-            "approval requirement or from its completion policy, and it can never",
-            "grant publication, outreach, payment, purchase, provisioning,",
-            "destructive action or policy change — those are refused categorically,",
-            "at registration and again when a running attempt proposes one, and a",
-            "declaration is judged by its command as well as by its tools.",
-            "",
-            "Setting one is a person's act: `set` asks for the window typed back at",
-            "an interactive terminal, and refuses outright inside an agent attempt.",
-            "`off` needs no terminal — revoking only narrows, and stopping",
-            "unattended spending must never wait for one.",
-            "",
-            "  --from <hh:mm>       when the window opens, local time (default 22:00)",
-            "  --to <hh:mm>         when it closes (default 07:00)",
-            "  --digest-at <hh:mm>  when the operator reads the account (default 07:30)",
-            "  --auto-dispatch      let ready work dispatch on its own; off by default",
-            "  --project <slug>     repeatable; defaults to this project alone",
-            "  --risk <class>       repeatable; internal, external or privileged (default internal)",
-            "  --kind <role>        repeatable work spec role (default implementation)",
-            "  --provider <name>    repeatable; any provider the specs name by default",
-            "  --model <name>       repeatable; any model the specs name by default",
-            "  --max-concurrent <n> attempts running at once (default 1)",
-            "  --budget-usd <n>     ceiling on declared budget per window, never on observed spend",
-            "  --max-runs <n>       ceiling on the runs a spec's retry policy may declare",
-            "  --stop-after <n>     stop waking after this many failed runs this window",
-            "  --json               machine-readable policy"
-        ]
-    },
-    {
-        name: "digest",
-        usage: [
-            {
-                syntax: "digest [--since <ts> | --hours <n>] [--json]",
-                description: ["the account of what happened while nobody was watching"]
-            }
-        ],
-        detail: [
-            "fold this project's event log over a window and group it: completed,",
-            "failed, retried, waiting on approval, waiting on capacity, then the",
-            "next actions. Reading it records nothing.",
-            "",
-            "Completed, failed and retried are what happened inside the window.",
-            "Waiting on approval is what is still waiting when it ends — a unit",
-            "nobody answered all night has no events in the window, and dropping it",
-            "would leave out the main fact about that night.",
-            "",
-            "Cost and token counts come from what the provider reported and read",
-            "unknown otherwise — a window whose spending nobody can see must not",
-            "read as free. Nothing is inferred from prose, and no prompt, output,",
-            "path or credential can appear: every line comes from events that",
-            "already crossed the sanitization guard.",
-            "",
-            "  --since <ts>   an explicit instant to start from",
-            "  --hours <n>    the last n hours",
-            "  --json         machine-readable digest",
-            "",
-            "with neither, the window starts where the overnight policy's window",
-            "does, or twelve hours ago when there is no policy."
-        ]
-    },
-    {
         name: "artifact",
         usage: [
             {
@@ -576,34 +378,6 @@ export const COMMANDS: CommandHelp[] = [
             "",
             "  --work <work-id>    only artifacts attached to this work unit",
             "  --project <slug>    only artifacts of this project, instead of the current one"
-        ]
-    },
-    {
-        name: "evidence",
-        usage: [
-            {
-                syntax: "evidence compile <manifest> [--out <name>] [--pin]",
-                description: ["compile a source-pinned evidence bundle from recorded state"]
-            },
-            {
-                syntax: "evidence verify <bundle> | show <bundle>",
-                description: ["recheck a bundle against the store, or read one"]
-            }
-        ],
-        detail: [
-            "compile the decisions, work, reports, milestones and commits a manifest",
-            "names into one canonical JSON bundle, so a later reader can recheck which",
-            "project state supported a claim. The same pinned inputs always give the",
-            "same bytes and the same digest; a source that moved, a selector that",
-            "matches nothing or matches several, and content the profile does not",
-            "carry all refuse instead of compiling something quieter. Nothing here",
-            "writes project state.",
-            "",
-            "  --out <name>    the file name to write, in the current directory",
-            "  --pin           write a manifest with this store's head and log hash",
-            "                  filled in, instead of compiling",
-            "  --pretty        force the terminal render of `show`",
-            "  --plain         force the piped render of `show`"
         ]
     },
     {

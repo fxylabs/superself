@@ -223,11 +223,6 @@ grep -q "a rule whose withdrawal leaks" "$STATE_A" || fail "a refused retraction
 # leaves a status behind is a type the registry is wrong about.
 WDONE="$(SELF work add "a unit that reaches done" | tail -1)"
 SELF work start "$WDONE" > /dev/null
-REQ="$(SELF work require "$WDONE" "the requirement that gets dropped" | tail -1)"
-SELF work drop "$WDONE" --requirement "$REQ" --why "it was the wrong statement" > /dev/null
-exercised requirement
-SELF search --type work "the requirement that gets dropped" | grep -q "\[dropped\]" \
-    || fail "a dropped requirement does not resolve in search with its status"
 WRET="$(SELF work add "a unit that gets retired" | tail -1)"
 SELF work retire "$WRET" --why "the outcome moved" > /dev/null
 exercised work
