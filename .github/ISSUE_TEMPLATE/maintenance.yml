@@ -14,7 +14,7 @@ body:
       options:
         - Documentation
         - Refactor
-        - Tests or proof coverage
+        - Test coverage
         - Dependencies or toolchain
         - CI or build
         - Release preparation
@@ -44,7 +44,7 @@ body:
     id: boundaries
     attributes:
       label: Boundaries
-      description: What must not change. Name the files, modules, contracts, or behavior an implementation may not touch. A pure move states that no behavior changes and no proof assertion changes.
+      description: What must not change. Name the files, modules, contracts, or behavior an implementation may not touch. A pure move states that no behavior changes and no test assertion changes.
       placeholder: |
         - Pure moves and mechanical extraction; no behavior change.
         - Proof assertions unchanged.

@@ -86,16 +86,16 @@ above.
 
 | Capability | State | What works now | Open operating gap |
 | --- | --- | --- | --- |
-| Durable project state | Shipped foundation | Goals, decisions, objectives, milestones, work, requirements, reports, artifacts, and history are event-sourced | Broader company scope and stronger migration guarantees |
+| Durable project state | Shipped foundation | Goals, decisions, objectives, milestones, work, reports, artifacts, and history are event-sourced | Broader company scope and stronger migration guarantees |
 | Cross-session recovery | Shipped foundation | `context`, `work show`, `search`, and managed agent blocks let another session resume | General context selection and retrieval budgets at every scope |
-| Outcome and evidence model | Shipped foundation | Work and milestones link to evidence and refuse unsupported completion | Wider automatic evidence collection and adapter contracts |
-| Executable work contract | Partial | A WorkSpec declares provider, model, command, capability, artifacts, validation, and retry | A stable public contract from intent through a versioned work graph and specs |
-| Attempt supervision | Shipped foundation | Process lifecycle, durable spool, retry, recovery, result gates, and report attachment | A control plane that supervises work across projects |
-| Local daemon | Partial | One daemon supervises eligible work for the project in which it started and applies overnight policy and provider circuits | One local supervisor cannot yet enumerate and schedule several projects |
-| Resource allocation | Partial | Policy concurrency, declared budget ceilings, retry times, and provider circuits | Cross-project priority, deadline, quota, observed capacity, reservation, and fair allocation |
-| Authorization | Partial | Explicit human work approval and exact-state integration approval | Policy-derived authorization receipts and a general action escalation/resume protocol |
-| Completion | Partial | One gate checks requirements, evidence, model, review, and approval | A controller does not yet record `work.done` and continue dependencies automatically |
-| Attention and reporting | Partial | Status, a read-only viewer, and an overnight digest exist | One cross-project surface for running, queued, capacity, approval, failure, and exact next actions |
+| Outcome and evidence model | Shipped foundation | Work and milestones link to evidence; a milestone is reached only when every exit criterion is covered | Wider automatic evidence collection and adapter contracts |
+| Executable work contract | Direction | Removed with the governance layer (decision 01kz2nczhtde554qx5tqpqzrt3); a work brief attaches via `report --file` | A stable public contract from intent through a versioned work graph |
+| Process visibility | Shipped foundation | The pid ledger maps a unit to its agent process; running, stale, and exited are judged at read time | A control plane that supervises work across projects |
+| Scheduling and supervision | Direction | Removed with the daemon; dispatch is a person or a session starting agents | A supervisor that enumerates and schedules several projects |
+| Resource allocation | Direction | Removed with the daemon and circuit breakers | Cross-project priority, deadline, quota, observed capacity, reservation, and fair allocation |
+| Authorization | Direction | A person merging the GitHub PR is the approval; in-tool approvals were removed | Policy-derived authorization and a general action escalation/resume protocol |
+| Completion | Shipped foundation | Done is a judgment: one gate admits it, and the evidence lives in the unit's reports | A controller does not yet record `work.done` and continue dependencies automatically |
+| Attention and reporting | Partial | Status with per-unit process state and a read-only viewer exist | One cross-project surface for running, queued, capacity, failure, and exact next actions |
 | Extension boundary | Direction | Provider-neutral execution and some MCP foundations exist | A trusted, namespaced capability registry and lifecycle |
 
 `Shipped foundation` does not mean the whole capability is finished. It means
@@ -122,12 +122,13 @@ its terminal.
 
 Current judgment:
 
-- durable state, requirement coverage, and evidence gates are usable
+- durable state, the outcome layer, and evidence-covered milestones are usable
   foundations;
-- the single-project daemon and overnight policy prove unattended execution;
-- physical attempt completion and semantic work completion are separate;
-- the integration train proves that exact-state review and approval receipts
-  can be real gates, but that model is not yet generalized to all work.
+- physical process termination and semantic work completion are separate: the
+  pid ledger records the first, and done stays a human judgment;
+- everything the removed governance layer once proved — unattended execution,
+  exact-state review gates — is now target state, to be re-earned on the
+  reduced surface if it returns.
 
 ## Now / next — close the governed autonomous work loop
 
@@ -150,8 +151,8 @@ silently inherits an earlier authorization.
 
 ### 3B. Supervise several projects from one local control plane
 
-**Problem.** The current daemon is singular for a local runner but fixed to the
-one project in which it started. Ready work in other projects is outside its
+**Problem.** Nothing supervises work today: dispatch is a person or a session
+starting agents, and ready work in every project is outside any automatic
 view.
 
 **Next outcome.** One local supervisor reconciles canonical state and
@@ -246,8 +247,8 @@ background attempts separately from open work](https://github.com/fxylabs/supers
 
 ## Phase 3 exit outcome
 
-Phase 3 is not complete because a daemon exists or a list of commands shipped.
-It is complete when one stable operating story is proved:
+Phase 3 is not complete because a list of commands shipped. It is complete
+when one stable operating story is proved:
 
 ```text
 A person gives one bounded outcome and policy.

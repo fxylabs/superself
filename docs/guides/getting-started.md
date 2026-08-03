@@ -16,8 +16,8 @@ By the end, you will have:
 
 > [!NOTE]
 > This guide describes the shipped local alpha. Registering work does not
-> automatically plan or run an agent. Continue to the execution guide when you
-> are ready to create and supervise a bounded agent attempt.
+> automatically plan or run an agent — a person or a session starts agents,
+> and the process ledger records what is running.
 
 ## Before you start
 
@@ -299,11 +299,9 @@ Create an empty private remote, then run `self remote add <url>` before trying
   understand how event history, folded state, generated views, agent context,
   and machine-local execution data fit together.
 - Follow [Running a long-term project](running-a-long-term-project.md) to add
-  objectives, milestones, requirements, reports, artifacts, and
-  evidence-backed completion.
-- Record agent processes with `self work started/exited` to bind one
-  agent run to explicit providers, capabilities, artifacts, validation,
-  cancellation, and recovery.
+  objectives, milestones, reports, artifacts, and evidence-backed completion.
+- Record agent processes with `self work started/exited` so a reader can see
+  what is running, what went stale, and how each run ended.
 - Read the [governed conversion improvement example](../examples/governed-conversion-improvement.md)
   to see analysis and plan approval before execution in an end-to-end target
   scenario.

@@ -81,7 +81,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: How an implementation will be shown to satisfy this issue, beyond typecheck and build. Name the proof coverage, the spot-checks, and the observable result.
+      description: How an implementation will be shown to satisfy this issue, beyond typecheck and build. Name the test coverage, the spot-checks, and the observable result.
     validations:
       required: true
 

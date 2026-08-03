@@ -152,15 +152,15 @@ and autonomy is not permission to act without boundaries.
 | A session ends and the next agent starts from zero | Append-only project and work events, derived state, and session context | Work can continue across sessions, models, and tools |
 | State grows until useful context is buried | Scope-specific, bounded context with retrieval pointers | Mature projects can resume without injecting their full history |
 | Decisions and rejected directions are repeated | A decision ledger with rationale, confirmation, revision, and history | The organization accumulates judgment instead of re-deriving it |
-| A handoff loses the outcome, current truth, or next action | Durable work units with requirements, reports, artifacts, and evidence | Another agent can take over without a private transcript |
-| Activity is disconnected from company goals | Goal, objective, milestone, work, requirement, and evidence links | Progress is judged by outcomes rather than motion |
-| A person must translate every direction into tasks | Versioned directives and work specifications | People state the outcome; the system can compile the execution structure |
-| A person must choose and launch every next action | Dependency-, policy-, priority-, budget-, and capacity-aware scheduling | Ready work can advance without another foreground conversation |
-| Agent processes fail, disappear, or leave partial output | Preflight, durable attempt state, heartbeats, retry, recovery, and atomic artifacts | Execution can be supervised without a person watching the terminal |
-| Every action is either blocked or over-permissioned | Capability scopes, versioned risk policy, policy authorization, and explicit human gates | Routine work proceeds while consequential actions still require judgment |
-| Completion reports cannot be trusted | Result envelopes, hashes, declared checks, and one completion gate | “Done” means the promised output exists and has evidence |
-| Parallel agents collide on shared resources | Dependencies, leases, fences, and serialized integration gates | Work stays parallel except where correctness requires serialization |
-| The human cannot tell what is actually running | Attempt telemetry, live activity, health, and digests | Attention goes to exceptions, not continuous supervision |
+| A handoff loses the outcome, current truth, or next action | Durable work units with reports, artifacts, and evidence | Another agent can take over without a private transcript |
+| Activity is disconnected from company goals | Goal, objective, milestone, work, and evidence links | Progress is judged by outcomes rather than motion |
+| A person must translate every direction into tasks | Versioned directives compiled into an execution structure | People state the outcome; the system can compile the execution structure |
+| A person must choose and launch every next action | Dependency-, priority-, budget-, and capacity-aware scheduling | Ready work can advance without another foreground conversation |
+| Agent processes fail, disappear, or leave partial output | The pid process ledger with read-time liveness, plus recoverable execution | Execution can be supervised without a person watching the terminal |
+| Every action is either blocked or over-permissioned | Capability scopes, versioned risk policy, and explicit human gates | Routine work proceeds while consequential actions still require judgment |
+| Completion reports cannot be trusted | Hashes, declared checks, and one completion gate | “Done” means the promised output exists and has evidence |
+| Parallel agents collide on shared resources | Dependency edges in the work graph | Work stays parallel except where correctness requires serialization |
+| The human cannot tell what is actually running | Per-unit process state, live activity, and health signals | Attention goes to exceptions, not continuous supervision |
 | Every company capability is hard-coded into the core | A trusted extension and MCP capability boundary | Companies can compose their own tools without weakening the operating loop |
 
 The table includes both shipped foundations and direction still being built.
@@ -352,8 +352,7 @@ Run `self --help` for the full command surface. The main families are:
 
 - project state: `goal`, `decide`, `convention`, `objective`, `milestone`;
 - work and evidence: `work`, `report`, `artifact`;
-- execution: `spec`, `attempt`, `daemon`, `overnight`, `digest`;
-- governed delivery: `integration`, `review`;
+- the process ledger: `work started`, `work exited`;
 - context and inspection: `context`, `status`, `search`, `view`;
 - workspace ownership: `project`, `workspace`, `remote`, `sync`, `clone`.
 
@@ -367,7 +366,7 @@ cd superself
 nvm use
 pnpm install
 pnpm typecheck
-pnpm proof
+pnpm test
 pnpm build
 ```
 

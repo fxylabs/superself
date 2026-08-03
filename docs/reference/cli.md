@@ -48,8 +48,9 @@ log search fold
 - `decide` records a confirmed decision by default. `--proposed` records one
   awaiting confirmation; `decide confirm <event-id>` confirms it.
 - `work` creates and moves outcomes, links them to objectives or milestones,
-  records requirements and approvals, and shows their evidence and recovery
-  path. `work done` is a completion gate, not a status shortcut.
+  records the process running a unit, and shows its evidence and recovery
+  path. `work done` is the judgment that the outcome was reached; the evidence
+  lives in the unit's reports.
 - `report` attaches a progress report, optional commit evidence, and optional
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
@@ -112,16 +113,18 @@ Every canonical state change is a `SelfEvent` in the event log:
 ```
 
 `refs` is optional. Its other supported links include confirmation and
-supersession, work, attempt, branch, blocked work, and decision sequencing.
+supersession, work, branch, blocked work, and decision sequencing.
 Event namespaces are owned; the current owners and names are listed in
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md#event-namespaces).
 
 ### Derived work and report records
 
-The folded work view contains the outcome id, status, blockers, requirements,
-reports, evidence, artifacts, branches, attempts, completion policy, linked
+The folded work view contains the outcome id, status, blockers, reports,
+evidence, artifacts, branches, the last-reported process transition, linked
 objectives or milestones, and the next action. It is derived from events; a
-surface must not assert a status independently of the fold.
+surface must not assert a status independently of the fold. Attempt history
+from logs written before the simplification still folds and renders
+read-only.
 
 A report may carry:
 
@@ -131,19 +134,8 @@ A report may carry:
 - the next action for a later session.
 
 Artifact metadata in the folded project state is `{id, name, path, digest?}`.
-The separate runner result envelope uses the stricter declared artifact shape
-`{name, sha256, bytes}`. `name`, not `path`, is the portable result-envelope
-field; see [`CONTRIBUTING.md`](../../CONTRIBUTING.md#result-envelope-contract).
-
-### Review envelope
-
-The review runner writes a JSON envelope with schema
-`superself.review-result/1`. It identifies the change set, review scope, exact
-base and head, diff digest, verdict, findings, test results, an artifact
-(`path`, `sha256`, `bytes`), reviewer identity, and completion time. The CLI
-validates the envelope and its artifact before recording a receipt; prose or an
-exit code alone does not create one. The exact TypeScript contract is
-[`envelope.ts`](../../apps/cli/src/envelope.ts).
+The declared artifact shape everywhere else is `{name, sha256, bytes}` —
+`name`, never `path`.
 
 ## Source of truth and drift boundary
 

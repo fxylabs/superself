@@ -228,11 +228,9 @@ not yet complete the entire Company State Runtime loop:
   approval, budget, capacity, failure, and newly freed resource;
 - the viewer is not yet the conversational control surface for the workflow.
 
-Those are target-contract responsibilities. Existing WorkSpec, attempt,
-daemon, and integration foundations are outside this state-continuity guide.
-Continue with the process ledger (`self work started/exited`) to
-bind a run to capabilities and evidence. The
+Those are target-contract responsibilities, outside this state-continuity
+guide. Record the process running a unit with the process ledger
+(`self work started/exited`); a branch reaches main through a GitHub pull
+request, owned by PR review and CI. The
 [governed conversion example](../examples/governed-conversion-improvement.md)
-shows how the complete operating contract is intended to compose, while the
-[integration train](../integration-train.md) documents the exact repository
-review and merge gate available today.
+shows how the complete operating contract is intended to compose.
