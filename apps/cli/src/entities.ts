@@ -49,6 +49,26 @@ export interface PendingPlacement
 // transitions on a sourced one and point at the verb that owns its record.
 export type EntitySource = "goal" | "decision" | "convention" | "objective" | "milestone";
 
+// The working state the execution events (#197 §5, #205) fold to. Facts about
+// doing, never assertions: no propose/confirm timing exists on this axis, and
+// an entity that no execution event ever touched is simply open.
+export type ExecutionStatus = "in-progress" | "blocked" | "done" | "retired";
+
+export interface EntityExecution
+{
+    status: ExecutionStatus;
+    ts: string;
+    // What a blocked entity waits on, and the reason recorded with a block or
+    // a retirement — free text by design: the blocked-reason enum was removed
+    // as structure and kept as optional metadata (#197 §7).
+    on?: string;
+    why?: string;
+    // The done-time text report: the evidence the done claim carried.
+    report?: string;
+    // Where a retired outcome went, when the retirement named a successor.
+    successor?: string;
+}
+
 export interface EntityState
 {
     id: string;
@@ -77,6 +97,9 @@ export interface EntityState
     closedWhy?: string;
     source?: EntitySource;
     pending?: PendingPlacement;
+    // Absent until an execution event names the entity: open is the default
+    // working state, not a recorded one.
+    execution?: EntityExecution;
 }
 
 export function isLive(entity: EntityState): boolean
@@ -101,6 +124,24 @@ interface PlacementEvent
     proposed: boolean;
 }
 
+// One execution event, collected rather than applied in the pass for the same
+// reason a placement is: the entity it names can be created later in a
+// union-merged log, and the event-id guard lets the reconcile pass route the
+// same line twice without applying it twice.
+interface ExecutionEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    type: string;
+    on?: string;
+    why?: string;
+    report?: string;
+    successor?: string;
+}
+
+const EXECUTION_EVENTS = ["entity.started", "entity.blocked", "entity.unblocked", "entity.done", "entity.retired"];
+
 export interface EntityFold
 {
     entities: EntityState[];
@@ -109,6 +150,7 @@ export interface EntityFold
     // time nor dependency, so a claim can precede either record it names.
     claims: { predecessor: string; successor: string }[];
     placements: PlacementEvent[];
+    executions: ExecutionEvent[];
     // Every id an `entity.confirmed` named in `refs.confirms`. A placement
     // proposal applies only when its event id is in here, and collecting the
     // ids first is what lets a union merge order the confirm above the
@@ -118,7 +160,7 @@ export interface EntityFold
 
 export function emptyEntityFold(): EntityFold
 {
-    return { entities: [], claims: [], placements: [], confirmations: new Set() };
+    return { entities: [], claims: [], placements: [], executions: [], confirmations: new Set() };
 }
 
 /* ── the single-pass fold ──────────────────────────────────────────── */
@@ -249,7 +291,35 @@ export function reconcileEntity(fold: EntityFold, event: SelfEvent): void
     if (event.type === "entity.linked" || event.type === "entity.unlinked")
     {
         relinkEntity(fold, event);
+        return;
     }
+    if (EXECUTION_EVENTS.includes(event.type))
+    {
+        collectExecution(fold, event);
+    }
+}
+
+// Execution events collect like placements: applied over the complete entity
+// set in `deriveEntities`, in timestamp order, so a union-merged log folds one
+// working-state history on every clone. The event-id guard is what lets the
+// reconcile pass in `model.ts` route the same line twice.
+function collectExecution(fold: EntityFold, event: SelfEvent): void
+{
+    const entity = String(event.payload.entity ?? "");
+    if (entity === "" || fold.executions.some((item) => item.event === event.id))
+    {
+        return;
+    }
+    fold.executions.push({
+        event: event.id,
+        ts: event.ts,
+        entity,
+        type: event.type,
+        on: str(event.payload.on),
+        why: str(event.payload.why),
+        report: str(event.payload.report),
+        successor: str(event.payload.successor)
+    });
 }
 
 function confirmEntity(fold: EntityFold, event: SelfEvent): void
@@ -381,7 +451,80 @@ export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityS
     linkLineage(entities, legacy);
     applySupersessions(entities, fold);
     applyPlacements(entities, fold);
+    applyExecutions(entities, fold);
     return entities;
+}
+
+// Working state lands in timestamp order, event id breaking ties — the same
+// determinism rule placements follow. The fold never refuses history (#205
+// table D): a line the transition matrix would have refused at the verb —
+// a start on a blocked record, a second done — is dropped rather than
+// applied, and a line naming an entity this store never saw folds to nothing.
+function applyExecutions(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    const ordered = [...fold.executions].sort((left, right) =>
+        left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+    for (const event of ordered)
+    {
+        const target = byId.get(event.entity);
+        if (target !== undefined)
+        {
+            applyExecution(target, event);
+        }
+    }
+}
+
+// Done and retired are terminal for the working state: a stale line merged
+// from a clone that had not pulled the completion cannot reopen it. The
+// remaining guards mirror the verb matrix, so a hand-appended or merge-
+// reordered line folds to the state the verbs could actually have reached.
+function applyExecution(target: EntityState, event: ExecutionEvent): void
+{
+    const status = target.execution?.status;
+    if (status === "done" || status === "retired")
+    {
+        return;
+    }
+    if (event.type === "entity.started" && status !== "blocked")
+    {
+        target.execution = { status: "in-progress", ts: event.ts };
+    }
+    if (event.type === "entity.blocked" && status !== "blocked")
+    {
+        target.execution = { status: "blocked", ts: event.ts, on: event.on, why: event.why };
+    }
+    if (event.type === "entity.unblocked" && status === "blocked")
+    {
+        target.execution = { status: "in-progress", ts: event.ts };
+    }
+    if (event.type === "entity.done")
+    {
+        target.execution = { status: "done", ts: event.ts, report: event.report };
+    }
+    if (event.type === "entity.retired")
+    {
+        target.execution = { status: "retired", ts: event.ts, why: event.why, successor: event.successor };
+    }
+}
+
+// How a working state reads on a page: `state show` prints it, and a second
+// spelling elsewhere would let two surfaces disagree about the same record.
+export function executionSummary(execution: EntityExecution): string
+{
+    if (execution.status === "blocked")
+    {
+        return `blocked${execution.on === undefined ? "" : ` on ${execution.on}`}${execution.why === undefined ? "" : ` — ${execution.why}`}`;
+    }
+    if (execution.status === "done")
+    {
+        return `done${execution.report === undefined ? "" : ` — ${execution.report}`}`;
+    }
+    if (execution.status === "retired")
+    {
+        return `retired${execution.why === undefined ? "" : ` — ${execution.why}`}${execution.successor === undefined ? "" : ` (successor ${execution.successor})`}`;
+    }
+    return "in-progress";
 }
 
 // Placements land in timestamp order, event id breaking ties — never in log

@@ -967,9 +967,14 @@ function deriveSignals(model: ProjectModel, now: Date): void
     for (const work of model.works)
     {
         deriveCompletion(work.completion);
-        // Derived for every unit, including the ones already done: a unit
-        // closed before a requirement was revised still says what it owes.
-        work.owes = completionRefusal(work) ?? undefined;
+        // Derived for open units only. A closed unit was judged — done through
+        // the gate, or legacy history the fold never refuses (#205 table D) —
+        // and re-deriving what it owes would mark every evidence-free legacy
+        // done "not done yet" on a page that says it is.
+        if (work.status !== "done" && work.status !== "retired")
+        {
+            work.owes = completionRefusal(work) ?? undefined;
+        }
         if (work.status === "blocked" && work.blockedOn === "decision")
         {
             noteWaiting(model, {
