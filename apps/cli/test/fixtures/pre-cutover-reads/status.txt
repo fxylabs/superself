@@ -1,0 +1,6 @@
+demo — goal: steady direction
+work: 0 active, 2 blocked, 1 next, 1 done, 1 retired
+objectives: 3 open, 0 of 2 milestones reached, 1 of 3 exit criteria covered
+waiting on you: 3
+unshipped: nothing waiting to ship
+health: ok

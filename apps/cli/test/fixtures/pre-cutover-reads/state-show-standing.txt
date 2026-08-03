@@ -1,0 +1,7 @@
+e-cyxv4  confirmed
+text: raw standing note
+labels: -
+placement: project · full · priority 15
+why: keeps cadence
+pending placement: exposure index (too broad for full) — confirm with `self state confirm e-cyxv4`
+recorded: 2026-08-03

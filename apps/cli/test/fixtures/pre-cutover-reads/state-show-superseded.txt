@@ -1,0 +1,6 @@
+01kz41ga6pj4pwzt6db7vzmcky  superseded  (from decision)
+text: ship weekly
+labels: decision
+placement: project · index · priority 40
+superseded by: 01kz41gawfbxxbewh23ffnazr0
+recorded: 2026-08-03

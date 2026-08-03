@@ -37,6 +37,7 @@ export interface PendingPlacement
     event: string;
     priority?: number;
     exposure?: Exposure;
+    scope?: EntityScope;
     why?: string;
     // The record this demotion makes room for, when the placement is the
     // demotion half of a cap-driven pair: the confirm surface applies the
@@ -44,10 +45,22 @@ export interface PendingPlacement
     admits?: string;
 }
 
-// Which preset record kind a legacy-derived entity is the reading of. Absent
-// for an entity `self state add` recorded; the verbs refuse lifecycle
-// transitions on a sourced one and point at the verb that owns its record.
-export type EntitySource = "goal" | "decision" | "convention" | "objective" | "milestone";
+// Which preset record kind an entity is a record of. A legacy-derived entity
+// carries the kind it was read from; a native entity carries the preset label
+// it was recorded under (#207): the preset verbs own its lifecycle either way,
+// and the raw verbs refuse it toward them. Absent for a free-labeled entity
+// `self state add` recorded.
+export type EntitySource = "goal" | "decision" | "convention" | "objective" | "milestone" | "work";
+
+// The labels that make a native entity a preset record. One list, read by the
+// fold, so `decide` and `state add --label decision` mint the same record kind
+// — presets are sugar over the entity, never a parallel type (#197 §7).
+const SOURCE_LABELS: EntitySource[] = ["goal", "decision", "convention", "objective", "milestone", "work"];
+
+function sourceOf(labels: string[]): EntitySource | undefined
+{
+    return SOURCE_LABELS.find((label) => labels.includes(label));
+}
 
 // The working state the execution events (#197 §5, #205) fold to. Facts about
 // doing, never assertions: no propose/confirm timing exists on this axis, and
@@ -67,6 +80,24 @@ export interface EntityExecution
     report?: string;
     // Where a retired outcome went, when the retirement named a successor.
     successor?: string;
+    // The successor's project, when the retirement moved the outcome across
+    // projects. Carried for the work reading; renders that print a successor
+    // without it mean the same project.
+    successorProject?: string;
+}
+
+// One coverage claim (#207 C): a criterion the entity declared, judged covered
+// with a reason, by a recorded actor, optionally citing the work unit and the
+// commits the evidence lives in. Claims bind to the entity id — a superseding
+// revision starts uncovered by construction.
+export interface CoverageClaim
+{
+    criterion: string;
+    ts: string;
+    why: string;
+    actor: string;
+    work?: string;
+    commits: string[];
 }
 
 export interface EntityState
@@ -91,6 +122,13 @@ export interface EntityState
     // supersedes links displace their targets — a proposal must not, and a
     // proposal retracted before confirmation never did.
     confirmedOnce: boolean;
+    // The coverage claims recorded against the declared criteria, in the
+    // order they landed. done/reach is gated on every criterion carrying one.
+    covered: CoverageClaim[];
+    // Set on an entity an `entity.*` creation event minted, absent on the
+    // legacy readings: the model projects native preset records back into the
+    // legacy read shapes, and this is the mark it projects by.
+    native?: boolean;
     supersededBy?: string;
     // Why the record was retracted, or what closed the legacy record it
     // reads. Absent on a supersession, which says why by naming its successor.
@@ -138,6 +176,45 @@ interface ExecutionEvent
     why?: string;
     report?: string;
     successor?: string;
+    successorProject?: string;
+}
+
+// A confirm, a retraction, a link edge, and a coverage claim collect exactly
+// as placements and executions do: applied over the complete entity set in
+// `deriveEntities`, because each can name a legacy-derived record that exists
+// only after the derive step composes it (#207 E2), and the event-id guard
+// lets the reconcile pass route the same line twice.
+interface ConfirmEvent
+{
+    event: string;
+    ts: string;
+    confirms: string;
+    humanConfirmed: boolean;
+}
+
+interface RetractEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    why?: string;
+}
+
+export interface LinkEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    add: boolean;
+    link: EntityLink;
+}
+
+interface CoverageEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    claim: CoverageClaim;
 }
 
 const EXECUTION_EVENTS = ["entity.started", "entity.blocked", "entity.unblocked", "entity.done", "entity.retired"];
@@ -151,6 +228,10 @@ export interface EntityFold
     claims: { predecessor: string; successor: string }[];
     placements: PlacementEvent[];
     executions: ExecutionEvent[];
+    confirms: ConfirmEvent[];
+    retractions: RetractEvent[];
+    links: LinkEvent[];
+    coverage: CoverageEvent[];
     // Every id an `entity.confirmed` named in `refs.confirms`. A placement
     // proposal applies only when its event id is in here, and collecting the
     // ids first is what lets a union merge order the confirm above the
@@ -160,7 +241,17 @@ export interface EntityFold
 
 export function emptyEntityFold(): EntityFold
 {
-    return { entities: [], claims: [], placements: [], executions: [], confirmations: new Set() };
+    return {
+        entities: [],
+        claims: [],
+        placements: [],
+        executions: [],
+        confirms: [],
+        retractions: [],
+        links: [],
+        coverage: [],
+        confirmations: new Set()
+    };
 }
 
 /* ── the single-pass fold ──────────────────────────────────────────── */
@@ -218,11 +309,12 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
         return;
     }
     const confirmed = event.type === "entity.confirmed";
+    const labels = stringList(event.payload.labels);
     fold.entities.push({
         id,
         ts: event.ts,
         text: String(event.payload.text ?? ""),
-        labels: stringList(event.payload.labels),
+        labels,
         links: readLinks(event.payload.links),
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
@@ -232,7 +324,10 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
         exposure: readExposure(event.payload.exposure),
         status: confirmed ? "confirmed" : "proposed",
         humanConfirmed: event.origin.confirmed === true,
-        confirmedOnce: confirmed
+        confirmedOnce: confirmed,
+        covered: [],
+        native: true,
+        source: sourceOf(labels)
     });
 }
 
@@ -250,6 +345,7 @@ function applyGoal(fold: EntityFold, event: SelfEvent): void
         labels: ["goal"],
         links: live.map((item) => ({ type: "supersedes" as const, target: item.id })),
         criteria: [],
+        covered: [],
         scope: "project",
         priority: 0,
         exposure: "full",
@@ -267,20 +363,21 @@ function applyGoal(fold: EntityFold, event: SelfEvent): void
 
 /* ── the linking transitions ───────────────────────────────────────── */
 
-// The transitions that speak about a record another event created. Each is a
-// no-op against a record already where the transition would put it, so the
-// reconcile pass in `model.ts` can run them a second time: a merged log can
-// put a retraction above the entity it withdraws.
+// The transitions that speak about a record another event created. Every one
+// collects rather than applies (#207 E2): the record it names can be a
+// legacy-derived one that exists only after the derive step composes it, and
+// the event-id guards let the reconcile pass in `model.ts` route the same
+// line twice without applying it twice.
 export function reconcileEntity(fold: EntityFold, event: SelfEvent): void
 {
     if (event.type === "entity.confirmed" && event.refs?.confirms !== undefined)
     {
-        confirmEntity(fold, event);
+        collectConfirm(fold, event);
         return;
     }
     if (event.type === "entity.retracted")
     {
-        retractEntity(fold, event);
+        collectRetraction(fold, event);
         return;
     }
     if (event.type === "entity.placed")
@@ -290,7 +387,12 @@ export function reconcileEntity(fold: EntityFold, event: SelfEvent): void
     }
     if (event.type === "entity.linked" || event.type === "entity.unlinked")
     {
-        relinkEntity(fold, event);
+        collectLink(fold, event);
+        return;
+    }
+    if (event.type === "entity.covered")
+    {
+        collectCoverage(fold, event);
         return;
     }
     if (EXECUTION_EVENTS.includes(event.type))
@@ -318,40 +420,55 @@ function collectExecution(fold: EntityFold, event: SelfEvent): void
         on: str(event.payload.on),
         why: str(event.payload.why),
         report: str(event.payload.report),
-        successor: str(event.payload.successor)
+        successor: str(event.payload.successor),
+        successorProject: str(event.payload.successorProject)
     });
 }
 
-function confirmEntity(fold: EntityFold, event: SelfEvent): void
+function collectConfirm(fold: EntityFold, event: SelfEvent): void
 {
-    const confirms = event.refs?.confirms;
-    if (confirms !== undefined)
+    const confirms = String(event.refs?.confirms ?? "");
+    if (confirms === "" || fold.confirms.some((item) => item.event === event.id))
     {
-        // Recorded whatever it names: a placement proposal's confirm carries
-        // the placement's event id, which no entity ever matches below.
-        fold.confirmations.add(confirms);
+        return;
     }
-    const target = fold.entities.find((item) => item.id === confirms);
-    if (target !== undefined && target.status === "proposed")
-    {
-        target.status = "confirmed";
-        target.confirmedOnce = true;
-        target.humanConfirmed = event.origin.confirmed === true;
-        target.ts = event.ts;
-    }
+    // Recorded whatever it names: a placement proposal's confirm carries the
+    // placement's event id, which no entity ever matches at apply time.
+    fold.confirmations.add(confirms);
+    fold.confirms.push({ event: event.id, ts: event.ts, confirms, humanConfirmed: event.origin.confirmed === true });
 }
 
-// Withdrawal is terminal and keeps the record: text, links and lineage stay
-// resolvable, the status alone leaves the current set. The first withdrawal
-// is the one that happened; a later event naming the record changes nothing.
-function retractEntity(fold: EntityFold, event: SelfEvent): void
+function collectRetraction(fold: EntityFold, event: SelfEvent): void
 {
-    const target = fold.entities.find((item) => item.id === event.payload.entity);
-    if (target !== undefined && isLive(target))
+    const entity = String(event.payload.entity ?? "");
+    if (entity === "" || fold.retractions.some((item) => item.event === event.id))
     {
-        target.status = "retracted";
-        target.closedWhy = str(event.payload.why);
+        return;
     }
+    fold.retractions.push({ event: event.id, ts: event.ts, entity, why: str(event.payload.why) });
+}
+
+function collectCoverage(fold: EntityFold, event: SelfEvent): void
+{
+    const entity = String(event.payload.entity ?? "");
+    const criterion = String(event.payload.criterion ?? "");
+    if (entity === "" || criterion === "" || fold.coverage.some((item) => item.event === event.id))
+    {
+        return;
+    }
+    fold.coverage.push({
+        event: event.id,
+        ts: event.ts,
+        entity,
+        claim: {
+            criterion,
+            ts: event.ts,
+            why: String(event.payload.why ?? ""),
+            actor: String(event.origin.actor ?? "agent"),
+            work: str(event.refs?.work),
+            commits: stringList(event.refs?.commits)
+        }
+    });
 }
 
 // Placement moves by event (#197 §3), collected here and applied over the
@@ -378,26 +495,15 @@ function collectPlacement(fold: EntityFold, event: SelfEvent): void
     });
 }
 
-// A link is one edge in a set: adding it twice keeps one, removing it twice
-// removes one — which is what lets the reconcile pass repeat either safely.
-function relinkEntity(fold: EntityFold, event: SelfEvent): void
+function collectLink(fold: EntityFold, event: SelfEvent): void
 {
-    const target = fold.entities.find((item) => item.id === event.payload.entity);
+    const entity = String(event.payload.entity ?? "");
     const links = readLinks([event.payload.link]);
-    if (target === undefined || links.length === 0)
+    if (entity === "" || links.length === 0 || fold.links.some((item) => item.event === event.id))
     {
         return;
     }
-    const link = links[0];
-    if (event.type === "entity.unlinked")
-    {
-        target.links = target.links.filter((item) => item.type !== link.type || item.target !== link.target);
-        return;
-    }
-    if (!target.links.some((item) => item.type === link.type && item.target === link.target))
-    {
-        target.links.push(link);
-    }
+    fold.links.push({ event: event.id, ts: event.ts, entity, add: event.type === "entity.linked", link: links[0] });
 }
 
 /* ── the legacy interpretation (#197 §8) ───────────────────────────── */
@@ -436,9 +542,10 @@ export interface LegacySources
 }
 
 // The whole entity view: native records first, then the legacy readings, then
-// supersession and placement — each applied once, over the complete set,
-// because a successor or a placement can name a record from either half and a
-// merged log can order a standalone claim before its target.
+// every collected transition — each applied once, over the complete set,
+// because a confirm, a retraction, a link, a claim or a placement can name a
+// record from either half (#207 E2), and a merged log can order a standalone
+// claim before its target.
 export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityState[]
 {
     const entities = [
@@ -449,10 +556,114 @@ export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityS
         ...legacy.objectives.flatMap((objective) => objective.milestones.map(milestoneEntity))
     ];
     linkLineage(entities, legacy);
+    applyConfirms(entities, fold);
+    applyRetractions(entities, fold);
+    applyLinks(entities, fold);
     applySupersessions(entities, fold);
     applyPlacements(entities, fold);
+    applyCoverage(entities, fold);
     applyExecutions(entities, fold);
     return entities;
+}
+
+// Ordered as placements are — timestamp, event id — so two clones of one
+// store settle one lifecycle. A confirm answers only a proposal; the first
+// retraction is the one that happened, and it is applied before supersession
+// so a withdrawal that already happened wins however the merged log ordered
+// the two.
+function applyConfirms(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    for (const confirm of ordered(fold.confirms))
+    {
+        const target = byId.get(confirm.confirms);
+        if (target !== undefined && target.status === "proposed")
+        {
+            target.status = "confirmed";
+            target.confirmedOnce = true;
+            target.humanConfirmed = confirm.humanConfirmed;
+            target.ts = confirm.ts;
+        }
+    }
+}
+
+// Withdrawal is terminal and keeps the record: text, links and lineage stay
+// resolvable, the status alone leaves the current set. The first withdrawal
+// is the one that happened; a later event naming the record changes nothing.
+function applyRetractions(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    for (const retraction of ordered(fold.retractions))
+    {
+        const target = byId.get(retraction.entity);
+        if (target !== undefined && isLive(target))
+        {
+            target.status = "retracted";
+            target.closedWhy = retraction.why;
+        }
+    }
+}
+
+// A link is one edge in a set: adding it twice keeps one, removing it twice
+// removes one. An event naming a record this set does not carry — a work unit
+// still folded from legacy `work.*` history — is left for the model, which
+// reads the same list and routes it onto the legacy record.
+function applyLinks(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    for (const item of ordered(fold.links))
+    {
+        const target = byId.get(item.entity);
+        if (target === undefined)
+        {
+            continue;
+        }
+        if (!item.add)
+        {
+            target.links = target.links.filter((link) => link.type !== item.link.type || link.target !== item.link.target);
+        }
+        else if (!target.links.some((link) => link.type === item.link.type && link.target === item.link.target))
+        {
+            target.links.push(item.link);
+        }
+    }
+}
+
+// Claims accumulate: a criterion may be judged more than once and every
+// judgment stays on record. A claim naming a criterion the entity never
+// declared folds to nothing — the verb refuses it, so such a line can only
+// arrive hand-appended or from a revision that dropped the criterion.
+function applyCoverage(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    for (const item of ordered(fold.coverage))
+    {
+        const target = byId.get(item.entity);
+        if (target !== undefined && target.criteria.includes(item.claim.criterion))
+        {
+            target.covered.push(item.claim);
+        }
+    }
+}
+
+function ordered<T extends { ts: string; event: string }>(items: T[]): T[]
+{
+    return [...items].sort((left, right) => left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+}
+
+// The criteria no claim covers yet — what still gates a done or a reach.
+export function uncoveredCriteria(entity: EntityState): string[]
+{
+    const covered = new Set(entity.covered.map((claim) => claim.criterion));
+    return entity.criteria.filter((criterion) => !covered.has(criterion));
+}
+
+// What still renders as current state: a live record whose working state is
+// not terminal. A done or retired outcome left the direction the context
+// carries — the live-state sections and search still answer for it.
+export function isCurrent(entity: EntityState): boolean
+{
+    return isLive(entity) && entity.execution?.status !== "done" && entity.execution?.status !== "retired";
 }
 
 // Working state lands in timestamp order, event id breaking ties — the same
@@ -504,7 +715,7 @@ function applyExecution(target: EntityState, event: ExecutionEvent): void
     }
     if (event.type === "entity.retired")
     {
-        target.execution = { status: "retired", ts: event.ts, why: event.why, successor: event.successor };
+        target.execution = { status: "retired", ts: event.ts, why: event.why, successor: event.successor, successorProject: event.successorProject };
     }
 }
 
@@ -550,6 +761,7 @@ function applyPlacements(entities: EntityState[], fold: EntityFold): void
                 event: placement.event,
                 priority: placement.priority,
                 exposure: placement.exposure,
+                scope: placement.scope,
                 why: placement.why,
                 admits: placement.admits
             };
@@ -591,12 +803,13 @@ export function orderEntities(entities: EntityState[]): EntityState[]
 
 // What currently occupies a retention tier (#197 §4): confirmed live records
 // at the scope, because a proposal takes its place only when a person
-// confirms it and a withdrawn record has already left. Full is measured in
+// confirms it and a withdrawn record has already left. A done or retired
+// outcome left the rendered set too, so it holds no seat. Full is measured in
 // characters of entity text — the same code-point count the context budget
 // charges — and index in entities.
 function occupiesTier(entity: EntityState, scope: EntityScope, exposure: Exposure): boolean
 {
-    return entity.status === "confirmed" && entity.scope === scope && entity.exposure === exposure;
+    return entity.status === "confirmed" && isCurrent(entity) && entity.scope === scope && entity.exposure === exposure;
 }
 
 export function fullTierCharacters(entities: EntityState[], scope: EntityScope): number
@@ -640,6 +853,10 @@ export function pendingSummary(pending: PendingPlacement): string
     {
         parts.push(`priority ${pending.priority}`);
     }
+    if (pending.scope !== undefined)
+    {
+        parts.push(`scope ${pending.scope}`);
+    }
     const why = pending.why === undefined ? "" : ` (${pending.why})`;
     return `${parts.join(", ") || "no change"}${why}`;
 }
@@ -656,6 +873,7 @@ function decisionEntity(decision: DecisionSource): EntityState
         labels: ["decision"],
         links: decision.supersedes.map((target) => ({ type: "supersedes" as const, target })),
         criteria: [],
+        covered: [],
         why: decision.why,
         scope: "project",
         priority: 40,
@@ -679,6 +897,7 @@ function conventionEntity(convention: ConventionSource): EntityState
         labels: ["convention"],
         links: convention.supersedes.map((target) => ({ type: "supersedes" as const, target })),
         criteria: [],
+        covered: [],
         scope: "project",
         priority: 30,
         exposure: "full",
@@ -705,6 +924,7 @@ function objectiveEntity(objective: ObjectiveState): EntityState
         links: objective.supersedes.map((target) => ({ type: "supersedes" as const, target })),
         target: objective.target,
         criteria: [],
+        covered: [],
         scope: "project",
         priority: 10,
         exposure: "full",
@@ -742,6 +962,7 @@ function milestoneEntity(milestone: MilestoneState): EntityState
         // The live exit criteria are what still gates a reach; dropped ones
         // are revision history the milestone's own page keeps.
         criteria: milestone.exit.filter((item) => item.dropped !== true).map((item) => item.text),
+        covered: [],
         scope: "project",
         priority: 20,
         exposure: "index",

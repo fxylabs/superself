@@ -31,7 +31,7 @@ it. The layers, lowest first:
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb) |
-| Commands | `main.ts`, `goals.ts`, `state.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
@@ -96,11 +96,10 @@ concern.
 
 | Namespace | Owner | Emitted from |
 | --- | --- | --- |
-| `work.*` | work state, the process transitions, proposals | `main.ts`, `goals.ts` |
-| `objective.*`, `milestone.*` | the outcome layer | `goals.ts` |
-| `goal.*`, `decision.*`, `convention.*` | core project state | `main.ts` |
-| `entity.*` | the shared entity record (#197); `entities.ts` owns the fold | `state.ts` |
+| `entity.*` | the shared entity record (#197); `entities.ts` owns the fold | `state.ts`, `main.ts`, `goals.ts` — every preset verb writes this grammar since the cutover (#207) |
+| `work.run-started`, `work.run-exited` | the process transitions | `main.ts` |
 | `report.*` | work reports | `main.ts` |
+| `goal.*`, `decision.*`, `convention.*`, `objective.*`, `milestone.*`, the rest of `work.*` | the pre-cutover record kinds — read forever (#197 §8), written by no verb | nothing |
 
 The process transitions are `work.run-started` and `work.run-exited`. They
 carry the work id and, on exit, the code — never the pid: a pid is

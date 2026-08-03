@@ -315,6 +315,20 @@ export interface StoreConfig
     // only — rendering never refuses, however far over a legacy store stands.
     fullCap?: number;
     indexCap?: number;
+    // The alias table (#207 A): user rows over the built-in preset defaults,
+    // keyed by verb. Same user-set-policy precedent as the caps above —
+    // hand-editable, read on every invocation, never event-sourced.
+    aliases?: Record<string, AliasRow>;
+}
+
+// One alias row: the label a verb records, and the default placement it
+// records under. A malformed hand-edited value reads as absent, so the
+// built-in default (or no default) answers instead of a crash.
+export interface AliasRow
+{
+    label?: string;
+    priority?: number;
+    exposure?: string;
 }
 
 export function readStoreConfig(storeDir: string): StoreConfig
