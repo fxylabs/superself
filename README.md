@@ -79,16 +79,12 @@ as operating outcomes and separates it from what is not complete.
   is reached only when every exit criterion is covered by evidence, a revision
   marks what it already settled as stale until someone re-judges it, and
   `self timezone` fixes the zone every target date falls due in;
-- the repository integration train — `integration register/plan/declare/lease/
-  attempt/observe/approve/merge/reconcile` and `review request/ingest/contract` —
-  serializes what may reach main: reviews are bound to the sha256 of the feature
-  diff, so a conflict-free rebase preserves them and a conflict resolution owes a
-  bounded delta review; one fenced lease per repository keeps rebase, resolution
-  and merge single-file while implementation and review stay parallel; a receipt
-  exists only when the supervisor ingests a validated result envelope with its
-  artifact bytes, never because an agent said approve; and a merge needs merged
-  predecessors, the current fence, exact-head CI, and a human approval naming
-  that exact head — [see the full contract](docs/integration-train.md);
+- the process ledger — `work started <id> --pid N` and `work exited <id>
+  [--code N]` — maps a work unit to the agent process running it: liveness is
+  judged at read time from the pid on the recording machine, a process that
+  died without reporting shows as stale on the next read, and the pid itself
+  never enters the synced log; merge control is deliberately not here — a
+  branch reaches main through a GitHub pull request, owned by PR review and CI;
 - every event immediately refolds canonical markdown (project state plus one
   file per open work unit) and lands as exactly one commit in the workspace
   repository, so state has log, blame, and revert;
@@ -210,18 +206,13 @@ machine.
   give agents a generated view of current state and a pull path into full
   history. Managed blocks in `AGENTS.md` and `CLAUDE.md` teach terminal agents
   to load and maintain that state.
-- **Outcome and evidence links.** Work can contribute to objectives and
-  milestones, declare requirements, attach reports and immutable artifacts,
-  and refuse completion while required coverage is missing.
-- **Supervised attempts.** Work specifications can dispatch provider-neutral
-  attempts through capability preflight, durable local spools, lifecycle
-  records, directives, cancellation, retry, recovery, and result validation.
-- **Governed integration.** Review receipts, leases, fences, exact-head CI,
-  human approvals, and promotion records form a serialized gate for changes
-  reaching `main`. See [the integration contract](docs/integration-train.md).
-- **Local supervision.** A daemon can supervise attempts for the one project in
-  which it started, enforce an overnight policy, maintain provider circuit
-  state, and produce a digest of what happened while nobody was watching.
+- **Outcome links.** Work can contribute to objectives and milestones and
+  attach reports and immutable artifacts; done is a judgment whose evidence
+  lives in the unit's reports.
+- **The process ledger.** A work unit maps to the agent process running it —
+  pid, started-at, running, stale, or exited, judged at read time by the OS on
+  the recording machine. Merge control is deliberately left to GitHub PR
+  review and CI.
 - **Inspectable views and sync.** `self view` renders read-only workspace,
   project, work, decision, event, and artifact pages. Explicit git-backed sync
   can carry the state store between machines.
@@ -232,10 +223,9 @@ machine.
   project, work, attempt, domain, risk, and directive scope.
 - Natural-language intent does not yet compile through one stable public
   contract into objectives, work graphs, policies, and attempts.
-- One local supervisor does not yet schedule across projects, and scheduling
-  does not yet close the full loop across priorities, dependencies, policy
-  authorization, budgets, capacity, failures, completion, and newly freed
-  resources.
+- Nothing schedules work across projects; dispatch is a person or a session
+  starting agents, and the full loop across priorities, dependencies, budgets,
+  capacity, failures, and completion is unproven.
 - The extension and MCP capability registry is still a design direction, not a
   general shipped plugin runtime.
 - The viewer is read-only today. It is not yet the conversational surface for
@@ -356,10 +346,7 @@ If you are customizing the rendered viewer, use the
 theme boundary.
 Follow the [long-running project guide](docs/guides/running-a-long-term-project.md)
 to carry a real outcome across sessions and agents through milestones,
-requirements, reports, and evidence-backed completion.
-Then use the [governed agent execution guide](docs/guides/governing-agent-execution.md)
-to bind one agent run to explicit capabilities, artifacts, validation, and
-human gates.
+reports, and evidence-backed completion.
 
 Run `self --help` for the full command surface. The main families are:
 
@@ -388,21 +375,20 @@ pnpm build
 
 ```text
 apps/
-└─ cli/                   the `self` CLI: state, context, work, execution, and gates
+└─ cli/                   the `self` CLI: state, context, work, and the process ledger
 
 docs/
 ├─ concepts/              the state, context, authority, and evidence model
 ├─ guides/                task-oriented guides for using the current CLI
-├─ examples/              end-to-end governed operating scenarios
+├─ examples/              end-to-end operating scenarios
 ├─ reference/             current CLI command and record reference
 ├─ viewer-theming.md      supported viewer tokens and accent themes
-├─ integration-train.md   the change-set, receipt, lease, and merge contract
 ├─ maintainers/           branch, version, and release policy
 ├─ roadmap.md             current capability, next outcomes, and exit evidence
 └─ strategy/              problem definition and positioning decisions
 
-ARCHITECTURE.md           layering, subsystem boundaries, single gates, namespaces
-CONTRIBUTING.md           process, code conventions, and the envelope contract
+ARCHITECTURE.md           layering, single gates, event namespaces, fixed naming
+CONTRIBUTING.md           process and code conventions
 ```
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing code and

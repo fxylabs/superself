@@ -276,7 +276,7 @@ contract this foundation is intended to support.
   synchronization.
 - Use [Running a long-term project](../guides/running-a-long-term-project.md)
   to operate goals, milestones, work, reports, and evidence across sessions.
-- Use [Governing agent execution](../guides/governing-agent-execution.md) to
+- Use the process ledger (`self work started/exited`) to
   bind an agent run to explicit capabilities, artifacts, validation, and
   recovery.
 - Read the [roadmap](../roadmap.md) for the path from the current project-state

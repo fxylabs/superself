@@ -24,8 +24,7 @@ prints them during the same run.
 | Outcomes | `goal set "<text>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>"`, `convention drop <event-id>` |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `artifact ...` |
-| Execution | `spec ...`, `attempt ...`, `daemon ...`, `overnight ...`, `digest ...` |
-| Integration and review | `integration ...`, `review ...` |
+| Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
 | Agent instructions | `connect [--global]` |
 
@@ -33,8 +32,8 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone project remote sync clone
-goal objective milestone decide work report integration review spec attempt
-daemon overnight digest artifact convention connect view context status setup
+goal objective milestone decide work report artifact convention connect view
+context status setup
 log search fold
 ```
 
@@ -59,26 +58,15 @@ The full work transitions and flags are in [`help.ts`](../../apps/cli/src/help.t
 under `work`, and the completion rules are implemented by
 [`completion.ts`](../../apps/cli/src/completion.ts).
 
-### Execution and review commands
+### The process ledger
 
-- `spec validate|apply|dispatch|list|show` handles immutable work-spec
-  generations and dispatches a pinned generation as an attempt.
-- `attempt run|register|started|heartbeat|exited|list|show|directive|cancel|propose|settle|recover|prune|retention|breaker`
-  runs or manages the durable attempt spool.
-- `daemon start|stop|status|tick|circuits` supervises attempts without a chat
-  turn; `overnight` defines a bounded unattended-dispatch policy and `digest`
-  reports what happened in its time window.
-- `integration` manages change sets, leases, integration attempts,
-  observations, approvals, merges, promotion, and reconciliation.
-- `review request|ingest|list|contract` creates review obligations and admits
-  receipts. A review receipt exists only after `review ingest` accepts its
-  envelope.
-
-The integration record and merge gate are described in
-[`docs/integration-train.md`](../integration-train.md). The implementation
-surfaces are [`integration.ts`](../../apps/cli/src/integration.ts),
-[`envelope.ts`](../../apps/cli/src/envelope.ts), and
-[`help.ts`](../../apps/cli/src/help.ts).
+- `work started <id> --pid N` records the agent process running a unit; the
+  pid stays in this machine's ledger and never enters the synced log.
+- `work exited <id> [--code N]` records how it ended.
+- Liveness is judged at read time: `self status` shows running while the pid
+  answers `kill -0`, stale once it stops answering without an exit record.
+- Merge control is not here. A branch reaches main through a GitHub pull
+  request, owned by PR review and CI.
 
 ### Context and inspection commands
 
