@@ -100,7 +100,7 @@ pnpm build
 - Comments explain why a rule exists, not what the next line does. The existing
   modules set the density; match them.
 - No behavior change smuggled into a move. A refactor pull request leaves the
-  proof assertions untouched.
+  test assertions untouched.
 
 ## Adding a command verb
 
@@ -114,8 +114,9 @@ incomplete:
    sync.
 3. Every refusal as a one-line `CliError` that says what was refused and why,
    in the user's terms. A refusal that only names a rule teaches nothing.
-4. Proof coverage under `apps/cli/proof/` for the behavior the verb adds,
-   including the refusal path.
+4. Test coverage under `apps/cli/test/` for the behavior the verb adds,
+   including the refusal path — a unit test where the behavior is in-process
+   logic, a case in the integration tests where it is a CLI contract.
 5. A statement of the scope it answers for. A read verb defaults to the project
    the directory resolves to, accepts `--project <slug>`, and either offers a
    `--workspace` form or says in its `help.ts` detail why it has none. A write
@@ -134,42 +135,31 @@ and no successor, and decline where the type has proposals. See
 [the record lifecycle](ARCHITECTURE.md#the-record-lifecycle) for what each
 transition has to fold to, and add the type to `STATEMENT_TYPES` in
 `model.ts` — the one declaration of the statement types, which `self search`
-reads and `proof/suites/lifecycle.sh` enumerates. The proof fails when a
-namespace that creates records has no entry there, so a new statement type
-cannot land without its lifecycle.
+reads and `test/lifecycle.test.mjs` enumerates, so a statement type cannot
+land without its lifecycle verbs in its own help.
 
-## Proof scripts
+## Tests
 
-Proof scripts run on a contributor's macOS laptop and on the ubuntu CI runner,
-against whatever git the host has. Write them checkout-agnostic:
+`pnpm test` runs the whole tier — unit tests plus the CLI integration tests —
+in seconds, on every pull request. The integration tests run on a
+contributor's macOS laptop and on the ubuntu CI runner, against whatever git
+the host has. Write them checkout-agnostic:
 
 - Never assume a default branch name. Pin it: `git init -q -b main`, or set
   `init.defaultBranch` in the scratch home before the first `git init`. A script
   that assumes `main` passes locally and fails on the runner.
 - Never assume a local `main` exists in the repository under test, and never
   read the real workspace. Point `HOME` and `XDG_CONFIG_HOME` at a scratch
-  directory per simulated machine, as `proof/proof.sh` does.
+  directory per simulated machine, as `test/harness.mjs` does.
 - Never assume user git config. Set `user.name` and `user.email` in each scratch
   home; Linux leaves the ident empty where macOS silently fills it in.
-- Never use macOS-only tools. `stat -f`, `sed -i ''`, and BSD-only flags do not
-  exist on the runner; keep the script to POSIX shell plus git and node.
+- Never use macOS-only tools; keep everything to node plus git.
 - Pin scratch-repo state explicitly — branch, commits, and config — instead of
   inheriting it from the environment.
-- Clean up with a `trap ... EXIT` on the temp root.
 
-### Proof-run economy
-
-Proof scripts build scratch repositories and drive the CLI end to end — tens of
-seconds per run. They are a gate, not a development feedback loop. Until #92
-ships tiered suites, budget them:
-
-- While implementing, get feedback from `pnpm typecheck` and direct node
-  invocations of the changed surface, not from the proof harness.
-- While writing a new proof script, run only its minimal single scenario.
-- Run the touched proof sections at most twice per change: once when the
-  implementation is complete, and once after fixing what that run caught.
-- Anything beyond that is CI's job — the verify workflow runs the full sweep on
-  every pull request.
+Assert product behavior, never the suite's own coverage: what fails when the
+CLI is wrong, not whether the test file still lists every case a diff would
+already show.
 
 ## Result envelope contract
 
@@ -290,6 +280,7 @@ Run the same checks as CI:
 
 ```bash
 pnpm typecheck
+pnpm test
 pnpm build
 ```
 
@@ -319,10 +310,8 @@ much as to hand-written work:
   the commit author.
 - The pull request title names the issue's outcome, and the body contains
   `Closes #N` for the single accepted issue.
-- Run `pnpm typecheck` and `pnpm build` locally. The full `pnpm proof` suite is
-  delegated to PR CI — CI runs typecheck, proof, and build on every pull
-  request. Run the targeted proof section locally when you changed the behavior
-  it covers.
+- Run `pnpm typecheck`, `pnpm test` and `pnpm build` locally — CI runs the
+  same three on every pull request.
 - Do not use `gh pr edit`; it rewrites fields you did not intend to touch. Set
   the title and body at `gh pr create` time, or PATCH the specific field through
   the API.

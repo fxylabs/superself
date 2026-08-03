@@ -302,7 +302,7 @@ export function shellArgument(value: string): string
 //
 // This is not the whole rule. A pointer interpolated into a sentence — the
 // `· ${scoped(…)}` notes a row carries — is prose, and prose is a `string`
-// wherever it is built; `proof/scope-pointers.mjs` still owns those. What the
+// wherever it is built; review still owns those. What the
 // brand removes is every site that passes a pointer as a pointer.
 declare const POINTER: unique symbol;
 declare const CHECKOUT: unique symbol;
@@ -393,7 +393,7 @@ function usableId(value: string): boolean
 
 // The workspace render's own pointers. `self status` there IS the command being
 // pointed at, so there is no project to name. This mint takes no project on
-// purpose, and `proof/scope-pointers.mjs` is what keeps it where it belongs: a
+// purpose, and review is what keeps it where it belongs: a
 // literal here reads as reaching no `scoped()` anywhere except inside the two
 // workspace helpers its allowlist names.
 export function workspacePointer(command: ScopableVerb): Pointer

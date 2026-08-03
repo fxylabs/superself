@@ -30,6 +30,6 @@ jobs:
             echo "tag v$TAG does not match package version $PKG" >&2
             exit 1
           fi
-      # prepublishOnly runs the full proof before anything uploads
+      # prepublishOnly rebuilds before anything uploads; the test tier ran in PR CI
       - run: npm publish
         working-directory: apps/cli

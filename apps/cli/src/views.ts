@@ -589,7 +589,7 @@ function workspaceOmission(count: number): string
 {
     // The workspace's own omission, not a project's: `self status` here is the
     // command being pointed at, which is why this function and
-    // workspaceContextLine are the two names proof/scope-pointers.mjs exempts.
+    // workspaceContextLine are the two names the scope-pointer review exempts.
     const recovery = "self status";
     return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`${recovery}\` from the workspace for the full summaries`;
 }
