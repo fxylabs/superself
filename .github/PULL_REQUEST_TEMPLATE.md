@@ -34,7 +34,7 @@ Closes #
 ## Verification
 
 - [ ] `pnpm typecheck`
-- [ ] `pnpm proof`
+- [ ] `pnpm test`
 - [ ] `pnpm build`
 - [ ] Added or updated regression coverage where appropriate
 
