@@ -307,7 +307,7 @@ export interface ProjectModel
 //
 // This list is not documentation. `search.ts` builds its historical-status
 // markers from `closed`, so a type missing from here silently stops saying
-// which of its records still hold — and `proof/suites/lifecycle.sh` reads this
+// which of its records still hold — and `test/lifecycle.test.mjs` reads this
 // same list out of the built module rather than restating it, so a row can
 // never drift from the verbs the CLI actually has.
 export interface StatementType
