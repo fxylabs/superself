@@ -80,9 +80,10 @@ The core engine should own:
 
 ## Where the core is today
 
-Superself currently provides durable state and a local foundation for
-single-project supervised execution. It does not yet close the complete loop
-above.
+Superself currently provides durable state, placed bounded context, and
+process visibility for single-project work. It does not supervise or dispatch
+execution — a person or a session starts agents — and it does not yet close
+the complete loop above.
 
 | Capability | State | What works now | Open operating gap |
 | --- | --- | --- | --- |

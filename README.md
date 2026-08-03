@@ -6,8 +6,11 @@ Models have context. Agents have runtimes. Companies need state.
 
 Company State is the durable, versioned truth of what an organization intends,
 has decided, is doing, may authorize, and can prove. A Company State Runtime
-turns that state into context, ready work, policy decisions, supervised
-execution, verified completion, and the next company state.
+turns that state into context, ready work, policy the engine itself enforces —
+retention caps, human-owned confirmations, evidence-gated completion — and the
+next company state. Supervised execution through WorkSpec contracts is a
+stated target, not shipped surface; [docs/roadmap.md](docs/roadmap.md) draws
+that boundary.
 
 Superself is building the open-source Company State Runtime. It gives a company
 durable state beyond any one context window and governed execution beyond any
