@@ -12,6 +12,7 @@ import {
     EntityLink,
     EntitySource,
     EntityState,
+    executionSummary,
     Exposure,
     EXPOSURES,
     fullTierCharacters,
@@ -25,12 +26,13 @@ import {
 } from "./entities.js";
 import { entityId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
+import { ProjectContext, readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { countCharacters } from "./style.js";
 import { CliError, SelfEvent } from "./types.js";
 
-const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w';
+const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
+    + ' | start <id> | block <id> | unblock <id> | done <id> --report r | retire <id> --why w';
 const ADD_USAGE = 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] '
     + "[--target YYYY-MM-DD] [--criteria c] [--link [type:]<id>] [--why w] [--proposed] [--demote <id>]";
 const PLACE_USAGE = "state place <id> [--priority <n>] [--exposure full|index|search] "
@@ -59,6 +61,12 @@ const PLACE_OPTIONS = {
 
 const WHY_OPTION = { why: { type: "string" } } as const;
 
+const BLOCK_OPTIONS = { on: { type: "string" }, why: { type: "string" } } as const;
+
+const DONE_OPTIONS = { report: { type: "string" } } as const;
+
+const RETIRE_OPTIONS = { why: { type: "string" }, successor: { type: "string" } } as const;
+
 // A bare `--` is not a listing flag: the contract's unnamed "options" form
 // keeps it a subcommand mistake that `subcommand()` explains.
 export const STATE_COMMAND: Command = {
@@ -84,7 +92,22 @@ export const STATE_COMMAND: Command = {
             verbs: ["place"]
         },
         { syntax: "state confirm <id>", description: ["confirm a proposed entity, or a placement waiting on you"], verbs: ["confirm"] },
-        { syntax: 'state retract <id> --why "<reason>"', description: ["withdraw an entity with nothing replacing it"], verbs: ["retract"] }
+        { syntax: 'state retract <id> --why "<reason>"', description: ["withdraw an entity with nothing replacing it"], verbs: ["retract"] },
+        {
+            syntax: "state start|block|unblock <id>",
+            description: ["record the working state as a fact: started, blocked (--on, --why), unblocked"],
+            verbs: ["start", "block", "unblock"]
+        },
+        {
+            syntax: 'state done <id> --report "<what verifiably happened>"',
+            description: ["record completion; the claim must carry evidence, and criteria gate it"],
+            verbs: ["done"]
+        },
+        {
+            syntax: 'state retire <id> --why "<reason>" [--successor <id>]',
+            description: ["record the outcome as given up or moved, never reached"],
+            verbs: ["retire"]
+        }
     ],
     detail: [
         "the raw record of the state engine: one entity, with free labels, typed",
@@ -93,10 +116,16 @@ export const STATE_COMMAND: Command = {
         "`state list`, `state show` and `state place` answer for them too; their",
         "own verbs keep owning their lifecycle.",
         "",
-        "add, place, confirm and retract write: they take no scope flag and record",
-        "into the project they run in. list and show read for the project this",
-        "directory resolves to; there is no --workspace form yet — workspace-scoped",
-        "entities arrive with a later phase.",
+        "add, place, confirm, retract and the execution verbs (start, block,",
+        "unblock, done, retire) write: they take no scope flag and record into the",
+        "project they run in. list and show read for the project this directory",
+        "resolves to; there is no --workspace form yet — workspace-scoped entities",
+        "arrive with a later phase.",
+        "",
+        "the execution verbs record facts about doing, not assertions: no --proposed",
+        "form exists on them, and each records its actor. done must carry evidence —",
+        "--report states what verifiably happened — and an entity carrying criteria",
+        "refuses done until every criterion is covered.",
         "",
         "a demotion — exposure moving toward less-rendered (full → index → search) —",
         "always records --why; a priority change alone is not one. Demotion out of",
@@ -116,7 +145,11 @@ export const STATE_COMMAND: Command = {
         "  --criteria <text>     an exit criterion that gates done claims, repeatable",
         "  --link [type:]<id>    typed edge, repeatable: --link supersedes:<id> replaces an",
         "                        earlier entity, member-of:<id> groups, relates:<id> (a bare id) refers",
-        "  --why <text>          rationale recorded with the entity, its placement, or its retraction",
+        "  --why <text>          rationale recorded with the entity, its placement, its retraction,",
+        "                        a block, or a retirement",
+        "  --on <what>           what a blocked entity waits on, free text",
+        "  --report <text>       what verifiably happened — the evidence a done claim must carry",
+        "  --successor <id>      the entity that carries a retired outcome now",
         "  --proposed            record as a proposal; `state confirm` makes it hold",
         "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
         "                        moving one tier down (full → index, index → search); repeatable",
@@ -133,7 +166,12 @@ export const STATE_COMMAND: Command = {
             leaf("show", SCOPE_OPTIONS, 1, stateShow),
             leaf("place", PLACE_OPTIONS, 1, statePlace),
             leaf("confirm", {}, 1, stateConfirm),
-            leaf("retract", WHY_OPTION, 1, stateRetract)
+            leaf("retract", WHY_OPTION, 1, stateRetract),
+            leaf("start", {}, 1, stateStart),
+            leaf("block", BLOCK_OPTIONS, 1, stateBlock),
+            leaf("unblock", {}, 1, stateUnblock),
+            leaf("done", DONE_OPTIONS, 1, stateDone),
+            leaf("retire", RETIRE_OPTIONS, 1, stateExecRetire)
         ]
     })
 };
@@ -607,6 +645,154 @@ function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>):
     recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why }, { retracts: entity.id }, true), entity.text);
 }
 
+/* ── the execution verbs (#197 §5, #205) ───────────────────────────── */
+
+// What one execution verb speaks about: the project it runs in, and the live
+// entity whose working state it records. Facts land on records that hold — a
+// proposal is not yet a record, a withdrawn or replaced one no longer is, and
+// a preset record kind's completion belongs to its own verbs.
+function executionTarget(id: string | undefined, usage: string): { ctx: ProjectContext; model: ProjectModel; entity: EntityState }
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const entity = requireEntity(model, id, usage);
+    if (entity.source !== undefined)
+    {
+        throw new CliError(`${entity.id} is a ${entity.source} record — execution events attach to raw entities; its own verbs own its lifecycle`);
+    }
+    if (entity.status === "proposed")
+    {
+        throw new CliError(`${entity.id} is still proposed — execution records facts about a record that holds; confirm it first with \`self state confirm ${entity.id}\``);
+    }
+    if (!isLive(entity))
+    {
+        throw new CliError(entity.status === "retracted"
+            ? `${entity.id} was retracted — a withdrawn record has no working state to move`
+            : `${entity.id} was superseded by ${entity.supersededBy ?? "a later entity"} — record the work on the successor`);
+    }
+    return { ctx, model, entity };
+}
+
+// The terminal row of the transition matrix (#205 table A): done and retired
+// end the working state, and every later transition is refused rather than
+// recorded — a completed or given-up outcome is not something to keep moving.
+function requireMovable(entity: EntityState, verb: string): void
+{
+    const status = entity.execution?.status;
+    if (status === "done")
+    {
+        throw new CliError(verb === "done"
+            ? `${entity.id} is already done`
+            : `${entity.id} is already done — its working state is terminal, so nothing is left to ${verb}`);
+    }
+    if (status === "retired")
+    {
+        throw new CliError(verb === "retire"
+            ? `${entity.id} is already retired`
+            : `${entity.id} was retired — its working state is terminal, so nothing is left to ${verb}`);
+    }
+}
+
+function stateStart({ positionals }: CommandInput): void
+{
+    const { ctx, entity } = executionTarget(positionals[0], "state start <id>");
+    requireMovable(entity, "start");
+    if (entity.execution?.status === "in-progress")
+    {
+        throw new CliError(`${entity.id} is already started`);
+    }
+    if (entity.execution?.status === "blocked")
+    {
+        throw new CliError(`${entity.id} is blocked — unblock it first with \`self state unblock ${entity.id}\``);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: entity.id }), entity.text);
+}
+
+function stateBlock({ values, positionals }: CommandInput<typeof BLOCK_OPTIONS>): void
+{
+    const { ctx, entity } = executionTarget(positionals[0], 'state block <id> [--on <what>] [--why "<reason>"]');
+    requireMovable(entity, "block");
+    if (entity.execution?.status === "blocked")
+    {
+        throw new CliError(`${entity.id} is already blocked${entity.execution.why === undefined ? "" : ` — ${entity.execution.why}`}`);
+    }
+    const payload: Record<string, unknown> = { entity: entity.id };
+    if (values.on !== undefined)
+    {
+        payload.on = validText(values.on, "--on", "what the entity waits on");
+    }
+    if (values.why !== undefined)
+    {
+        payload.why = values.why;
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.blocked", payload), entity.text);
+}
+
+function stateUnblock({ positionals }: CommandInput): void
+{
+    const { ctx, entity } = executionTarget(positionals[0], "state unblock <id>");
+    requireMovable(entity, "unblock");
+    if (entity.execution?.status !== "blocked")
+    {
+        throw new CliError(`${entity.id} is not blocked — there is nothing to unblock`);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.unblocked", { entity: entity.id }), entity.text);
+}
+
+// The evidence gate (#205 table B, user-ruled 2026-08-03): a done claim
+// carries what verifiably happened, and a record that declared criteria is
+// additionally gated on covering them. Raw entities have no coverage grammar
+// yet — that arrives with the preset unification — so a criterion declared
+// here holds the claim open until then. Done is allowed while blocked
+// (ruling ①): completion is a judgment on the outcome, not on the block.
+function stateDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): void
+{
+    const { ctx, entity } = executionTarget(positionals[0], 'state done <id> --report "<what verifiably happened>"');
+    requireMovable(entity, "done");
+    if (entity.criteria.length > 0)
+    {
+        throw new CliError(`${entity.id} declared criteria its done claim is gated on, and none is covered — `
+            + entity.criteria.map((criterion) => `"${criterion}"`).join("; ")
+            + " — cover them once coverage ships, or retire the entity if the outcome was given up");
+    }
+    if (values.report === undefined || values.report.trim() === "")
+    {
+        throw new CliError(`done must carry evidence — state what verifiably happened with \`self state done ${entity.id} --report "<what happened>"\``);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.done", { entity: entity.id, report: values.report.trim() }), entity.text);
+}
+
+function stateExecRetire({ values, positionals }: CommandInput<typeof RETIRE_OPTIONS>): void
+{
+    const usage = 'state retire <id> --why "<why the outcome was given up or moved>" [--successor <id>]';
+    const { ctx, model, entity } = executionTarget(positionals[0], usage);
+    requireMovable(entity, "retire");
+    const why = requireText(values.why, usage);
+    const payload: Record<string, unknown> = { entity: entity.id, why };
+    if (values.successor !== undefined)
+    {
+        payload.successor = requireSuccessor(model, entity, values.successor).id;
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.retired", payload), entity.text);
+}
+
+// The successor is resolved before anything is written: an unknown reference
+// refuses the retirement instead of recording a pointer nothing can follow,
+// and an outcome cannot move to the record that gave it up.
+function requireSuccessor(model: ProjectModel, retired: EntityState, value: string): EntityState
+{
+    const successor = requireEntity(model, value, "state retire <id> --successor <entity-id>");
+    if (successor.id === retired.id)
+    {
+        throw new CliError(`${retired.id} cannot succeed itself — name the entity that carries the outcome now`);
+    }
+    if (successor.execution?.status === "retired")
+    {
+        throw new CliError(`successor ${successor.id} is itself retired — the outcome cannot move to a record that gave it up`);
+    }
+    return successor;
+}
+
 // Where each preset record kind's own withdrawal lives, for the refusal that
 // points a caller back at the verb owning the record.
 const OWNING_WITHDRAW: Record<EntitySource, string> = {
@@ -661,6 +847,10 @@ function renderEntity(entity: EntityState): string
     optional(lines, "target", entity.target);
     entity.criteria.forEach((criterion) => lines.push(`criterion: ${criterion}`));
     entity.links.forEach((link) => lines.push(`link: ${link.type} ${link.target}`));
+    if (entity.execution !== undefined)
+    {
+        lines.push(`working: ${executionSummary(entity.execution)}`);
+    }
     optional(lines, "superseded by", entity.supersededBy);
     optional(lines, "closed", entity.closedWhy);
     if (entity.pending !== undefined)

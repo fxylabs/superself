@@ -40,7 +40,7 @@ import {
     StoreConfig,
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
-import { makeEvent, recordEvent } from "./pipeline.js";
+import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { completionRefusal } from "./completion.js";
 import { recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
@@ -220,9 +220,13 @@ const SEARCH_OPTIONS = { type: { type: "string" }, project: { type: "string" } }
 const WORK_TRANSITIONS: [string, string][] = [
     ["start", "work.started"],
     ["block", "work.blocked"],
-    ["unblock", "work.unblocked"],
-    ["done", "work.done"]
+    ["unblock", "work.unblocked"]
 ];
+
+// Done is not a transition like the others: it is the claim that the outcome
+// was reached, so it carries its own option set — the done-time text report
+// the evidence gate accepts as the floor (#205, ruling ②).
+const DONE_OPTIONS = { why: { type: "string" }, report: { type: "string" } } as const;
 
 // Listing and showing are workspace reads, so they resolve from any directory;
 // every verb that writes still requires the linked checkout. The unnamed form
@@ -233,6 +237,7 @@ const WORK_CHILDREN: CommandLeaf[] = [
     leaf("add", {}, 1, ({ positionals }) => cmdWorkAdd(positionals[0])),
     leaf("show", SCOPE_OPTIONS, 1, cmdWorkShow),
     ...WORK_TRANSITIONS.map(([verb, type]) => leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input))),
+    leaf("done", DONE_OPTIONS, 1, cmdWorkDone),
     leaf("started", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, true)),
     leaf("exited", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, false)),
     leaf("retire", RETIRE_OPTIONS, 1, cmdWorkRetireUnit, ["requirement"]),
@@ -438,9 +443,17 @@ export const COMMANDS: Command[] = [
                 verbs: ["show"]
             },
             {
-                syntax: "work start|block|unblock|done <id>",
+                syntax: "work start|block|unblock <id>",
                 description: ["move a work unit (block: --on decision|dependency|external [--why w])"],
-                verbs: ["start", "block", "unblock", "done"]
+                verbs: ["start", "block", "unblock"]
+            },
+            {
+                syntax: 'work done <id> [--report "<what verifiably happened>"] [--why w]',
+                description: [
+                    "close a unit whose outcome was reached; the claim must carry evidence",
+                    "(a report with a commit or artifact, or the done-time --report text)"
+                ],
+                verbs: ["done"]
             },
             {
                 syntax: "work link|unlink <id> --objective o | --milestone m",
@@ -467,12 +480,16 @@ export const COMMANDS: Command[] = [
             "create and move units of work, and state what each contributes to.",
             "`work add` prints the new id.",
             "",
-            "done is the judgment that the outcome was reached; the evidence for it",
-            "lives in the unit's reports.",
+            "done is the judgment that the outcome was reached, and the claim must",
+            "carry evidence: a report with a commit or an artifact, or a done-time",
+            "--report stating what verifiably happened — a bare summary never",
+            "satisfies. Declared criteria additionally gate it. Done is allowed",
+            "while blocked: completion is a judgment on the outcome, not the block.",
             "",
             "  --project <slug>      list or show against this project, from any directory",
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
             "  --why <text>          detail recorded with the block, a revision, or the done",
+            "  --report <text>       what verifiably happened, recorded as a report with the done",
             "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
             "  --successor-project <slug>  the successor's project when its id is ambiguous",
             "  --objective <id>      the objective a linked unit contributes to",
@@ -1219,23 +1236,6 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
 {
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
-    // Done is not a transition like the others: it is the claim that the
-    // outcome was reached, and the completion check is what admits it.
-    if (type === "work.done")
-    {
-        const refusal = completionRefusal(work);
-        if (refusal !== null)
-        {
-            throw new CliError(refusal);
-        }
-        const payload: Record<string, unknown> = { work: work.id };
-        if (values.why !== undefined)
-        {
-            payload.why = values.why;
-        }
-        recordEvent(ctx, makeEvent(ctx.project, "work.done", payload), `${work.id} ${work.outcome}`);
-        return;
-    }
     const payload: Record<string, unknown> = { work: work.id };
     if (type === "work.blocked")
     {
@@ -1250,6 +1250,34 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
         }
     }
     recordEvent(ctx, makeEvent(ctx.project, type, payload), `${work.id} ${work.outcome}`);
+}
+
+// The claim that the outcome was reached, admitted by the completion gate
+// (#205 table B): a report carrying a commit or an artifact satisfies it, and
+// a done-time --report is the floor for genuinely trivial work — recorded as
+// a report in the same append, so the evidence and the claim can never land
+// apart. Done is allowed while blocked (ruling ①): `requireOpenWork` refuses
+// only the closed states.
+function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): void
+{
+    const ctx = requireProject(process.cwd());
+    const work = requireOpenWork(ctx, positionals[0]);
+    const report = values.report === undefined ? undefined
+        : requireText(values.report, 'work done <work-id> --report "<what verifiably happened>"');
+    const refusal = completionRefusal(work, report);
+    if (refusal !== null)
+    {
+        throw new CliError(refusal);
+    }
+    const payload: Record<string, unknown> = { work: work.id };
+    if (values.why !== undefined)
+    {
+        payload.why = values.why;
+    }
+    const events = report === undefined ? []
+        : [makeEvent(ctx.project, "report.added", { text: report }, { work: work.id })];
+    events.push(makeEvent(ctx.project, "work.done", payload));
+    recordEvents(ctx, events, `${work.id} ${work.outcome}`);
 }
 
 function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): void
