@@ -513,7 +513,15 @@ function applySupersessions(entities: EntityState[], fold: EntityFold): void
     }
     for (const claim of fold.claims)
     {
-        supersede(byId.get(claim.predecessor), claim.successor);
+        // A standalone claim answers to the same rule the links path does: it
+        // settles only when the successor it names exists here and was
+        // confirmed at some point. A proposal, or an id this store never saw,
+        // replaces nothing.
+        const successor = byId.get(claim.successor);
+        if (successor !== undefined && successor.confirmedOnce)
+        {
+            supersede(byId.get(claim.predecessor), claim.successor);
+        }
     }
 }
 
@@ -547,9 +555,12 @@ function readLinks(value: unknown): EntityLink[]
     });
 }
 
+// Safe integers only, matching the verb's own refusal: a hand-appended
+// priority the float type cannot hold exactly reads as absent rather than as
+// a silently different number.
 function readPriority(value: unknown): number | undefined
 {
-    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function readExposure(value: unknown): Exposure

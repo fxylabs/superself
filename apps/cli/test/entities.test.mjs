@@ -155,3 +155,24 @@ test("an orphan milestone folds to nothing, and merge-ordered entity lines still
     assert.ok(must(box, demo, ["state", "show", "e-mrgd2"]).out.includes("superseded by: e-mrgd3"));
     assert.ok(list.includes("newer statement"));
 });
+
+test("a standalone supersession claim settles only when its successor exists and was confirmed", () =>
+{
+    const log = join(box.root, "ws", ".superself", "projects", "demo", "log.jsonl");
+    const lines = [
+        { id: "01hz0000000000000000000010", ts: "2025-02-01T00:00:00.000Z", type: "entity.confirmed", project: "demo", payload: { entity: "e-supa1", text: "standing rule a", labels: [], links: [], criteria: [], exposure: "index", scope: "project" }, refs: {}, origin: {} },
+        // A proposal that was never confirmed must displace nothing, however
+        // the displacement is spelled — links or a standalone claim.
+        { id: "01hz0000000000000000000011", ts: "2025-02-01T00:01:00.000Z", type: "entity.proposed", project: "demo", payload: { entity: "e-supb1", text: "unconfirmed proposal b", labels: [], links: [], criteria: [], exposure: "index", scope: "project" }, refs: {}, origin: {} },
+        { id: "01hz0000000000000000000012", ts: "2025-02-01T00:02:00.000Z", type: "entity.superseded", project: "demo", payload: { entity: "e-supa1", successor: "e-supb1" }, refs: {}, origin: {} },
+        // A successor this store never saw is no replacement either.
+        { id: "01hz0000000000000000000013", ts: "2025-02-01T00:03:00.000Z", type: "entity.confirmed", project: "demo", payload: { entity: "e-supc1", text: "standing rule c", labels: [], links: [], criteria: [], exposure: "index", scope: "project" }, refs: {}, origin: {} },
+        { id: "01hz0000000000000000000014", ts: "2025-02-01T00:04:00.000Z", type: "entity.superseded", project: "demo", payload: { entity: "e-supc1", successor: "e-nope99" }, refs: {}, origin: {} }
+    ];
+    appendFileSync(log, lines.map((line) => JSON.stringify(line) + "\n").join(""));
+    must(box, demo, ["fold"]);
+    const list = must(box, demo, ["state", "list"]).out;
+    assert.ok(list.includes("standing rule a"), "an unconfirmed proposal displaced a confirmed entity through a standalone claim");
+    assert.ok(list.includes("standing rule c"), "a nonexistent successor displaced a confirmed entity");
+    assert.ok(must(box, demo, ["state", "show", "e-supa1"]).out.includes("confirmed"));
+});

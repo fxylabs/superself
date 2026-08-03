@@ -342,14 +342,17 @@ const OWNING_REPLACE: Record<EntitySource, string> = {
 };
 
 // Sparse whole numbers (#197 §3): 0 is the top of context and gaps leave room
-// to insert later. Anything else is refused rather than rounded.
+// to insert later. Anything else is refused rather than rounded — including a
+// number too large to keep exactly, which would fold back as a different
+// priority than the one this verb confirmed.
 function validPriority(value: string): number
 {
-    if (!/^\d+$/.test(value.trim()))
+    const priority = Number(value.trim());
+    if (!/^\d+$/.test(value.trim()) || !Number.isSafeInteger(priority))
     {
-        throw new CliError(`--priority takes a whole number, 0 or higher — "${value}" is not one`);
+        throw new CliError(`--priority takes a whole number, 0 or higher, small enough to keep exactly — "${value}" is not one`);
     }
-    return Number(value.trim());
+    return priority;
 }
 
 function validExposure(value: string): string

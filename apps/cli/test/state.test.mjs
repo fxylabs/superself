@@ -99,6 +99,7 @@ test("placement and metadata shapes are refused in user terms", () =>
     const refusals = [
         [["state", "add", "x", "--priority", "high"], /whole number/],
         [["state", "add", "x", "--priority", "2.5"], /whole number/],
+        [["state", "add", "x", "--priority", "99999999999999999999"], /whole number/],
         [["state", "add", "x", "--exposure", "loud"], /full \(whole text in context\), index \(one line\), or search/],
         [["state", "add", "x", "--target", "soon"], /use YYYY-MM-DD/],
         [["state", "add", "x", "--target", "2030-13-99"], /use YYYY-MM-DD/],
