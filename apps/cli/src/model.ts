@@ -9,6 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
+import { applyEntity, deriveEntities, emptyEntityFold, EntityFold, EntityState, reconcileEntity } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
@@ -295,6 +296,11 @@ export interface ProjectModel
     // omitted. Derived here for the same reason the band is: a renderer that
     // decided it would answer differently from the next renderer.
     unshipped: BranchUnshipped[];
+    // The entity view (#197): every asserted record — native `entity.*`
+    // events and the legacy record kinds above read as entities — folded by
+    // `entities.ts` into one shape. Derived after the signals, so the legacy
+    // statuses it reads are the settled ones.
+    entities: EntityState[];
     health: string[];
 }
 
@@ -387,6 +393,25 @@ export const STATEMENT_TYPES: StatementType[] = [
                 .map((item) => [item.id, item.status] as [string, string])
         ]
     },
+    {
+        type: "entity",
+        namespaces: ["entity"],
+        command: "state",
+        supersede: "--link supersedes:<id>",
+        withdraw: "state retract",
+        // `decline` is deliberately absent although entities have proposals:
+        // the shared event grammar (#197 §5) carries one withdrawal event,
+        // `entity.retracted`, so turning down a proposed entity is spelled
+        // `state retract` — the same literal the withdraw row already checks.
+        //
+        // Only native entities are reported here. A legacy record folds into
+        // the entity view too, but its own statement type above already
+        // answers for it, and answering twice would overwrite a status such
+        // as "declined" with this type's coarser "retracted".
+        closed: (model) => model.entities
+            .filter((item) => item.source === undefined && item.status !== "proposed" && item.status !== "confirmed")
+            .map((item) => [item.id, item.status])
+    },
 ];
 
 // A milestone leaves the current set three ways, and a reader who searched for
@@ -417,10 +442,32 @@ export function closedRecords(model: ProjectModel): Map<string, string>
 
 export function buildModel(storeDir: string, slug: string, now: Date): ProjectModel
 {
-    const entry = readRegistry(storeDir).find((item) => item.slug === slug);
-    const model: ProjectModel = {
+    const model = emptyModel(storeDir, slug);
+    const events = readEvents(storeDir, slug);
+    const entityFold = emptyEntityFold();
+    for (const event of events)
+    {
+        applyEvent(model, event);
+        // The entity reading of the same pass: `entity.*` and the goal chain
+        // fold here; the other legacy kinds derive from their folded records.
+        applyEntity(entityFold, event);
+    }
+    reconcileLifecycle(model, entityFold, events);
+    deriveSignals(model, now);
+    model.entities = deriveEntities(entityFold, { decisions: model.decisions, conventions: model.conventions, objectives: model.goals.objectives });
+    // Read once per fold, not once per row: the verdicts are a file, and a fold
+    // runs on every event. Both derivations below read the same copy.
+    const verdicts = readVerdicts(storeDir, slug);
+    deriveAttention(model, verdicts);
+    model.unshipped = unshippedBranches(model.works, verdicts);
+    return model;
+}
+
+function emptyModel(storeDir: string, slug: string): ProjectModel
+{
+    return {
         slug,
-        description: entry?.description,
+        description: readRegistry(storeDir).find((item) => item.slug === slug)?.description,
         zone: readStoreConfig(storeDir).timezone ?? DEFAULT_ZONE,
         goals: emptyGoals(),
         decisions: [],
@@ -430,21 +477,9 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         waiting: [],
         attention: { unblocks: [], undecidable: [], inEffect: [] },
         unshipped: [],
+        entities: [],
         health: []
     };
-    const events = readEvents(storeDir, slug);
-    for (const event of events)
-    {
-        applyEvent(model, event);
-    }
-    reconcileLifecycle(model, events);
-    deriveSignals(model, now);
-    // Read once per fold, not once per row: the verdicts are a file, and a fold
-    // runs on every event. Both derivations below read the same copy.
-    const verdicts = readVerdicts(storeDir, slug);
-    deriveAttention(model, verdicts);
-    model.unshipped = unshippedBranches(model.works, verdicts);
-    return model;
 }
 
 function applyEvent(model: ProjectModel, event: SelfEvent): void
@@ -601,7 +636,7 @@ function linkDecision(model: ProjectModel, event: SelfEvent): void
 // correctly the first time is untouched, and one that could not is not left
 // current forever. Revisions and coverage are deliberately absent: they
 // accumulate rather than settle, and running one twice would count it twice.
-function reconcileLifecycle(model: ProjectModel, events: SelfEvent[]): void
+function reconcileLifecycle(model: ProjectModel, entityFold: EntityFold, events: SelfEvent[]): void
 {
     for (const event of events)
     {
@@ -620,6 +655,10 @@ function reconcileLifecycle(model: ProjectModel, events: SelfEvent[]): void
         else if (event.type === "milestone.dropped")
         {
             applyMilestone(model.goals, event);
+        }
+        else if (event.type.startsWith("entity."))
+        {
+            reconcileEntity(entityFold, event);
         }
     }
 }

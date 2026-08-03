@@ -82,7 +82,7 @@ function recordOf(event: SelfEvent): string
         return String(event.payload.proposal ?? event.id);
     }
     const named = event.payload.requirement ?? event.payload.milestone
-        ?? event.payload.objective ?? event.payload.work;
+        ?? event.payload.objective ?? event.payload.entity ?? event.payload.work;
     return named === undefined ? event.id : String(named);
 }
 

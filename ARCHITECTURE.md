@@ -25,13 +25,13 @@ it. The layers, lowest first:
 | CLI surface | `args.ts`, `contract.ts`, `help.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, and confirms a human; `human.ts` imports nothing local, `contract.ts` imports only `args.ts` and `types.ts`, and `help.ts` renders the contract rather than keeping a list of its own |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`) |
-| Domain | `completion.ts`, `objectives.ts`, `dates.ts` | per-domain state shapes and their reducers |
+| Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
 | Render | `view.ts`, `views.ts`, `pretty.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb) |
-| Commands | `main.ts`, `goals.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
@@ -39,9 +39,9 @@ ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
 `pipeline.ts` would make rendering able to write state.
 
 - A new module joins an existing layer or declares a new one here first.
-- A domain module (`completion.ts`, `objectives.ts`, `dates.ts`) imports
-  `types.ts`, lower layers, and its own peers only — never `model.ts`, so a
-  reducer can never depend on the fold that calls it.
+- A domain module (`completion.ts`, `objectives.ts`, `dates.ts`,
+  `entities.ts`) imports `types.ts`, lower layers, and its own peers only —
+  never `model.ts`, so a reducer can never depend on the fold that calls it.
 - `model.ts` imports domain modules, never commands.
 - Enforcement: review. `tsc` catches a cycle only when it becomes a type error,
   so the import direction is a reading check on every pull request.
@@ -99,6 +99,7 @@ concern.
 | `work.*` | work state, the process transitions, proposals | `main.ts`, `goals.ts` |
 | `objective.*`, `milestone.*` | the outcome layer | `goals.ts` |
 | `goal.*`, `decision.*`, `convention.*` | core project state | `main.ts` |
+| `entity.*` | the shared entity record (#197); `entities.ts` owns the fold | `state.ts` |
 | `report.*` | work reports | `main.ts` |
 
 The process transitions are `work.run-started` and `work.run-exited`. They
