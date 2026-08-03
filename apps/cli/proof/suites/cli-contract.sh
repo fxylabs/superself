@@ -40,20 +40,14 @@ do
 done
 # a verb the dispatcher answers but the list never names has no scoped help at
 # all, which is how a command that lands later goes missing from this contract
-for CMD in spec attempt
+for CMD in attempt
 do
     echo "$VERBS" | grep -qx "$CMD" || fail "the root list does not name $CMD"
 done
-SELF spec --help | grep -q "spec validate <workspec.json>" || fail "self spec --help does not document validate"
-SELF spec --help | grep -q "spec apply <workspec.json>" || fail "self spec --help does not document apply"
-SELF spec --help | grep -q "spec dispatch <work-spec-id>" || fail "self spec --help does not document dispatch"
-SELF spec --help | grep -q "spec list" || fail "self spec --help does not document list and show"
 SELF attempt --help | grep -q "attempt register <plan.json>" || fail "self attempt --help does not document register"
 SELF attempt --help | grep -q "heartbeat <id>" || fail "self attempt --help does not document the launcher-driven verbs"
 # subcommand help resolves to the owning command's page from any position
 SELF attempt run --help | grep -q "^usage: self attempt" || fail "self attempt run --help printed no scoped usage"
-SELF spec apply --help | grep -q "^usage: self spec" || fail "self spec apply --help printed no scoped usage"
-SELF integration lease acquire --help | grep -q "^usage: self integration" || fail "a nested integration verb lost its help"
 [ "$(wc -l < "$LOG_A")" = "$LOG_BEFORE" ] || fail "help wrote an event"
 [ "$(git -C "$ROOT/A/ws/.superself" rev-list --count HEAD)" = "$STORE_BEFORE" ] || fail "help committed derived state"
 
@@ -179,32 +173,6 @@ for SUB in "register plan.json" "started at-nope --pid 1" "heartbeat at-nope" "e
 do
     rejects attempt attempt $SUB --bogus
 done
-# and the supervisor's own verbs: `start` launches a detached process and
-# `tick` settles attempts, so a flag none of them accepts has to be refused
-# before any of that, not swallowed into a supervision pass
-for SUB in start stop status tick circuits
-do
-    rejects daemon daemon $SUB --bogus
-done
-SELF daemon status | grep -q "no self daemon is running" || fail "a rejected daemon flag started a supervisor"
-# and the work spec verbs: validate only reads, but apply seals a generation
-# and dispatch spends an attempt, so none of them may reach its body with a
-# flag it never accepted
-for SUB in "validate x" "apply x" "dispatch x" "list" "show x"
-do
-    rejects spec spec $SUB --bogus
-done
-BADSPEC="$(SELF spec apply x surplus 2>&1 || true)"
-echo "$BADSPEC" | grep -q "unexpected argument 'surplus'" || fail "an extra spec argument was swallowed"
-# and the evidence verbs: none of them writes state, but a swallowed --out would
-# put a bundle somewhere nobody asked for and a swallowed flag would compile a
-# selection the operator never approved
-for SUB in "compile m.json" "verify b.json" "show b.json"
-do
-    rejects evidence evidence $SUB --bogus
-done
-BADEVIDENCE="$(SELF evidence compile m.json surplus 2>&1 || true)"
-echo "$BADEVIDENCE" | grep -q "unexpected argument 'surplus'" || fail "an extra evidence argument was swallowed"
 rejects "" --bogus
 
 # a typoed verb is named on stderr and exits non-zero, never a usage list

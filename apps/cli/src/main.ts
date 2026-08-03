@@ -5,10 +5,6 @@ import { helpHint, parseCommand, subcommand, unknownOption } from "./args.js";
 import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
 import { runAttemptCommand } from "./attempt/commands.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
-import { runDaemonCommand } from "./daemon/commands.js";
-import { runDigestCommand } from "./daemon/digest.js";
-import { runEvidenceCommand } from "./evidence/commands.js";
-import { runOvernightCommand } from "./daemon/overnight.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
@@ -45,20 +41,8 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
-import {
-    cmdWorkApprovalRequired,
-    cmdWorkApprove,
-    cmdWorkMet,
-    cmdWorkPolicy,
-    cmdWorkRequire,
-    cmdWorkDrop,
-    cmdWorkRevise,
-    doneEvent
-} from "./requirements.js";
-import { cmdReview } from "./reviews.js";
-import { cmdIntegration } from "./train.js";
+import { doneEvent } from "./requirements.js";
 import { runSearch } from "./search.js";
-import { runSpecCommand } from "./spec/commands.js";
 import { printSetup } from "./setup.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
@@ -102,15 +86,8 @@ async function main(argv: string[]): Promise<void>
         case "decide": cmdDecide(rest); break;
         case "work": cmdWork(rest); break;
         case "report": cmdReport(rest); break;
-        case "integration": cmdIntegration(requireProject(process.cwd()), rest); break;
-        case "review": cmdReview(requireProject(process.cwd()), rest); break;
         case "artifact": cmdArtifact(rest); break;
-        case "evidence": runEvidenceCommand(rest); break;
-        case "spec": await runSpecCommand(rest); break;
         case "attempt": await runAttemptCommand(rest); break;
-        case "daemon": await runDaemonCommand(rest); break;
-        case "overnight": runOvernightCommand(rest); break;
-        case "digest": runDigestCommand(rest); break;
         case "convention": cmdConvention(rest); break;
         case "connect": cmdConnect(rest); break;
         case "view": cmdView(rest); break;
@@ -730,39 +707,12 @@ function cmdWork(rest: string[]): void
         cmdWorkRetireUnit(rest.slice(1));
         return;
     }
-    if (COMPLETION_VERBS.includes(sub as string))
-    {
-        completionVerb(sub as string, rest.slice(1));
-        return;
-    }
     const type = TRANSITIONS[sub as string];
     if (type === undefined)
     {
-        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|retire|link|unlink|propose|accept|decline|` +
-            COMPLETION_VERBS.join("|"));
+        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|block|unblock|done|retire|link|unlink|propose|accept|decline`);
     }
     transitionWork(type, rest.slice(1));
-}
-
-// What done means for a unit, written on the unit itself. Routed together so
-// the dispatcher states once that these extend `self work` rather than
-// introducing a noun of their own.
-const COMPLETION_VERBS = ["require", "revise", "drop", "met", "recheck", "approval-required", "approve", "policy"];
-
-function completionVerb(sub: string, args: string[]): void
-{
-    const ctx = requireProject(process.cwd());
-    switch (sub)
-    {
-        case "require": cmdWorkRequire(ctx, args); break;
-        case "revise": cmdWorkRevise(ctx, args); break;
-        case "drop": cmdWorkDrop(ctx, args); break;
-        case "met": cmdWorkMet(ctx, args, false); break;
-        case "recheck": cmdWorkMet(ctx, args, true); break;
-        case "approval-required": cmdWorkApprovalRequired(ctx, args); break;
-        case "approve": cmdWorkApprove(ctx, args); break;
-        default: cmdWorkPolicy(ctx, args); break;
-    }
 }
 
 function cmdWorkList(rest: string[]): void

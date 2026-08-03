@@ -180,8 +180,6 @@ do
     BARE="$(bare_pointers "$(SELF $ARGV)")"
     [ -z "$BARE" ] || fail "self $ARGV carried an unscoped read pointer: $BARE"
 done
-# a command with no scope form is not given one: the row says where to stand
-echo "$SCOPED_CTX" | grep -q "self integration plan --project" && fail "a pointer promised --project on a verb that has none"
 
 # ── the ruled render carries the same rule ────────────────────────────────
 # --pretty forces the ruled render into a pipe, so this needs no terminal. It
@@ -233,17 +231,6 @@ bare_wide()
 # force the sections whose pointers only appear once a section overflows, and a
 # gated unit, whose row carries a pointer of its own
 cd "$ROOT/outside/app"
-# nine open change sets, because the integration section names its pointer only
-# once it overflows. Empty commits are enough: what is asserted is the pointer
-# the row carries, not the train's own behaviour, which integration.sh owns.
-git commit -q --allow-empty -m "scope base"
-CS_BASE="$(git rev-parse HEAD)"
-for index in 1 2 3 4 5 6 7 8 9
-do
-    git commit -q --allow-empty -m "scope cs$index"
-    SELF integration register --repo scope --base "$CS_BASE" --head "$(git rev-parse HEAD)" \
-        --domain "scope.demo@$index" --check ci > /dev/null
-done
 PRETTY_WID="$(SELF work add "a ruled-render unit a proposal gates" | tail -1)"
 SELF decide "ruled render gate" --proposed --blocks "$PRETTY_WID" > /dev/null
 for index in 1 2 3 4 5 6 7 8 9
@@ -270,12 +257,6 @@ echo "$RULED_CTX" | grep -q "self search --type decision --project 'outside'" ||
 # pointer the ruled render prints outside a table cell
 echo "$RULED_CTX" | grep -q "self status --project 'outside'" || fail "the ruled decisions band printed no scoped pointer"
 echo "$RULED_CTX" | grep -q -- "--project 'demo'" && fail "the ruled render pointed at the caller's project"
-# a verb with no scope form is proved the same way, end to end: the integration
-# section overflows, and its row names the checkout rather than a flag
-echo "$RULED_CTX" | grep -q "self integration plan from a checkout of 'outside'" \
-    || fail "the ruled integration overflow named no checkout"
-echo "$RULED_CTX" | grep -q "self integration plan --project" \
-    && fail "a pointer promised --project on a verb that has none"
 
 # the gated-by note sits in a table cell the 80-column pipe cuts, so it is read
 # at a width that cuts nothing. Everything above is re-checked there under the
