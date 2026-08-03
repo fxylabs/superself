@@ -66,6 +66,25 @@ export function fit(text: string, width: number): string
     return text.length > width ? text.slice(0, Math.max(1, width - 1)) + "…" : text;
 }
 
+/* ── character counting ────────────────────────────────────────────── */
+
+// The one rule for counting stored text in characters: Unicode code points,
+// so a surrogate pair is one character on every machine. The context budget
+// and the full-exposure retention cap both measure through here — a second
+// counter would let a store pass the cap and still blow the budget, or the
+// other way round.
+export function countCharacters(text: string): number
+{
+    return Array.from(text).length;
+}
+
+// Truncation in the same unit the counting charges, so a cut can never split
+// a surrogate pair and change the count it was made against.
+export function takeCharacters(text: string, count: number): string
+{
+    return Array.from(text).slice(0, Math.max(0, count)).join("");
+}
+
 /* ── display width ─────────────────────────────────────────────────── */
 
 // A ruled table aligns on terminal cells, not on code points: one Hangul

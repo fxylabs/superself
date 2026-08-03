@@ -1,3 +1,4 @@
+import { EntityState, orderEntities, pendingSummary } from "./entities.js";
 import { judgeProcess } from "./ledger.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import {
@@ -7,7 +8,6 @@ import {
     BranchUnshipped,
     branchTotals,
     buildModel,
-    currentConventions,
     ProjectModel,
     WaitingItem,
     WorkState
@@ -16,7 +16,6 @@ import { contributionsOf, openObjectives, openProposals } from "./objectives.js"
 import { CliContext, ProjectScope, readRegistry, readVerdicts } from "./paths.js";
 import {
     AttemptRow,
-    Checkout,
     Pointer,
     RenderMode,
     renderContext,
@@ -26,26 +25,16 @@ import {
     scoped,
     shellArgument,
     pointerTo,
-    UnscopedVerb,
     workspacePointer
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
-import { blue, dim, displayWidth, fit, green, plural, red, styled, termWidth, yellow } from "./style.js";
+import { blue, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { SelfEvent } from "./types.js";
 
 const CONTEXT_LIMIT = 12_000;
 // The command writes one final newline; the rendered body owns the rest.
 const CONTEXT_BODY_LIMIT = CONTEXT_LIMIT - 1;
 const REPORT_EXCERPT_LIMIT = 500;
-
-interface ProjectContextOptions
-{
-    decisions: string[];
-    omittedDecisions: number;
-    reportExcerpt: number;
-    detailLimit: number;
-    compactOptional: boolean;
-}
 
 // Console surfaces reuse the verdicts persisted by the last fold, so they
 // agree with canonical state without re-running git. Artifacts are re-checked
@@ -84,310 +73,232 @@ export function printContext(ctx: CliContext, render: RenderMode): void
     writeContext(renderProjectContext(model));
 }
 
+// The placement projection (#197 §6, #202): collect the live entities, order
+// them by priority, render each by its exposure — full text, one line, or
+// absent with a pointer — and anchor the derived live state directly after
+// the full-exposure block, before the index lines. One rule replaces the
+// hardcoded section order and the degradation ladder: render in priority
+// order until the budget is spent, then pointer rows.
+interface ContextSection
+{
+    header?: string;
+    rows: string[];
+    omission: (count: number) => string;
+}
+
 function renderProjectContext(model: ProjectModel): string
 {
-    const confirmed = confirmedDecisionLines(model);
-    let options: ProjectContextOptions = {
-        decisions: [],
-        omittedDecisions: confirmed.length,
-        reportExcerpt: REPORT_EXCERPT_LIMIT,
-        detailLimit: Number.POSITIVE_INFINITY,
-        compactOptional: false
+    const project = shellArgument(model.slug);
+    // Collect is scope-aware: a workspace-scoped entity enters every
+    // project's context, so both scopes render here. Collecting them across
+    // stores arrives with workspace-scoped creation (phase 4).
+    const placed = orderEntities(model.entities.filter((item) => item.status === "confirmed"));
+    const sections = [
+        descriptionSection(model, project),
+        fullSection(placed, project),
+        ...liveSections(model, project),
+        indexSection(placed, project)
+    ];
+    return fitContext([`# ${model.slug}`, ""], sections);
+}
+
+function descriptionSection(model: ProjectModel, project: string): ContextSection
+{
+    return {
+        rows: model.description === undefined ? [] : [model.description],
+        omission: () => `description omitted; run \`${pointerTo({ verb: "search" }, project)}\``
     };
-
-    if (contextLength(renderProject(model, options)) > CONTEXT_BODY_LIMIT)
-    {
-        options = { ...options, reportExcerpt: largestReportExcerpt(model, options) };
-    }
-    if (contextLength(renderProject(model, options)) > CONTEXT_BODY_LIMIT)
-    {
-        options = { ...options, compactOptional: true, detailLimit: largestDetailLimit(model, options) };
-    }
-    if (contextLength(renderProject(model, options)) > CONTEXT_BODY_LIMIT)
-    {
-        return renderMinimalProjectContext(model, confirmed);
-    }
-    return renderProject(model, fillDecisions(model, options, confirmed));
 }
 
-function confirmedDecisionLines(model: ProjectModel): string[]
+function fullSection(placed: EntityState[], project: string): ContextSection
 {
-    return [...model.decisions]
-        .filter((decision) => decision.status === "confirmed")
-        .sort(compareDated)
-        .map((decision) => `- ${decision.text}${decision.why === undefined ? "" : ` — ${decision.why}`}`);
+    return {
+        rows: placed.filter((item) => item.exposure === "full").map(fullEntityRow),
+        omission: (count) => `- … ${plural(count, "full-exposure entity", "full-exposure entities")} omitted; run \`${scoped("self state", project)}\``
+    };
 }
 
-// Report excerpts and the non-decision sections claim their space first.
-// Decisions then enter newest-first until the next whole decision would
-// cross the cap. Selected decisions retain their original chronological
-// order in the rendered section.
-function fillDecisions(model: ProjectModel, options: ProjectContextOptions, confirmed: string[]): ProjectContextOptions
+// Full exposure is the whole record: text as recorded, the deadline it
+// carries, and its rationale. No id — the pointer rows and `state list` carry
+// those — so the block reads as direction, not as a table.
+function fullEntityRow(entity: EntityState): string
 {
-    for (let index = confirmed.length - 1; index >= 0; index--)
+    const target = entity.target === undefined ? "" : ` (target ${entity.target})`;
+    const why = entity.why === undefined ? "" : ` — ${entity.why}`;
+    return `- ${entityLabel(entity)}${entity.text}${target}${why}`;
+}
+
+function indexEntityRow(entity: EntityState): string
+{
+    const why = entity.why === undefined ? "" : ` — ${entity.why}`;
+    return `- ${entityLabel(entity)}${oneLine(entity.text)}${oneLine(why)}`;
+}
+
+function entityLabel(entity: EntityState): string
+{
+    return entity.labels.length === 0 ? "" : `[${entity.labels.join(", ")}] `;
+}
+
+// The index block: one line per entity, and the search tier absent by design
+// — a count and the command that lists it is all search exposure renders.
+function indexSection(placed: EntityState[], project: string): ContextSection
+{
+    const searchable = placed.filter((item) => item.exposure === "search").length;
+    const rows = placed.filter((item) => item.exposure === "index").map(indexEntityRow);
+    if (searchable > 0)
     {
-        const candidate = {
-            ...options,
-            decisions: [confirmed[index], ...options.decisions],
-            omittedDecisions: index
-        };
-        if (contextLength(renderProject(model, candidate)) > CONTEXT_BODY_LIMIT)
-        {
-            break;
-        }
-        options = candidate;
+        rows.push(`- ${plural(searchable, "entity", "entities")} at search exposure; run \`${scoped("self state", project)}\``);
     }
-    return options;
+    return {
+        header: "## Index",
+        rows,
+        omission: (count) => `- … ${plural(count, "index row")} omitted; run \`${scoped("self state", project)}\``
+    };
 }
 
-function renderProject(model: ProjectModel, options: ProjectContextOptions): string
+// The derived live state (#197 §6, user-ruled 2026-08-03): what is moving and
+// what waits on a person, anchored between the full block and the index lines
+// — even when the full block is empty. Engine-owned: nothing here is asserted
+// or placed, so its internal order is fixed.
+function liveSections(model: ProjectModel, project: string): ContextSection[]
 {
-    const project = shellArgument(model.slug);
-    const lines: string[] = [`# ${model.slug}`, ""];
-    if (model.description !== undefined)
-    {
-        lines.push(detail(model.description, options.detailLimit, pointerTo({ verb: "search" }, project)), "");
-    }
-    lines.push(`Goal: ${detail(model.goal ?? "(not set)", options.detailLimit, pointerTo({ verb: "search" }, project))}`, "");
-    pushList(lines, "Objectives", options.compactOptional
-        ? countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project))
-        : objectiveLines(model));
-    pushList(lines, "Decisions", decisionLines(options.decisions, options.omittedDecisions,
-        scoped("self search --type decision", project)));
-    pushList(lines, "Conventions", currentConventions(model.conventions).map((convention) =>
-        `- ${detail(convention.text, options.detailLimit, pointerTo({ verb: "search", id: convention.id, type: "convention" }, project))}`));
-    pushList(lines, "Work in progress", inProgressLines(model, options.reportExcerpt, options.detailLimit));
-    pushList(lines, "Unshipped by branch", options.compactOptional ? unshippedCountLines(model) : unshippedLines(model));
-    pushList(lines, "Waiting on you", [
-        ...options.compactOptional ? attentionOmission(model) : [],
-        ...waitingItems(model).map((item) => `- ${detail(item.full, options.detailLimit, itemPointer(item.recovery, project))}`)
-    ]);
-    const next = model.works.filter((work) => work.status === "next");
-    pushList(lines, "Next", options.compactOptional
-        ? countedOmission(next.length, "next work item", scoped("self work", project))
-        : next.map((work) => `- ${work.id} ${detail(work.outcome, options.detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))}`));
-    pushList(lines, "Health", options.compactOptional
-        ? countedOmission(model.health.length, "health signal", scoped("self status", project))
-        : model.health.map((health) => `- ${detail(health, options.detailLimit, scoped("self status", project))}`));
-    return lines.join("\n").replace(/\n+$/, "");
-}
-
-function renderMinimalProjectContext(model: ProjectModel, confirmed: string[]): string
-{
-    let selected: string[] = [];
-    let omitted = confirmed.length;
-    if (contextLength(renderMinimalProject(model, selected, omitted)) > CONTEXT_BODY_LIMIT)
-    {
-        return renderAggregateProject(model);
-    }
-    for (let index = confirmed.length - 1; index >= 0; index--)
-    {
-        const candidate = [confirmed[index], ...selected];
-        if (contextLength(renderMinimalProject(model, candidate, index)) > CONTEXT_BODY_LIMIT)
-        {
-            break;
-        }
-        selected = candidate;
-        omitted = index;
-    }
-    return renderMinimalProject(model, selected, omitted);
-}
-
-function renderMinimalProject(model: ProjectModel, decisions: string[], omittedDecisions: number): string
-{
-    const project = shellArgument(model.slug);
-    const recovery = `self search --project ${project}`;
-    const lines: string[] = [`# ${model.slug}`, ""];
-    if (model.description !== undefined)
-    {
-        lines.push(`Description: omitted; run \`${recovery}\``, "");
-    }
-    lines.push(`Goal: omitted; run \`${recovery}\``, "");
-    pushList(lines, "Objectives", countedOmission(openObjectives(model.goals).length, "open objective", scoped("self objective", project)));
-    pushList(lines, "Decisions", decisionLines(decisions, omittedDecisions, `self search --type decision --project ${project}`));
-    pushList(lines, "Conventions", [...currentConventions(model.conventions)]
-        .sort(compareDated)
-        .map((convention) => `- convention ${convention.id}; run \`self search ${convention.id} --type convention --project ${project}\``));
-    const progressing = [...model.works]
-        .filter((work) => work.status === "active" || (work.status === "blocked" && work.blockedOn !== "decision"))
-        .sort((left, right) => left.id.localeCompare(right.id));
-    pushList(lines, "Work in progress", progressing.map((work) =>
-        `- ${work.status} work ${work.id}; run \`${pointerTo({ verb: "work-show", id: work.id }, project)}\``));
-    pushList(lines, "Unshipped by branch", unshippedCountLines(model));
-    pushList(lines, "Waiting on you", [
-        ...attentionOmission(model),
-        ...waitingItems(model).map((item) => `- ${item.identity}; run \`${itemPointer(item.recovery, project)}\``)
-    ]);
-    pushList(lines, "Next", countedOmission(model.works.filter((work) => work.status === "next").length, "next work item",
-        scoped("self work", project)));
-    pushList(lines, "Health", countedOmission(model.health.length, "health signal", scoped("self status", project)));
-    return lines.join("\n").replace(/\n+$/, "");
-}
-
-// The selected decisions, preceded by the omission row that names how many
-// confirmed decisions the budget left out and the command that pulls them.
-function decisionLines(selected: string[], omitted: number, recovery: string): string[]
-{
-    const lines = [...selected];
-    if (omitted > 0)
-    {
-        lines.unshift(`- … ${omitted} confirmed decision${omitted === 1 ? "" : "s"} omitted; run \`${recovery}\``);
-    }
-    return lines;
-}
-
-// Once the budget starts cutting rows short, a row can no longer be trusted to
-// carry its own group, so the band is stated once as counts. Nothing is hidden:
-// every proposal still has its row, and this says where to read the ranking
-// back in full.
-function attentionOmission(model: ProjectModel): string[]
-{
-    const recovery = scoped("self status", shellArgument(model.slug));
-    return attentionRows(model).length === 0 ? [] : [`- ${attentionLine(model)}; run \`${recovery}\``];
-}
-
-// A waiting item's recovery pointer. The item names an exact command or names
-// what it is pointing at; either way the pointer is minted here rather than
-// formatted where the item was built.
-function itemPointer(recovery: WaitingItem["recovery"], project: string): Pointer
-{
-    return typeof recovery === "string" ? scoped(recovery, project) : pointerTo(recovery, project);
-}
-
-// One omission row for a section the budget treats as optional: the count and
-// the command that prints the section in full, or no row when there is
-// nothing to omit. The two shapes are separate signatures rather than one with
-// an optional argument: a scoped pointer names its project and needs nothing
-// more, and a verb with no scope form cannot be written here without the
-// sentence that says where to stand. The sentence sits outside the code span,
-// because it is prose rather than something to paste.
-function countedOmission(count: number, noun: string, recovery: Pointer): string[];
-function countedOmission(count: number, noun: string, recovery: UnscopedVerb, where: Checkout): string[];
-function countedOmission(count: number, noun: string, recovery: string, where = ""): string[]
-{
-    if (count === 0)
-    {
-        return [];
-    }
-    return [`- … ${count} ${noun}${count === 1 ? "" : "s"} omitted; run \`${recovery}\`${where}`];
-}
-
-// If even one identity-and-pointer row per protected item cannot fit, listing
-// a prefix would silently privilege log order. Aggregate every protected
-// category instead and say exactly where the complete canonical state lives.
-function renderAggregateProject(model: ProjectModel): string
-{
-    const active = model.works.filter((work) => work.status === "active").length;
-    const blocked = model.works.filter((work) => work.status === "blocked").length;
-    const waiting = waitingItems(model).length;
-    const conventions = currentConventions(model.conventions).length;
-    const project = shellArgument(model.slug);
-    const recovery = `self search --project ${project}`;
-    const works = scoped("self work", project);
     return [
-        `# ${takeCharacters(model.slug, 200)}`,
-        "",
-        `Protected context is larger than ${CONTEXT_LIMIT.toLocaleString("en-US")} characters even as identity rows.`,
-        `- description/goal: run \`${recovery}\``,
-        `- ${conventions} convention${conventions === 1 ? "" : "s"}: run \`${recovery}\``,
-        `- ${active} active and ${blocked} blocked work item${active + blocked === 1 ? "" : "s"}: run \`${works}\``,
-        `- ${plural(model.unshipped.length, "branch", "branches")} carrying unshipped open work: run \`${works}\``,
-        `- ${waiting} waiting item${waiting === 1 ? "" : "s"}: run \`${recovery}\``,
-        `- decisions: run \`self search --type decision --project ${project}\``
-    ].join("\n");
+        {
+            header: "## Work in progress",
+            rows: [...inProgressLines(model), ...otherOpenRows(model, project)],
+            omission: (count) => `- … ${plural(count, "work item")} omitted; run \`${scoped("self work", project)}\``
+        },
+        {
+            header: "## Waiting on you",
+            rows: [...waitingItems(model).map((item) => `- ${item.full}`), ...entityWaitingRows(model)],
+            omission: (count) => `- … ${plural(count, "waiting item")} omitted; run \`${scoped("self status", project)}\``
+        },
+        {
+            header: "## Deadlines",
+            rows: deadlineRows(model),
+            omission: (count) => `- … ${plural(count, "deadline")} omitted; run \`${scoped("self state", project)}\``
+        },
+        {
+            header: "## Unshipped by branch",
+            rows: unshippedLines(model),
+            omission: (count) => `- … ${plural(count, "branch", "branches")} omitted; run \`${scoped("self work", project)}\``
+        },
+        {
+            header: "## Health",
+            rows: model.health.map((signal) => `- ${signal}`),
+            omission: (count) => `- … ${plural(count, "health signal")} omitted; run \`${scoped("self status", project)}\``
+        }
+    ];
 }
 
-function largestReportExcerpt(model: ProjectModel, options: ProjectContextOptions): number
+// Work in progress and approval waits render as full rows; all other open
+// work is a count with the command that lists it (#197 §6).
+function otherOpenRows(model: ProjectModel, project: string): string[]
 {
-    let low = 0;
-    let high = REPORT_EXCERPT_LIMIT;
-    while (low < high)
+    const next = model.works.filter((work) => work.status === "next").length;
+    return next === 0 ? [] : [`- ${plural(next, "more open work item")}; run \`${scoped("self work", project)}\``];
+}
+
+// The entity grammar's own approval waits: a proposed entity, and a placement
+// proposal pending on a confirmed one. Each row carries the confirm command,
+// so the paired proposed-add and proposed-demotion an agent recorded past a
+// cap are both actionable from this render alone — the demotion's why names
+// the record it admits.
+function entityWaitingRows(model: ProjectModel): string[]
+{
+    const rows: string[] = [];
+    for (const entity of model.entities)
     {
-        const middle = Math.ceil((low + high) / 2);
-        const candidate = renderProject(model, { ...options, reportExcerpt: middle });
-        if (contextLength(candidate) <= CONTEXT_BODY_LIMIT)
+        if (entity.status === "proposed" && entity.source === undefined)
         {
-            low = middle;
+            rows.push(`- proposed entity ${entity.id}: ${oneLine(entity.text)} (confirm with \`self state confirm ${entity.id}\`)`);
         }
-        else
+        else if (entity.status === "confirmed" && entity.pending !== undefined)
         {
-            high = middle - 1;
+            rows.push(`- proposed placement of ${entity.id}: ${pendingSummary(entity.pending)} (confirm with \`self state confirm ${entity.id}\`)`);
         }
     }
-    return low;
+    return rows;
 }
 
-function largestDetailLimit(model: ProjectModel, options: ProjectContextOptions): number
+// Deadlines derive from the reserved `target` metadata over the live set,
+// soonest first. The date renders as recorded — judging it against today is
+// the health signals' job, so this projection is stable for a given log.
+function deadlineRows(model: ProjectModel): string[]
 {
-    let low = 24;
-    let high = 1_000;
-    let best = low;
-    while (low <= high)
-    {
-        const middle = Math.floor((low + high) / 2);
-        const candidate = renderProject(model, { ...options, detailLimit: middle, compactOptional: true });
-        if (contextLength(candidate) <= CONTEXT_BODY_LIMIT)
-        {
-            best = middle;
-            low = middle + 1;
-        }
-        else
-        {
-            high = middle - 1;
-        }
-    }
-    return best;
+    return model.entities
+        .filter((item) => item.status === "confirmed" && item.target !== undefined)
+        .sort((left, right) => (left.target ?? "").localeCompare(right.target ?? "") || left.id.localeCompare(right.id))
+        .map((item) => `- ${item.target}: ${entityLabel(item)}${oneLine(item.text)}`);
 }
 
-// The outcome layer, in the order an agent needs it: the target, why it reads
-// the way it does, and which milestone still has nothing pointed at it.
-function objectiveLines(model: ProjectModel): string[]
-{
-    const lines: string[] = [];
-    for (const objective of openObjectives(model.goals))
-    {
-        const box = objective.target === undefined ? "" : ` (${objective.horizon ?? "target"} ${objective.target})`;
-        lines.push(`- ${objective.id} ${objective.outcome}${box} — ${objective.state}: ${objective.reason}`);
-        for (const milestone of objective.milestones.filter((m) => m.state !== "closed"))
-        {
-            const flags = [milestone.criticalPath ? "critical path" : "", milestone.works.length === 0 ? "no work linked" : ""]
-                .filter((flag) => flag !== "").join(", ");
-            lines.push(`  - ${milestone.id} ${milestone.outcome} — ${milestone.state}: ${milestone.reason}` +
-                `${flags === "" ? "" : ` [${flags}]`}`);
-        }
-    }
-    return lines;
-}
-
-function inProgressLines(model: ProjectModel, reportLimit: number, detailLimit: number): string[]
+function inProgressLines(model: ProjectModel): string[]
 {
     const project = shellArgument(model.slug);
     const active = model.works.filter((w) => w.status === "active").map((work) =>
     {
         const latest = [...work.reports].sort(compareDated).at(-1);
-        const outcome = detail(work.outcome, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project));
-        const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, reportLimit, project);
-        const next = work.next === undefined ? "" : ` (next: ${detail(work.next, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))})`;
+        const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, project);
+        const next = work.next === undefined ? "" : ` (next: ${work.next})`;
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
-        return `- ${work.id} ${outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
+        return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
     });
     const blocked = model.works
         .filter((w) => w.status === "blocked" && w.blockedOn !== "decision")
-        .map((work) => `- ${work.id} ${detail(work.outcome, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${detail(work.blockedWhy, detailLimit, pointerTo({ verb: "work-show", id: work.id }, project))}`}`);
+        .map((work) => `- ${work.id} ${work.outcome} — blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`);
     return [...active, ...blocked];
 }
 
-function reportExcerpt(text: string, work: string, limit: number, project: string): string
+// A report can be pages; its row carries a bounded excerpt and the command
+// that prints it whole. Fixed at 500 characters rather than derived from the
+// budget: the budget now cuts whole rows, and a row that survives should read
+// the same however full the context is.
+function reportExcerpt(text: string, work: string, project: string): string
 {
     const recovery = `\`${pointerTo({ verb: "work-show", id: work }, project)}\``;
-    if (limit === 0)
-    {
-        return ` — latest report: ${recovery}`;
-    }
     const normalized = text.trim().replace(/\s+/g, " ");
-    const excerpt = takeCharacters(normalized, limit);
-    const ellipsis = contextLength(normalized) > limit ? "…" : "";
+    const excerpt = takeCharacters(normalized, REPORT_EXCERPT_LIMIT);
+    const ellipsis = countCharacters(normalized) > REPORT_EXCERPT_LIMIT ? "…" : "";
     return ` — latest report: ${excerpt}${ellipsis} (full: ${recovery})`;
+}
+
+/* ── fitting the budget ────────────────────────────────────────────── */
+
+function sectionLines(section: ContextSection, keep: number): string[]
+{
+    if (section.rows.length === 0)
+    {
+        return [];
+    }
+    const omitted = section.rows.length - keep;
+    const rows = [...section.rows.slice(0, keep), ...(omitted > 0 ? [section.omission(omitted)] : [])];
+    return [...(section.header === undefined ? [] : [section.header, ""]), ...rows, ""];
+}
+
+function assembleContext(head: string[], sections: ContextSection[], keeps: number[]): string
+{
+    return [...head, ...sections.flatMap((section, index) => sectionLines(section, keeps[index]))]
+        .join("\n").replace(/\n+$/, "");
+}
+
+// The budget is spent from the top, so rows leave from the bottom section
+// upward — the lowest-priority rendering first — each cut section collapsing
+// to one pointer row that counts what it holds and names the recovery
+// command. A row that does not fit whole is never truncated: it joins the
+// counted omission instead, and the pointer recovers it intact.
+function fitContext(head: string[], sections: ContextSection[]): string
+{
+    const keeps = sections.map((section) => section.rows.length);
+    let rendered = assembleContext(head, sections, keeps);
+    for (let index = sections.length - 1; index >= 0 && countCharacters(rendered) > CONTEXT_BODY_LIMIT; index--)
+    {
+        while (keeps[index] > 0 && countCharacters(rendered) > CONTEXT_BODY_LIMIT)
+        {
+            keeps[index] -= 1;
+            rendered = assembleContext(head, sections, keeps);
+        }
+    }
+    return rendered;
 }
 
 // What the ruled render takes: the same items the plain render sentences,
@@ -462,15 +373,6 @@ function unshippedLines(model: ProjectModel): string[]
     });
 }
 
-// The honest remainder once the budget stops paying for whole rows: the same
-// per-branch counts, and the command that reads the units back. Nothing is
-// hidden — the branches themselves are still named.
-function unshippedCountLines(model: ProjectModel): string[]
-{
-    const works = scoped("self work", shellArgument(model.slug));
-    return model.unshipped.map((branch) => `- ${branchLabel(branch)} — ${unitCount(branch)} unshipped; run \`${works}\``);
-}
-
 // The whole statement in one line, for the surfaces that report counts rather
 // than rows. Bounded, because this list only ever grows: a branch leaves it by
 // having its evidence settle, and nothing ages a branch out. An unbounded join
@@ -523,18 +425,9 @@ function compareDated(left: { ts: string; id: string }, right: { ts: string; id:
     return left.ts.localeCompare(right.ts) || left.id.localeCompare(right.id);
 }
 
-function pushList(lines: string[], title: string, items: string[]): void
-{
-    if (items.length === 0)
-    {
-        return;
-    }
-    lines.push(`## ${title}`, "", ...items, "");
-}
-
 function detail(text: string, limit: number, recovery: Pointer): string
 {
-    if (!Number.isFinite(limit) || contextLength(text) <= limit)
+    if (!Number.isFinite(limit) || countCharacters(text) <= limit)
     {
         return text;
     }
@@ -548,7 +441,7 @@ function renderWorkspaceContext(models: ProjectModel[]): string
         return "no projects registered — run `self project add` inside a project directory";
     }
     const full = models.map(workspaceContextLine).join("\n");
-    if (contextLength(full) <= CONTEXT_BODY_LIMIT)
+    if (countCharacters(full) <= CONTEXT_BODY_LIMIT)
     {
         return full;
     }
@@ -561,7 +454,7 @@ function renderWorkspaceContext(models: ProjectModel[]): string
         {
             next.push(workspaceOmission(omitted));
         }
-        if (contextLength(next.join("\n")) > CONTEXT_BODY_LIMIT)
+        if (countCharacters(next.join("\n")) > CONTEXT_BODY_LIMIT)
         {
             break;
         }
@@ -596,16 +489,6 @@ function workspaceOmission(count: number): string
 function writeContext(text: string): void
 {
     process.stdout.write(text + "\n");
-}
-
-function contextLength(text: string): number
-{
-    return Array.from(text).length;
-}
-
-function takeCharacters(text: string, count: number): string
-{
-    return Array.from(text).slice(0, Math.max(0, count)).join("");
 }
 
 export function printStatus(ctx: CliContext, render: RenderMode): void

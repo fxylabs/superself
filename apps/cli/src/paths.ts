@@ -309,12 +309,37 @@ export interface StoreConfig
     // The zone every target date is judged in. Without it the same log would
     // read on-track on one machine and missed on another.
     timezone?: string;
+    // The retention caps (#197 §4), user-set in the store's config.json and
+    // enforced by the entity verbs: full in characters of entity text, index
+    // in entities, each per scope. They gate `state add` and `state place`
+    // only — rendering never refuses, however far over a legacy store stands.
+    fullCap?: number;
+    indexCap?: number;
 }
 
 export function readStoreConfig(storeDir: string): StoreConfig
 {
     const file = join(storeDir, "config.json");
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+}
+
+export interface RetentionCaps
+{
+    full: number;
+    index: number;
+}
+
+// The defaults are user-ruled (2026-08-03): full ≤ 4,000 characters because
+// tokens are the real constraint, index ≤ 50 entities. A malformed configured
+// value reads as the default rather than as no cap at all.
+export function retentionCaps(config: StoreConfig): RetentionCaps
+{
+    return { full: capValue(config.fullCap, 4_000), index: capValue(config.indexCap, 50) };
+}
+
+function capValue(value: number | undefined, fallback: number): number
+{
+    return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 // settled: reachable from the default branch — counts as progress, final.

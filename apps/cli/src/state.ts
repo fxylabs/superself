@@ -8,23 +8,33 @@ import { requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import {
+    DEMOTION_TARGET,
     EntityLink,
     EntitySource,
     EntityState,
+    Exposure,
     EXPOSURES,
+    fullTierCharacters,
+    indexTierCount,
+    isDemotion,
     isLive,
     LINK_TYPES,
-    LinkType
+    LinkType,
+    orderEntities,
+    pendingSummary
 } from "./entities.js";
 import { entityId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { readScopes, requireProject, SCOPE_OPTIONS } from "./paths.js";
-import { makeEvent, recordEvent } from "./pipeline.js";
-import { CliError } from "./types.js";
+import { readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
+import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { countCharacters } from "./style.js";
+import { CliError, SelfEvent } from "./types.js";
 
-const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | confirm <id> | retract <id> --why w';
+const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w';
 const ADD_USAGE = 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] '
-    + "[--target YYYY-MM-DD] [--criteria c] [--link [type:]<id>] [--why w] [--proposed]";
+    + "[--target YYYY-MM-DD] [--criteria c] [--link [type:]<id>] [--why w] [--proposed] [--demote <id>]";
+const PLACE_USAGE = "state place <id> [--priority <n>] [--exposure full|index|search] "
+    + '[--why "<reason>"] [--proposed] [--demote <id>]';
 const RETRACT_USAGE = 'state retract <id> --why "<why it no longer holds>"';
 
 const ADD_OPTIONS = {
@@ -35,7 +45,16 @@ const ADD_OPTIONS = {
     criteria: { type: "string", multiple: true },
     link: { type: "string", multiple: true },
     why: { type: "string" },
-    proposed: { type: "boolean" }
+    proposed: { type: "boolean" },
+    demote: { type: "string", multiple: true }
+} as const;
+
+const PLACE_OPTIONS = {
+    priority: { type: "string" },
+    exposure: { type: "string" },
+    why: { type: "string" },
+    proposed: { type: "boolean" },
+    demote: { type: "string", multiple: true }
 } as const;
 
 const WHY_OPTION = { why: { type: "string" } } as const;
@@ -59,20 +78,36 @@ export const STATE_COMMAND: Command = {
             verbs: ["add"]
         },
         { syntax: "state show <id> [--project <slug>]", description: ["print an entity's current values"], verbs: ["show"] },
-        { syntax: "state confirm <id>", description: ["confirm a proposed entity"], verbs: ["confirm"] },
+        {
+            syntax: "state place <id> [--priority <n>] [--exposure full|index|search]",
+            description: ["move an entity in context: render order, render form; a demotion needs --why"],
+            verbs: ["place"]
+        },
+        { syntax: "state confirm <id>", description: ["confirm a proposed entity, or a placement waiting on you"], verbs: ["confirm"] },
         { syntax: 'state retract <id> --why "<reason>"', description: ["withdraw an entity with nothing replacing it"], verbs: ["retract"] }
     ],
     detail: [
         "the raw record of the state engine: one entity, with free labels, typed",
         "links, reserved metadata, and placement. The preset record kinds — goal,",
         "decision, convention, objective, milestone — fold into the same view, so",
-        "`state list` and `state show` answer for them too; their own verbs keep",
-        "owning their lifecycle.",
+        "`state list`, `state show` and `state place` answer for them too; their",
+        "own verbs keep owning their lifecycle.",
         "",
-        "add, confirm and retract write: they take no scope flag and record into",
-        "the project they run in. list and show read for the project this directory",
-        "resolves to; there is no --workspace form yet — workspace-scoped entities",
-        "arrive with a later phase.",
+        "add, place, confirm and retract write: they take no scope flag and record",
+        "into the project they run in. list and show read for the project this",
+        "directory resolves to; there is no --workspace form yet — workspace-scoped",
+        "entities arrive with a later phase.",
+        "",
+        "a demotion — exposure moving toward less-rendered (full → index → search) —",
+        "always records --why; a priority change alone is not one. Demotion out of",
+        "full is human-owned: an agent passes --proposed, and the move waits until",
+        "a person runs `state confirm <id>`.",
+        "",
+        "retention caps (config.json fullCap and indexCap; defaults 4,000 characters",
+        "of full-exposure text and 50 index entities, per scope) gate add and place",
+        "into a tier: past a cap the verb refuses until --demote names what frees",
+        "the room. An agent adds --proposed to land the add and the demotion as a",
+        "pair that waits on a person; rendering itself never refuses.",
         "",
         "  --label <text>        free label, repeatable; presets use goal, objective, convention, …",
         "  --priority <n>        render order: a whole number, 0 first; leave gaps (0, 10, 20)",
@@ -81,8 +116,10 @@ export const STATE_COMMAND: Command = {
         "  --criteria <text>     an exit criterion that gates done claims, repeatable",
         "  --link [type:]<id>    typed edge, repeatable: --link supersedes:<id> replaces an",
         "                        earlier entity, member-of:<id> groups, relates:<id> (a bare id) refers",
-        "  --why <text>          rationale recorded with the entity, or with its retraction",
+        "  --why <text>          rationale recorded with the entity, its placement, or its retraction",
         "  --proposed            record as a proposal; `state confirm` makes it hold",
+        "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
+        "                        moving one tier down (full → index, index → search); repeatable",
         "  --project <slug>      read this registered project instead of this directory's"
     ],
     node: branch({
@@ -94,6 +131,7 @@ export const STATE_COMMAND: Command = {
             leaf("list", SCOPE_OPTIONS, 0, stateList),
             leaf("add", ADD_OPTIONS, 1, stateAdd),
             leaf("show", SCOPE_OPTIONS, 1, stateShow),
+            leaf("place", PLACE_OPTIONS, 1, statePlace),
             leaf("confirm", {}, 1, stateConfirm),
             leaf("retract", WHY_OPTION, 1, stateRetract)
         ]
@@ -107,14 +145,30 @@ function stateAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS>): vo
     const ctx = requireProject(process.cwd());
     const text = requireText(positionals[0], ADD_USAGE);
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const exposure = validExposure(values.exposure ?? "index");
+    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
+    const demotions = demotionsFor(model, values.demote ?? [], cappedTier(exposure), undefined, ADD_USAGE);
+    requireRoom(model, caps, cappedTier(exposure), countCharacters(text), demotions);
+    requireDemotionRoom(model, caps, demotions, false);
     const id = entityId();
+    const proposed = values.proposed === true;
+    const events = [
+        makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", addPayload(model, id, text, exposure, values), undefined, !proposed),
+        ...demotionEvents(ctx.project, demotions, id, proposed)
+    ];
+    recordEvents(ctx, events, `${id} ${text}`);
+    console.log(id);
+}
+
+function addPayload(model: ProjectModel, id: string, text: string, exposure: Exposure, values: CommandInput<typeof ADD_OPTIONS>["values"]): Record<string, unknown>
+{
     const payload: Record<string, unknown> = {
         entity: id,
         text,
         labels: (values.label ?? []).map((label) => validText(label, "--label", "the label's text")),
         links: parseLinks(model, values.link ?? []),
         criteria: (values.criteria ?? []).map((criterion) => validText(criterion, "--criteria", "one criterion's text")),
-        exposure: validExposure(values.exposure ?? "index"),
+        exposure,
         scope: "project"
     };
     if (values.priority !== undefined)
@@ -129,9 +183,334 @@ function stateAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS>): vo
     {
         payload.why = values.why;
     }
+    return payload;
+}
+
+function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>): void
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const entity = requirePlaceable(model, positionals[0]);
+    const priority = values.priority === undefined ? undefined : validPriority(values.priority);
+    const exposure = values.exposure === undefined ? undefined : validExposure(values.exposure);
+    requirePlacementChange(entity, priority, exposure);
+    const why = requireDemotionWhy(entity, exposure, values.why);
+    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
+    const tier = enteredTier(entity, exposure);
+    const demotions = demotionsFor(model, values.demote ?? [], tier, entity.id, PLACE_USAGE);
+    requireRoom(model, caps, tier, countCharacters(entity.text), demotions);
+    requireDemotionRoom(model, caps, demotions, entity.exposure === "index");
     const proposed = values.proposed === true;
-    recordEvent(ctx, makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", payload, undefined, !proposed), `${id} ${text}`);
-    console.log(id);
+    const events = [
+        makeEvent(ctx.project, "entity.placed", placePayload(entity.id, priority, exposure, why, proposed), undefined, !proposed),
+        ...demotionEvents(ctx.project, demotions, entity.id, proposed)
+    ];
+    recordEvents(ctx, events, `${entity.id} ${entity.text}`);
+}
+
+function placePayload(entity: string, priority: number | undefined, exposure: Exposure | undefined, why: string | undefined, proposed: boolean): Record<string, unknown>
+{
+    const payload: Record<string, unknown> = { entity };
+    if (priority !== undefined)
+    {
+        payload.priority = priority;
+    }
+    if (exposure !== undefined)
+    {
+        payload.exposure = exposure;
+    }
+    if (why !== undefined)
+    {
+        payload.why = why;
+    }
+    if (proposed)
+    {
+        payload.proposed = true;
+    }
+    return payload;
+}
+
+// Placement moves live, confirmed records: a proposal has nothing rendered to
+// move yet, and a withdrawn or replaced record no longer renders at all.
+function requirePlaceable(model: ProjectModel, value: string | undefined): EntityState
+{
+    const entity = requireEntity(model, value, PLACE_USAGE);
+    if (entity.status === "proposed")
+    {
+        throw new CliError(`${entity.id} is still proposed — placement moves confirmed records; confirm it first, or state its placement at add time`);
+    }
+    if (entity.status === "retracted")
+    {
+        throw new CliError(`${entity.id} was retracted — a withdrawn record no longer renders, so it has no placement to change`);
+    }
+    if (entity.status === "superseded")
+    {
+        throw new CliError(`${entity.id} was superseded by ${entity.supersededBy ?? "a later record"} — place the successor instead`);
+    }
+    return entity;
+}
+
+function requirePlacementChange(entity: EntityState, priority: number | undefined, exposure: Exposure | undefined): void
+{
+    if (priority === undefined && exposure === undefined)
+    {
+        throw new CliError("state place changes placement — pass --priority <n>, --exposure full|index|search, or both");
+    }
+    if ((exposure === undefined || exposure === entity.exposure) && (priority === undefined || priority === entity.priority))
+    {
+        throw new CliError(`${entity.id} already sits at that placement — nothing changes`);
+    }
+}
+
+// --why is demanded exactly where a record leaves rendered ground: exposure
+// moving toward less-rendered. A promotion or a priority move carries --why
+// only if the caller offers one.
+function requireDemotionWhy(entity: EntityState, exposure: Exposure | undefined, why: string | undefined): string | undefined
+{
+    if (exposure === undefined || !isDemotion(entity.exposure, exposure))
+    {
+        return why;
+    }
+    if (why === undefined || why.trim() === "")
+    {
+        throw new CliError(`demoting ${entity.id} from ${entity.exposure} to ${exposure} needs --why "<reason>" — a record leaves the rendered set only with its reason on record`);
+    }
+    return why;
+}
+
+/* ── the retention caps (#197 §4) ──────────────────────────────────── */
+
+// The tiers the caps guard. Search is unbounded by design — it renders
+// nothing — so an add into it, and any move toward it, passes without
+// gating. That open floor is what keeps a store past its caps from ever
+// wedging: a chain of demotions always terminates at search.
+function cappedTier(exposure: Exposure): "full" | "index" | undefined
+{
+    return exposure === "search" ? undefined : exposure;
+}
+
+// Which capped tier a placement moves its record into. Direction does not
+// matter: a full → index demotion enters index exactly as a promotion does
+// and can overfill it the same way, so both are gated. A full → index move
+// past the index cap names an index → search demotion beside it, and
+// index → search itself enters nothing.
+function enteredTier(entity: EntityState, exposure: Exposure | undefined): "full" | "index" | undefined
+{
+    if (exposure === undefined || exposure === entity.exposure || exposure === "search")
+    {
+        return undefined;
+    }
+    return exposure;
+}
+
+function requireRoom(model: ProjectModel, caps: RetentionCaps, tier: "full" | "index" | undefined, adding: number, demotions: EntityState[]): void
+{
+    if (tier === "full")
+    {
+        requireFullRoom(model, caps.full, adding, demotions);
+    }
+    else if (tier === "index")
+    {
+        requireIndexRoom(model, caps.index, demotions);
+    }
+}
+
+// One refusal hands the whole contract: the cap, the current usage, and the
+// exact command shape that names a demotion.
+function requireFullRoom(model: ProjectModel, cap: number, adding: number, demotions: EntityState[]): void
+{
+    const usage = fullTierCharacters(model.entities, "project");
+    if (usage + adding <= cap)
+    {
+        requireDemotionsNeeded(demotions, "full");
+        return;
+    }
+    if (demotions.length === 0)
+    {
+        throw new CliError(`the project full tier holds ${usage} of ${cap} characters and this text adds ${adding} more — `
+            + "name what demotes: pass `--demote <id>` (that full entity moves to index), "
+            + 'or demote first with `self state place <id> --exposure index --why "<reason>"`');
+    }
+    const freed = demotions.reduce((sum, item) => sum + countCharacters(item.text), 0);
+    if (usage - freed + adding > cap)
+    {
+        throw new CliError(`still ${usage - freed + adding - cap} characters over the ${cap}-character full cap `
+            + `after the named demotion${demotions.length === 1 ? "" : "s"} — name more with --demote`);
+    }
+}
+
+function requireIndexRoom(model: ProjectModel, cap: number, demotions: EntityState[]): void
+{
+    const usage = indexTierCount(model.entities, "project");
+    if (usage < cap)
+    {
+        requireDemotionsNeeded(demotions, "index");
+        return;
+    }
+    if (demotions.length === 0)
+    {
+        throw new CliError(`the project index tier holds ${usage} of ${cap} entities — `
+            + "name what demotes: pass `--demote <id>` (that index entity moves to search), "
+            + 'or demote first with `self state place <id> --exposure search --why "<reason>"`');
+    }
+    const over = usage - demotions.length + 1 - cap;
+    if (over > 0)
+    {
+        throw new CliError(`still ${over} over the ${cap}-entity index cap after `
+            + `${demotions.length} named demotion${demotions.length === 1 ? "" : "s"} — name more with --demote`);
+    }
+}
+
+// A named full → index demotion enters the index tier itself — the gating
+// rule has no exception for the remedy — so the pair is refused while its
+// destination lacks room, toward the drain that always fits: index → search.
+// `vacates` is the seat the placed record itself frees when it leaves index
+// for full, so a swap at an exactly-full cap still passes.
+function requireDemotionRoom(model: ProjectModel, caps: RetentionCaps, demotions: EntityState[], vacates: boolean): void
+{
+    const entering = demotions.filter((item) => item.exposure === "full").length;
+    if (entering === 0)
+    {
+        return;
+    }
+    const after = indexTierCount(model.entities, "project") + entering - (vacates ? 1 : 0);
+    if (after > caps.index)
+    {
+        throw new CliError(`the named demotion${entering === 1 ? "" : "s"} would put the project index tier at `
+            + `${after} of ${caps.index} entities — free index room first with `
+            + '`self state place <id> --exposure search --why "<reason>"`');
+    }
+}
+
+// One seat movement a confirm would apply: where the record stands now (a
+// proposed record stands nowhere), and where it would sit.
+interface SeatMove
+{
+    from?: Exposure;
+    to: Exposure;
+    characters: number;
+}
+
+function unitMoves(unit: ConfirmMember[]): SeatMove[]
+{
+    return unit.flatMap((member): SeatMove[] =>
+    {
+        const characters = countCharacters(member.entity.text);
+        if (member.kind === "record")
+        {
+            return [{ to: member.entity.exposure, characters }];
+        }
+        const to = member.entity.pending?.exposure;
+        return to === undefined || to === member.entity.exposure
+            ? []
+            : [{ from: member.entity.exposure, to, characters }];
+    });
+}
+
+// What a confirm admits must fit at confirm time (review F2), judged as the
+// unit's net movement (review F3): a tier the unit enters must end within
+// its cap, credited with every seat the unit itself vacates there — the
+// same crediting the write path does — under the same counts the write
+// verbs gate on. A tier the unit only drains is never gated, so an over-cap
+// store keeps its way down.
+function requireUnitRoom(model: ProjectModel, caps: RetentionCaps, unit: ConfirmMember[]): void
+{
+    for (const tier of ["full", "index"] as const)
+    {
+        requireTierRoom(model, caps, tier, unitMoves(unit));
+    }
+}
+
+function requireTierRoom(model: ProjectModel, caps: RetentionCaps, tier: "full" | "index", moves: SeatMove[]): void
+{
+    const weigh = (move: SeatMove): number => tier === "full" ? move.characters : 1;
+    const entering = moves.filter((move) => move.to === tier).reduce((sum, move) => sum + weigh(move), 0);
+    if (entering === 0)
+    {
+        return;
+    }
+    const usage = tier === "full" ? fullTierCharacters(model.entities, "project") : indexTierCount(model.entities, "project");
+    const cap = tier === "full" ? caps.full : caps.index;
+    const leaving = moves.filter((move) => move.from === tier).reduce((sum, move) => sum + weigh(move), 0);
+    if (usage + entering - leaving > cap)
+    {
+        throw new CliError(`confirming this would put the project ${tier} tier over its cap `
+            + `(${usage} of ${cap} ${tier === "full" ? "characters" : "entities"} held) — `
+            + `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
+    }
+}
+
+// A demotion named where no cap demands one would demote a record as a side
+// effect of an unrelated command — refused toward the direct verb instead.
+function requireDemotionsNeeded(demotions: EntityState[], tier: "full" | "index"): void
+{
+    if (demotions.length > 0)
+    {
+        throw new CliError(`the project ${tier} tier is not over its cap — nothing needs to demote; `
+            + `demote directly with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
+    }
+}
+
+function demotionsFor(model: ProjectModel, raw: string[], tier: "full" | "index" | undefined, exclude: string | undefined, usage: string): EntityState[]
+{
+    if (raw.length === 0)
+    {
+        return [];
+    }
+    if (tier === undefined)
+    {
+        throw new CliError("--demote frees room in the capped tier a record enters — this command enters none, so nothing needs to demote");
+    }
+    const demotions = raw.map((value) => requireDemotable(model, value, tier, exclude, usage));
+    for (const [index, entity] of demotions.entries())
+    {
+        if (demotions.findIndex((item) => item.id === entity.id) !== index)
+        {
+            throw new CliError(`--demote ${entity.id} is repeated — one record frees its place once`);
+        }
+    }
+    return demotions;
+}
+
+function requireDemotable(model: ProjectModel, value: string, tier: "full" | "index", exclude: string | undefined, usage: string): EntityState
+{
+    const entity = requireEntity(model, value, usage);
+    if (entity.id === exclude)
+    {
+        throw new CliError(`--demote ${entity.id} names the record being placed — another entity has to free the room`);
+    }
+    if (entity.status === "proposed")
+    {
+        throw new CliError(`--demote ${entity.id} is still proposed — it holds no place in the ${tier} tier until confirmed`);
+    }
+    if (!isLive(entity))
+    {
+        throw new CliError(`--demote ${entity.id} was already ${entity.status} — it holds no place in the ${tier} tier`);
+    }
+    if (entity.scope !== "project")
+    {
+        throw new CliError(`--demote ${entity.id} is workspace-scoped — the project ${tier} cap frees only by demoting project-scoped records`);
+    }
+    if (entity.exposure !== tier)
+    {
+        throw new CliError(`--demote ${entity.id} sits at ${entity.exposure} exposure — name a record at ${tier} exposure, the tier being entered`);
+    }
+    return entity;
+}
+
+// The paired demotion, appended in the same write as the add or placement it
+// makes room for: `refs.admits` is the machine-readable pairing the confirm
+// surface applies the pair as one unit by, and the why says the same thing
+// to the person reading it. --proposed marks both halves, so neither applies
+// until a person answers.
+function demotionEvents(project: string, demotions: EntityState[], admit: string, proposed: boolean): SelfEvent[]
+{
+    return demotions.map((entity) => makeEvent(project, "entity.placed", {
+        entity: entity.id,
+        exposure: DEMOTION_TARGET[entity.exposure as "full" | "index"],
+        why: `demoted to admit ${admit} under the ${entity.exposure} cap`,
+        ...(proposed ? { proposed: true } : {})
+    }, { admits: admit }, !proposed));
 }
 
 function stateConfirm({ positionals }: CommandInput): void
@@ -139,17 +518,74 @@ function stateConfirm({ positionals }: CommandInput): void
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const entity = requireEntity(model, positionals[0], "state confirm <id>");
-    if (entity.status !== "proposed")
+    const unit = confirmableUnit(model, entity);
+    requireUnitRoom(model, retentionCaps(readStoreConfig(ctx.storeDir)), unit);
+    recordEvents(ctx, unit.map((member) => confirmEvent(ctx.project, member)), entity.text);
+}
+
+// One confirmable thing a record carries: its own proposal, or a placement
+// pending on it. A confirm answers to the entity's own id either way, and
+// the placement axis is entity-owned, so this holds for the preset record
+// kinds too.
+interface ConfirmMember
+{
+    entity: EntityState;
+    kind: "record" | "placement";
+}
+
+function waitingMember(entity: EntityState | undefined): ConfirmMember | null
+{
+    if (entity === undefined)
+    {
+        return null;
+    }
+    if (entity.status === "proposed")
+    {
+        return { entity, kind: "record" };
+    }
+    return entity.status === "confirmed" && entity.pending !== undefined ? { entity, kind: "placement" } : null;
+}
+
+// A cap-driven pair is one confirmable unit (review F3): from either half's
+// id, the admitted record and every demotion still paired to it land in one
+// append. No ordering exists to get wrong, no in-between state exists for a
+// cap to be exceeded in, and an exact swap of two full tiers cannot
+// deadlock. A demotion whose admitted record already landed — or left by
+// retraction or supersession — confirms alone.
+function confirmableUnit(model: ProjectModel, entity: EntityState): ConfirmMember[]
+{
+    const own = waitingMember(entity);
+    if (own === null)
     {
         throw new CliError(`${entity.id} is already ${entity.status}`);
     }
     // Only a decision or an objective can stand proposed among the legacy
     // readings, so the remedy below always has a confirm verb to name.
-    if (entity.source !== undefined)
+    if (own.kind === "record" && entity.source !== undefined)
     {
         throw new CliError(`${entity.id} is a ${entity.source} record — run \`self ${entity.source === "decision" ? "decide" : entity.source} confirm ${entity.id}\``);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: entity.id }, { confirms: entity.id }, true), entity.text);
+    const admitted = own.kind === "placement" && entity.pending?.admits !== undefined
+        ? waitingMember(model.entities.find((item) => item.id === entity.pending?.admits))
+        : null;
+    const centre = own.kind === "placement" && entity.pending?.admits !== undefined ? admitted ?? own : own;
+    const members = new Map<string, ConfirmMember>([[centre.entity.id, centre]]);
+    for (const item of model.entities)
+    {
+        const paired = item.pending?.admits === centre.entity.id ? waitingMember(item) : null;
+        if (paired !== null)
+        {
+            members.set(item.id, paired);
+        }
+    }
+    members.set(entity.id, own);
+    return [...members.values()];
+}
+
+function confirmEvent(project: string, member: ConfirmMember): SelfEvent
+{
+    const confirms = member.kind === "record" ? member.entity.id : member.entity.pending?.event ?? member.entity.id;
+    return makeEvent(project, "entity.confirmed", { entity: member.entity.id }, { confirms }, true);
 }
 
 function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
@@ -192,7 +628,7 @@ function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
         console.log("no live entities");
         return;
     }
-    for (const entity of ordered(live))
+    for (const entity of orderEntities(live))
     {
         console.log(stateLine(entity));
     }
@@ -203,17 +639,6 @@ function stateShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>):
     const scope = readScopes(process.cwd(), values)[0];
     const model = buildModel(scope.storeDir, scope.project, new Date());
     console.log(renderEntity(requireEntity(model, positionals[0], "state show <id> [--project <slug>]")));
-}
-
-// Priority order, ties by recency (#197 §6). An absent priority sorts after
-// every stated one, and the id breaks the remaining tie so two clones of one
-// store render one order.
-function ordered(entities: EntityState[]): EntityState[]
-{
-    return [...entities].sort((left, right) =>
-        (left.priority ?? Number.MAX_SAFE_INTEGER) - (right.priority ?? Number.MAX_SAFE_INTEGER)
-        || right.ts.localeCompare(left.ts)
-        || left.id.localeCompare(right.id));
 }
 
 function stateLine(entity: EntityState): string
@@ -238,6 +663,10 @@ function renderEntity(entity: EntityState): string
     entity.links.forEach((link) => lines.push(`link: ${link.type} ${link.target}`));
     optional(lines, "superseded by", entity.supersededBy);
     optional(lines, "closed", entity.closedWhy);
+    if (entity.pending !== undefined)
+    {
+        lines.push(`pending placement: ${pendingSummary(entity.pending)} — confirm with \`self state confirm ${entity.id}\``);
+    }
     lines.push(`recorded: ${entity.ts.slice(0, 10)}`);
     return lines.join("\n");
 }
@@ -355,13 +784,13 @@ function validPriority(value: string): number
     return priority;
 }
 
-function validExposure(value: string): string
+function validExposure(value: string): Exposure
 {
     if (!(EXPOSURES as readonly string[]).includes(value))
     {
         throw new CliError(`"${value}" is not an exposure — use full (whole text in context), index (one line), or search (found only by search)`);
     }
-    return value;
+    return value as Exposure;
 }
 
 function validText(value: string, flag: string, what: string): string
