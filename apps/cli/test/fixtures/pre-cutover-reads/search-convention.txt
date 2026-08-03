@@ -1,0 +1,3 @@
+demo  2026-08-03  convention.added [superseded]  [01kz41gf27bk44jsp0mcv74emn]  four spaces
+demo  2026-08-03  convention.added  [01kz41gfs4067wp4y8bfcxxyps]  four spaces, semicolons
+demo  2026-08-03  convention.dropped  [01kz41gh47k1wsyn787g92p9we]  spaces won

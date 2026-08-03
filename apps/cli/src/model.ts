@@ -9,10 +9,22 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, deriveEntities, emptyEntityFold, EntityFold, EntityState, reconcileEntity } from "./entities.js";
+import { applyEntity, deriveEntities, emptyEntityFold, EntityFold, EntityState, isLive, reconcileEntity } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
-import { applyMilestone, applyObjective, applyProposal, deriveGoals, emptyGoals, GoalState } from "./objectives.js";
+import {
+    applyMilestone,
+    applyObjective,
+    applyProposal,
+    applySupersededObjectives,
+    Coverage,
+    deriveGoals,
+    emptyGoals,
+    findMilestone,
+    GoalState,
+    MilestoneState,
+    ObjectiveState
+} from "./objectives.js";
 import { readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
 import { ArtifactMeta, SelfEvent } from "./types.js";
 
@@ -446,22 +458,50 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     const model = emptyModel(storeDir, slug);
     const events = readEvents(storeDir, slug);
     const entityFold = emptyEntityFold();
+    const creations = new Map<string, SelfEvent>();
     for (const event of events)
     {
         applyEvent(model, event);
         // The entity reading of the same pass: `entity.*` and the goal chain
         // fold here; the other legacy kinds derive from their folded records.
         applyEntity(entityFold, event);
+        noteCreation(creations, event);
     }
     reconcileLifecycle(model, entityFold, events);
-    deriveSignals(model, now);
+    // Objective supersessions settle before the entity view reads statuses;
+    // deriveGoals runs the same idempotent pass again below.
+    applySupersededObjectives(model.goals);
     model.entities = deriveEntities(entityFold, { decisions: model.decisions, conventions: model.conventions, objectives: model.goals.objectives });
+    // The cutover joint (#207 B/E2), both directions. Entity events that moved
+    // a legacy-derived record sync back onto it, so every legacy read surface
+    // agrees with the entity view; native preset entities project into the
+    // legacy read shapes, so those surfaces answer for post-cutover records.
+    syncLegacyRecords(model);
+    const nativeWorks = projectNativeRecords(model, creations);
+    routeEntityWorkFacts(model, entityFold);
+    replayDeferred(model, events, nativeWorks);
+    deriveSignals(model, now);
     // Read once per fold, not once per row: the verdicts are a file, and a fold
     // runs on every event. Both derivations below read the same copy.
     const verdicts = readVerdicts(storeDir, slug);
     deriveAttention(model, verdicts);
     model.unshipped = unshippedBranches(model.works, verdicts);
     return model;
+}
+
+// The event that asserted each native entity, kept for the projection: the
+// preset verbs record their extra fields — a decision's refs, an objective's
+// horizon, a proposal's brief — on the creation event, and the entity schema
+// deliberately does not carry them (#197 §2).
+function noteCreation(creations: Map<string, SelfEvent>, event: SelfEvent): void
+{
+    const creates = event.type === "entity.proposed"
+        || (event.type === "entity.confirmed" && event.refs?.confirms === undefined);
+    const id = creates ? String(event.payload.entity ?? "") : "";
+    if (id !== "" && !creations.has(id))
+    {
+        creations.set(id, event);
+    }
 }
 
 function emptyModel(storeDir: string, slug: string): ProjectModel
@@ -662,6 +702,584 @@ function reconcileLifecycle(model: ProjectModel, entityFold: EntityFold, events:
             reconcileEntity(entityFold, event);
         }
     }
+}
+
+/* ── the cutover joint (#207) ────────────────────────────────────────
+//
+// The preset verbs write `entity.*` events for every record kind, and the
+// fold keeps reading legacy history forever (spec §8). These passes are the
+// joint between the two: entity events that named a legacy-derived record
+// settle onto its legacy state, native preset entities project into the
+// legacy read shapes, and the work facts that still ride their own event
+// types — reports, process transitions, completion history — replay onto
+// work units the projection created. A store with no entity events reaches
+// none of this, which is what keeps a pre-cutover store byte-identical (E1).
+*/
+
+// Entity lifecycle events can target a legacy-derived record — `decide
+// confirm` on a legacy proposal, `objective close` on a legacy objective —
+// and the entity view already settled them. Copy the settled statuses back
+// onto the legacy records, so search markers, the attention band and every
+// legacy render agree with the entity view (E2).
+function syncLegacyRecords(model: ProjectModel): void
+{
+    for (const entity of model.entities)
+    {
+        if (entity.native === true || entity.source === undefined)
+        {
+            continue;
+        }
+        if (entity.source === "decision")
+        {
+            syncDecision(model, entity);
+        }
+        else if (entity.source === "convention")
+        {
+            syncConvention(model, entity);
+        }
+        else if (entity.source === "objective")
+        {
+            syncObjective(model, entity);
+        }
+        else if (entity.source === "milestone")
+        {
+            syncMilestone(model, entity);
+        }
+    }
+}
+
+function syncDecision(model: ProjectModel, entity: EntityState): void
+{
+    const record = model.decisions.find((item) => item.id === entity.id);
+    if (record === undefined || (record.status !== "proposed" && record.status !== "confirmed"))
+    {
+        return;
+    }
+    if (entity.status === "confirmed" && record.status === "proposed")
+    {
+        record.status = "confirmed";
+        record.humanConfirmed = entity.humanConfirmed;
+        record.ts = entity.ts;
+    }
+    if (entity.status === "retracted")
+    {
+        record.status = record.status === "proposed" ? "declined" : "retracted";
+        record.closedWhy = entity.closedWhy;
+    }
+    if (entity.status === "superseded")
+    {
+        record.status = "superseded";
+    }
+}
+
+function syncConvention(model: ProjectModel, entity: EntityState): void
+{
+    const record = model.conventions.find((item) => item.id === entity.id);
+    if (record === undefined || record.status !== "current")
+    {
+        return;
+    }
+    if (entity.status === "retracted")
+    {
+        record.status = "dropped";
+        record.closedWhy = entity.closedWhy;
+    }
+    if (entity.status === "superseded")
+    {
+        record.status = "superseded";
+    }
+}
+
+function syncObjective(model: ProjectModel, entity: EntityState): void
+{
+    const record = model.goals.objectives.find((item) => item.id === entity.id);
+    if (record === undefined || (record.status !== "proposed" && record.status !== "active"))
+    {
+        return;
+    }
+    if (entity.status === "confirmed" && record.status === "proposed")
+    {
+        record.status = "active";
+        record.humanConfirmed = entity.humanConfirmed;
+    }
+    if (entity.status === "retracted")
+    {
+        record.status = record.status === "proposed" ? "declined" : "dropped";
+        record.closedWhy = entity.closedWhy;
+    }
+    if (entity.status === "superseded")
+    {
+        record.status = "superseded";
+        record.supersededBy = entity.supersededBy;
+    }
+    if (entity.execution?.status === "done")
+    {
+        record.status = "reached";
+        record.closedWhy = entity.execution.report;
+    }
+    if (entity.execution?.status === "retired")
+    {
+        record.status = "dropped";
+        record.closedWhy = entity.execution.why;
+    }
+}
+
+function syncMilestone(model: ProjectModel, entity: EntityState): void
+{
+    const found = findMilestone(model.goals, entity.id);
+    if (found === null)
+    {
+        return;
+    }
+    const { objective, milestone } = found;
+    if (entity.status === "superseded" && milestone.supersededBy === undefined)
+    {
+        milestone.supersededBy = entity.supersededBy;
+    }
+    syncCoverage(milestone, objective.revision, entity);
+    if (entity.execution?.status === "retired")
+    {
+        milestone.droppedWhy = milestone.droppedWhy ?? (entity.execution.why ?? "retired");
+    }
+    if (entity.execution?.status === "done" && milestone.reached === undefined)
+    {
+        milestone.reached = reachedFromEntity(milestone, objective.revision, entity);
+    }
+}
+
+// A claim names the criterion by text; the legacy record keys coverage by the
+// criterion's id. Claims land at the record's current revisions — post-cutover
+// nothing goes stale by revision, a revision is a supersession (#207 B12).
+function syncCoverage(milestone: MilestoneState, objectiveRevision: number, entity: EntityState): void
+{
+    for (const claim of entity.covered)
+    {
+        const criterion = milestone.exit.find((item) => item.dropped !== true && item.text === claim.criterion);
+        if (criterion !== undefined)
+        {
+            milestone.coverage.push({
+                criterion: criterion.id,
+                ts: claim.ts,
+                why: claim.why,
+                work: claim.work,
+                commits: claim.commits,
+                objectiveRevision,
+                milestoneRevision: milestone.revision
+            });
+        }
+    }
+}
+
+function reachedFromEntity(milestone: MilestoneState, objectiveRevision: number, entity: EntityState)
+{
+    return {
+        ts: entity.execution?.ts ?? entity.ts,
+        objectiveRevision,
+        milestoneRevision: milestone.revision,
+        criteria: [...new Set(milestone.coverage.map((item) => item.criterion))],
+        evidence: [...new Set(milestone.coverage.flatMap((item) => item.commits))]
+    };
+}
+
+/* ── the native projection (#207 B) ────────────────────────────────── */
+
+// Native preset entities become the legacy read shapes, so `self objective`,
+// `self work show`, the canonical files and the HTML views answer for
+// post-cutover records without a renderer changing. Returns the native work
+// ids, which the deferred replay attaches reports and process history to.
+function projectNativeRecords(model: ProjectModel, creations: Map<string, SelfEvent>): Set<string>
+{
+    const natives = model.entities.filter((entity) => entity.native === true && entity.source !== undefined);
+    for (const entity of natives.filter((item) => item.source !== "milestone" && item.source !== "work"))
+    {
+        projectNative(model, entity, creations.get(entity.id));
+    }
+    // Milestones after the objectives they hang under, and work last: a
+    // unit's member-of links resolve against the projected outcome layer, and
+    // a union-merged log can order any of the pairs backwards.
+    for (const entity of natives.filter((item) => item.source === "milestone"))
+    {
+        projectMilestone(model, entity, creations.get(entity.id));
+    }
+    for (const entity of natives.filter((item) => item.source === "work"))
+    {
+        projectWork(model, entity, creations.get(entity.id));
+    }
+    projectGoal(model);
+    return new Set(model.works.filter((work) => natives.some((entity) => entity.id === work.id)).map((work) => work.id));
+}
+
+function projectNative(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
+{
+    if (entity.source === "decision")
+    {
+        model.decisions.push(projectDecision(entity, creation));
+    }
+    else if (entity.source === "convention")
+    {
+        model.conventions.push(projectConvention(entity));
+    }
+    else if (entity.source === "objective")
+    {
+        model.goals.objectives.push(projectObjective(entity, creation));
+    }
+}
+
+// The newest live goal-labeled entity is the goal, exactly as the last
+// `goal.set` always was. Only a store holding native goals reaches this;
+// everywhere else the pass-1 reading stands untouched.
+function projectGoal(model: ProjectModel): void
+{
+    const goals = model.entities.filter((entity) => entity.source === "goal" && isLive(entity));
+    if (!goals.some((entity) => entity.native === true))
+    {
+        return;
+    }
+    const newest = [...goals].sort((left, right) => right.ts.localeCompare(left.ts) || right.id.localeCompare(left.id))[0];
+    model.goal = newest?.text ?? model.goal;
+}
+
+function supersedesOf(entity: EntityState): string[]
+{
+    return entity.links.filter((link) => link.type === "supersedes").map((link) => link.target);
+}
+
+function projectDecision(entity: EntityState, creation: SelfEvent | undefined): DecisionState
+{
+    return {
+        id: entity.id,
+        text: entity.text,
+        why: entity.why,
+        ts: entity.ts,
+        status: entity.status === "retracted" && !entity.confirmedOnce ? "declined" : entity.status,
+        humanConfirmed: entity.humanConfirmed,
+        expired: false,
+        supersedes: supersedesOf(entity),
+        closedWhy: entity.closedWhy,
+        work: creation?.refs?.work,
+        blocks: stringList(creation?.refs?.blocks),
+        after: creation?.refs?.after === undefined ? undefined : String(creation.refs.after)
+    };
+}
+
+function projectConvention(entity: EntityState): ConventionState
+{
+    return {
+        id: entity.id,
+        ts: entity.ts,
+        text: entity.text,
+        status: entity.status === "confirmed" || entity.status === "proposed" ? "current"
+            : entity.status === "superseded" ? "superseded" : "dropped",
+        supersedes: supersedesOf(entity),
+        closedWhy: entity.closedWhy
+    };
+}
+
+function projectObjective(entity: EntityState, creation: SelfEvent | undefined): ObjectiveState
+{
+    const payload = creation?.payload ?? {};
+    return {
+        id: entity.id,
+        outcome: entity.text,
+        ts: entity.ts,
+        revision: 1,
+        horizon: payload.horizon === undefined ? undefined : String(payload.horizon),
+        target: entity.target,
+        success: stringList(payload.success),
+        stop: stringList(payload.stop),
+        priority: typeof payload.rank === "number" ? payload.rank : undefined,
+        status: objectiveStatusOf(entity),
+        humanConfirmed: entity.humanConfirmed,
+        supersedes: supersedesOf(entity),
+        supersededBy: entity.supersededBy,
+        closedWhy: objectiveClosedWhy(entity),
+        history: [],
+        milestones: [],
+        state: "on-track",
+        reason: "",
+        met: 0,
+        total: 0,
+        works: []
+    };
+}
+
+// Execution first: a reached or retired outcome outranks the assertion
+// status, because completion and withdrawal say more than "still asserted".
+function objectiveStatusOf(entity: EntityState): ObjectiveState["status"]
+{
+    if (entity.execution?.status === "done")
+    {
+        return "reached";
+    }
+    if (entity.execution?.status === "retired")
+    {
+        return "dropped";
+    }
+    if (entity.status === "proposed")
+    {
+        return "proposed";
+    }
+    if (entity.status === "confirmed")
+    {
+        return "active";
+    }
+    return entity.status === "superseded" ? "superseded" : entity.confirmedOnce ? "dropped" : "declined";
+}
+
+function objectiveClosedWhy(entity: EntityState): string | undefined
+{
+    if (entity.execution?.status === "done")
+    {
+        return entity.execution.report;
+    }
+    if (entity.execution?.status === "retired")
+    {
+        return entity.execution.why;
+    }
+    return entity.closedWhy;
+}
+
+function projectMilestone(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
+{
+    const parent = entity.links.find((link) => link.type === "member-of");
+    const objective = parent === undefined ? undefined
+        : model.goals.objectives.find((item) => item.id === parent.target);
+    if (objective === undefined)
+    {
+        return;
+    }
+    const milestone: MilestoneState = {
+        id: entity.id,
+        objective: objective.id,
+        outcome: entity.text,
+        ts: entity.ts,
+        revision: 1,
+        target: entity.target,
+        exit: entity.criteria.map((text, index) => ({ id: `c${index + 1}`, text })),
+        after: stringList(creation?.payload.after),
+        coverage: [],
+        supersededBy: entity.supersededBy,
+        droppedWhy: milestoneDroppedWhy(entity),
+        state: "on-track",
+        reason: "",
+        met: [],
+        open: [],
+        stale: [],
+        works: [],
+        blockedWorks: [],
+        evidence: [],
+        criticalPath: false
+    };
+    syncCoverage(milestone, objective.revision, entity);
+    if (entity.execution?.status === "done")
+    {
+        milestone.reached = reachedFromEntity(milestone, objective.revision, entity);
+    }
+    objective.milestones.push(milestone);
+}
+
+function milestoneDroppedWhy(entity: EntityState): string | undefined
+{
+    if (entity.execution?.status === "retired")
+    {
+        return entity.execution.why ?? "retired";
+    }
+    return entity.status === "retracted" ? entity.closedWhy ?? "retracted" : undefined;
+}
+
+// A work entity whose creation carried the proposal brief is a proposal; it
+// becomes a unit the moment it is confirmed — accept is confirm (#207 B13) —
+// so one record carries the whole lifecycle under one id.
+function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
+{
+    const brief = creation?.payload.value !== undefined;
+    if (brief)
+    {
+        model.goals.proposals.push(projectProposal(entity, creation as SelfEvent));
+    }
+    if (!entity.confirmedOnce)
+    {
+        return;
+    }
+    const links = entity.links.filter((link) => link.type === "member-of").map((link) => link.target);
+    model.works.push({
+        id: entity.id,
+        outcome: entity.text,
+        ts: entity.ts,
+        lastEventTs: entity.execution?.ts ?? entity.ts,
+        status: workStatusOf(entity),
+        blockedOn: entity.execution?.status === "blocked" ? entity.execution.on ?? "dependency" : undefined,
+        blockedWhy: entity.execution?.status === "blocked" ? entity.execution.why : undefined,
+        retiredWhy: entity.execution?.status === "retired" ? entity.execution.why ?? "retired" : undefined,
+        successor: entity.execution?.successor === undefined ? undefined
+            : { work: entity.execution.successor, project: entity.execution.successorProject },
+        reports: [],
+        evidence: [],
+        notes: [],
+        artifacts: [],
+        branches: creation?.refs?.branch === undefined ? [] : [String(creation.refs.branch)],
+        objectives: links.filter((id) => model.goals.objectives.some((item) => item.id === id)),
+        milestones: links.filter((id) => findMilestone(model.goals, id) !== null),
+        gatedBy: [],
+        attempts: [],
+        completion: emptyCompletion()
+    });
+}
+
+function workStatusOf(entity: EntityState): WorkState["status"]
+{
+    const status = entity.execution?.status;
+    if (status === "in-progress")
+    {
+        return "active";
+    }
+    if (status === "blocked" || status === "done" || status === "retired")
+    {
+        return status;
+    }
+    return "next";
+}
+
+function projectProposal(entity: EntityState, creation: SelfEvent)
+{
+    const payload = creation.payload;
+    return {
+        id: entity.id,
+        ts: entity.ts,
+        outcome: entity.text,
+        objective: payload.objective === undefined ? undefined : String(payload.objective),
+        milestone: payload.milestone === undefined ? undefined : String(payload.milestone),
+        value: String(payload.value ?? ""),
+        success: stringList(payload.success),
+        stop: stringList(payload.stop),
+        depends: stringList(payload.depends),
+        risk: String(payload.risk ?? ""),
+        capacity: String(payload.capacity ?? ""),
+        evidencePlan: String(payload.evidencePlan ?? ""),
+        confidence: String(payload.confidence ?? ""),
+        expires: String(payload.expires ?? ""),
+        status: entity.confirmedOnce ? "accepted" as const : entity.status === "retracted" ? "declined" as const : "open" as const,
+        expired: false,
+        work: entity.confirmedOnce ? entity.id : undefined,
+        declinedWhy: entity.status === "retracted" ? entity.closedWhy : undefined
+    };
+}
+
+/* ── entity work facts on legacy units, and the deferred replay ────── */
+
+// Post-cutover, `work start` and its siblings record `entity.*` execution
+// events whatever kind of unit they move. On a native unit the entity view
+// already carries them; a legacy unit is not an entity, so its events route
+// here, in the same timestamp order and with the same terminal guards the
+// entity fold applies.
+function routeEntityWorkFacts(model: ProjectModel, fold: EntityFold): void
+{
+    const entityIds = new Set(model.entities.map((entity) => entity.id));
+    const works = new Map(model.works.map((work) => [work.id, work]));
+    const executions = [...fold.executions].sort((left, right) =>
+        left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+    for (const event of executions)
+    {
+        const work = works.get(event.entity);
+        if (!entityIds.has(event.entity) && work !== undefined)
+        {
+            applyExecutionToWork(work, event);
+        }
+    }
+    const links = [...fold.links].sort((left, right) =>
+        left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+    for (const event of links)
+    {
+        const work = works.get(event.entity);
+        if (!entityIds.has(event.entity) && work !== undefined && event.link.type === "member-of")
+        {
+            applyMemberOf(model, work, event.link.target, event.add);
+        }
+    }
+}
+
+function applyExecutionToWork(work: WorkState, event: { ts: string; type: string; on?: string; why?: string; successor?: string; successorProject?: string }): void
+{
+    if (work.status === "done" || work.status === "retired")
+    {
+        return;
+    }
+    work.lastEventTs = event.ts;
+    if (event.type === "entity.started" && work.status !== "blocked")
+    {
+        work.status = "active";
+    }
+    if (event.type === "entity.unblocked" && work.status === "blocked")
+    {
+        work.status = "active";
+        work.blockedOn = undefined;
+        work.blockedWhy = undefined;
+    }
+    if (event.type === "entity.blocked" && work.status !== "blocked")
+    {
+        work.status = "blocked";
+        work.blockedOn = event.on ?? "dependency";
+        work.blockedWhy = event.why;
+    }
+    if (event.type === "entity.done")
+    {
+        work.status = "done";
+    }
+    if (event.type === "entity.retired")
+    {
+        work.status = "retired";
+        work.blockedOn = undefined;
+        work.blockedWhy = undefined;
+        work.retiredWhy = event.why ?? "retired";
+        work.successor = event.successor === undefined ? undefined
+            : { work: event.successor, project: event.successorProject };
+    }
+}
+
+function applyMemberOf(model: ProjectModel, work: WorkState, target: string, add: boolean): void
+{
+    const field = model.goals.objectives.some((item) => item.id === target) ? "objectives"
+        : findMilestone(model.goals, target) !== null ? "milestones" : null;
+    if (field === null)
+    {
+        return;
+    }
+    work[field] = add
+        ? [...new Set([...work[field], target])]
+        : work[field].filter((item) => item !== target);
+}
+
+// Reports, process transitions and completion history keep their own event
+// types (#207 B14). In the first pass they attach to nothing when they name a
+// unit the projection had not created yet, so the lines naming a native unit
+// run once more here — everything else already attached, and runs zero times.
+function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: Set<string>): void
+{
+    if (nativeWorks.size === 0)
+    {
+        return;
+    }
+    for (const event of events)
+    {
+        const ref = attachedWorkOf(event);
+        if (ref !== undefined && nativeWorks.has(ref))
+        {
+            applyEvent(model, event);
+        }
+    }
+}
+
+function attachedWorkOf(event: SelfEvent): string | undefined
+{
+    if (event.type === "report.added" || event.type === "review.received" || event.type.startsWith("run."))
+    {
+        return event.refs?.work === undefined ? undefined : String(event.refs.work);
+    }
+    if (event.type.startsWith("work.") && event.type !== "work.created" && !PROPOSAL_EVENTS.includes(event.type))
+    {
+        return typeof event.payload.work === "string" ? event.payload.work : undefined;
+    }
+    return undefined;
 }
 
 // Withdrawal with no successor. The record keeps its text, its reason and

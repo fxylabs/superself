@@ -1,0 +1,36 @@
+# o-yfxat — reach preview
+
+- Status: active
+- Target state: on-track — m-48nbn: 1 of 2 exit criteria covered across 1 work unit(s)
+- Revision: 1
+- Timebox: quarter, target 2099-01-01
+- Progress: 1 of 3 exit criteria covered
+
+## Milestone m-48nbn
+
+- Objective: o-yfxat reach preview
+- State: on-track — 1 of 2 exit criteria covered across 1 work unit(s)
+- Revision: 1 (objective revision 1)
+- Critical path: no
+- Work: w-2hcs1
+
+## Exit criteria
+
+- c1 — tests pass _(covered)_
+- c2 — docs updated _(open)_
+
+## Coverage
+
+- c1 on 2026-08-03 — suite ran green _(revision 1/1)_
+
+## Milestone m-5fcfn
+
+- Objective: o-yfxat reach preview
+- State: unstarted — no work linked yet
+- Revision: 1 (objective revision 1)
+- Critical path: no
+- Work: none linked
+
+## Exit criteria
+
+- c1 — docs live _(open)_

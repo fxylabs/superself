@@ -1,0 +1,8 @@
+m-48nbn  confirmed  (from milestone)
+text: suite green
+labels: milestone
+placement: project · index · priority 20
+criterion: tests pass
+criterion: docs updated
+link: member-of o-yfxat
+recorded: 2026-08-03

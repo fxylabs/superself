@@ -410,7 +410,9 @@ test("C: a pending proposal renders as a waiting row", () =>
         "--risk", "low", "--capacity", "one round", "--evidence-plan", "a recorded run",
         "--confidence", "high", "--expires", "2030-01-01"]);
     const out = contextC();
-    assert.match(out, /work proposal [0-9a-z]+: a proposed direction/);
+    // The proposal is a proposed work entity now (#207 B13), so its id is a
+    // unit id — the row shape is otherwise the phase 3 one.
+    assert.match(out, /work proposal [\w-]+: a proposed direction/);
 });
 
 test("C: blocked on dependency or external renders as a count, not a row", () =>

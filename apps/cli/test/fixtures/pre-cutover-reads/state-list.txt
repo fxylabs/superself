@@ -1,0 +1,14 @@
+01kz41g8sv00dfkp216h92cmxv  goal  full p0  steady direction
+e-ynje7  -  index p5  raw index note
+o-tvmtf  objective  full p10  old target
+o-93cg3  objective  full p10  later maybe  (proposed)
+o-yfxat  objective  full p10  reach preview
+e-cyxv4  -  full p15  raw standing note
+m-5fcfn  milestone  index p20  docs shipped
+m-48nbn  milestone  index p20  suite green
+01kz41gfs4067wp4y8bfcxxyps  convention  full p30  four spaces, semicolons
+01kz41gecqab9snmnr9ztp5nsk  convention  full p30  events only
+01kz41gawfbxxbewh23ffnazr0  decision  index p40  ship daily
+01kz41g9fesqqfs59ftf889m3d  decision  index p40  keep sqlite
+e-qfffb  -  index  proposed raw  (proposed)
+e-ya54d  -  search  raw searchable

@@ -1,0 +1,6 @@
+01kz41gawfbxxbewh23ffnazr0  confirmed  (from decision)
+text: ship daily
+labels: decision
+placement: project · index · priority 40
+link: supersedes 01kz41ga6pj4pwzt6db7vzmcky
+recorded: 2026-08-03

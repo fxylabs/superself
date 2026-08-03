@@ -1,8 +1,8 @@
 import { parseArgs } from "node:util";
+import { presetRow } from "./aliases.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf, rawLeaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
-import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { milestoneId, objectiveId, workId } from "./ids.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
 import {
@@ -23,14 +23,14 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { recordCoverage } from "./state.js";
 import { dim, errYellow, markdownHeadings, styled } from "./style.js";
-import { CliError, EventRefs } from "./types.js";
+import { CliError } from "./types.js";
 
-const HORIZONS = ["day", "week", "month", "quarter", "year"];
 const CONFIDENCE = ["low", "medium", "high"];
 
 const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | decline <id> --why w | revise <id> --why w | close <id> --as reached|dropped [--why w]';
-const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> [--criterion c1] --why w';
+const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> --criterion c1 --why w';
 
 // `met` and `recheck` are one intake read twice, so they declare one option set
 // rather than two that can drift apart.
@@ -116,7 +116,10 @@ export const OBJECTIVE_COMMAND: Command = {
         },
         {
             syntax: "objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]",
-            description: ["an empty --target/--horizon/--priority withdraws that field"],
+            description: [
+                "a revision supersedes: a new objective id carries the revised fields",
+                "(an empty --target/--horizon/--priority withdraws that field)"
+            ],
             verbs: ["revise"]
         },
         { syntax: "objective close <id> --as reached|dropped [--why w]", description: ["--why is required when it is dropped"], verbs: ["close"] }
@@ -201,14 +204,26 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
     const { ctx, model } = writeTarget();
     const outcome = requireText(positionals[0], 'objective add "<desired outcome>"');
     const id = objectiveId();
-    const payload: Record<string, unknown> = { objective: id, outcome, success: values.success ?? [], stop: values.stop ?? [] };
-    payload.horizon = values.horizon === undefined ? undefined : validHorizon(values.horizon);
-    payload.target = values.target === undefined ? undefined : validDate(values.target);
-    payload.priority = values.priority === undefined ? undefined : validPriority(values.priority);
-    payload.proposed = values.proposed === true;
-    const refs = values.supersedes === undefined ? undefined
-        : { supersedes: values.supersedes.map((prefix) => requireObjective(model, prefix).id) };
-    recordEvent(ctx, makeEvent(ctx.project, "objective.created", strip(payload), refs, values.proposed !== true), `${id} ${outcome}`);
+    const row = presetRow(ctx.storeDir, "objective");
+    const proposed = values.proposed === true;
+    // The horizon enum was removed as structure and kept as optional metadata
+    // (#197 §7, #207 B7): whatever span the caller states is recorded.
+    const payload: Record<string, unknown> = {
+        entity: id,
+        text: outcome,
+        labels: [row.label],
+        links: (values.supersedes ?? []).map((prefix) => ({ type: "supersedes", target: requireObjective(model, prefix).id })),
+        criteria: [],
+        exposure: row.exposure,
+        scope: "project",
+        priority: row.priority,
+        horizon: values.horizon,
+        target: values.target === undefined ? undefined : validDate(values.target),
+        rank: values.priority === undefined ? undefined : validPriority(values.priority),
+        success: values.success ?? [],
+        stop: values.stop ?? []
+    };
+    recordEvent(ctx, makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", strip(payload), undefined, !proposed), `${id} ${outcome}`);
     console.log(id);
 }
 
@@ -220,11 +235,12 @@ function confirmObjective({ positionals }: CommandInput): void
     {
         throw new CliError(`${objective.id} is already ${objective.status}`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "objective.confirmed", { objective: objective.id }, undefined, true), objective.outcome);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: objective.id }, { confirms: objective.id }, true), objective.outcome);
 }
 
 // The other answer to a proposal. Confirming says the objective is the
 // project's; declining says it is not, and the reason is the whole record.
+// One withdrawal event in the shared grammar; the record keeps "declined".
 function declineObjective({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
 {
     const { ctx, model } = writeTarget();
@@ -234,31 +250,72 @@ function declineObjective({ values, positionals }: CommandInput<typeof WHY_OPTIO
     {
         throw new CliError(`${objective.id} is already ${objective.status} — only a proposed objective can be declined`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "objective.declined", { objective: objective.id, why }, undefined, true), objective.outcome);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: objective.id, why }, { declines: objective.id }, true), objective.outcome);
 }
 
-// A revision is the record that the target moved, so it demands a reason and
-// at least one change — an empty revision would only invalidate coverage.
+// A revision is a supersession (#207 B9): a new objective entity carries the
+// links and the revised fields, the predecessor reads superseded, and prior
+// coverage under it is stale by construction — the record id changes.
 function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): void
 {
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
     const why = requireText(values.why, 'objective revise <id> --why "<what changed and why>"');
-    const payload: Record<string, unknown> = {
-        objective: objective.id,
-        why,
-        outcome: restated(values.outcome, "objective"),
-        success: values.success,
-        stop: values.stop
-    };
-    payload.horizon = withdrawable(values.horizon, validHorizon);
-    payload.target = withdrawable(values.target, validDate);
-    payload.priority = withdrawable(values.priority, validPriority);
-    if (Object.keys(strip(payload)).length === 2)
+    if (isTerminalObjective(objective) || objective.status === "superseded")
+    {
+        throw new CliError(`${objective.id} is already ${objective.status} — a closed objective is not revised; add a new one`);
+    }
+    const changes = [values.outcome, values.horizon, values.target, values.priority, values.success, values.stop];
+    if (changes.every((value) => value === undefined))
     {
         throw new CliError("objective revise needs at least one of --outcome, --horizon, --target, --priority, --success, --stop");
     }
-    recordEvent(ctx, makeEvent(ctx.project, "objective.revised", strip(payload), undefined, true), `${objective.id} ${why}`);
+    const id = objectiveId();
+    const carried = carriedPlacement(model, objective.id);
+    const payload: Record<string, unknown> = {
+        entity: id,
+        text: restated(values.outcome, "objective") ?? objective.outcome,
+        labels: [presetRow(ctx.storeDir, "objective").label],
+        links: [{ type: "supersedes", target: objective.id }],
+        criteria: [],
+        ...carried,
+        horizon: revisedField(values.horizon, objective.horizon),
+        target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, objective.target),
+        rank: revisedField(withdrawable(values.priority, validPriority) as number | null | undefined, objective.priority),
+        success: values.success ?? objective.success,
+        stop: values.stop ?? objective.stop,
+        why
+    };
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", strip(payload), undefined, true), `${id} ${why}`);
+    console.log(id);
+}
+
+// What a revision does to one field: absent keeps the predecessor's value, a
+// value replaces it, an empty spelling (already read as null) withdraws it.
+function revisedField<T>(value: T | null | undefined, current: T | undefined): T | undefined
+{
+    if (value === null)
+    {
+        return undefined;
+    }
+    return value ?? current;
+}
+
+// The successor of a revision keeps the predecessor's placement: the record
+// moved, not its place in context. Falls back to the preset defaults for a
+// record whose entity the store cannot see, which cannot happen from here.
+function carriedPlacement(model: ProjectModel, id: string): Record<string, unknown>
+{
+    const entity = model.entities.find((item) => item.id === id);
+    const carried: Record<string, unknown> = {
+        exposure: entity?.exposure ?? "full",
+        scope: entity?.scope ?? "project"
+    };
+    if (entity?.priority !== undefined)
+    {
+        carried.priority = entity.priority;
+    }
+    return carried;
 }
 
 function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_CLOSE_OPTIONS>): void
@@ -288,8 +345,12 @@ function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_C
     {
         throw new CliError(`${objective.id} still has unreached milestones (${open.map((m) => m.id).join(", ")}) — reach or supersede them first`);
     }
-    const payload = strip({ objective: objective.id, as: values.as, why: values.why });
-    recordEvent(ctx, makeEvent(ctx.project, "objective.closed", payload, undefined, true), `${objective.id} ${values.as}`);
+    // Reached is the criteria-gated done claim; dropped is the retirement
+    // (#207 B10) — the outcome layer speaks the execution grammar too.
+    const payload = values.as === "reached"
+        ? strip({ entity: objective.id, report: values.why })
+        : { entity: objective.id, why: values.why };
+    recordEvent(ctx, makeEvent(ctx.project, values.as === "reached" ? "entity.done" : "entity.retired", payload, undefined, true), `${objective.id} ${values.as}`);
 }
 
 /* ── milestones ────────────────────────────────────────────────────── */
@@ -312,7 +373,11 @@ export const MILESTONE_COMMAND: Command = {
             description: ["print a milestone, its exit criteria, and its coverage"],
             verbs: ["show"]
         },
-        { syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]", verbs: ["revise"] },
+        {
+            syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]",
+            description: ["a revision supersedes: a new milestone id carries the revised criteria"],
+            verbs: ["revise"]
+        },
         {
             syntax: 'milestone drop <id> --why "<reason>"',
             description: ["give up on a checkpoint with nothing replacing it"],
@@ -321,8 +386,8 @@ export const MILESTONE_COMMAND: Command = {
         { syntax: "milestone met <id> --criterion c1 --why w [--work id] [--evidence c]", verbs: ["met"] },
         { syntax: "milestone reach <id>", description: ["record a milestone as reached once every criterion is covered"], verbs: ["reach"] },
         {
-            syntax: "milestone recheck <id> [--criterion c1] --why w",
-            description: ["re-judge coverage, or a reach, a revision left stale"],
+            syntax: "milestone recheck <id> --criterion c1 --why w",
+            description: ["re-cover a criterion on the current record — a revision's successor starts uncovered"],
             verbs: ["recheck"]
         }
     ],
@@ -401,49 +466,69 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         throw new CliError(`${objective.id} milestones need explicit exit criteria — pass --exit "<criterion>" at least once`);
     }
     const id = milestoneId();
+    const row = presetRow(ctx.storeDir, "milestone");
+    const links: Record<string, unknown>[] = [{ type: "member-of", target: objective.id }];
+    if (values.supersedes !== undefined)
+    {
+        links.push({ type: "supersedes", target: requireSibling(objective, values.supersedes) });
+    }
     const payload: Record<string, unknown> = {
-        objective: objective.id,
-        milestone: id,
-        outcome,
-        exit: values.exit.map((text, index) => ({ id: `c${index + 1}`, text })),
+        entity: id,
+        text: outcome,
+        labels: [row.label],
+        links,
+        criteria: values.exit,
+        exposure: row.exposure,
+        scope: "project",
+        priority: row.priority,
         after: (values.after ?? []).map((prefix) => requireSibling(objective, prefix)),
-        target: values.target === undefined ? undefined : validDate(values.target),
-        supersedes: values.supersedes === undefined ? undefined : requireSibling(objective, values.supersedes)
+        target: values.target === undefined ? undefined : validDate(values.target)
     };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.created", strip(payload), undefined, true), `${id} ${outcome}`);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", strip(payload), undefined, true), `${id} ${outcome}`);
     console.log(id);
 }
 
+// A revision is a supersession (#207 B12): a new milestone entity carries the
+// revised criteria and the grouping, the predecessor reads superseded, and
+// its coverage is stale by construction — claims bind to the entity id.
 function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): void
 {
-    const { ctx, milestone } = milestoneTarget(positionals[0]);
+    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const why = requireText(values.why, 'milestone revise <id> --why "<what changed and why>"');
-    const payload: Record<string, unknown> = {
-        milestone: milestone.id,
-        why,
-        outcome: restated(values.outcome, "milestone"),
-        target: withdrawable(values.target, validDate),
-        addExit: nextCriteria(milestone, values.exit ?? []),
-        dropExit: (values["drop-exit"] ?? []).map((id) => requireCriterion(milestone, id).id)
-    };
-    if (Object.keys(strip(payload)).length === 2)
+    if (milestone.supersededBy !== undefined || milestone.droppedWhy !== undefined)
+    {
+        throw new CliError(`${milestone.id} is already closed — a withdrawn or replaced checkpoint is not revised`);
+    }
+    if (values.outcome === undefined && values.target === undefined
+        && (values.exit === undefined || values.exit.length === 0)
+        && (values["drop-exit"] === undefined || values["drop-exit"].length === 0))
     {
         throw new CliError("milestone revise needs at least one of --outcome, --target, --exit, --drop-exit");
     }
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.revised", strip(payload), undefined, true), `${milestone.id} ${why}`);
-}
-
-// Criterion ids are never reused: a dropped c2 stays dropped so coverage
-// recorded against it keeps pointing at what it actually satisfied.
-function nextCriteria(milestone: MilestoneState, texts: string[]): { id: string; text: string }[]
-{
-    const highest = milestone.exit.reduce((max, criterion) => Math.max(max, Number(criterion.id.slice(1)) || 0), 0);
-    return texts.map((text, index) => ({ id: `c${highest + index + 1}`, text }));
+    const dropped = new Set((values["drop-exit"] ?? []).map((id) => requireCriterion(milestone, id).id));
+    const criteria = [
+        ...milestone.exit.filter((item) => item.dropped !== true && !dropped.has(item.id)).map((item) => item.text),
+        ...values.exit ?? []
+    ];
+    const id = milestoneId();
+    const payload: Record<string, unknown> = {
+        entity: id,
+        text: restated(values.outcome, "milestone") ?? milestone.outcome,
+        labels: [presetRow(ctx.storeDir, "milestone").label],
+        links: [{ type: "member-of", target: objective.id }, { type: "supersedes", target: milestone.id }],
+        criteria,
+        ...carriedPlacement(model, milestone.id),
+        after: milestone.after,
+        target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, milestone.target),
+        why
+    };
+    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", strip(payload), undefined, true), `${id} ${why}`);
+    console.log(id);
 }
 
 // A checkpoint given up on, with nothing taking its place. Revising it would
-// say the target moved; dropping it says nobody is going to reach it, which is
-// the thing a milestone had no way to say.
+// say the target moved; dropping it says nobody is going to reach it — the
+// retirement of the execution grammar (#207 B12).
 function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
 {
     const { ctx, milestone } = milestoneTarget(positionals[0]);
@@ -456,119 +541,80 @@ function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>)
     {
         throw new CliError(`${milestone.id} is already closed — ${milestone.reason}`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.dropped", { milestone: milestone.id, why }, undefined, true), `${milestone.id} ${why}`);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.retired", { entity: milestone.id, why }, undefined, true), `${milestone.id} ${why}`);
 }
 
+// Sugar over the coverage grammar (#207 C5): `met` records the same
+// `entity.covered` a `state cover` records, with the criterion named by its
+// cN id and the work reference held to a stated contribution.
 function milestoneMet({ values, positionals }: CommandInput<typeof COVERAGE_OPTIONS>): void
 {
-    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
+    const { ctx, model, milestone } = milestoneTarget(positionals[0]);
     const criterion = requireCriterion(milestone, requireText(values.criterion, "milestone met <id> --criterion <c1>"));
     const why = requireText(values.why, 'milestone met <id> --criterion c1 --why "<how the evidence covers it>"');
     if (milestone.met.includes(criterion.id))
     {
         throw new CliError(`${milestone.id} ${criterion.id} is already covered — revise the milestone if the criterion changed`);
     }
-    const payload = { milestone: milestone.id, criterion: criterion.id, why, objectiveRevision: objective.revision, milestoneRevision: milestone.revision };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.covered", payload, coverageRefs(model, milestone, values, "milestone met"), true),
-        `${milestone.id} ${criterion.id} ${why}`);
-}
-
-function coverageRefs(
-    model: ProjectModel,
-    milestone: MilestoneState,
-    values: { work?: string; evidence?: string[] },
-    verb: string
-): EventRefs
-{
-    const refs: EventRefs = {};
     if (values.work !== undefined)
     {
-        refs.work = requireLinkedWork(model, milestone, values.work).id;
+        requireLinkedWork(model, milestone, values.work);
     }
-    // The same revision guard every other commit-ref intake reads: this one
-    // wrote what was typed straight into `refs.commits`, so prose was recorded
-    // as a commit and an uppercase object name was refused later by the event
-    // guard as a credential (#132). The verb arrives from the caller because
-    // `met` and `recheck` share this intake, and a refusal naming the command
-    // the user did not run is the same defect one surface smaller.
-    const commits = (values.evidence ?? []).map((item) => requireRevision(item, bareRevisionRefusal(verb)));
-    if (commits.length > 0)
-    {
-        refs.commits = commits;
-    }
-    return refs;
+    recordCoverage(ctx, model, milestone.id, criterion.text, why, values, "milestone met");
 }
 
-// A revision moves what the milestone is judged against, which is what makes
-// settled coverage and a settled reach read stale. Clearing that is a
-// judgment someone makes deliberately, at the revision standing now — never a
-// side effect of another verb, and never an assertion that skips the gate the
-// first reach had to pass.
+// A revision is a supersession now, so what recheck re-judges is the
+// successor: coverage binds to the entity id, a superseding revision starts
+// uncovered, and recheck covers the current record (#207 C6). Legacy stale
+// coverage — judged against a revision that has since moved — re-covers the
+// same way.
 function milestoneRecheck({ values, positionals }: CommandInput<typeof COVERAGE_OPTIONS>): void
 {
-    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
-    const why = requireText(values.why, 'milestone recheck <id> [--criterion c1] --why "<what you re-judged>"');
+    const { ctx, model } = writeTarget();
+    const named = requireMilestone(model, positionals[0]);
+    const why = requireText(values.why, 'milestone recheck <id> --criterion c1 --why "<what you re-judged>"');
     if (values.criterion === undefined)
     {
-        recheckReach(ctx, milestone, objective, why);
-        return;
+        throw new CliError("milestone recheck re-covers a criterion on the current record — pass --criterion <c>; "
+            + "a revision is a supersession now, so its successor starts uncovered");
     }
-    recheckCoverage(ctx, model, milestone, objective, why, values);
+    const { milestone } = currentMilestone(model, named.milestone);
+    const criterion = requireCriterion(milestone, values.criterion);
+    if (milestone.met.includes(criterion.id) && !milestone.stale.some((item) => item.criterion === criterion.id))
+    {
+        throw new CliError(`${milestone.id} ${criterion.id} is already covered at the current record — nothing to recheck`);
+    }
+    if (values.work !== undefined)
+    {
+        requireLinkedWork(model, milestone, values.work);
+    }
+    recordCoverage(ctx, model, milestone.id, criterion.text, why, values, "milestone recheck");
 }
 
-function recheckCoverage(
-    ctx: ProjectContext,
-    model: ProjectModel,
-    milestone: MilestoneState,
-    objective: ObjectiveState,
-    why: string,
-    values: { criterion?: string; work?: string; evidence?: string[] }
-): void
+// The record a recheck lands on: the live end of the supersession chain.
+// Single steps over folded state, bounded by the milestone count, so a cycle
+// a foreign writer appended cannot loop the walk.
+function currentMilestone(model: ProjectModel, milestone: MilestoneState): { milestone: MilestoneState }
 {
-    const criterion = requireCriterion(milestone, values.criterion as string);
-    if (!milestone.met.includes(criterion.id))
+    let current = milestone;
+    for (let hops = 0; current.supersededBy !== undefined && hops < 1000; hops += 1)
     {
-        throw new CliError(`${milestone.id} ${criterion.id} has no coverage to recheck — ` +
-            `cover it with \`self milestone met ${milestone.id} --criterion ${criterion.id} --why "<how>"\``);
+        const next = findMilestone(model.goals, current.supersededBy);
+        if (next === null)
+        {
+            break;
+        }
+        current = next.milestone;
     }
-    if (!milestone.stale.some((item) => item.criterion === criterion.id))
-    {
-        throw new CliError(currentAlready(`${milestone.id} ${criterion.id} coverage`, objective, milestone));
-    }
-    const payload = { milestone: milestone.id, criterion: criterion.id, why, objectiveRevision: objective.revision, milestoneRevision: milestone.revision };
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.rechecked", payload, coverageRefs(model, milestone, values, "milestone recheck"), true),
-        `${milestone.id} ${criterion.id} ${why}`);
-}
-
-// Re-judging a reach passes the same gate the first one did: a revision that
-// widened the ask has to be covered before the reach can stand again, so a
-// recheck can never wave through criteria nobody looked at.
-function recheckReach(ctx: ProjectContext, milestone: MilestoneState, objective: ObjectiveState, why: string): void
-{
-    if (milestone.reached === undefined)
-    {
-        throw new CliError(`${milestone.id} was never reached — reach it with \`self milestone reach ${milestone.id}\``);
-    }
-    requireCovered(milestone);
-    const judged = milestone.reaffirmed ?? milestone.reached;
-    if (judged.objectiveRevision === objective.revision && judged.milestoneRevision === milestone.revision)
-    {
-        throw new CliError(currentAlready(milestone.id, objective, milestone));
-    }
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.rechecked", { ...reachPayload(milestone, objective), why }, undefined, true),
-        `${milestone.id} ${why}`);
-}
-
-function currentAlready(what: string, objective: ObjectiveState, milestone: MilestoneState): string
-{
-    return `${what} was already judged against the current revision ${objective.revision}/${milestone.revision} — nothing to recheck`;
+    return { milestone: current };
 }
 
 // Work reaching done is not a milestone being reached: the exit criteria are
 // the gate, and they are checked here rather than inferred from a transition.
+// Reached is the criteria-gated done claim of the shared grammar (#207 B12).
 function milestoneReach({ positionals }: CommandInput): void
 {
-    const { ctx, milestone, objective } = milestoneTarget(positionals[0]);
+    const { ctx, milestone } = milestoneTarget(positionals[0]);
     if (milestone.reached !== undefined)
     {
         throw new CliError(`${milestone.id} was already reached on ${milestone.reached.ts.slice(0, 10)}`);
@@ -579,7 +625,7 @@ function milestoneReach({ positionals }: CommandInput): void
     {
         console.error(`${errYellow("warning:")} ${milestone.id} depends on ${waiting.join(", ")} — check they are reached`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "milestone.reached", reachPayload(milestone, objective), undefined, true),
+    recordEvent(ctx, makeEvent(ctx.project, "entity.done", { entity: milestone.id }, undefined, true),
         `${milestone.id} ${milestone.outcome}`);
 }
 
@@ -593,17 +639,6 @@ function requireCovered(milestone: MilestoneState): void
     throw new CliError(`${milestone.id} has uncovered exit criteria — ` +
         open.map((criterion) => `${criterion.id} ${criterion.text}`).join("; ") +
         `\n  cover each with \`self milestone met ${milestone.id} --criterion <id> --why "<how>"\``);
-}
-
-function reachPayload(milestone: MilestoneState, objective: ObjectiveState): Record<string, unknown>
-{
-    return {
-        milestone: milestone.id,
-        objectiveRevision: objective.revision,
-        milestoneRevision: milestone.revision,
-        criteria: milestone.met,
-        evidence: milestone.evidence
-    };
 }
 
 /* ── work links ────────────────────────────────────────────────────── */
@@ -636,6 +671,9 @@ export const WORK_GOAL_LEAVES: CommandLeaf[] = [
     rawLeaf("decline", WHY_OPTION, (args) => cmdProposalDecision(requireProject(process.cwd()), args, false))
 ];
 
+// Stating what a unit contributes to is a grouping edge in the shared
+// grammar (#207 B13): one `entity.linked` per named outcome, `member-of`
+// pointing at the objective or the milestone.
 function cmdWorkLink(ctx: ProjectContext, args: string[], link: boolean): void
 {
     const { values, positionals } = parseArgs({
@@ -649,17 +687,19 @@ function cmdWorkLink(ctx: ProjectContext, args: string[], link: boolean): void
     {
         throw new CliError(`self work ${link ? "link" : "unlink"} <work-id> --objective <id> | --milestone <id>`);
     }
-    const payload: Record<string, unknown> = { work: work.id };
+    const targets: string[] = [];
     if (values.objective !== undefined)
     {
-        payload.objective = requireObjective(model, values.objective).id;
+        targets.push(requireObjective(model, values.objective).id);
     }
     if (values.milestone !== undefined)
     {
-        payload.milestone = requireMilestone(model, values.milestone).milestone.id;
+        targets.push(requireMilestone(model, values.milestone).milestone.id);
     }
-    const type = link ? "work.linked" : "work.unlinked";
-    recordEvent(ctx, makeEvent(ctx.project, type, payload, undefined, true), `${work.id} ${work.outcome}`);
+    const type = link ? "entity.linked" : "entity.unlinked";
+    recordEvents(ctx, targets.map((target) =>
+        makeEvent(ctx.project, type, { entity: work.id, link: { type: "member-of", target } }, undefined, true)),
+        `${work.id} ${work.outcome}`);
 }
 
 /* ── goal-gap proposals ────────────────────────────────────────────── */
@@ -673,6 +713,9 @@ const PROPOSAL_FIELDS: [string, string][] = [
     ["expires", "YYYY-MM-DD after which the proposal is stale"]
 ];
 
+// A proposal is a proposed work entity (#207 B13): the brief rides the
+// creation event, and accepting is confirming — the proposal's id is the
+// unit's id.
 function cmdPropose(ctx: ProjectContext, args: string[]): void
 {
     const { values, positionals } = parseArgs({
@@ -682,9 +725,25 @@ function cmdPropose(ctx: ProjectContext, args: string[]): void
     });
     const outcome = requireText(positionals[0], 'work propose "<required outcome>" --milestone <id> …');
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const payload = proposalPayload(model, outcome, values as Record<string, string | string[] | undefined>);
-    requireNovel(model, outcome, payload);
-    recordEvent(ctx, makeEvent(ctx.project, "work.proposed", payload), `${outcome}`);
+    const brief = proposalPayload(model, outcome, values as Record<string, string | string[] | undefined>);
+    requireNovel(model, outcome, brief);
+    const row = presetRow(ctx.storeDir, "work");
+    const id = workId();
+    const { outcome: text, ...rest } = brief;
+    void text;
+    const payload: Record<string, unknown> = {
+        entity: id,
+        text: outcome,
+        labels: [row.label],
+        links: [],
+        criteria: [],
+        exposure: row.exposure,
+        scope: "project",
+        priority: row.priority,
+        ...rest
+    };
+    recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip(payload)), `${outcome}`);
+    console.log(id);
 }
 
 // A proposal that cannot say what it buys, what stops it, and when it goes
@@ -768,6 +827,9 @@ function normalize(text: string): string
     return text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+// Accept is confirm and decline is the withdrawal (#207 B13): the proposal
+// entity becomes the unit under its own id, and the grouping edge toward the
+// outcome it closes lands in the same append.
 function cmdProposalDecision(ctx: ProjectContext, args: string[], accept: boolean): void
 {
     const { values, positionals } = parseArgs({ args, options: WHY_OPTION, allowPositionals: true });
@@ -776,19 +838,17 @@ function cmdProposalDecision(ctx: ProjectContext, args: string[], accept: boolea
     if (!accept)
     {
         const why = requireText(values.why, 'work decline <proposal-id> --why "<why it was turned down>"');
-        recordEvent(ctx, makeEvent(ctx.project, "work.declined", { proposal: proposal.id, why }, undefined, true), `${proposal.outcome}`);
+        recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.outcome}`);
         return;
     }
-    // Creating the unit, pointing it at what it closes, and settling the
-    // proposal are one act, so they reach the log as one append.
-    const id = workId();
-    const link = strip({ work: id, objective: proposal.objective, milestone: proposal.milestone });
-    recordEvents(ctx, [
-        makeEvent(ctx.project, "work.created", { work: id, outcome: proposal.outcome }, undefined, true),
-        makeEvent(ctx.project, "work.linked", link, undefined, true),
-        makeEvent(ctx.project, "work.accepted", { proposal: proposal.id, work: id }, undefined, true)
-    ], `${id} ${proposal.outcome}`);
-    console.log(id);
+    const target = proposal.milestone ?? proposal.objective;
+    const events = [makeEvent(ctx.project, "entity.confirmed", { entity: proposal.id }, { confirms: proposal.id }, true)];
+    if (target !== undefined)
+    {
+        events.push(makeEvent(ctx.project, "entity.linked", { entity: proposal.id, link: { type: "member-of", target } }, undefined, true));
+    }
+    recordEvents(ctx, events, `${proposal.id} ${proposal.outcome}`);
+    console.log(proposal.id);
 }
 
 /* ── console output ────────────────────────────────────────────────── */
@@ -945,15 +1005,6 @@ function withdrawable<T>(value: string | undefined, valid: (value: string) => T)
         return undefined;
     }
     return value.trim() === "" ? null : valid(value);
-}
-
-function validHorizon(value: string): string
-{
-    if (!HORIZONS.includes(value))
-    {
-        throw new CliError(`"${value}" is not a horizon — use one of ${HORIZONS.join(", ")}`);
-    }
-    return value;
 }
 
 function validPriority(value: string): number
