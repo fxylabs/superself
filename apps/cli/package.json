@@ -35,6 +35,7 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test test/*.test.mjs",
     "proof": "tsc && bash proof/proof.sh"
   },
   "devDependencies": {
