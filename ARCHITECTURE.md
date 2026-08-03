@@ -105,7 +105,7 @@ than a sanctioned alternative.
   a gate decides is the violation — including a local re-check that duplicates
   the gate's condition and can drift from it.
 - A new gate is added to this table in the same pull request that introduces it.
-- Enforcement: review, guided by this table. `proof/event-sanitization.mjs`
+- Enforcement: review, guided by this table. `test/sanitize.test.mjs`
   covers the sanitization gate specifically.
 
 ## Event namespaces
@@ -191,11 +191,11 @@ not.
   `model.ts`. It is load-bearing rather than documentation: `search.ts` builds
   its historical-status markers from it, so a type missing an entry stops
   saying which of its records still hold.
-- Enforcement: `proof/suites/lifecycle.sh` reads `STATEMENT_TYPES` out of the
-  built module and fails when an entry's verbs are missing from its command's
-  help, when a namespace that creates records has no entry and is not declared
-  a non-statement namespace, or when a withdrawal does not actually leave the
-  current renders. Review catches it earlier.
+- Enforcement: `test/lifecycle.test.mjs` reads `STATEMENT_TYPES` out of the
+  built module, fails when an entry's verbs are missing from its command's
+  help, and exercises withdrawal actually leaving the current renders. Review
+  holds the rest: a namespace that creates records must carry an entry or be a
+  declared non-statement namespace.
 
 ## Fixed naming
 
@@ -247,7 +247,7 @@ reminders:
   typecheck; the verbs with no scope form are the `UnscopedVerb` union, and the
   constructors that take one also take the `Checkout` sentence that says where
   to stand, so the note cannot be left off. A pointer written into prose is
-  still a string — `proof/scope-pointers.mjs` holds those.
+  still a string — review holds those.
 - Piped output is a contract. `self context`, `self work` and `self status`
   render for a person only when stdout is a terminal; a pipe, a redirect,
   `--plain`, `TERM=dumb`, and a terminal too narrow for a table all get the
