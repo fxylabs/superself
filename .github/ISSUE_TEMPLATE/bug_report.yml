@@ -105,7 +105,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: How a fix will be shown to work. The smallest reproduction that must stop reproducing, plus any proof coverage it should gain.
+      description: How a fix will be shown to work. The smallest reproduction that must stop reproducing, plus any test coverage it should gain.
     validations:
       required: true
 

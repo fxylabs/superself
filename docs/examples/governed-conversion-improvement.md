@@ -14,9 +14,8 @@ This example deliberately crosses the boundary between the alpha that exists
 and the complete operating loop Superself is building.
 
 - **Shipped foundation** means a corresponding primitive exists in the current
-  `self` CLI: typed project and work state, decisions, proposals, requirements,
-  reports, artifacts, human approval, work specifications, supervised attempts,
-  result validation, and integration gates.
+  `self` CLI: typed project and work state, decisions, proposals, reports,
+  artifacts, and the pid process ledger.
 - **Target contract** means the behavior is part of the intended operating
   loop but is not yet one stable, end-to-end public workflow.
 - **Illustrative record** means a name or shape used to make the lifecycle
@@ -287,9 +286,9 @@ Each node states an outcome, requirements, dependencies, declared artifacts,
 policy, and evidence plan. The graph may run independent nodes in parallel,
 but it cannot walk past the action gate.
 
-**Shipped foundation:** Superself has goals, objectives, milestones, work
-requirements, proposals, WorkSpec generations, attempt plans, completion
-policies, and evidence-linked reports.
+**Shipped foundation:** Superself has goals, objectives, milestones,
+proposals, and evidence-linked reports. The execution-contract machinery this
+stage describes is target state.
 
 **Target contract:** approved intent compiles into a coordinated work graph
 through one stable public contract rather than manual command-by-command
@@ -320,9 +319,9 @@ That is a plan-relevant finding, not an ordinary retry. The engine stops the
 path, attaches the evidence, and requests revision because the approved
 assumption and risk profile changed.
 
-**Shipped foundation:** capability preflight, durable attempt spools,
-directives, cancellation, retry, recovery, artifact validation, and daemon
-supervision exist in the alpha CLI.
+**Shipped foundation:** the pid process ledger exists in the alpha CLI —
+running, stale, and exited are judged at read time. The supervision machinery
+this stage describes is target state.
 
 **Target contract:** scheduling closes the loop across objective priority,
 dependencies, approvals, budget, capacity, failure, and newly freed resources.
@@ -477,14 +476,13 @@ the surrounding prose still sounds similar.
 The alpha already provides much of the lower-level substrate:
 
 - local-first append-only events and derived project state;
-- goals, decisions, objectives, milestones, work, requirements, reports,
-  artifacts, proposals, and human work approval;
-- versioned WorkSpec generations and provider attempt plans;
-- capability preflight, durable spools, directives, cancellation, retry,
-  recovery, circuit breakers, and daemon supervision;
-- result-envelope and artifact verification;
-- review receipts, exact-state approvals, leases, fences, and integration
-  gates.
+- goals, decisions, objectives, milestones, work, reports, artifacts, and
+  proposals;
+- the pid process ledger with read-time liveness.
+
+Everything beyond that — execution contracts, supervision, capability
+policy, and merge gates — is target state; merge control today belongs to
+GitHub PR review and CI.
 
 The example makes the missing composition explicit:
 
