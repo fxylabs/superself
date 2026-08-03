@@ -6,17 +6,17 @@ Models have context. Agents have runtimes. Companies need state.
 
 Company State is the durable, versioned truth of what an organization intends,
 has decided, is doing, may authorize, and can prove. A Company State Runtime
-turns that state into context, ready work, policy the engine itself enforces —
-retention caps, human-owned confirmations, evidence-gated completion — and the
-next company state. Supervised execution through WorkSpec contracts is a
-stated target, not shipped surface; [docs/roadmap.md](docs/roadmap.md) draws
-that boundary.
+turns that state into context, ready work, evidence-gated completion, and the
+next company state. Engine-enforced policy today covers the raw state verbs
+and the completion gate; supervised execution through WorkSpec contracts and
+cap-gated preset verbs are stated targets —
+[docs/roadmap.md](docs/roadmap.md) draws that boundary.
 
-Superself is building the open-source Company State Runtime. It gives a company
-durable state beyond any one context window and governed execution beyond any
-one person's attention span. People set direction, make consequential
-decisions, and remain accountable. Agents carry most planning, routine
-execution, recovery, verification, and reporting.
+Superself is building the open-source Company State Runtime: durable state
+beyond any one context window today, and governed execution beyond any one
+person's attention span as the target. People set direction, make
+consequential decisions, and remain accountable. Agents carry most planning,
+routine execution, recovery, verification, and reporting.
 
 > [!IMPORTANT]
 > Superself is an early alpha. The local `self` CLI and the foundations
@@ -85,12 +85,13 @@ as operating outcomes and separates it from what is not complete.
 - placement is scope × priority × exposure: a workspace-scoped entity renders
   in every project's context, priority orders the render, and exposure picks
   full text, one line, or a search pointer — `self state place` moves any of
-  the three, demotions record why, and demotion out of full waits for a
-  person to confirm;
+  the three, demotions record why, and an agent demoting out of full passes
+  `--proposed` so the move waits for a person to confirm;
 - retention caps bound the always-rendered set (defaults: 4,000 characters of
-  full text and 50 index entities, per scope) — adding past a cap is refused
-  until `--demote` names what frees the room, so an agent lands the pair as
-  proposals a person confirms;
+  full text and 50 index entities, per scope) — `state add`, `state place`,
+  and the alias verbs refuse past a cap until `--demote` names what frees the
+  room, and `--proposed` lands the pair for a person to confirm; the preset
+  verbs are not cap-gated yet;
 - the outcome layer above work — `objective add/revise/close`, `milestone
   add/revise/met/reach/recheck`, `work link/unlink`, and `work
   propose/accept/decline` — connects the goal to verified progress: a milestone

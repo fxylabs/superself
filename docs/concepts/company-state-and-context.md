@@ -152,21 +152,24 @@ order until the budget is spent, then pointers. Exposure is per entity, not
 per label — one convention may be full while another has decayed to index.
 
 A demotion — exposure moving toward less-rendered — always records `--why`.
-Demotion out of full is human-owned: an agent records the move with
-`--proposed`, and it waits until a person runs `self state confirm`.
+Demotion out of full is human-owned by convention: an agent records the move
+with `--proposed`, and it waits until a person runs `self state confirm`.
 
 ### Retention caps
 
-The always-rendered set is bounded by policy: user-set caps, engine-enforced,
-per scope. The defaults are 4,000 characters of full-exposure text and 50
-index entities (`fullCap` and `indexCap` in the store's `config.json`) —
-characters for full because tokens are the real constraint, count for index.
+The always-rendered set is bounded by policy: user-set caps, enforced by the
+engine on `state add`, `state place`, and the alias verbs, per scope. The
+defaults are 4,000 characters of full-exposure text and 50 index entities
+(`fullCap` and `indexCap` in the store's `config.json`) — characters for full
+because tokens are the real constraint, count for index.
 
 Adding or placing past a cap is refused until the caller names what demotes:
 `--demote <id>` frees the room by moving a named entity one tier down. An
-agent passes `--proposed`, landing the add and the demotion as a pair that
-waits on a person — an agent cannot silently inflate the always-rendered set,
-and rendering itself never refuses.
+agent that passes `--proposed` lands the add and the demotion as a pair that
+waits on a person; without it both halves apply at once. The gate binds
+`state add`, `state place`, and the alias verbs — the preset verbs do not
+route through it yet (see the [roadmap](../roadmap.md)). Rendering itself
+never refuses.
 
 ## Context is a projection, not a dump
 

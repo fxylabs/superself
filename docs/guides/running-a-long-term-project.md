@@ -165,8 +165,10 @@ What context renders is placement: every record above is an entity with a
 priority (render order) and an exposure (full text, one index line, or a
 search pointer). When a decision stops governing daily work, demote it rather
 than deleting it — `self state place <id> --exposure index --why "<reason>"`
-keeps it recoverable while freeing the always-rendered budget, and the
-retention caps refuse additions past their limit until something demotes.
+keeps it recoverable while freeing the always-rendered budget. The caps
+refuse a `state add` or `state place` that would push a tier past its limit
+until something demotes; the preset verbs above do not route through that
+gate yet.
 
 ## 6. Complete work with evidence
 

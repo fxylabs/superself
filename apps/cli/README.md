@@ -39,8 +39,9 @@ with a label and a placement — scope (`project` or `workspace`), priority
 (render order), and exposure (`full`, `index`, or `search`). The preset verbs
 are rows in a user-editable alias table (`self alias`), `self state` records
 and moves raw entities, and retention caps keep the always-rendered set
-bounded: adding past a cap is refused until `--demote` names what frees the
-room. `self work done` refuses a bare claim — the evidence is a report with a
+bounded: a `state add`, `state place`, or alias-verb add past a cap is
+refused until `--demote` names what frees the room.
+`self work done` refuses a bare claim — the evidence is a report with a
 commit or an artifact, or a done-time `--report` of what verifiably happened.
 
 ## What agents get

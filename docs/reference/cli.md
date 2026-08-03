@@ -56,8 +56,8 @@ work, or a free-labeled entity — folds into one record kind with placement:
   person (`state confirm`).
 - Retention caps (`fullCap` and `indexCap` in the store's `config.json`;
   defaults 4,000 characters of full text and 50 index entities, per scope)
-  gate `state add` and `state place` into a tier: past a cap the verb refuses
-  until `--demote <id>` names what frees the room.
+  gate `state add`, `state place`, and the alias verbs into a tier: past a
+  cap the verb refuses until `--demote <id>` names what frees the room.
 - `alias` prints and edits the table the preset verbs read their label and
   default placement from; built-in rows can be overridden and restored.
 
