@@ -1,14 +1,15 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { helpHint, parseCommand, subcommand, unknownOption } from "./args.js";
-import { commitStaged, runArtifact, stageArtifacts } from "./artifact.js";
+import { helpHint, parseCommand, unknownOption } from "./args.js";
+import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
+import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
-import { cmdMilestone, cmdObjective, cmdProposalDecision, cmdPropose, cmdWorkLink, rejectManualProgress } from "./goals.js";
+import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
-import { cliVersion, commandUsage, findCommand, rootUsage } from "./help.js";
+import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -67,37 +68,28 @@ async function main(argv: string[]): Promise<void>
         printUsage(help);
         return;
     }
-    const cmd = argv[0] ?? "";
-    const rest = argv.slice(1);
-    switch (cmd)
+    const resolved = resolveCommand(COMMANDS, argv);
+    if (resolved === null)
     {
-        case "init": await cmdInit(rest); break;
-        case "workspace": cmdWorkspace(rest); break;
-        case "lang": cmdLang(rest); break;
-        case "theme": cmdTheme(rest); break;
-        case "timezone": cmdTimezone(rest); break;
-        case "project": cmdProject(rest); break;
-        case "remote": cmdRemote(rest); break;
-        case "sync": cmdSync(rest); break;
-        case "clone": cmdClone(rest); break;
-        case "goal": cmdGoal(rest); break;
-        case "objective": cmdObjective(guarded(rest)); break;
-        case "milestone": cmdMilestone(guarded(rest)); break;
-        case "decide": cmdDecide(rest); break;
-        case "work": cmdWork(rest); break;
-        case "report": cmdReport(rest); break;
-        case "artifact": cmdArtifact(rest); break;
-        case "convention": cmdConvention(rest); break;
-        case "connect": cmdConnect(rest); break;
-        case "view": cmdView(rest); break;
-        case "context": cmdContext(rest); break;
-        case "status": cmdStatus(rest); break;
-        case "setup": cmdSetup(rest); break;
-        case "log": cmdLog(rest); break;
-        case "search": cmdSearch(rest); break;
-        case "fold": cmdFold(rest); break;
-        default: cmdUnknown(cmd); break;
+        cmdUnknown(argv[0] ?? "");
+        return;
     }
+    await runLeaf(resolved);
+}
+
+// The one parse in the CLI: the option set and the positional count come from
+// the leaf the contract resolved to, so nothing a command accepts can be
+// declared anywhere else. A raw leaf keeps its own parseArgs call — the second
+// parse path recorded as debt (#111) — and is handed the arguments untouched.
+async function runLeaf(resolved: Resolved): Promise<void>
+{
+    if (resolved.leaf.mode === "raw")
+    {
+        await resolved.leaf.run(resolved.args);
+        return;
+    }
+    const parsed = parseCommand(resolved.command.name, resolved.args, resolved.leaf.options, resolved.leaf.positionals);
+    await resolved.leaf.run(parsed);
 }
 
 // Bare `self` is a request for the verb list; anything else that reached no
@@ -108,7 +100,7 @@ function cmdUnknown(cmd: string): void
 {
     if (cmd === "")
     {
-        printUsage(rootUsage());
+        printUsage(rootUsage(COMMANDS));
         return;
     }
     if (cmd.startsWith("-"))
@@ -126,8 +118,8 @@ function helpText(argv: string[]): string | null
     {
         return null;
     }
-    const command = findCommand(argv[0] === "help" ? argv[1] : argv[0]);
-    return command === undefined ? rootUsage() : commandUsage(command);
+    const command = findCommandByName(COMMANDS, argv[0] === "help" ? argv[1] : argv[0]);
+    return command === undefined ? rootUsage(COMMANDS) : commandUsage(command);
 }
 
 // After `--` a flag is a positional the user meant literally, not a request.
@@ -177,9 +169,492 @@ function printUsage(usage: string): void
     }).join("\n"));
 }
 
-async function cmdInit(rest: string[]): Promise<void>
+/* ── the option sets this module's leaves declare ──────────────────── */
+
+const INIT_OPTIONS = { lang: { type: "string" }, agents: { type: "boolean" } } as const;
+
+const PROJECT_ADD_OPTIONS = { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } } as const;
+
+const DECIDE_OPTIONS = {
+    proposed: { type: "boolean" },
+    why: { type: "string" },
+    supersedes: { type: "string", multiple: true },
+    work: { type: "string" },
+    blocks: { type: "string", multiple: true },
+    after: { type: "string" }
+} as const;
+
+const WITHDRAW_OPTIONS = { why: { type: "string" } } as const;
+
+const TRANSITION_OPTIONS = { on: { type: "string" }, why: { type: "string" } } as const;
+
+const PROCESS_OPTIONS = { pid: { type: "string" }, code: { type: "string" } } as const;
+
+const RETIRE_OPTIONS = {
+    why: { type: "string" },
+    successor: { type: "string" },
+    "successor-project": { type: "string" },
+    requirement: { type: "string" }
+} as const;
+
+const REPORT_OPTIONS = {
+    evidence: { type: "string", multiple: true },
+    artifact: { type: "string", multiple: true },
+    next: { type: "string" },
+    file: { type: "string" }
+} as const;
+
+// Declared once for the whole verb, so the subcommand that does not take one
+// of these says so itself rather than dropping the flag.
+const CONVENTION_OPTIONS = { supersedes: { type: "string", multiple: true }, why: { type: "string" } } as const;
+
+const SCOPED_RENDER_OPTIONS = { ...SCOPE_OPTIONS, ...RENDER_OPTIONS } as const;
+
+const WORKSPACE_RENDER_OPTIONS = { ...WORKSPACE_SCOPE_OPTIONS, ...RENDER_OPTIONS } as const;
+
+const LOG_OPTIONS = { lines: { type: "string", short: "n" }, ...WORKSPACE_SCOPE_OPTIONS } as const;
+
+const SEARCH_OPTIONS = { type: { type: "string" }, project: { type: "string" } } as const;
+
+const WORK_TRANSITIONS: [string, string][] = [
+    ["start", "work.started"],
+    ["block", "work.blocked"],
+    ["unblock", "work.unblocked"],
+    ["done", "work.done"]
+];
+
+// Listing and showing are workspace reads, so they resolve from any directory;
+// every verb that writes still requires the linked checkout. The unnamed form
+// takes over only for a leading long flag, so a bare `--` is still explained
+// as a separator standing where a subcommand belongs.
+const WORK_CHILDREN: CommandLeaf[] = [
+    leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
+    leaf("add", {}, 1, ({ positionals }) => cmdWorkAdd(positionals[0])),
+    leaf("show", SCOPE_OPTIONS, 1, cmdWorkShow),
+    ...WORK_TRANSITIONS.map(([verb, type]) => leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input))),
+    leaf("started", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, true)),
+    leaf("exited", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, false)),
+    leaf("retire", RETIRE_OPTIONS, 1, cmdWorkRetireUnit, ["requirement"]),
+    ...WORK_GOAL_LEAVES
+];
+
+/* ── the canonical hierarchy ───────────────────────────────────────── */
+
+// Dispatch, argument parsing, help, and the test-tier enumeration read this
+// list and nothing beside it; each entry is declared where its handlers live,
+// and composed here in the order the verb list prints.
+export const COMMANDS: Command[] = [
+    {
+        name: "init",
+        usage: [{ syntax: "init [--lang <code>] [--agents]", description: ["initialize the current directory as a workspace"], verbs: [""] }],
+        detail: [
+            "create the workspace store this machine records project state in, and",
+            "point this machine at it.",
+            "",
+            "  --lang <code>   language of the HTML views, as a BCP 47 code (en, ko, ja)",
+            "  --agents        tell this machine's agents about self without asking"
+        ],
+        node: leaf("", INIT_OPTIONS, 0, cmdInit)
+    },
+    {
+        name: "workspace",
+        usage: [{ syntax: "workspace [<path>]", description: ["show or set the workspace this machine uses"], verbs: [""] }],
+        detail: [
+            "with no path, print the workspace this machine resolves to; with a path,",
+            "point this machine at an existing workspace store."
+        ],
+        node: leaf("", {}, 1, ({ positionals }) => cmdWorkspace(positionals[0]))
+    },
+    {
+        name: "lang",
+        usage: [{ syntax: "lang [<code>]", description: ["show or set the language of the HTML views"], verbs: [""] }],
+        detail: [
+            "with no code, print the current language; with a BCP 47 code, set it and",
+            "re-render every project view."
+        ],
+        node: leaf("", {}, 1, ({ positionals }) => cmdLang(positionals[0]))
+    },
+    {
+        name: "theme",
+        usage: [{ syntax: "theme [<name>]", description: ["show or set the viewer accent theme (violet, cyan, orange, mono)"], verbs: [""] }],
+        detail: [
+            "with no name, print the current accent; with a name, set it and re-render",
+            "every project view."
+        ],
+        node: leaf("", {}, 1, ({ positionals }) => cmdTheme(positionals[0]))
+    },
+    {
+        name: "timezone",
+        usage: [{ syntax: "timezone [<zone>]", description: ["show or set the zone every target date is judged in"], verbs: [""] }],
+        detail: [
+            "with no zone, print the current zone; with an IANA zone name such as",
+            "Asia/Seoul, set it and re-render every project view."
+        ],
+        node: leaf("", {}, 1, ({ positionals }) => cmdTimezone(positionals[0]))
+    },
+    {
+        name: "project",
+        usage: [
+            {
+                syntax: "project add [path] [--name s] [--desc d] [--no-connect]",
+                description: ["register a project and render its agent block"],
+                verbs: ["add"]
+            },
+            {
+                syntax: "project link [slug] [path]",
+                description: ["attach a registered project's directory on this machine"],
+                verbs: ["link"]
+            }
+        ],
+        detail: [
+            "register a project with the workspace, or attach one registered on another",
+            "machine. Every checkout of a registered git repository — worktrees",
+            "included — resolves on its own; `link` with no slug infers it from the",
+            "repository and only saves the probe.",
+            "",
+            "  --name <slug>   register under this slug instead of the directory name",
+            "  --desc <text>   one-line description shown in the workspace view",
+            "  --no-connect    skip writing the managed block into AGENTS.md and CLAUDE.md"
+        ],
+        node: branch({
+            name: "project",
+            unnamed: "refuse",
+            refusal: 'usage: self project add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]',
+            children: [
+                leaf("add", PROJECT_ADD_OPTIONS, 1, projectAdd),
+                leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1]))
+            ]
+        })
+    },
+    {
+        name: "remote",
+        usage: [{ syntax: "remote add <url>", description: ["connect the workspace store to a git remote"], verbs: ["add"] }],
+        detail: ["set the git remote that `self sync` pushes the workspace store to."],
+        node: branch({
+            name: "remote",
+            unnamed: "refuse",
+            refusal: "usage: self remote add <url>",
+            children: [
+                leaf("add", {}, 1, ({ positionals }) =>
+                    remoteAdd(requireWorkspace(process.cwd()), requireText(positionals[0], "remote add <url>")))
+            ]
+        })
+    },
+    {
+        name: "sync",
+        usage: [{ syntax: "sync", description: ["pull, refold, and push the workspace store"], verbs: [""] }],
+        detail: ["commit pending state, rebase on the remote, re-derive canonical files, and push."],
+        node: leaf("", {}, 0, () => syncStore(requireWorkspace(process.cwd())))
+    },
+    {
+        name: "clone",
+        usage: [{ syntax: "clone <url> [dir]", description: ["clone a workspace store onto a new machine"], verbs: [""] }],
+        detail: ["clone an existing workspace store and point this machine at it."],
+        node: leaf("", {}, 2, ({ positionals }) => cloneStore(requireText(positionals[0], "clone <url> [dir]"), positionals[1]))
+    },
+    {
+        name: "goal",
+        usage: [{ syntax: 'goal set "<text>"', description: ["set the long-term project goal"], verbs: ["set"] }],
+        detail: ["record the outcome this project exists to reach. The latest one wins."],
+        node: branch({
+            name: "goal",
+            unnamed: "refuse",
+            refusal: 'usage: self goal set "<text>"',
+            children: [leaf("set", {}, 1, ({ positionals }) => cmdGoalSet(positionals[0]))]
+        })
+    },
+    OBJECTIVE_COMMAND,
+    MILESTONE_COMMAND,
+    {
+        name: "decide",
+        usage: [
+            { syntax: 'decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id] [--blocks id] [--after id]', verbs: [""] },
+            { syntax: "decide confirm <event-id>", description: ["confirm a proposed decision"], verbs: ["confirm"] },
+            {
+                syntax: 'decide decline <event-id> --why "<reason>"',
+                description: ["turn down a proposal; it leaves \"waiting on you\" at once"],
+                verbs: ["decline"]
+            },
+            {
+                syntax: 'decide retract <event-id> --why "<reason>"',
+                description: [
+                    "take back a confirmed decision with nothing replacing it",
+                    "it stops rendering as current and stays inspectable in search"
+                ],
+                verbs: ["retract"]
+            }
+        ],
+        detail: [
+            "record one decision. Confirmed by default: use --proposed for a decision",
+            "the user has not agreed to yet, and `decide confirm` when they do.",
+            "",
+            "  --why <text>          the reason the decision was made, or the reason it was withdrawn",
+            "  --proposed            record as a proposal, which never displaces a confirmed decision",
+            "  --supersedes <id>     retire an earlier decision, repeatable",
+            "  --work <work-id>      attach the decision to a work unit",
+            "  --blocks <work-id>    the work confirming it would unblock, repeatable",
+            "  --after <event-id>    the event it cannot be decided before",
+            "",
+            "--blocks is what ranks a proposal: `self context` and `self status` say",
+            "whether confirming it unblocks work, cannot be decided yet, or only",
+            "records a rule the gated work already landed under.",
+            "",
+            "--supersedes replaces a decision, `retract` withdraws one with nothing in",
+            "its place, and `decline` answers a proposal. None of the three rewrites",
+            "history: the record keeps its text and gains a status."
+        ],
+        node: branch({
+            name: "decide",
+            // `confirm`, `retract` and `decline` are the only subcommands:
+            // every other first argument is the decision text, which may itself
+            // start with a dash after `--`. Only the withdrawals take `--why`,
+            // so asking `confirm` for one is still named as a flag it does not
+            // have.
+            unnamed: "text",
+            refusal: 'usage: self decide "<text>" | confirm <id> | retract <id> --why w | decline <id> --why w',
+            children: [
+                leaf("", DECIDE_OPTIONS, 1, cmdDecide),
+                leaf("confirm", {}, 1, ({ positionals }) => confirmDecision(requireProject(process.cwd()), positionals[0])),
+                leaf("decline", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
+                    withdrawDecision(requireProject(process.cwd()), "decline", positionals[0], values.why)),
+                leaf("retract", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
+                    withdrawDecision(requireProject(process.cwd()), "retract", positionals[0], values.why))
+            ]
+        })
+    },
+    {
+        name: "work",
+        usage: [
+            {
+                syntax: "work [--project <slug>] [--pretty|--plain]",
+                description: ["list open work, from any directory with --project", "(a terminal gets the ruled table; a pipe gets one line per unit)"],
+                verbs: [""]
+            },
+            { syntax: 'work add "<required outcome>"', description: ["create a work unit"], verbs: ["add"] },
+            {
+                syntax: "work show <id> [--project <slug>]",
+                description: ["print full work detail: brief, reports, evidence", "(resolves the owning project from any directory)"],
+                verbs: ["show"]
+            },
+            {
+                syntax: "work start|block|unblock|done <id>",
+                description: ["move a work unit (block: --on decision|dependency|external [--why w])"],
+                verbs: ["start", "block", "unblock", "done"]
+            },
+            {
+                syntax: "work link|unlink <id> --objective o | --milestone m",
+                description: ["state, or withdraw, what a work unit contributes to"],
+                verbs: ["link", "unlink"]
+            },
+            { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r', verbs: ["propose"] },
+            { syntax: "work accept|decline <proposal-id> [--why w]", description: ["act on a goal-gap proposal; decline states why"], verbs: ["accept", "decline"] },
+            {
+                syntax: "work started <id> --pid N | exited <id> [--code N]",
+                description: ["record the agent process running a unit, and how it ended", "liveness is judged at read time from the pid on this machine"],
+                verbs: ["started", "exited"]
+            },
+            {
+                syntax: "work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]",
+                description: [
+                    "retire the unit itself: its outcome was given up or moved, not reached",
+                    "history stays inspectable; the unit stops counting as open work"
+                ],
+                verbs: ["retire"]
+            }
+        ],
+        detail: [
+            "create and move units of work, and state what each contributes to.",
+            "`work add` prints the new id.",
+            "",
+            "done is the judgment that the outcome was reached; the evidence for it",
+            "lives in the unit's reports.",
+            "",
+            "  --project <slug>      list or show against this project, from any directory",
+            "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
+            "  --why <text>          detail recorded with the block, a revision, or the done",
+            "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
+            "  --successor-project <slug>  the successor's project when its id is ambiguous",
+            "  --objective <id>      the objective a linked unit contributes to",
+            "  --milestone <id>      the milestone a linked or proposed unit contributes to",
+            "  --value <text>        why the proposed work matters",
+            "  --success <text>      what done looks like for the proposal",
+            "  --stop <text>         the condition that ends the proposal early",
+            "  --risk <text>         what could go wrong",
+            "  --capacity <text>     the effort the proposal asks for",
+            "  --evidence-plan <e>   how the outcome will be evidenced",
+            "  --confidence <level>  low, medium, or high",
+            "  --expires <date>      when an unanswered proposal lapses"
+        ],
+        node: branch({
+            name: "work",
+            unnamed: "options",
+            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|accept|decline`,
+            children: WORK_CHILDREN
+        })
+    },
+    {
+        name: "report",
+        usage: [
+            {
+                syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]',
+                verbs: [""]
+            }
+        ],
+        detail: [
+            "attach a report to a work unit. The current HEAD commit is recorded as",
+            "evidence unless --evidence names other values. The project repository",
+            "decides what each value is: one it resolves is recorded as a Git revision",
+            "and watched, anything else is kept as a descriptive note and never",
+            "resolved again. Force either reading with commit:<v> or note:<v>.",
+            "",
+            "  --file <path>       read the summary from a file instead of the argument",
+            "  --evidence <v>      record evidence, repeatable: a revision this repo",
+            "                      resolves, else a note; commit:<v>/note:<v> force it",
+            "  --artifact <path>   copy a file into the store and attach it, repeatable",
+            "  --next <text>       what the next session should pick up"
+        ],
+        node: leaf("", REPORT_OPTIONS, 2, cmdReport)
+    },
+    ARTIFACT_COMMAND,
+    {
+        name: "convention",
+        usage: [
+            { syntax: 'convention add "<text>" [--supersedes <event-id>]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
+            { syntax: 'convention drop <event-id> --why "<reason>"', description: ["retire a convention with nothing replacing it"], verbs: ["drop"] }
+        ],
+        detail: [
+            "record a rule this project works by, or retire one by its event id.",
+            "",
+            "  --supersedes <id>     the convention this one replaces, repeatable",
+            "  --why <text>          why a dropped rule no longer holds; every withdrawal carries one",
+            "",
+            "correcting a rule is one event, not a drop and a re-add: the replacement",
+            "carries the lineage, so the pair can never both read as current."
+        ],
+        node: branch({
+            name: "convention",
+            unnamed: "refuse",
+            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] | drop <event-id> --why w',
+            children: [
+                leaf("add", CONVENTION_OPTIONS, 1, conventionAdd),
+                leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop)
+            ]
+        })
+    },
+    {
+        name: "connect",
+        usage: [
+            {
+                syntax: "connect [--global]",
+                description: [
+                    "render the agent-onboarding block into AGENTS.md and CLAUDE.md",
+                    "(--global: into this machine's agent instruction files)"
+                ],
+                verbs: [""]
+            }
+        ],
+        detail: [
+            "write the managed block that tells any agent tool how this project",
+            "records its state.",
+            "",
+            "  --global    write into this machine's agent instruction files instead"
+        ],
+        node: leaf("", { global: { type: "boolean" } }, 0, ({ values }) => cmdConnect(values.global === true))
+    },
+    {
+        name: "view",
+        usage: [{ syntax: "view [slug]", description: ["open the live workspace or project view in the browser at a terminal"], verbs: [""] }],
+        detail: [
+            "open the HTML view the last fold rendered: the workspace, or one project.",
+            "Without an interactive terminal, `view` prints the rendered path and",
+            "launches nothing."
+        ],
+        node: leaf("", {}, 1, ({ positionals }) => cmdView(positionals[0]))
+    },
+    {
+        name: "context",
+        usage: [{ syntax: "context [--project <slug>] [--pretty|--plain]", description: ["print derived context for agents"], verbs: [""] }],
+        detail: [
+            "print this project's current truth: goal, active decisions, open work, recent reports.",
+            "piped output is capped at 12,000 characters per project; every omission names",
+            "the command that recovers the omitted state in full.",
+            "a terminal gets the ruled render instead, which carries no cap; --plain forces",
+            "the capped agent output anywhere, --pretty forces the ruled render.",
+            "there is no --workspace form: run from outside every project, `context` already",
+            "summarizes the whole workspace.",
+            "",
+            "  --project <slug>    read this registered project instead of this directory's"
+        ],
+        // `context` has no workspace form because it already is one: run from
+        // outside any project, it renders the workspace summary, and --project
+        // names one project to read instead of the directory's own.
+        node: leaf("", SCOPED_RENDER_OPTIONS, 0, ({ values }) =>
+            printContext(readScope(process.cwd(), values), resolveRender(values)))
+    },
+    {
+        name: "status",
+        usage: [
+            {
+                syntax: "status [--project <slug>] [--workspace] [--pretty|--plain]",
+                description: ["print a short state summary"],
+                verbs: [""]
+            }
+        ],
+        detail: [
+            "print what waits on you, what is moving, and any health signals.",
+            "an open unit with a recorded process shows its state — running, stale,",
+            "or exited — judged on this machine at read time.",
+            "",
+            "  --project <slug>    summarize this registered project instead of this directory's",
+            "  --workspace         one line per registered project, from anywhere"
+        ],
+        node: leaf("", WORKSPACE_RENDER_OPTIONS, 0, ({ values }) =>
+            printStatus(readScope(process.cwd(), values), resolveRender(values)))
+    },
+    {
+        name: "setup",
+        usage: [{ syntax: "setup", description: ["print the workspace, project, and store this directory resolves to"], verbs: [""] }],
+        detail: ["explain how this directory resolves, and what to run when it resolves to nothing."],
+        node: leaf("", {}, 0, () => printSetup(process.cwd()))
+    },
+    {
+        name: "log",
+        usage: [{ syntax: "log [-n N] [--project <slug>] [--workspace]", description: ["print recent events"], verbs: [""] }],
+        detail: [
+            "print the project's event log, newest last.",
+            "--workspace merges every registered project onto one timeline and leads each",
+            "line with the project it happened in.",
+            "",
+            "  -n <count>          how many events to print (default 20)",
+            "  --project <slug>    read this registered project instead of this directory's",
+            "  --workspace         every registered project's events on one timeline"
+        ],
+        node: leaf("", LOG_OPTIONS, 0, cmdLog)
+    },
+    {
+        name: "search",
+        usage: [{ syntax: "search [query] [--type t] [--project p]", description: ["grep state (query optional with --type or --project)"], verbs: [""] }],
+        detail: [
+            "search events across every registered project.",
+            "the query may be omitted when --type or --project narrows the pull.",
+            "",
+            "  --type <type>       only events of this type, such as decision.confirmed",
+            "  --project <slug>    only this project"
+        ],
+        node: leaf("", SEARCH_OPTIONS, 1, cmdSearch)
+    },
+    {
+        name: "fold",
+        usage: [{ syntax: "fold", description: ["re-derive canonical files from the log"], verbs: [""] }],
+        detail: ["rebuild state files, work briefs, and HTML views from the event log."],
+        node: leaf("", {}, 0, cmdFold)
+    }
+];
+
+/* ── the workspace and project verbs this module implements ────────── */
+
+async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<void>
 {
-    const { values } = parseCommand("init", rest, { lang: { type: "string" }, agents: { type: "boolean" } }, 0);
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
@@ -232,9 +707,8 @@ function connectMachineAgents(): void
     console.log(`agents on this machine now know about self — block written into ${files.join(", ")}`);
 }
 
-function cmdWorkspace(rest: string[]): void
+function cmdWorkspace(path: string | undefined): void
 {
-    const [path] = parseCommand("workspace", rest, {}, 1).positionals;
     if (path === undefined)
     {
         console.log(machineWorkspace() ?? "no workspace set — run `self init` in the directory that should hold it");
@@ -271,9 +745,8 @@ function validLang(code: string): string
     return lang;
 }
 
-function cmdLang(rest: string[]): void
+function cmdLang(code: string | undefined): void
 {
-    const [code] = parseCommand("lang", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
     if (code === undefined)
     {
@@ -285,15 +758,8 @@ function cmdLang(rest: string[]): void
     console.log(`views now render in "${lang}"`);
 }
 
-function guarded(rest: string[]): string[]
+function cmdTimezone(zone: string | undefined): void
 {
-    rejectManualProgress(rest);
-    return rest;
-}
-
-function cmdTimezone(rest: string[]): void
-{
-    const [zone] = parseCommand("timezone", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
     if (zone === undefined)
     {
@@ -305,9 +771,8 @@ function cmdTimezone(rest: string[]): void
     console.log(`target dates are now judged in "${timezone}"`);
 }
 
-function cmdTheme(rest: string[]): void
+function cmdTheme(name: string | undefined): void
 {
-    const [name] = parseCommand("theme", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
     if (name === undefined)
     {
@@ -329,30 +794,8 @@ function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
     commitAll(ctx.storeDir, message);
 }
 
-function cmdProject(rest: string[]): void
+function projectAdd({ values, positionals }: CommandInput<typeof PROJECT_ADD_OPTIONS>): void
 {
-    const sub = subcommand("project", rest);
-    if (sub === "add")
-    {
-        projectAdd(rest.slice(1));
-        return;
-    }
-    if (sub === "link")
-    {
-        projectLink(rest.slice(1));
-        return;
-    }
-    throw new CliError('usage: self project add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]');
-}
-
-function projectAdd(args: string[]): void
-{
-    const { values, positionals } = parseCommand(
-        "project",
-        args,
-        { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } },
-        1
-    );
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(positionals[0] ?? process.cwd());
     const slug = values.name ?? basename(projectDir);
@@ -387,9 +830,8 @@ function projectAdd(args: string[]): void
     }
 }
 
-function projectLink(args: string[]): void
+function projectLink(wanted: string | undefined, path: string | undefined): void
 {
-    const [wanted, path] = parseCommand("project", args, {}, 2).positionals;
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(path ?? process.cwd());
     if (!existsSync(projectDir))
@@ -431,9 +873,8 @@ function inferredSlug(storeDir: string, projectDir: string): string
     return requireText(undefined, "project link <slug> [path]");
 }
 
-function cmdView(rest: string[]): void
+function cmdView(slug: string | undefined): void
 {
-    const [slug] = parseCommand("view", rest, {}, 1).positionals;
     const ctx = requireWorkspace(process.cwd());
     if (slug !== undefined)
     {
@@ -458,96 +899,15 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
     excludeLocally(projectDir, MARKER_FILE);
 }
 
-function cmdSync(rest: string[]): void
+function cmdGoalSet(value: string | undefined): void
 {
-    parseCommand("sync", rest, {}, 0);
-    syncStore(requireWorkspace(process.cwd()));
-}
-
-function cmdClone(rest: string[]): void
-{
-    const [url, dir] = parseCommand("clone", rest, {}, 2).positionals;
-    cloneStore(requireText(url, "clone <url> [dir]"), dir);
-}
-
-// `context` has no workspace form because it already is one: run from outside
-// any project, it renders the workspace summary, and --project names one
-// project to read instead of the directory's own.
-function cmdContext(rest: string[]): void
-{
-    const { values } = parseCommand("context", rest, { ...SCOPE_OPTIONS, ...RENDER_OPTIONS }, 0);
-    printContext(readScope(process.cwd(), values), resolveRender(values));
-}
-
-function cmdStatus(rest: string[]): void
-{
-    const { values } = parseCommand("status", rest, { ...WORKSPACE_SCOPE_OPTIONS, ...RENDER_OPTIONS }, 0);
-    printStatus(readScope(process.cwd(), values), resolveRender(values));
-}
-
-function cmdSetup(rest: string[]): void
-{
-    parseCommand("setup", rest, {}, 0);
-    printSetup(process.cwd());
-}
-
-function cmdArtifact(rest: string[]): void
-{
-    runArtifact(() => requireWorkspace(process.cwd()), rest);
-}
-
-function cmdRemote(rest: string[]): void
-{
-    if (subcommand("remote", rest) !== "add")
-    {
-        throw new CliError("usage: self remote add <url>");
-    }
-    const [, url] = parseCommand("remote", rest, {}, 2).positionals;
-    remoteAdd(requireWorkspace(process.cwd()), requireText(url, "remote add <url>"));
-}
-
-function cmdGoal(rest: string[]): void
-{
-    if (subcommand("goal", rest) !== "set")
-    {
-        throw new CliError('usage: self goal set "<text>"');
-    }
-    const text = requireText(parseCommand("goal", rest, {}, 2).positionals[1], 'goal set "<text>"');
+    const text = requireText(value, 'goal set "<text>"');
     const ctx = requireProject(process.cwd());
     recordEvent(ctx, makeEvent(ctx.project, "goal.set", { text }, undefined, true), text);
 }
 
-function cmdDecide(rest: string[]): void
+function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>): void
 {
-    // `confirm`, `retract` and `decline` are the only subcommands: every other
-    // first argument is the decision text, which may itself start with a dash
-    // after `--`. Only the withdrawals take `--why`, so asking `confirm` for
-    // one is still named as a flag it does not have.
-    if (rest[0] === "confirm")
-    {
-        const [, prefix] = parseCommand("decide", rest, {}, 2).positionals;
-        confirmDecision(requireProject(process.cwd()), prefix);
-        return;
-    }
-    if (rest[0] === "retract" || rest[0] === "decline")
-    {
-        const { values, positionals } = parseCommand("decide", rest, { why: { type: "string" } }, 2);
-        withdrawDecision(requireProject(process.cwd()), rest[0], positionals[1], values.why);
-        return;
-    }
-    const { values, positionals } = parseCommand(
-        "decide",
-        rest,
-        {
-            proposed: { type: "boolean" },
-            why: { type: "string" },
-            supersedes: { type: "string", multiple: true },
-            work: { type: "string" },
-            blocks: { type: "string", multiple: true },
-            after: { type: "string" }
-        },
-        1
-    );
     const ctx = requireProject(process.cwd());
     const text = requireText(positionals[0], 'decide "<decision>" [--why w] [--proposed]');
     const payload: Record<string, unknown> = { text };
@@ -654,80 +1014,22 @@ function decisionRefs(ctx: ProjectContext, options: DecisionOptions): EventRefs 
     return Object.keys(refs).length === 0 ? undefined : refs;
 }
 
-const TRANSITIONS: Record<string, string> = {
-    start: "work.started",
-    block: "work.blocked",
-    unblock: "work.unblocked",
-    done: "work.done"
-};
-
-function cmdWork(rest: string[]): void
+function cmdWorkAdd(value: string | undefined): void
 {
-    // Listing and showing are workspace reads, so they resolve from any
-    // directory; every verb that writes still requires the linked checkout.
-    // A bare `--` is not a listing flag: subcommand() explains it below.
-    if (rest.length === 0 || (rest[0] !== "--" && rest[0].startsWith("--")))
-    {
-        cmdWorkList(rest);
-        return;
-    }
-    const sub = subcommand("work", rest);
-    if (sub === "show")
-    {
-        cmdWorkShow(rest.slice(1));
-        return;
-    }
-    if (sub === "add")
-    {
-        const outcome = requireText(parseCommand("work", rest, {}, 2).positionals[1], 'work add "<required outcome>"');
-        const ctx = requireProject(process.cwd());
-        const id = workId();
-        recordEvent(ctx, makeEvent(ctx.project, "work.created", { work: id, outcome }), `${id} ${outcome}`);
-        console.log(id);
-        return;
-    }
-    if (sub === "link" || sub === "unlink")
-    {
-        cmdWorkLink(requireProject(process.cwd()), rest.slice(1), sub === "link");
-        return;
-    }
-    if (sub === "propose")
-    {
-        cmdPropose(requireProject(process.cwd()), rest.slice(1));
-        return;
-    }
-    if (sub === "accept" || sub === "decline")
-    {
-        cmdProposalDecision(requireProject(process.cwd()), rest.slice(1), sub === "accept");
-        return;
-    }
-    if (sub === "retire")
-    {
-        cmdWorkRetireUnit(rest.slice(1));
-        return;
-    }
-    if (sub === "started" || sub === "exited")
-    {
-        cmdWorkProcess(rest.slice(1), sub === "started");
-        return;
-    }
-    const type = TRANSITIONS[sub as string];
-    if (type === undefined)
-    {
-        throw new CliError(`unknown work subcommand "${sub}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|accept|decline`);
-    }
-    transitionWork(type, rest.slice(1));
+    const outcome = requireText(value, 'work add "<required outcome>"');
+    const ctx = requireProject(process.cwd());
+    const id = workId();
+    recordEvent(ctx, makeEvent(ctx.project, "work.created", { work: id, outcome }), `${id} ${outcome}`);
+    console.log(id);
 }
 
-function cmdWorkList(rest: string[]): void
+function cmdWorkList({ values }: CommandInput<typeof SCOPED_RENDER_OPTIONS>): void
 {
-    const { values } = parseCommand("work", rest, { ...SCOPE_OPTIONS, ...RENDER_OPTIONS }, 0);
     printWorkList(readScopes(process.cwd(), values)[0], resolveRender(values));
 }
 
-function cmdWorkShow(args: string[]): void
+function cmdWorkShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("work", args, SCOPE_OPTIONS, 1);
     const wanted = requireText(positionals[0], "work show <work-id> [--project <slug>]");
     const ctx = requireWorkspace(process.cwd());
     const found = findWorkAcross(ctx, wanted, values.project);
@@ -808,14 +1110,8 @@ function orderedSlugs(ctx: CliContext): string[]
 // Retiring a unit records that its outcome was deliberately given up or moved
 // — never achieved. The unit keeps every report, evidence hash, and artifact,
 // and stops counting as live work everywhere the status is read.
-function cmdWorkRetireUnit(args: string[]): void
+function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "work",
-        args,
-        { why: { type: "string" }, successor: { type: "string" }, "successor-project": { type: "string" }, requirement: { type: "string" } },
-        1
-    );
     if (values.requirement !== undefined)
     {
         // The verb that used to carry this moved: one verb per scope, so a
@@ -886,9 +1182,8 @@ function successorRef(ctx: ProjectContext, source: string, successor: string | u
 // The process ledger's two verbs. The synced event carries the transition and
 // never the pid — a pid is machine-local, and the sanitization gate refuses
 // it by design — so the pid lands in the machine ledger beside the event.
-function cmdWorkProcess(args: string[], started: boolean): void
+function cmdWorkProcess({ values, positionals }: CommandInput<typeof PROCESS_OPTIONS>, started: boolean): void
 {
-    const { values, positionals } = parseCommand("work", args, { pid: { type: "string" }, code: { type: "string" } }, 1);
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
     if (started)
@@ -915,9 +1210,8 @@ function cmdWorkProcess(args: string[], started: boolean): void
     recordEvent(ctx, makeEvent(ctx.project, "work.run-exited", payload), `${work.id} ${work.outcome}`);
 }
 
-function transitionWork(type: string, args: string[]): void
+function transitionWork(type: string, { values, positionals }: CommandInput<typeof TRANSITION_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand("work", args, { on: { type: "string" }, why: { type: "string" } }, 1);
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
     // Done is not a transition like the others: it is the claim that the
@@ -953,19 +1247,8 @@ function transitionWork(type: string, args: string[]): void
     recordEvent(ctx, makeEvent(ctx.project, type, payload), `${work.id} ${work.outcome}`);
 }
 
-function cmdReport(rest: string[]): void
+function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "report",
-        rest,
-        {
-            evidence: { type: "string", multiple: true },
-            artifact: { type: "string", multiple: true },
-            next: { type: "string" },
-            file: { type: "string" }
-        },
-        2
-    );
     const ctx = requireProject(process.cwd());
     const work = requireOpenWork(ctx, positionals[0]);
     const text = values.file === undefined
@@ -1061,49 +1344,40 @@ function headEvidence(ctx: ProjectContext): string[]
     return head === null ? [] : [head];
 }
 
-function cmdConvention(rest: string[]): void
+function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
 {
-    const sub = subcommand("convention", rest);
-    const { values, positionals } = parseCommand("convention",
-        rest, { supersedes: { type: "string", multiple: true }, why: { type: "string" } }, 2);
-    const value = positionals[1];
-    if (sub === "add")
+    const text = requireText(positionals[0], 'convention add "<text>" [--supersedes <event-id>]');
+    if (values.why !== undefined)
     {
-        const text = requireText(value, 'convention add "<text>" [--supersedes <event-id>]');
-        if (values.why !== undefined)
-        {
-            throw new CliError("convention add takes no --why — the rule is its own statement; --why records why a rule was withdrawn");
-        }
-        const ctx = requireProject(process.cwd());
-        // A correction is one event: the replacement carries the lineage, so
-        // the rule it replaces never has to be dropped and re-added — which is
-        // how two contradicting conventions used to end up both current.
-        const refs = values.supersedes === undefined ? undefined
-            : { supersedes: currentConventionIds(ctx, values.supersedes) };
-        recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, refs, true), text);
-        return;
+        throw new CliError("convention add takes no --why — the rule is its own statement; --why records why a rule was withdrawn");
     }
-    if (sub === "drop")
+    const ctx = requireProject(process.cwd());
+    // A correction is one event: the replacement carries the lineage, so
+    // the rule it replaces never has to be dropped and re-added — which is
+    // how two contradicting conventions used to end up both current.
+    const refs = values.supersedes === undefined ? undefined
+        : { supersedes: currentConventionIds(ctx, values.supersedes) };
+    recordEvent(ctx, makeEvent(ctx.project, "convention.added", { text }, refs, true), text);
+}
+
+function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
+{
+    // Declared once for the whole verb, so the subcommand that does not
+    // take it says so rather than dropping one convention and ignoring the
+    // id the person expected it to replace.
+    if (values.supersedes !== undefined)
     {
-        // Declared once for the whole verb, so the subcommand that does not
-        // take it says so rather than dropping one convention and ignoring the
-        // id the person expected it to replace.
-        if (values.supersedes !== undefined)
-        {
-            throw new CliError('convention drop takes no --supersedes — to replace a rule, run `convention add "<text>" --supersedes <event-id>`');
-        }
-        const ctx = requireProject(process.cwd());
-        const usage = 'convention drop <event-id> --why "<why the rule no longer holds>"';
-        const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(value, usage));
-        // Every withdrawal carries its reason. A rule that left the current set
-        // with nothing recorded reads, a year later, exactly like one nobody
-        // ever wrote down.
-        const payload = { why: requireText(values.why, usage) };
-        const refs = { supersedes: currentConventionIds(ctx, [target.id]) };
-        recordEvent(ctx, makeEvent(ctx.project, "convention.dropped", payload, refs, true), String(target.payload.text));
-        return;
+        throw new CliError('convention drop takes no --supersedes — to replace a rule, run `convention add "<text>" --supersedes <event-id>`');
     }
-    throw new CliError('usage: self convention add "<text>" [--supersedes <event-id>] | drop <event-id> --why w');
+    const ctx = requireProject(process.cwd());
+    const usage = 'convention drop <event-id> --why "<why the rule no longer holds>"';
+    const target = findEventByPrefix(ctx.storeDir, ctx.project, requireText(positionals[0], usage));
+    // Every withdrawal carries its reason. A rule that left the current set
+    // with nothing recorded reads, a year later, exactly like one nobody
+    // ever wrote down.
+    const payload = { why: requireText(values.why, usage) };
+    const refs = { supersedes: currentConventionIds(ctx, [target.id]) };
+    recordEvent(ctx, makeEvent(ctx.project, "convention.dropped", payload, refs, true), String(target.payload.text));
 }
 
 // The ids of conventions that still hold. A withdrawn one is refused rather
@@ -1128,9 +1402,8 @@ function currentConventionIds(ctx: ProjectContext, prefixes: string[]): string[]
     });
 }
 
-function cmdLog(rest: string[]): void
+function cmdLog({ values }: CommandInput<typeof LOG_OPTIONS>): void
 {
-    const { values } = parseCommand("log", rest, { lines: { type: "string", short: "n" }, ...WORKSPACE_SCOPE_OPTIONS }, 0);
     const limit = values.lines === undefined ? 20 : Number.parseInt(values.lines, 10);
     if (Number.isNaN(limit) || limit <= 0)
     {
@@ -1145,14 +1418,8 @@ function cmdLog(rest: string[]): void
     printLog(scopes[0], limit);
 }
 
-function cmdSearch(rest: string[]): void
+function cmdSearch({ values, positionals }: CommandInput<typeof SEARCH_OPTIONS>): void
 {
-    const { values, positionals } = parseCommand(
-        "search",
-        rest,
-        { type: { type: "string" }, project: { type: "string" } },
-        1
-    );
     // Context recovery pointers pull whole categories, so a filter alone is a
     // complete request: `--type` or `--project` may stand in for the query.
     const query = positionals[0] ?? (values.type === undefined && values.project === undefined
@@ -1161,10 +1428,9 @@ function cmdSearch(rest: string[]): void
     runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
 }
 
-function cmdConnect(rest: string[]): void
+function cmdConnect(global: boolean): void
 {
-    const { values } = parseCommand("connect", rest, { global: { type: "boolean" } }, 0);
-    if (values.global === true)
+    if (global)
     {
         connectMachineAgents();
         return;
@@ -1175,9 +1441,8 @@ function cmdConnect(rest: string[]): void
     console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
 }
 
-function cmdFold(rest: string[]): void
+function cmdFold(): void
 {
-    parseCommand("fold", rest, {}, 0);
     const ctx = requireProject(process.cwd());
     foldWorkspace(ctx.storeDir, ctx.project);
     commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
@@ -1214,17 +1479,23 @@ function userMessage(error: unknown, argv: string[]): string | null
     return `${cause.charAt(0).toLowerCase()}${cause.slice(1)} — ${helpHint(argv[0])}`;
 }
 
-try
+// The whole invocation, including its error boundary. `bin/self.mjs` calls this
+// and nothing else, so importing this module — to read the contract — runs no
+// command.
+export async function runCli(argv: string[]): Promise<void>
 {
-    await main(process.argv.slice(2));
-}
-catch (error)
-{
-    const message = userMessage(error, process.argv.slice(2));
-    if (message === null)
+    try
     {
-        throw error;
+        await main(argv);
     }
-    console.error(`${errRed("error:")} ${message}`);
-    process.exitCode = 1;
+    catch (error)
+    {
+        const message = userMessage(error, argv);
+        if (message === null)
+        {
+            throw error;
+        }
+        console.error(`${errRed("error:")} ${message}`);
+        process.exitCode = 1;
+    }
 }

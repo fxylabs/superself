@@ -1,9 +1,10 @@
 # CLI and record reference
 
 This is the current reference for the `self` CLI in this checkout. The
-implementation-owned command catalogue is [`apps/cli/src/help.ts`](../../apps/cli/src/help.ts):
-`self --help` renders its root list, and `self <command> --help` renders one
-command's full syntax and detail. This page explains the stable command
+implementation-owned command catalogue is the typed command contract composed
+in [`apps/cli/src/main.ts`](../../apps/cli/src/main.ts): `self --help` renders
+its root list, and `self <command> --help` renders one command's full syntax
+and detail. This page explains the stable command
 families and record contracts; the scoped help output remains the authority
 for every option and subcommand.
 
@@ -55,8 +56,8 @@ log search fold
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
 
-The full work transitions and flags are in [`help.ts`](../../apps/cli/src/help.ts)
-under `work`, and the completion rules are implemented by
+The full work transitions and flags are in the `work` declaration of
+[`main.ts`](../../apps/cli/src/main.ts), and the completion rules are implemented by
 [`completion.ts`](../../apps/cli/src/completion.ts).
 
 ### The process ledger
