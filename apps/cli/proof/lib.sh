@@ -196,11 +196,3 @@ snapshot()
     git -C "$STORE" status --porcelain
     wc -l < "$STORE/projects/demo/log.jsonl"
 }
-
-# reads $MKSPEC, $AGENT, $DEMO
-workspec()
-{
-    local file="$1"
-    shift
-    node "$MKSPEC" "$file" "agent=$AGENT" "cwd=$DEMO" "$@"
-}

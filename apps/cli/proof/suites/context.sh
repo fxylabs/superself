@@ -64,7 +64,6 @@ SELF fold > /dev/null
 ORDERED_REPORT_CONTEXT="$(SELF context)"
 echo "$ORDERED_REPORT_CONTEXT" | grep -q "chronological newest report marker" || fail "JSONL order displaced the chronologically newest report"
 echo "$ORDERED_REPORT_CONTEXT" | grep -q "out-of-order stale report" && fail "an appended old report displaced the newest report"
-printf '{"id":"budget-changeset","ts":"2099-01-01T00:00:00.000Z","type":"changeset.registered","origin":{"actor":"agent","confirmed":false},"project":"demo","payload":{"changeSet":"cs-budget","repository":"budget-repo","base":"aaaa","head":"bbbb","digest":"cccc"}}\n' >> "$LOG_A"
 PROTECTED_TEXT="$(awk 'BEGIN { for (i = 0; i < 2000; i++) printf "p" }')"
 for index in $(seq 1 90)
 do
@@ -90,12 +89,10 @@ echo "$PROTECTED_CONTEXT" | grep -q "protected-proposal-020" || fail "protected 
 # ranking is restated once as counts beside the command that prints it whole.
 echo "$PROTECTED_CONTEXT" | grep -q "decisions waiting: 21 unblock work, 0 cannot be decided yet, 0 already in effect; run \`self status --project 'demo'\`" \
     || fail "the compacted band lost the ranking without saying how to read it back"
-# The outcome layer and the integration train are whole-state recoverable
-# through one command each, so under pressure they compact to a count and a
-# pointer instead of crowding out the protected sections.
+# The outcome layer is whole-state recoverable through one command, so under
+# pressure it compacts to a count and a pointer instead of crowding out the
+# protected sections.
 echo "$PROTECTED_CONTEXT" | grep -q "open objective.*omitted; run \`self objective --project 'demo'\`" || fail "objectives did not compact to a self objective pointer"
-echo "$PROTECTED_CONTEXT" | grep -q "open change set.*omitted; run \`self integration plan\` from a checkout of 'demo'" \
-    || fail "the train pointer lost the checkout it has to be run from"
 
 # When even identity rows cannot fit, the mathematical exception is explicit
 # and its project-only pull command must expose the canonical state.

@@ -19,56 +19,6 @@
                 "prep-agent.mjs"
             ]
         },
-        "integration": {
-            "entry": "integration.sh",
-            "deps": [
-                "lib.sh"
-            ]
-        },
-        "daemon-loop": {
-            "entry": "daemon-loop.sh",
-            "deps": [
-                "attempt-plan.mjs",
-                "daemon-agent.mjs",
-                "daemon-launch.mjs",
-                "daemon-validate.mjs",
-                "external-launch.mjs",
-                "lib.sh",
-                "tick-lock.mjs",
-                "workspec.mjs"
-            ]
-        },
-        "overnight-digest": {
-            "entry": "overnight-digest.sh",
-            "deps": [
-                "attempt-plan.mjs",
-                "daemon-agent.mjs",
-                "daemon-launch.mjs",
-                "daemon-validate.mjs",
-                "lib.sh",
-                "spec-double-seal.mjs",
-                "workspec.mjs"
-            ]
-        },
-        "semantic-completion": {
-            "entry": "semantic-completion.sh",
-            "deps": [
-                "attempt-plan.mjs",
-                "daemon-agent.mjs",
-                "daemon-launch.mjs",
-                "lib.sh",
-                "workspec.mjs"
-            ]
-        },
-        "specs": {
-            "entry": "suites/specs.sh",
-            "deps": [
-                "attempt-agent.mjs",
-                "attempt-plan.mjs",
-                "lib.sh",
-                "workspec.mjs"
-            ]
-        },
         "artifacts": {
             "entry": "suites/artifacts.sh",
             "deps": [
@@ -128,21 +78,11 @@
                 "lib.sh"
             ]
         },
-        "evidence-bundle": {
-            "entry": "suites/evidence-bundle.sh",
-            "deps": [
-                "lib.sh"
-            ]
-        },
         "sync": {
             "entry": "suites/sync.sh",
             "deps": [
                 "lib.sh"
             ]
-        },
-        "tick-mutex": {
-            "entry": "tick-mutex.mjs",
-            "deps": []
         }
     }
 }
