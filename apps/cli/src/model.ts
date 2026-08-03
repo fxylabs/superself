@@ -167,6 +167,7 @@ export type ScopableVerb =
     | "self status"
     | "self context"
     | "self log"
+    | "self state"
     | "self search --type decision"
     | "self search --type convention";
 

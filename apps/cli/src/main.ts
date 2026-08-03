@@ -577,7 +577,10 @@ export const COMMANDS: Command[] = [
         name: "context",
         usage: [{ syntax: "context [--project <slug>] [--pretty|--plain]", description: ["print derived context for agents"], verbs: [""] }],
         detail: [
-            "print this project's current truth: goal, active decisions, open work, recent reports.",
+            "print this project's current truth: the placed entities — goal, conventions,",
+            "decisions, everything asserted — in priority order and at their exposure,",
+            "with the derived live state (work moving, waits, deadlines) anchored after",
+            "the full-text block.",
             "piped output is capped at 12,000 characters per project; every omission names",
             "the command that recovers the omitted state in full.",
             "a terminal gets the ruled render instead, which carries no cap; --plain forces",

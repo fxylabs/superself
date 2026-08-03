@@ -9,6 +9,7 @@
 // `types.ts` and its peer `objectives.ts` only, never the fold that calls it.
 
 import { MilestoneState, ObjectiveState } from "./objectives.js";
+import { countCharacters } from "./style.js";
 import { SelfEvent } from "./types.js";
 
 // Spelled once, for the verbs' refusals and the fold's own reading guards.
@@ -24,6 +25,19 @@ export interface EntityLink
 {
     type: LinkType;
     target: string;
+}
+
+// A placement proposal waiting on a person (#197 §5, ruling 4): recorded by
+// `state place --proposed`, applied only once an `entity.confirmed` names the
+// placement event in `refs.confirms` — the same propose/confirm grammar the
+// entity itself uses. Until then the entity keeps its current placement and
+// carries the proposal, so a render can say what waits.
+export interface PendingPlacement
+{
+    event: string;
+    priority?: number;
+    exposure?: Exposure;
+    why?: string;
 }
 
 // Which preset record kind a legacy-derived entity is the reading of. Absent
@@ -58,11 +72,28 @@ export interface EntityState
     // reads. Absent on a supersession, which says why by naming its successor.
     closedWhy?: string;
     source?: EntitySource;
+    pending?: PendingPlacement;
 }
 
 export function isLive(entity: EntityState): boolean
 {
     return entity.status === "proposed" || entity.status === "confirmed";
+}
+
+// One `entity.placed` line, collected rather than applied in the pass: a
+// placement can name a legacy-derived entity that exists only after the
+// derive step composes it, so every placement waits and lands there — one
+// application path for native and legacy records alike.
+interface PlacementEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    priority?: number;
+    exposure?: Exposure;
+    scope?: EntityScope;
+    why?: string;
+    proposed: boolean;
 }
 
 export interface EntityFold
@@ -72,11 +103,17 @@ export interface EntityFold
     // once every entity exists: a union-merged log orders lines by neither
     // time nor dependency, so a claim can precede either record it names.
     claims: { predecessor: string; successor: string }[];
+    placements: PlacementEvent[];
+    // Every id an `entity.confirmed` named in `refs.confirms`. A placement
+    // proposal applies only when its event id is in here, and collecting the
+    // ids first is what lets a union merge order the confirm above the
+    // proposal it answers.
+    confirmations: Set<string>;
 }
 
 export function emptyEntityFold(): EntityFold
 {
-    return { entities: [], claims: [] };
+    return { entities: [], claims: [], placements: [], confirmations: new Set() };
 }
 
 /* ── the single-pass fold ──────────────────────────────────────────── */
@@ -201,7 +238,7 @@ export function reconcileEntity(fold: EntityFold, event: SelfEvent): void
     }
     if (event.type === "entity.placed")
     {
-        placeEntity(fold, event);
+        collectPlacement(fold, event);
         return;
     }
     if (event.type === "entity.linked" || event.type === "entity.unlinked")
@@ -212,7 +249,14 @@ export function reconcileEntity(fold: EntityFold, event: SelfEvent): void
 
 function confirmEntity(fold: EntityFold, event: SelfEvent): void
 {
-    const target = fold.entities.find((item) => item.id === event.refs?.confirms);
+    const confirms = event.refs?.confirms;
+    if (confirms !== undefined)
+    {
+        // Recorded whatever it names: a placement proposal's confirm carries
+        // the placement's event id, which no entity ever matches below.
+        fold.confirmations.add(confirms);
+    }
+    const target = fold.entities.find((item) => item.id === confirms);
     if (target !== undefined && target.status === "proposed")
     {
         target.status = "confirmed";
@@ -235,30 +279,27 @@ function retractEntity(fold: EntityFold, event: SelfEvent): void
     }
 }
 
-// Placement moves by event (#197 §3). No verb writes this yet — the placement
-// surface arrives with the context-renderer phase — but the family is one
-// grammar, and a fold that ignored the event would strand the phase that
-// starts writing it.
-function placeEntity(fold: EntityFold, event: SelfEvent): void
+// Placement moves by event (#197 §3), collected here and applied over the
+// complete entity set in `deriveEntities`: the target can be a legacy-derived
+// record that does not exist in this pass. The event-id guard is what lets
+// the reconcile pass in `model.ts` route the same line twice.
+function collectPlacement(fold: EntityFold, event: SelfEvent): void
 {
-    const target = fold.entities.find((item) => item.id === event.payload.entity);
-    if (target === undefined || !isLive(target))
+    const entity = String(event.payload.entity ?? "");
+    if (entity === "" || fold.placements.some((item) => item.event === event.id))
     {
         return;
     }
-    const priority = readPriority(event.payload.priority);
-    if (priority !== undefined)
-    {
-        target.priority = priority;
-    }
-    if ((EXPOSURES as readonly string[]).includes(String(event.payload.exposure)))
-    {
-        target.exposure = event.payload.exposure as Exposure;
-    }
-    if (event.payload.scope === "project" || event.payload.scope === "workspace")
-    {
-        target.scope = event.payload.scope;
-    }
+    fold.placements.push({
+        event: event.id,
+        ts: event.ts,
+        entity,
+        priority: readPriority(event.payload.priority),
+        exposure: readExposureOptional(event.payload.exposure),
+        scope: event.payload.scope === "project" || event.payload.scope === "workspace" ? event.payload.scope : undefined,
+        why: str(event.payload.why),
+        proposed: event.payload.proposed === true
+    });
 }
 
 // A link is one edge in a set: adding it twice keeps one, removing it twice
@@ -319,9 +360,9 @@ export interface LegacySources
 }
 
 // The whole entity view: native records first, then the legacy readings, then
-// supersession — applied once, over the complete set, because a successor can
-// name a record from either half and a merged log can order a standalone
-// claim before its target.
+// supersession and placement — each applied once, over the complete set,
+// because a successor or a placement can name a record from either half and a
+// merged log can order a standalone claim before its target.
 export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityState[]
 {
     const entities = [
@@ -333,7 +374,119 @@ export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityS
     ];
     linkLineage(entities, legacy);
     applySupersessions(entities, fold);
+    applyPlacements(entities, fold);
     return entities;
+}
+
+// Placements land in timestamp order, event id breaking ties — never in log
+// order, which a union merge does not preserve, so two clones of one store
+// fold one placement history. A proposal that no confirm has answered pends
+// on its entity instead of moving it; a withdrawn or superseded record is
+// past placing either way.
+function applyPlacements(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    const ordered = [...fold.placements].sort((left, right) =>
+        left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+    for (const placement of ordered)
+    {
+        const target = byId.get(placement.entity);
+        if (target === undefined || !isLive(target))
+        {
+            continue;
+        }
+        if (placement.proposed && !fold.confirmations.has(placement.event))
+        {
+            target.pending = { event: placement.event, priority: placement.priority, exposure: placement.exposure, why: placement.why };
+            continue;
+        }
+        applyPlacement(target, placement);
+    }
+}
+
+function applyPlacement(target: EntityState, placement: PlacementEvent): void
+{
+    if (placement.priority !== undefined)
+    {
+        target.priority = placement.priority;
+    }
+    if (placement.exposure !== undefined)
+    {
+        target.exposure = placement.exposure;
+    }
+    if (placement.scope !== undefined)
+    {
+        target.scope = placement.scope;
+    }
+}
+
+/* ── placement order and the retention-cap usage ───────────────────── */
+
+// Priority order, ties by recency (#197 §6). An absent priority sorts after
+// every stated one, and the id breaks the remaining tie so two clones of one
+// store render one order. `state list` and the context projection both sort
+// through here — a second comparator would let the two surfaces disagree.
+export function orderEntities(entities: EntityState[]): EntityState[]
+{
+    return [...entities].sort((left, right) =>
+        (left.priority ?? Number.MAX_SAFE_INTEGER) - (right.priority ?? Number.MAX_SAFE_INTEGER)
+        || right.ts.localeCompare(left.ts)
+        || left.id.localeCompare(right.id));
+}
+
+// What currently occupies a retention tier (#197 §4): confirmed live records
+// at the scope, because a proposal takes its place only when a person
+// confirms it and a withdrawn record has already left. Full is measured in
+// characters of entity text — the same code-point count the context budget
+// charges — and index in entities.
+function occupiesTier(entity: EntityState, scope: EntityScope, exposure: Exposure): boolean
+{
+    return entity.status === "confirmed" && entity.scope === scope && entity.exposure === exposure;
+}
+
+export function fullTierCharacters(entities: EntityState[], scope: EntityScope): number
+{
+    return entities.filter((item) => occupiesTier(item, scope, "full"))
+        .reduce((sum, item) => sum + countCharacters(item.text), 0);
+}
+
+export function indexTierCount(entities: EntityState[], scope: EntityScope): number
+{
+    return entities.filter((item) => occupiesTier(item, scope, "index")).length;
+}
+
+// Which transitions are demotions: exposure moving toward less-rendered —
+// full → index, full → search, index → search. A priority change alone is
+// never one: it reorders a record inside its tier without reducing how it
+// renders, so it needs no --why and no proposal.
+const EXPOSURE_RANK: Record<Exposure, number> = { full: 0, index: 1, search: 2 };
+
+export function isDemotion(from: Exposure, to: Exposure): boolean
+{
+    return EXPOSURE_RANK[to] > EXPOSURE_RANK[from];
+}
+
+// Where a record named by --demote goes: one tier less rendered than the one
+// it frees. Search has nothing below it, which is why nothing demotes out of
+// search and the caps never gate it.
+export const DEMOTION_TARGET: Record<"full" | "index", Exposure> = { full: "index", index: "search" };
+
+// What a waiting placement proposal asks to change, in the words the person
+// judges it by. `state show` and the context projection print the same
+// sentence, so the row a person confirms from reads the same everywhere.
+export function pendingSummary(pending: PendingPlacement): string
+{
+    const parts: string[] = [];
+    if (pending.exposure !== undefined)
+    {
+        parts.push(`exposure ${pending.exposure}`);
+    }
+    if (pending.priority !== undefined)
+    {
+        parts.push(`priority ${pending.priority}`);
+    }
+    const why = pending.why === undefined ? "" : ` (${pending.why})`;
+    return `${parts.join(", ") || "no change"}${why}`;
 }
 
 // A decision is an entity labeled decision, one line in context. A declined
@@ -565,7 +718,14 @@ function readPriority(value: unknown): number | undefined
 
 function readExposure(value: unknown): Exposure
 {
-    return (EXPOSURES as readonly string[]).includes(String(value)) ? value as Exposure : "index";
+    return readExposureOptional(value) ?? "index";
+}
+
+// A placement's exposure has no default: absent means "leave it", where a
+// creation's absent exposure means index.
+function readExposureOptional(value: unknown): Exposure | undefined
+{
+    return (EXPOSURES as readonly string[]).includes(String(value)) ? value as Exposure : undefined;
 }
 
 function str(value: unknown): string | undefined
