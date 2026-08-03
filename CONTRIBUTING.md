@@ -42,6 +42,15 @@ and intended scope are clear enough to implement. Assignment identifies who is
 authorized to open the pull request; the label alone is not an open invitation.
 The `contribution-policy` check verifies both conditions from GitHub metadata.
 
+Issue labels carry maintainer triage state only:
+
+- `status:accepted` marks scope a maintainer has accepted for implementation.
+- `status:deferred` marks accepted scope deliberately not being worked now; the
+  deferring comment names the condition under which work resumes.
+- No label carries execution state. Whether work on an issue is queued, running,
+  or finished is read from the self CLI's own records — the work log and the
+  machine-local process ledger — not from GitHub metadata.
+
 ## Before opening an issue
 
 1. Search existing issues for the same symptom or proposal.
