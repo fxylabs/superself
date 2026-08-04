@@ -1,6 +1,6 @@
-import { parseArgs } from "node:util";
 import { presetRow } from "./aliases.js";
-import { branch, Command, CommandInput, CommandLeaf, leaf, rawLeaf } from "./contract.js";
+import { required, Requirement } from "./args.js";
+import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import { requireSupersedeKind } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
@@ -29,6 +29,27 @@ import { dim, errYellow, markdownHeadings, styled } from "./style.js";
 import { CliError } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
+
+// What each verb cannot run without, declared once: the parse gate refuses
+// every missing one in a single answer and the help page states them, so an
+// agent never discovers this contract a refusal at a time (#106).
+const WHY_TURNED_DOWN: Requirement = { flags: ["why"], hint: "why it was turned down" };
+
+const WHY_CHANGED: Requirement = { flags: ["why"], hint: "what changed and why" };
+
+const COVERAGE_REQUIRED: Requirement[] = [
+    { flags: ["criterion"], value: "<c1>", hint: "the declared criterion being judged" },
+    { flags: ["why"], hint: "how the evidence covers it" }
+];
+
+const RECHECK_REQUIRED: Requirement[] = [
+    {
+        flags: ["criterion"],
+        value: "<c1>",
+        hint: "the criterion to re-judge on the current record — a revision is a supersession, so its successor starts uncovered"
+    },
+    { flags: ["why"], hint: "what you re-judged" }
+];
 
 const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | decline <id> --why w | revise <id> --why w | close <id> --as reached|dropped [--why w]';
 const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> --criterion c1 --why w';
@@ -159,9 +180,11 @@ export const OBJECTIVE_COMMAND: Command = {
             leaf("add", OBJECTIVE_ADD_OPTIONS, 1, objectiveAdd),
             leaf("show", SCOPE_OPTIONS, 1, objectiveShow),
             leaf("confirm", {}, 1, confirmObjective),
-            leaf("decline", WHY_OPTION, 1, declineObjective),
-            leaf("revise", OBJECTIVE_REVISE_OPTIONS, 1, objectiveRevise),
-            leaf("close", OBJECTIVE_CLOSE_OPTIONS, 1, objectiveClose)
+            leaf("decline", WHY_OPTION, 1, declineObjective, { requires: [WHY_TURNED_DOWN] }),
+            leaf("revise", OBJECTIVE_REVISE_OPTIONS, 1, objectiveRevise, { requires: [WHY_CHANGED] }),
+            leaf("close", OBJECTIVE_CLOSE_OPTIONS, 1, objectiveClose, {
+                requires: [{ flags: ["as"], value: "reached|dropped", hint: "whether the outcome was reached or given up" }]
+            })
         ]
     })
 };
@@ -250,7 +273,7 @@ function declineObjective({ values, positionals }: CommandInput<typeof WHY_OPTIO
 {
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
-    const why = requireText(values.why, 'objective decline <id> --why "<why it was turned down>"');
+    const why = required(values.why);
     if (objective.status !== "proposed")
     {
         throw new CliError(`${objective.id} is already ${objective.status} — only a proposed objective can be declined`);
@@ -265,7 +288,7 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
 {
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
-    const why = requireText(values.why, 'objective revise <id> --why "<what changed and why>"');
+    const why = required(values.why);
     if (isTerminalObjective(objective) || objective.status === "superseded")
     {
         throw new CliError(`${objective.id} is already ${objective.status} — a closed objective is not revised; add a new one`);
@@ -327,9 +350,11 @@ function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_C
 {
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
+    // The gate demanded --as; what is left is whether the closure it names is
+    // one the lifecycle has.
     if (values.as !== "reached" && values.as !== "dropped")
     {
-        throw new CliError("objective close requires --as reached|dropped");
+        throw new CliError(`objective close --as must be reached or dropped — "${values.as}" is neither`);
     }
     // Dropping is a withdrawal, and every withdrawal in the lifecycle carries
     // its reason: an objective given up on with no reason recorded leaves the
@@ -423,13 +448,20 @@ export const MILESTONE_COMMAND: Command = {
         children: [
             leaf("", SCOPE_OPTIONS, 0, milestoneList),
             leaf("list", SCOPE_OPTIONS, 0, milestoneList),
-            leaf("add", MILESTONE_ADD_OPTIONS, 1, milestoneAdd),
+            leaf("add", MILESTONE_ADD_OPTIONS, 1, milestoneAdd, {
+                requires: [
+                    { flags: ["objective"], value: "<id>", hint: "the objective this checkpoint sits under" },
+                    { flags: ["exit"], value: "<criterion>", hint: "what has to be true to call it reached, repeatable" }
+                ]
+            }),
             leaf("show", SCOPE_OPTIONS, 1, milestoneShow),
-            leaf("revise", MILESTONE_REVISE_OPTIONS, 1, milestoneRevise),
-            leaf("drop", WHY_OPTION, 1, milestoneDrop),
-            leaf("met", COVERAGE_OPTIONS, 1, milestoneMet),
+            leaf("revise", MILESTONE_REVISE_OPTIONS, 1, milestoneRevise, { requires: [WHY_CHANGED] }),
+            leaf("drop", WHY_OPTION, 1, milestoneDrop, {
+                requires: [{ flags: ["why"], hint: "why it is not being reached" }]
+            }),
+            leaf("met", COVERAGE_OPTIONS, 1, milestoneMet, { requires: COVERAGE_REQUIRED }),
             leaf("reach", {}, 1, milestoneReach),
-            leaf("recheck", COVERAGE_OPTIONS, 1, milestoneRecheck)
+            leaf("recheck", COVERAGE_OPTIONS, 1, milestoneRecheck, { requires: RECHECK_REQUIRED })
         ]
     })
 };
@@ -465,11 +497,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
 {
     const { ctx, model } = writeTarget();
     const outcome = requireText(positionals[0], 'milestone add "<outcome>" --objective <id> --exit "<criterion>"');
-    const objective = requireObjective(model, requireText(values.objective, 'milestone add … --objective <id>'));
-    if (values.exit === undefined || values.exit.length === 0)
-    {
-        throw new CliError(`${objective.id} milestones need explicit exit criteria — pass --exit "<criterion>" at least once`);
-    }
+    const objective = requireObjective(model, required(values.objective));
     const id = milestoneId();
     const row = presetRow(ctx.storeDir, "milestone");
     const links: Record<string, unknown>[] = [{ type: "member-of", target: objective.id }];
@@ -500,7 +528,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
 function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): void
 {
     const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
-    const why = requireText(values.why, 'milestone revise <id> --why "<what changed and why>"');
+    const why = required(values.why);
     if (milestone.supersededBy !== undefined || milestone.droppedWhy !== undefined)
     {
         throw new CliError(`${milestone.id} is already closed — a withdrawn or replaced checkpoint is not revised`);
@@ -538,7 +566,7 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
 function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
 {
     const { ctx, milestone } = milestoneTarget(positionals[0]);
-    const why = requireText(values.why, 'milestone drop <id> --why "<why it is not being reached>"');
+    const why = required(values.why);
     if (milestone.state === "reached")
     {
         throw new CliError(`${milestone.id} was already reached — dropping it would unsay evidence that landed`);
@@ -556,8 +584,8 @@ function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>)
 function milestoneMet({ values, positionals }: CommandInput<typeof COVERAGE_OPTIONS>): void
 {
     const { ctx, model, milestone } = milestoneTarget(positionals[0]);
-    const criterion = requireCriterion(milestone, requireText(values.criterion, "milestone met <id> --criterion <c1>"));
-    const why = requireText(values.why, 'milestone met <id> --criterion c1 --why "<how the evidence covers it>"');
+    const criterion = requireCriterion(milestone, required(values.criterion));
+    const why = required(values.why);
     if (milestone.met.includes(criterion.id))
     {
         throw new CliError(`${milestone.id} ${criterion.id} is already covered — revise the milestone if the criterion changed`);
@@ -578,14 +606,9 @@ function milestoneRecheck({ values, positionals }: CommandInput<typeof COVERAGE_
 {
     const { ctx, model } = writeTarget();
     const named = requireMilestone(model, positionals[0]);
-    const why = requireText(values.why, 'milestone recheck <id> --criterion c1 --why "<what you re-judged>"');
-    if (values.criterion === undefined)
-    {
-        throw new CliError("milestone recheck re-covers a criterion on the current record — pass --criterion <c>; "
-            + "a revision is a supersession now, so its successor starts uncovered");
-    }
+    const why = required(values.why);
     const { milestone } = currentMilestone(model, named.milestone);
-    const criterion = requireCriterion(milestone, values.criterion);
+    const criterion = requireCriterion(milestone, required(values.criterion));
     if (milestone.met.includes(criterion.id) && !milestone.stale.some((item) => item.criterion === criterion.id))
     {
         throw new CliError(`${milestone.id} ${criterion.id} is already covered at the current record — nothing to recheck`);
@@ -650,10 +673,12 @@ function requireCovered(milestone: MilestoneState): void
 /* ── work links ────────────────────────────────────────────────────── */
 
 // The work verbs this module owns, grafted under `self work` by the
-// dispatcher's declaration. Their handlers still parse with node's parseArgs
-// directly — the second argument-parse path recorded as debt (#111) — so they
-// are declared raw, over the same option objects those parsers read.
+// dispatcher's declaration. They parse through the one gate like every other
+// verb: the required-option refusal lives there, so a verb that stated its
+// contract in its own parser could not be covered by it (#106, closing #111).
 const LINK_OPTIONS = { objective: { type: "string" }, milestone: { type: "string" } } as const;
+
+const LINK_TARGET: Requirement = { flags: ["objective", "milestone"], value: "<id>", hint: "what the unit contributes to" };
 
 const PROPOSAL_OPTIONS = {
     objective: { type: "string" },
@@ -669,30 +694,43 @@ const PROPOSAL_OPTIONS = {
     expires: { type: "string" }
 } as const;
 
+// One statement of what a proposal has to say for itself, read by the gate
+// that refuses a call missing any of it and by the help page that lists them.
+// The gap a proposal closes is the requirement a project can be unable to
+// satisfy yet, so it carries the verb that creates one.
+const PROPOSAL_REQUIRED: Requirement[] = [
+    { flags: ["value"], hint: "what reaching this buys the objective" },
+    { flags: ["success"], hint: "what done looks like, repeatable" },
+    { flags: ["stop"], hint: "the condition that ends it early, repeatable" },
+    { flags: ["risk"], hint: "what could go wrong and how it would show" },
+    { flags: ["capacity"], hint: "the effort this is expected to cost" },
+    { flags: ["evidence-plan"], value: "<e>", hint: "what evidence will prove it done" },
+    { flags: ["confidence"], value: "<level>", hint: "low, medium or high" },
+    { flags: ["expires"], value: "<date>", hint: "YYYY-MM-DD after which the proposal is stale" },
+    {
+        flags: ["objective", "milestone"],
+        value: "<id>",
+        hint: "the gap this proposal closes",
+        unblock: 'no objective yet? `self objective add "<outcome>" --proposed`, then `self objective confirm <id>`'
+    }
+];
+
 export const WORK_GOAL_LEAVES: CommandLeaf[] = [
-    rawLeaf("link", LINK_OPTIONS, (args) => cmdWorkLink(requireProject(process.cwd()), args, true)),
-    rawLeaf("unlink", LINK_OPTIONS, (args) => cmdWorkLink(requireProject(process.cwd()), args, false)),
-    rawLeaf("propose", PROPOSAL_OPTIONS, (args) => cmdPropose(requireProject(process.cwd()), args), ["depends"]),
-    rawLeaf("accept", WHY_OPTION, (args) => cmdProposalDecision(requireProject(process.cwd()), args, true)),
-    rawLeaf("decline", WHY_OPTION, (args) => cmdProposalDecision(requireProject(process.cwd()), args, false))
+    leaf("link", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, true), { requires: [LINK_TARGET] }),
+    leaf("unlink", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, false), { requires: [LINK_TARGET] }),
+    leaf("propose", PROPOSAL_OPTIONS, 1, cmdPropose, { undocumented: ["depends"], requires: PROPOSAL_REQUIRED }),
+    leaf("accept", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true)),
+    leaf("decline", WHY_OPTION, 1, (input) => cmdProposalDecision(input, false), { requires: [WHY_TURNED_DOWN] })
 ];
 
 // Stating what a unit contributes to is a grouping edge in the shared
 // grammar (#207 B13): one `entity.linked` per named outcome, `member-of`
 // pointing at the objective or the milestone.
-function cmdWorkLink(ctx: ProjectContext, args: string[], link: boolean): void
+function cmdWorkLink({ values, positionals }: CommandInput<typeof LINK_OPTIONS>, link: boolean): void
 {
-    const { values, positionals } = parseArgs({
-        args,
-        options: LINK_OPTIONS,
-        allowPositionals: true
-    });
+    const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireWork(model, positionals[0]);
-    if (values.objective === undefined && values.milestone === undefined)
-    {
-        throw new CliError(`self work ${link ? "link" : "unlink"} <work-id> --objective <id> | --milestone <id>`);
-    }
     const targets: string[] = [];
     if (values.objective !== undefined)
     {
@@ -710,25 +748,12 @@ function cmdWorkLink(ctx: ProjectContext, args: string[], link: boolean): void
 
 /* ── goal-gap proposals ────────────────────────────────────────────── */
 
-const PROPOSAL_FIELDS: [string, string][] = [
-    ["value", "what reaching this buys the objective"],
-    ["risk", "what could go wrong and how it would show"],
-    ["capacity", "the effort this is expected to cost"],
-    ["evidence-plan", "what evidence will prove it done"],
-    ["confidence", "low|medium|high"],
-    ["expires", "YYYY-MM-DD after which the proposal is stale"]
-];
-
 // A proposal is a proposed work entity (#207 B13): the brief rides the
 // creation event, and accepting is confirming — the proposal's id is the
 // unit's id.
-function cmdPropose(ctx: ProjectContext, args: string[]): void
+function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTIONS>): void
 {
-    const { values, positionals } = parseArgs({
-        args,
-        options: PROPOSAL_OPTIONS,
-        allowPositionals: true
-    });
+    const ctx = requireProject(process.cwd());
     const outcome = requireText(positionals[0], 'work propose "<required outcome>" --milestone <id> …');
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const brief = proposalPayload(model, outcome, values as Record<string, string | string[] | undefined>);
@@ -752,32 +777,17 @@ function cmdPropose(ctx: ProjectContext, args: string[]): void
     console.log(id);
 }
 
-// A proposal that cannot say what it buys, what stops it, and when it goes
-// stale is not a proposal an agent may act on, so the command refuses it
-// rather than recording a gap the reader has to fill in later.
+// The gate refused a proposal missing any of its required options before this
+// ran, so what is left is whether the values it was given are ones the record
+// can keep.
 function proposalPayload(model: ProjectModel, outcome: string, values: Record<string, string | string[] | undefined>): Record<string, unknown>
 {
-    for (const [flag, hint] of PROPOSAL_FIELDS)
-    {
-        if (typeof values[flag] !== "string" || (values[flag] as string).trim() === "")
-        {
-            throw new CliError(`work propose needs --${flag}: ${hint}`);
-        }
-    }
     if (!CONFIDENCE.includes(values.confidence as string))
     {
         throw new CliError(`work propose --confidence must be one of ${CONFIDENCE.join(", ")}`);
     }
-    if (values.objective === undefined && values.milestone === undefined)
-    {
-        throw new CliError("work propose needs --objective or --milestone: a proposal states the gap it closes");
-    }
     const success = (values.success ?? []) as string[];
     const stop = (values.stop ?? []) as string[];
-    if (success.length === 0 || stop.length === 0)
-    {
-        throw new CliError('work propose needs at least one --success and one --stop criterion');
-    }
     return strip({
         outcome,
         objective: values.objective === undefined ? undefined : requireObjective(model, values.objective as string).id,
@@ -836,14 +846,14 @@ function normalize(text: string): string
 // Accept is confirm and decline is the withdrawal (#207 B13): the proposal
 // entity becomes the unit under its own id, and the grouping edge toward the
 // outcome it closes lands in the same append.
-function cmdProposalDecision(ctx: ProjectContext, args: string[], accept: boolean): void
+function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OPTION>, accept: boolean): void
 {
-    const { values, positionals } = parseArgs({ args, options: WHY_OPTION, allowPositionals: true });
+    const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const proposal = requireProposal(model, positionals[0]);
     if (!accept)
     {
-        const why = requireText(values.why, 'work decline <proposal-id> --why "<why it was turned down>"');
+        const why = required(values.why);
         recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.outcome}`);
         return;
     }

@@ -4,7 +4,7 @@
 // this surface is the extensibility promise: user-defined labels over the
 // same record kind, folded by `entities.ts` into one view.
 
-import { requireText } from "./args.js";
+import { required, requireText, Requirement } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import {
@@ -86,6 +86,19 @@ const BLOCK_OPTIONS = { on: { type: "string" }, why: { type: "string" } } as con
 const DONE_OPTIONS = { report: { type: "string" } } as const;
 
 const RETIRE_OPTIONS = { why: { type: "string" }, successor: { type: "string" } } as const;
+
+// What each of these verbs cannot run without, declared once for the gate that
+// refuses them together and the help page that states them (#106).
+const WHY_NO_LONGER_HOLDS: Requirement = { flags: ["why"], hint: "why the record no longer holds" };
+
+const RETIRE_WHY: Requirement = { flags: ["why"], hint: "why the outcome was given up or moved" };
+
+const DONE_REPORT: Requirement = { flags: ["report"], hint: "what verifiably happened — done must carry evidence" };
+
+const COVERAGE_REQUIRED: Requirement[] = [
+    { flags: ["criterion"], value: "<c>", hint: "the declared criterion this claim covers" },
+    { flags: ["why"], hint: "how the evidence covers it" }
+];
 
 // A bare `--` is not a listing flag: the contract's unnamed "options" form
 // keeps it a subcommand mistake that `subcommand()` explains.
@@ -200,13 +213,13 @@ export const STATE_COMMAND: Command = {
             leaf("show", SCOPE_OPTIONS, 1, stateShow),
             leaf("place", PLACE_OPTIONS, 1, statePlace),
             leaf("confirm", {}, 1, stateConfirm),
-            leaf("retract", WHY_OPTION, 1, stateRetract),
-            leaf("cover", COVER_OPTIONS, 1, stateCover),
+            leaf("retract", WHY_OPTION, 1, stateRetract, { requires: [WHY_NO_LONGER_HOLDS] }),
+            leaf("cover", COVER_OPTIONS, 1, stateCover, { requires: COVERAGE_REQUIRED }),
             leaf("start", {}, 1, stateStart),
             leaf("block", BLOCK_OPTIONS, 1, stateBlock),
             leaf("unblock", {}, 1, stateUnblock),
-            leaf("done", DONE_OPTIONS, 1, stateDone),
-            leaf("retire", RETIRE_OPTIONS, 1, stateExecRetire)
+            leaf("done", DONE_OPTIONS, 1, stateDone, { requires: [DONE_REPORT] }),
+            leaf("retire", RETIRE_OPTIONS, 1, stateExecRetire, { requires: [RETIRE_WHY] })
         ]
     })
 };
@@ -774,8 +787,8 @@ function stateCover({ values, positionals }: CommandInput<typeof COVER_OPTIONS>)
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const entity = requireCoverable(model, positionals[0]);
-    const criterion = resolveCriterion(entity, requireText(values.criterion, COVER_USAGE));
-    const why = requireText(values.why, COVER_USAGE);
+    const criterion = resolveCriterion(entity, required(values.criterion));
+    const why = required(values.why);
     if (entity.covered.some((claim) => claim.criterion === criterion))
     {
         throw new CliError(`${entity.id} "${criterion}" is already covered — a criterion is judged once per record; a superseding revision starts uncovered`);
@@ -874,7 +887,7 @@ function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>):
             ? `${entity.id} was already retracted`
             : `${entity.id} was already superseded by ${entity.supersededBy ?? "a later entity"} — nothing is left to retract`);
     }
-    const why = requireText(values.why, RETRACT_USAGE);
+    const why = required(values.why);
     recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why }, { retracts: entity.id }, true), entity.text);
 }
 
@@ -982,11 +995,7 @@ function stateDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): 
     const { ctx, entity } = executionTarget(positionals[0], 'state done <id> --report "<what verifiably happened>"');
     requireMovable(entity, "done");
     requireCriteriaCovered(entity);
-    if (values.report === undefined || values.report.trim() === "")
-    {
-        throw new CliError(`done must carry evidence — state what verifiably happened with \`self state done ${entity.id} --report "<what happened>"\``);
-    }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.done", { entity: entity.id, report: values.report.trim() }), entity.text);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.done", { entity: entity.id, report: required(values.report).trim() }), entity.text);
 }
 
 // The criteria gate, spelled once: `state done` and the preset done claims —
@@ -1009,7 +1018,7 @@ function stateExecRetire({ values, positionals }: CommandInput<typeof RETIRE_OPT
     const usage = 'state retire <id> --why "<why the outcome was given up or moved>" [--successor <id>]';
     const { ctx, model, entity } = executionTarget(positionals[0], usage);
     requireMovable(entity, "retire");
-    const why = requireText(values.why, usage);
+    const why = required(values.why);
     const payload: Record<string, unknown> = { entity: entity.id, why };
     if (values.successor !== undefined)
     {

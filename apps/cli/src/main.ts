@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ALIAS_COMMAND, presetRow, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
-import { helpHint, parseCommand, unknownOption } from "./args.js";
+import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
@@ -97,18 +97,13 @@ async function main(argv: string[]): Promise<void>
     await runLeaf(aliased);
 }
 
-// The one parse in the CLI: the option set and the positional count come from
-// the leaf the contract resolved to, so nothing a command accepts can be
-// declared anywhere else. A raw leaf keeps its own parseArgs call — the second
-// parse path recorded as debt (#111) — and is handed the arguments untouched.
+// The one parse in the CLI: the option set, the positional count and what the
+// verb cannot run without all come from the leaf the contract resolved to, so
+// nothing a command accepts or demands can be declared anywhere else.
 async function runLeaf(resolved: Resolved): Promise<void>
 {
-    if (resolved.leaf.mode === "raw")
-    {
-        await resolved.leaf.run(resolved.args);
-        return;
-    }
-    const parsed = parseCommand(resolved.command.name, resolved.args, resolved.leaf.options, resolved.leaf.positionals);
+    const parsed = parseCommand(resolved.path, resolved.args, resolved.leaf.options,
+        resolved.leaf.positionals, resolved.leaf.requires);
     await resolved.leaf.run(parsed);
 }
 
@@ -256,11 +251,15 @@ const SEARCH_OPTIONS = { type: { type: "string" }, project: { type: "string" } }
 
 // The shared execution grammar (#207 B14): a work verb records the same
 // `entity.*` fact the raw state verbs record, whichever kind of unit it moves.
-const WORK_TRANSITIONS: [string, string][] = [
-    ["start", "entity.started"],
-    ["block", "entity.blocked"],
-    ["unblock", "entity.unblocked"]
+const WORK_TRANSITIONS: [string, string, Requirement[]][] = [
+    ["start", "entity.started", []],
+    ["block", "entity.blocked", [{ flags: ["on"], value: "<reason>", hint: "what the unit waits on: decision, dependency, or external" }]],
+    ["unblock", "entity.unblocked", []]
 ];
+
+// Every withdrawal in the CLI carries its reason, so the verbs that record one
+// declare it rather than each asking for it in its own words.
+const WHY_REQUIRED: Requirement = { flags: ["why"], hint: "why the record no longer holds" };
 
 // Done is not a transition like the others: it is the claim that the outcome
 // was reached, so it carries its own option set — the done-time text report
@@ -275,11 +274,15 @@ const WORK_CHILDREN: CommandLeaf[] = [
     leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
     leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd),
     leaf("show", SCOPE_OPTIONS, 1, cmdWorkShow),
-    ...WORK_TRANSITIONS.map(([verb, type]) => leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input))),
+    ...WORK_TRANSITIONS.map(([verb, type, requires]) =>
+        leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input), { requires })),
     leaf("done", DONE_OPTIONS, 1, cmdWorkDone),
     leaf("started", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, true)),
     leaf("exited", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, false)),
-    leaf("retire", RETIRE_OPTIONS, 1, cmdWorkRetireUnit, ["requirement"]),
+    leaf("retire", RETIRE_OPTIONS, 1, cmdWorkRetireUnit, {
+        undocumented: ["requirement"],
+        requires: [{ flags: ["why"], hint: "why the outcome was given up or moved" }]
+    }),
     ...WORK_GOAL_LEAVES
 ];
 
@@ -461,9 +464,11 @@ export const COMMANDS: Command[] = [
                 leaf("", DECIDE_OPTIONS, 1, cmdDecide),
                 leaf("confirm", {}, 1, ({ positionals }) => confirmDecision(requireProject(process.cwd()), positionals[0])),
                 leaf("decline", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
-                    withdrawDecision(requireProject(process.cwd()), "decline", positionals[0], values.why)),
+                    withdrawDecision(requireProject(process.cwd()), "decline", positionals[0], values.why),
+                { requires: [{ flags: ["why"], hint: "why the proposed decision was turned down" }] }),
                 leaf("retract", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
-                    withdrawDecision(requireProject(process.cwd()), "retract", positionals[0], values.why))
+                    withdrawDecision(requireProject(process.cwd()), "retract", positionals[0], values.why),
+                { requires: [WHY_REQUIRED] })
             ]
         })
     },
@@ -609,7 +614,7 @@ export const COMMANDS: Command[] = [
             refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w',
             children: [
                 leaf("add", CONVENTION_OPTIONS, 1, conventionAdd),
-                leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop)
+                leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop, { requires: [WHY_REQUIRED] })
             ]
         })
     },
@@ -1101,7 +1106,8 @@ function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", pref
     }
     // Every lifecycle exit that is not a supersession carries its reason: a
     // supersession says why by naming its successor, and nothing else does.
-    const payload = { entity: decision.id, why: requireText(why, usage) };
+    // The gate refused a call without one before this ran.
+    const payload = { entity: decision.id, why: required(why) };
     const refs = verb === "retract" ? { retracts: decision.id } : { declines: decision.id };
     recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", payload, refs, true), decision.text);
 }
@@ -1320,7 +1326,7 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
         console.log(`${work.id} is already retired — ${work.retiredWhy}`);
         return;
     }
-    const why = requireText(values.why, 'work retire <work-id> --why "<why the outcome was given up or moved>" [--successor <work-id>]');
+    const why = required(values.why);
     const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
     recordEvent(ctx, makeEvent(ctx.project, "entity.retired", payload, undefined, true), `${work.id} ${why}`);
 }
@@ -1412,9 +1418,11 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
     const payload: Record<string, unknown> = { entity: work.id };
     if (type === "entity.blocked")
     {
+        // The gate demanded --on; what is left is whether the reason it names
+        // is one the work graph knows.
         if (values.on !== "decision" && values.on !== "dependency" && values.on !== "external")
         {
-            throw new CliError("work block requires --on decision|dependency|external");
+            throw new CliError(`work block --on must be decision, dependency or external — "${values.on}" is none of them`);
         }
         payload.on = values.on;
         if (values.why !== undefined)
@@ -1598,7 +1606,7 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     // Every withdrawal carries its reason. A rule that left the current set
     // with nothing recorded reads, a year later, exactly like one nobody
     // ever wrote down.
-    const payload = { entity: id, why: requireText(values.why, usage) };
+    const payload = { entity: id, why: required(values.why) };
     const text = model.conventions.find((item) => item.id === id)?.text ?? id;
     recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", payload, { retracts: id }, true), text);
 }
