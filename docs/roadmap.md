@@ -111,7 +111,7 @@ edges are target state, named so a reader does not infer them:
 
 - **Preset cap gating** (work `w-wdhg4`): the retention caps gate `state add`,
   `state place`, and the alias verbs today. The dedicated preset commands —
-  `goal set`, `objective add`, `milestone add`, `convention add`, `decide` —
+  `goal add`, `objective add`, `milestone add`, `convention add`, `decide` —
   do not yet route through the cap gate, so they can still land a record in a
   tier that is over its cap.
 - **WorkSpec machinery**: dispatch and execution contracts are out of the

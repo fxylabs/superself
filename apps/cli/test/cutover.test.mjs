@@ -32,10 +32,10 @@ function shown(id)
     return must(box, demo, ["state", "show", id]).out;
 }
 
-test("B1: goal set records entity.confirmed at goal placement and supersedes the previous goal", async () =>
+test("B1: goal add records entity.confirmed at goal placement and supersedes the goal it names", async () =>
 {
-    const first = idIn(must(box, demo, ["goal", "set", "first direction"]).out);
-    const printed = (await approved(["goal", "set", "second direction"], first)).printed;
+    const first = idIn(must(box, demo, ["goal", "add", "first direction"]).out);
+    const printed = (await approved(["goal", "add", "second direction", "--supersedes", first], first)).printed;
     assert.match(printed, /entity\.confirmed recorded/);
     const second = idIn(printed);
     const recorded = eventFor(second, "entity.confirmed");

@@ -352,6 +352,19 @@ export interface StatementType
 
 export const STATEMENT_TYPES: StatementType[] = [
     {
+        type: "goal",
+        namespaces: ["goal"],
+        command: "goal",
+        supersede: "--supersedes <id>",
+        withdraw: "goal retract",
+        // A goal has no proposal form, so `decline` is absent: the closest
+        // preset kind, a convention, has none either, and nothing this type
+        // ships depends on one existing.
+        closed: (model) => model.entities
+            .filter((item) => item.source === "goal" && item.status !== "confirmed")
+            .map((item) => [item.id, item.status])
+    },
+    {
         type: "decision",
         namespaces: ["decision"],
         command: "decide",
@@ -932,18 +945,37 @@ function projectNative(model: ProjectModel, entity: EntityState, creation: SelfE
     }
 }
 
-// The newest live goal-labeled entity is the goal, exactly as the last
-// `goal.set` always was. Only a store holding native goals reaches this;
-// everywhere else the pass-1 reading stands untouched.
+// Every goal still standing, newest first. Several stand at once — `goal add`
+// displaces nothing, and only a stated `--supersedes` retires one — so a
+// surface with room renders them all and a one-line surface reads the first.
+export function liveGoals(model: ProjectModel): EntityState[]
+{
+    return model.entities.filter((entity) => entity.source === "goal" && isLive(entity))
+        .sort((left, right) => right.ts.localeCompare(left.ts) || right.id.localeCompare(left.id));
+}
+
+// What a surface with one line for the goal appends to it: how many others
+// stand behind the one it printed. Empty where nothing does, so the common
+// case reads exactly as it always has.
+export function otherGoals(model: ProjectModel): string
+{
+    const rest = liveGoals(model).length - 1;
+    return rest > 0 ? ` (+${rest} more)` : "";
+}
+
+// `model.goal` is one string that predates goals being ordinary records, and
+// the surfaces with a single slot for it still read it. The newest live goal
+// answers there; `liveGoals` answers everywhere with room for the rest.
 function projectGoal(model: ProjectModel): void
 {
-    const goals = model.entities.filter((entity) => entity.source === "goal" && isLive(entity));
-    if (!goals.some((entity) => entity.native === true))
+    // A store that recorded no goal at all keeps the pass-1 reading; one that
+    // did lets the entity view answer, including when the last standing goal
+    // was withdrawn and the slot is empty again.
+    if (!model.entities.some((entity) => entity.source === "goal"))
     {
         return;
     }
-    const newest = [...goals].sort((left, right) => right.ts.localeCompare(left.ts) || right.id.localeCompare(left.id))[0];
-    model.goal = newest?.text ?? model.goal;
+    model.goal = liveGoals(model)[0]?.text;
 }
 
 function supersedesOf(entity: EntityState): string[]

@@ -127,7 +127,7 @@ test("E6: one representative verb per family prints the entity event it records"
 {
     const box = machine();
     const { demo } = demoWorkspace(box);
-    assert.match(must(box, demo, ["goal", "set", "own the niche"]).out, /entity\.confirmed recorded/);
+    assert.match(must(box, demo, ["goal", "add", "own the niche"]).out, /entity\.confirmed recorded/);
     const proposed = idIn(must(box, demo, ["decide", "maybe so", "--proposed"]).out);
     assert.match(must(box, demo, ["decide", "decline", proposed, "--why", "not now"]).out, /entity\.retracted recorded/);
     const objective = must(box, demo, ["objective", "add", "reach preview"]).out.match(/\bo-[0-9a-z]{5}\b/)[0];

@@ -8,6 +8,7 @@ import {
     BranchUnshipped,
     branchTotals,
     buildModel,
+    otherGoals,
     ProjectModel,
     WaitingItem,
     WorkState
@@ -493,7 +494,7 @@ function renderWorkspaceContext(models: ProjectModel[]): string
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail(model.goal ?? "(no goal)", 500, workspacePointer("self status"));
+    const goal = detail((model.goal ?? "(no goal)") + otherGoals(model), 500, workspacePointer("self status"));
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 
@@ -529,7 +530,7 @@ export function printStatus(ctx: CliContext, render: RenderMode): void
         }).join("\n"));
         return;
     }
-    console.log(`${model.slug} — goal: ${model.goal ?? "(not set)"}`);
+    console.log(`${model.slug} — goal: ${(model.goal ?? "(not set)") + otherGoals(model)}`);
     console.log(`work: ${countLine(model.works)}`);
     console.log(`objectives: ${objectiveCountLine(model)}`);
     console.log(`waiting on you: ${waitingCount(model)}`);
@@ -602,7 +603,7 @@ function printWorkspaceOverview(ctx: CliContext, render: RenderMode): void
     for (const model of models)
     {
         const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-        console.log(`${model.slug} — ${model.goal ?? "(no goal)"} (${countLine(model.works)})${health}`);
+        console.log(`${model.slug} — ${(model.goal ?? "(no goal)") + otherGoals(model)} (${countLine(model.works)})${health}`);
     }
 }
 

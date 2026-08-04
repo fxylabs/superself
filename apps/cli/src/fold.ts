@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
-import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, ProjectModel, unshippedBranches, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
 import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
@@ -171,7 +171,10 @@ function renderState(model: ProjectModel): string
     {
         lines.push(model.description, "");
     }
-    lines.push("## Goal", "", model.goal ?? "_not set_", "");
+    // Every goal, not the newest: this file has the room, and a project
+    // aiming at three outcomes reads as one that abandoned two if only the
+    // last one recorded renders.
+    lines.push("## Goal", "", ...goalLines(model), "");
     section(lines, "Objectives", objectiveLines(model));
     section(lines, "Proposed work", proposalSummaryLines(model));
     section(lines, "Decisions", decisionLines(model.decisions.filter((d) => d.status === "confirmed")));
@@ -183,6 +186,18 @@ function renderState(model: ProjectModel): string
     section(lines, "Open questions", model.openQuestions.map((q) => `- ${q}`));
     section(lines, "Health", model.health.map((h) => `- ${h}`));
     return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+// One goal renders as the paragraph it always was; several render as a list,
+// so the file never has to claim one of them is the goal.
+function goalLines(model: ProjectModel): string[]
+{
+    const goals = liveGoals(model);
+    if (goals.length === 0)
+    {
+        return [model.goal ?? "_not set_"];
+    }
+    return goals.length === 1 ? [goals[0].text] : goals.map((goal) => `- ${goal.text} _(${goal.id})_`);
 }
 
 function section(lines: string[], title: string, items: string[]): void

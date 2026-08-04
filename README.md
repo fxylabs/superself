@@ -77,7 +77,7 @@ as operating outcomes and separates it from what is not complete.
 - every asserted record folds into one entity — text, free labels, typed
   links, reserved metadata (`target`, `criteria`), and placement — recorded
   through one shared `entity.*` event grammar in a per-project JSONL log;
-- the preset verbs — `goal set`, `objective add`, `milestone add`,
+- the preset verbs — `goal add`, `objective add`, `milestone add`,
   `convention add`, `decide`, `work add` — are sugar over that entity: each
   resolves its label and default placement through a user-editable alias
   table (`self alias`), `self state` is the raw verb for free-labeled
@@ -344,7 +344,7 @@ self init
 
 cd ~/path/to/my-project
 self project add
-self goal set "Ship the first trustworthy release"
+self goal add "Ship the first trustworthy release"
 self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
 self context

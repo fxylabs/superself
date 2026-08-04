@@ -22,7 +22,7 @@ mkdir my-workspace && cd my-workspace
 self init                    # this directory becomes your workspace
 cd ~/code/my-project
 self project add             # register a project (renders its agent block)
-self goal set "ship the alpha"
+self goal add "ship the alpha"
 self work add "signup flow works end to end"
 self work start w-xxxxx
 self report w-xxxxx "flow works; email verification remains" --evidence <commit>
@@ -87,7 +87,7 @@ commands also refuse an argument they have no room for; the `work`
 linking and proposal verbs still ignore a surplus positional.
 
 To pass text that starts with a dash, put it after `--`:
-`self goal set -- "--help is the goal"`. Before `--`, a `--help` standing
+`self goal add -- "--help is the goal"`. Before `--`, a `--help` standing
 anywhere a flag could stand answers with that command's help; in an option's
 value position it is handed to the command's parser instead
 (`--why=--help` records the literal text).

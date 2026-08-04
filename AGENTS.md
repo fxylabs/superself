@@ -80,7 +80,7 @@ concept is, when to reach for it, and the order the verbs go in:
 - `self help records` — one entity behind every record kind, and how a record is corrected
 - `self help placement` — scope, priority and exposure — how a record earns its place in context
 - `self help work` — the work graph: outcomes, evidence, criteria, and proposals
-- `self help goals` — the long-term goal, objectives, milestones, and what reaching one takes
+- `self help goals` — long-term goals, objectives, milestones, and what reaching one takes
 - `self help workspace` — the store, the projects in it, and moving it between machines
 
 ### Conventions

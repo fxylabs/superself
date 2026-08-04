@@ -121,10 +121,10 @@ test("placement and metadata shapes are refused in user terms", () =>
 
 test("the preset record kinds keep their own lifecycle verbs", () =>
 {
-    const goal = idIn(must(box, demo, ["goal", "set", "own the niche"]).out);
+    const goal = idIn(must(box, demo, ["goal", "add", "own the niche"]).out);
     const retractGoal = self(["state", "retract", goal, "--why", "x"]);
     assert.notEqual(retractGoal.code, 0);
-    assert.match(retractGoal.out, /goal record — a goal leaves by replacement/);
+    assert.match(retractGoal.out, /goal record — run `self goal retract <id> --why w`/);
     const decision = idIn(must(box, demo, ["decide", "keep sqlite", "--proposed"]).out);
     const confirmLegacy = self(["state", "confirm", decision]);
     assert.notEqual(confirmLegacy.code, 0);

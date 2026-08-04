@@ -157,7 +157,7 @@ export type EntityKind = EntitySource | "entity";
 // record kinds, read by every surface that takes the flag, instead of a
 // spelling per surface.
 const SUPERSEDE_SPELLING: Record<EntityKind, string> = {
-    goal: '`self goal set "<text>"` (the latest goal supersedes the previous one)',
+    goal: '`self goal add "<text>" --supersedes <id>`',
     decision: '`self decide "<text>" --supersedes <id>`',
     convention: '`self convention add "<text>" --supersedes <id>`',
     objective: '`self objective add "<outcome>" --supersedes <id>`',

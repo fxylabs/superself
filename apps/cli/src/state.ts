@@ -1058,7 +1058,7 @@ function requireSuccessor(model: ProjectModel, retired: EntityState, value: stri
 // Where each preset record kind's own withdrawal lives, for the refusal that
 // points a caller back at the verb owning the record.
 const OWNING_WITHDRAW: Record<EntitySource, string> = {
-    goal: 'a goal leaves by replacement — `self goal set "<text>"`',
+    goal: "run `self goal retract <id> --why w`",
     decision: "run `self decide retract <id> --why w` (or `decide decline` for a proposal)",
     convention: "run `self convention drop <id> --why w`",
     objective: "run `self objective close <id> --as dropped --why w` (or `objective decline` for a proposal)",

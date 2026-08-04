@@ -7,7 +7,7 @@ import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
-import { isEntityCreation, isLive, requireSupersedeKind } from "./entities.js";
+import { EntityState, isEntityCreation, isLive, requireSupersedeKind } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
@@ -251,6 +251,14 @@ const CONVENTION_OPTIONS = {
     workspace: { type: "boolean" }
 } as const;
 
+// The same shape, for the same reason: `goal add` refuses the withdrawal's
+// reason and `goal retract` refuses the successor's link, rather than either
+// silently dropping a flag the caller meant.
+const GOAL_OPTIONS = {
+    supersedes: { type: "string", multiple: true },
+    why: { type: "string" }
+} as const;
+
 const SCOPED_RENDER_OPTIONS = { ...SCOPE_OPTIONS, ...RENDER_OPTIONS } as const;
 
 const WORKSPACE_RENDER_OPTIONS = { ...WORKSPACE_SCOPE_OPTIONS, ...RENDER_OPTIONS } as const;
@@ -412,13 +420,33 @@ export const COMMANDS: Command[] = [
     },
     {
         name: "goal",
-        usage: [{ syntax: 'goal set "<text>"', description: ["set the long-term project goal"], verbs: ["set"] }],
-        detail: ["record the outcome this project exists to reach. The latest one wins."],
+        usage: [
+            { syntax: 'goal add "<text>" [--supersedes <id>]', description: ["record a long-term goal, replacing ones it corrects"], verbs: ["add"] },
+            { syntax: 'goal retract <id> --why "<reason>"', description: ["withdraw a goal with nothing replacing it"], verbs: ["retract"] }
+        ],
+        detail: [
+            "record an outcome this project exists to reach, or withdraw one by its id.",
+            "",
+            "  --supersedes <id>     the goal this one replaces, repeatable",
+            "  --why <text>          why a withdrawn goal no longer holds; every withdrawal carries one",
+            "",
+            "a project holds as many goals as it means to: recording one displaces",
+            "nothing. Replacing a goal is stated with --supersedes, never implied by",
+            "stating another."
+        ],
         node: branch({
             name: "goal",
             unnamed: "refuse",
-            refusal: 'usage: self goal set "<text>"',
-            children: [leaf("set", {}, 1, ({ positionals }) => cmdGoalSet(positionals[0]))]
+            // `goal set` was the one destructive verb whose caller never named
+            // what it destroyed, so it is refused rather than kept working
+            // under a spelling that no longer describes what happens.
+            refusal: (verb) => verb === "set"
+                ? 'goal set is now `self goal add "<text>"` — the goal it replaces is named with --supersedes <id> rather than implied'
+                : 'usage: self goal add "<text>" [--supersedes <id>] | retract <id> --why w',
+            children: [
+                leaf("add", GOAL_OPTIONS, 1, goalAdd),
+                leaf("retract", GOAL_OPTIONS, 1, goalRetract, { requires: [WHY_REQUIRED] })
+            ]
         })
     },
     OBJECTIVE_COMMAND,
@@ -1070,17 +1098,71 @@ function presetEntityEvent(
         text);
 }
 
-function cmdGoalSet(value: string | undefined): void
+function goalAdd({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): void
 {
-    const text = requireText(value, 'goal set "<text>"');
+    const text = requireText(positionals[0], 'goal add "<text>" [--supersedes <id>]');
+    if (values.why !== undefined)
+    {
+        throw new CliError("goal add takes no --why — the goal is its own statement; --why records why a goal was withdrawn");
+    }
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    // The latest goal wins, as it always has: the new statement supersedes
-    // every live goal record, legacy-derived and native alike.
-    const live = model.entities.filter((item) => item.source === "goal" && isLive(item));
-    presetEntityEvent(ctx, model, "goal", text, {
-        links: live.map((item) => ({ type: "supersedes", target: item.id }))
-    }, undefined, false);
+    const extra: Record<string, unknown> = {};
+    // What a new goal replaces is named, never inferred from what happens to
+    // be standing. A project may aim at several outcomes at once, so stating
+    // one more says nothing about the ones already recorded.
+    if (values.supersedes !== undefined)
+    {
+        extra.links = values.supersedes.map((prefix) =>
+        {
+            requireSupersedeKind(model.entities, prefix, "goal");
+            return { type: "supersedes", target: requireGoal(model, prefix).id };
+        });
+    }
+    presetEntityEvent(ctx, model, "goal", text, extra, undefined, false);
+}
+
+function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): void
+{
+    if (values.supersedes !== undefined)
+    {
+        throw new CliError('goal retract takes no --supersedes — to replace a goal, run `goal add "<text>" --supersedes <id>`');
+    }
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const goal = requireGoal(model, requireText(positionals[0], 'goal retract <id> --why "<why it no longer holds>"'));
+    if (!isLive(goal))
+    {
+        throw new CliError(`${goal.id} is already ${goal.status} — a goal leaves once, and the first withdrawal is what happened`);
+    }
+    const payload = { entity: goal.id, why: required(values.why) };
+    recordRetirement(ctx, retirementIntent(model, "retract", [goal.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
+            confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: goal.id }, true)],
+        goal.text);
+}
+
+// Exact id first, then a unique prefix, over every goal the fold carries —
+// legacy `goal.set` records and native goal entities answer through one
+// lookup, and a withdrawn one is still found so the refusal can say so.
+function requireGoal(model: ProjectModel, prefix: string): EntityState
+{
+    const goals = model.entities.filter((item) => item.source === "goal");
+    const exact = goals.find((item) => item.id === prefix);
+    if (exact !== undefined)
+    {
+        return exact;
+    }
+    const matches = goals.filter((item) => item.id.startsWith(prefix));
+    if (matches.length > 1)
+    {
+        throw new CliError(`goal id "${prefix}" is ambiguous (${matches.length} matches) — spell more of it`);
+    }
+    if (matches.length === 0)
+    {
+        throw new CliError(`${prefix} is not a goal`);
+    }
+    return matches[0];
 }
 
 function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>): void

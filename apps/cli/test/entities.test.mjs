@@ -27,10 +27,18 @@ function shortIdIn(text, prefix)
     return match[0];
 }
 
-test("a goal.set chain folds to exactly one live goal entity with supersede lineage", async () =>
+// `goal set` is gone (w-1r025) and a new goal displaces nothing, so the
+// implicit chain only exists in logs written before that — which is where it
+// is asserted, on the interpretation the fold keeps reading forever.
+const LEGACY_GOALS = ["01hz00000000000000000g0001", "01hz00000000000000000g0002"];
+
+test("a legacy goal.set chain folds to exactly one live goal entity with supersede lineage", () =>
 {
-    const first = idIn(must(box, demo, ["goal", "set", "first direction"]).out);
-    const second = idIn((await approved(["goal", "set", "second direction"], first)).printed);
+    const [first, second] = LEGACY_GOALS;
+    appendLegacy([
+        { id: first, ts: "2025-01-02T00:00:00.000Z", type: "goal.set", project: "demo", payload: { text: "first direction" }, refs: {}, origin: {} },
+        { id: second, ts: "2025-01-02T00:01:00.000Z", type: "goal.set", project: "demo", payload: { text: "second direction" }, refs: {}, origin: {} }
+    ]);
     const list = must(box, demo, ["state", "list"]).out;
     const goals = list.split("\n").filter((line) => /\bgoal\b/.test(line));
     assert.equal(goals.length, 1, `expected one live goal entity:\n${list}`);
