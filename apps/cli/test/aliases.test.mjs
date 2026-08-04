@@ -32,7 +32,7 @@ function placementOf(id)
 
 test("A1: all 8 preset verbs resolve through the table with spec §7 defaults", () =>
 {
-    const goal = idIn(must(box, demo, ["goal", "set", "own the niche"]).out);
+    const goal = idIn(must(box, demo, ["goal", "add", "own the niche"]).out);
     assert.equal(placementOf(goal), "placement: project · full · priority 0");
     const objective = must(box, demo, ["objective", "add", "reach preview"]).out.match(/\bo-[0-9a-z]{5}\b/)[0];
     assert.equal(placementOf(objective), "placement: project · full · priority 10");

@@ -113,7 +113,7 @@ test("D6: convention add --workspace records at workspace scope and renders ever
 
 test("D7: workspace and project entities interleave by priority in one ordering", () =>
 {
-    must(box, other, ["goal", "set", "the other project's goal"]);
+    must(box, other, ["goal", "add", "the other project's goal"]);
     must(box, other, ["objective", "add", "the other project's objective"]);
     must(box, demo, ["state", "place", shared, "--exposure", "full", "--why", "promoted for the ordering check"]);
     const context = otherContext();

@@ -107,7 +107,7 @@ export function aliasTable(config: StoreConfig): Record<string, PresetRow>
 
 // What a preset write verb records under (#207 A1/A3): its row from the
 // merged table. Every preset command body reads through here, so `alias set`
-// on a built-in changes what the next `goal set` or `decide` records.
+// on a built-in changes what the next `goal add` or `decide` records.
 export function presetRow(storeDir: string, verb: string): PresetRow
 {
     return aliasTable(readStoreConfig(storeDir))[verb] ?? { label: verb, exposure: "index" };

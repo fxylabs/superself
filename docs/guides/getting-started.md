@@ -150,7 +150,7 @@ Create a long-term direction, one governing decision, and one outcome that must
 be reached:
 
 ```bash
-self goal set "Ship the first trustworthy release"
+self goal add "Ship the first trustworthy release"
 self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
 ```

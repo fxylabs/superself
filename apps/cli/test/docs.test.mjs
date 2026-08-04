@@ -198,7 +198,7 @@ function entityIdIn(text)
 // the store's own log — the oracle is what the CLI wrote, not a list here.
 async function writeCurrentVocabulary(box, demo)
 {
-    must(box, demo, ["goal", "set", "the goal"]);
+    must(box, demo, ["goal", "add", "the goal"]);
     must(box, demo, ["decide", "a first take", "--proposed"]);
     const decided = idIn(must(box, demo, ["decide", "a second take"]).out);
     await approvedIn(box, demo, ["decide", "a third take", "--supersedes", decided], decided);

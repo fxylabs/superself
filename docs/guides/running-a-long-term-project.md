@@ -47,11 +47,14 @@ By default, registration also renders the managed Superself block into
 state at session start and to update state through `self` rather than editing
 derived files by hand.
 
-Set the long-term goal once:
+Record the long-term goal:
 
 ```bash
-self goal set "Continuously ship trustworthy product improvements"
+self goal add "Continuously ship trustworthy product improvements"
 ```
+
+Recording another adds it beside this one. Replacing this one is stated:
+`self goal add "<new text>" --supersedes <id>`.
 
 Record judgments that future work must respect:
 
