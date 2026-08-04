@@ -99,7 +99,7 @@ body:
     attributes:
       label: Naming
       description: Event namespaces, command verbs, or exported types involved, if you know them. Write "Unknown" if you do not.
-      placeholder: '`self work done`, `work.done`'
+      placeholder: '`self work done`, `entity.done`'
 
   - type: textarea
     id: verification

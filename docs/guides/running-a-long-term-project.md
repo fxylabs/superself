@@ -68,13 +68,13 @@ Create the result that matters for the current horizon:
 
 ```bash
 self objective add "The beta is ready for ten design partners" \
-  --horizon month \
   --success "Ten partners can complete the critical flow without a severity-one defect" \
   --stop "A privacy or data-integrity risk makes external use unsafe"
 ```
 
-The command prints an objective id such as `o-xxxxx`. Use the real id in later
-commands. Add a checkpoint beneath it:
+The command answers with the event it recorded — every assertion lands as an
+`entity.*` event — and prints an objective id such as `o-xxxxx`. Use the real
+id in later commands. Add a checkpoint beneath it:
 
 ```bash
 self milestone add "The critical flow is release-ready" \
@@ -161,6 +161,15 @@ durable yet. Add the missing decision or report before continuing.
 entire project history. `self work show` and `self search` are the pull path
 when the current action needs more detail.
 
+What context renders is placement: every record above is an entity with a
+priority (render order) and an exposure (full text, one index line, or a
+search pointer). When a decision stops governing daily work, demote it rather
+than deleting it — `self state place <id> --exposure index --why "<reason>"`
+keeps it recoverable while freeing the always-rendered budget. The caps
+refuse a `state add` or `state place` that would push a tier past its limit
+until something demotes; the preset verbs above do not route through that
+gate yet.
+
 ## 6. Complete work with evidence
 
 After committing the verified result, attach the exact commit and final
@@ -182,8 +191,10 @@ Replace the paths with files the work produced; missing files are refused. Run
 self work done w-xxxxx
 ```
 
-`self work done` is the judgment that the outcome was reached; the evidence
-for it lives in the reports the unit carries.
+`self work done` is the judgment that the outcome was reached, and the claim
+must carry evidence: a report with a commit or an artifact — like the one
+above — or a done-time `--report` stating what verifiably happened. A bare
+claim on a unit whose reports carry neither is refused.
 
 Now cover the milestone's separate exit criteria:
 
