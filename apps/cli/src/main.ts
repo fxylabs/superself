@@ -7,14 +7,14 @@ import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
-import { isLive, requireSupersedeKind } from "./entities.js";
+import { isEntityCreation, isLive, requireSupersedeKind } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
-import { findEventByPrefix } from "./logfile.js";
+import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import {
@@ -576,6 +576,33 @@ export const COMMANDS: Command[] = [
             refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|accept|decline`,
             children: WORK_CHILDREN
         })
+    },
+    {
+        name: "undo",
+        usage: [
+            {
+                syntax: 'undo <event-id> --why "<why the retirement was wrong>"',
+                verbs: [""]
+            }
+        ],
+        detail: [
+            "take back one retirement, supersession or withdrawal. Nothing else is",
+            "undone: the id names the destructive event, and any other kind of event",
+            "is refused rather than guessed at.",
+            "",
+            "The record comes back and the log keeps both halves — what happened and",
+            "what took it back. A supersession's successor stays; it simply stops",
+            "claiming to replace anything, which is the accident this answers: a",
+            "record that belonged, carrying a link that did not.",
+            "",
+            "No terminal is needed. Retiring a record is a person's call because it",
+            "cannot be taken back; this is the taking back, and gating it would",
+            "contradict the reason the other gate exists.",
+            "",
+            "  --why <text>    why the retirement was wrong"
+        ],
+        node: leaf("", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
+            cmdUndo(requireProject(process.cwd()), positionals[0], values.why), { requires: [WHY_REQUIRED] })
     },
     {
         name: "report",
@@ -1761,6 +1788,64 @@ function userMessage(error: unknown, argv: string[]): string | null
 // The whole invocation, including its error boundary. `bin/self.mjs` calls this
 // and nothing else, so importing this module — to read the contract — runs no
 // command.
+/* ── undo ──────────────────────────────────────────────────────────── */
+
+// The kinds of event an undo can take back, and what each one did. Anything
+// outside this table is refused by name: `undo` reads like it reverses any
+// event, and the refusal is where that impression gets corrected.
+const UNDOABLE: Record<string, string> = {
+    "entity.retracted": "withdrawal",
+    "entity.retired": "retirement"
+};
+
+// Reversing one destructive event. The event is named rather than the record,
+// because what went wrong is an act, not a state — and because naming the act
+// is what lets this stay safe under a merge: an undo cannot have been written
+// without seeing the event it reverses, which is the exact case a withdrawal
+// stays terminal against.
+function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | undefined): void
+{
+    const usage = 'undo <event-id> --why "<why the retirement was wrong>"';
+    const event = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, usage));
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const undone = undoableKind(event);
+    if (readEvents(ctx.storeDir, ctx.project).some((item: SelfEvent) => item.refs?.annuls === event.id))
+    {
+        throw new CliError(`${event.id} was already undone — the record it took back is standing`);
+    }
+    const restored = restoredBy(event);
+    const text = model.entities.find((item) => item.id === restored)?.text ?? restored;
+    recordEvent(ctx, makeEvent(ctx.project, "entity.restored",
+        { entity: restored, why: required(why) }, { annuls: event.id }, true), text);
+    console.log(`${restored} is standing again — its ${undone} was taken back`);
+}
+
+// Which act this event was, or a refusal naming the ones that can be taken
+// back. A creation is undoable only where it displaced something: without a
+// supersedes link there is nothing for an undo to give back.
+function undoableKind(event: SelfEvent): string
+{
+    const named = UNDOABLE[event.type];
+    if (named !== undefined)
+    {
+        return named;
+    }
+    if (isEntityCreation(event) && supersedeTargets(event.payload).length > 0)
+    {
+        return "supersession";
+    }
+    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, or a record's supersession of another, and nothing else`);
+}
+
+// What comes back. A withdrawal and a retirement name their target; a
+// supersession names it from the link the successor carries.
+function restoredBy(event: SelfEvent): string
+{
+    return UNDOABLE[event.type] === undefined
+        ? supersedeTargets(event.payload)[0]
+        : String(event.payload.entity ?? "");
+}
+
 export async function runCli(argv: string[]): Promise<void>
 {
     try

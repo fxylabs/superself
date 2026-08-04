@@ -43,3 +43,62 @@ test("a wrong answer at the terminal records nothing", async () =>
     const after = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8").trim().split("\n").length;
     assert.equal(after, before);
 });
+
+/* ── undo: taking a destruction back ───────────────────────────────── */
+
+const events = () => readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line));
+
+test("undo gives back a superseded record and leaves the successor standing", async () =>
+{
+    const first = idIn(must(box, demo, ["decide", "undo: the standing policy"]).out);
+    const replacing = await approvedIn(box, demo, ["decide", "undo: the replacement", "--supersedes", first], first);
+    assert.equal(replacing.code, 0, replacing.out);
+    assert.match(must(box, demo, ["state", "show", first]).out, /superseded/);
+    const undone = selfIn(box, demo, ["undo", idIn(replacing.printed), "--why", "it added to the policy, it did not replace it"]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.match(must(box, demo, ["state", "show", first]).out, /confirmed/);
+    const context = must(box, demo, ["context"]).out;
+    assert.ok(context.includes("undo: the replacement"), "the successor was taken back along with its link");
+});
+
+test("undo needs no terminal — reversing a destruction destroys nothing", async () =>
+{
+    const id = idIn(must(box, demo, ["convention", "add", "undo: a rule that came back"]).out);
+    const dropped = await approvedIn(box, demo, ["convention", "drop", id, "--why", "dropped in error"], id);
+    assert.equal(dropped.code, 0, dropped.out);
+    assert.ok(!must(box, demo, ["context"]).out.includes("undo: a rule that came back"));
+    // Spawned as a child: no terminal, and no gate either.
+    const undone = selfIn(box, demo, ["undo", idIn(dropped.printed), "--why", "the rule still holds"]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.ok(must(box, demo, ["context"]).out.includes("undo: a rule that came back"));
+});
+
+test("undo keeps both halves in the log and refuses a second time", async () =>
+{
+    const unit = must(box, demo, ["work", "add", "undo: an outcome given up"]).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const retired = await approvedIn(box, demo, ["work", "retire", unit, "--why", "given up early"], unit);
+    const retirement = idIn(retired.printed);
+    assert.equal(selfIn(box, demo, ["undo", retirement, "--why", "it is still wanted"]).code, 0);
+    assert.doesNotMatch(must(box, demo, ["work", "show", unit]).out, /Status: retired/);
+    const kept = events().filter((event) => event.id === retirement || event.refs?.annuls === retirement);
+    assert.equal(kept.length, 2, "the log dropped a half of what happened");
+    const again = selfIn(box, demo, ["undo", retirement, "--why", "twice"]);
+    assert.notEqual(again.code, 0);
+    assert.match(again.out, /was already undone/);
+});
+
+test("undo refuses an event that destroyed nothing, and names what it takes back", () =>
+{
+    const plain = idIn(must(box, demo, ["decide", "undo: a decision that replaced nothing"]).out);
+    const refused = selfIn(box, demo, ["undo", plain, "--why", "nothing to take back"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /undo takes back a retirement, a withdrawal, or a record's supersession/);
+});
+
+test("undo without --why is refused", () =>
+{
+    const refused = selfIn(box, demo, ["undo", "01zzzzz"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /--why/);
+});

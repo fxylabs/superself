@@ -218,6 +218,9 @@ async function writeCurrentVocabulary(box, demo)
     must(box, demo, ["work", "done", unit, "--report", "the flow verifiably works"]);
     const retiredUnit = workIdIn(must(box, demo, ["work", "add", "a superseded outcome"]).out);
     await approvedIn(box, demo, ["work", "retire", retiredUnit, "--why", "moved elsewhere"], retiredUnit);
+    const undoneUnit = workIdIn(must(box, demo, ["work", "add", "an outcome given up in error"]).out);
+    const undone = await approvedIn(box, demo, ["work", "retire", undoneUnit, "--why", "given up"], undoneUnit);
+    must(box, demo, ["undo", idIn(undone.printed), "--why", "the outcome is still wanted"]);
     const runUnit = workIdIn(must(box, demo, ["work", "add", "a supervised outcome"]).out);
     must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
     must(box, demo, ["work", "exited", runUnit, "--code", "0"]);

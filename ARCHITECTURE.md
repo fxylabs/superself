@@ -30,7 +30,7 @@ it. The layers, lowest first:
 | Render | `view.ts`, `views.ts`, `pretty.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
-| Command support | `artifact.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb) |
+| Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
 | Commands | `main.ts`, `goals.ts`, `state.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs |
 
 The append path and the imports run the same way, from higher layers to lower
@@ -72,6 +72,7 @@ of them is a review finding, not a refactor note.
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess` | the one writer and the one reader of the machine-local pid ledger; a pid never reaches a synced event |
 | Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Every command surface goes through it — `node:util` `parseArgs` is called from `parseCommand` and nowhere else |
+| Retirement approval | `retirement.ts` `requireHumanRetirement`, called from `recordRetirement` | the one answer to "may this call destroy a record": every verb that supersedes, withdraws or retires a confirmed record routes through it, and it discloses the target and reads a typed confirmation from a terminal before anything is written (#173). A call that displaces nothing passes straight through, so the trigger is what a call destroys rather than which flag was typed |
 | Required options | `args.ts` `requireOptions`, called from `parseCommand` | the one answer to "may this verb run with what it was given": every missing required option is named in one refusal, with its hint and any unblocking verb. A handler that asked again would be a second implementation of the same rule (#106) |
 
 What a verb cannot run without is declared on its leaf, beside the options it
@@ -158,10 +159,21 @@ never excused: `decide retract`, `decide decline`, `convention drop`, `objective
 decline`, `objective close --as dropped`, `milestone drop`, `work retire` and
 `work decline` all require it.
 
-A withdrawal is terminal. Once a record is retracted, declined or dropped, a
-later event naming it does not move it back: the fold refuses the transition
-rather than trusting log order, because a log merged from another clone can
-carry a revision written before the withdrawal was pulled.
+A withdrawal is terminal against every event written in ignorance of it. Once
+a record is retracted, declined or dropped, a later event naming it does not
+move it back: the fold refuses the transition rather than trusting log order,
+because a log merged from another clone can carry a revision written before
+the withdrawal was pulled.
+
+Only an event naming that withdrawal *by id* reverses it, which is what `undo`
+records — `entity.restored` carrying `refs.annuls`. That case is exactly the
+one the rule above is not written against: an undo cannot have been composed
+without seeing the event it takes back. The fold collects the annulled ids
+before it reads anything else and skips those events, so every rule keeps its
+shape — first-withdrawal-wins still holds among the withdrawals that stand —
+and binding to an id rather than to log order is what keeps a merged log
+folding to one answer. An annulled supersession gives back what it displaced
+and leaves its successor standing, without the link.
 
 Lifecycle refs also survive log order. A union merge orders lines by neither
 time nor dependency, so a retraction can sit above the decision it withdraws;

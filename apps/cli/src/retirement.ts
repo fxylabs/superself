@@ -139,10 +139,16 @@ function headline(intent: RetirementIntent): string
     return `this ${SUBJECT[intent.kind]} ${describe(intent)} — nothing is recorded until you confirm`;
 }
 
+// What is about to be lost, in the words a person uses for it. The label a
+// record carries is the noun everywhere else it renders, so it is the noun
+// here too — except where the label is a shorthand the sentence cannot use.
+const NOUN: Record<string, string> = { work: "work unit" };
+
 function describe(intent: RetirementIntent): string
 {
-    const kind = intent.targets[0]?.labels[0] ?? "record";
-    return intent.targets.length === 1 ? `a confirmed ${kind}` : `${intent.targets.length} confirmed ${kind}s`;
+    const label = intent.targets[0]?.labels[0] ?? "record";
+    const noun = NOUN[label] ?? label;
+    return intent.targets.length === 1 ? `a confirmed ${noun}` : `${intent.targets.length} confirmed ${noun}s`;
 }
 
 // One target, as a person reads it: what it says, when it was confirmed, how
