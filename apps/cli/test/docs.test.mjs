@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMANDS } from "../dist/main.js";
-import { demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -196,15 +196,15 @@ function entityIdIn(text)
 
 // Drives every current write verb once and reads the vocabulary back from
 // the store's own log — the oracle is what the CLI wrote, not a list here.
-function writeCurrentVocabulary(box, demo)
+async function writeCurrentVocabulary(box, demo)
 {
     must(box, demo, ["goal", "set", "the goal"]);
     must(box, demo, ["decide", "a first take", "--proposed"]);
     const decided = idIn(must(box, demo, ["decide", "a second take"]).out);
-    must(box, demo, ["decide", "a third take", "--supersedes", decided]);
+    await approvedIn(box, demo, ["decide", "a third take", "--supersedes", decided], decided);
     const note = entityIdIn(must(box, demo, ["state", "add", "a note", "--label", "note"]).out);
     must(box, demo, ["state", "place", note, "--priority", "7"]);
-    must(box, demo, ["state", "retract", note, "--why", "probe over"]);
+    await approvedIn(box, demo, ["state", "retract", note, "--why", "probe over"], note);
     const objective = entityIdIn(must(box, demo, ["objective", "add", "an outcome"]).out);
     const milestone = entityIdIn(must(box, demo, ["milestone", "add", "a checkpoint", "--objective", objective, "--exit", "the proof passes"]).out);
     const unit = workIdIn(must(box, demo, ["work", "add", "the flow works"]).out);
@@ -217,15 +217,15 @@ function writeCurrentVocabulary(box, demo)
     must(box, demo, ["report", unit, "progress so far"]);
     must(box, demo, ["work", "done", unit, "--report", "the flow verifiably works"]);
     const retiredUnit = workIdIn(must(box, demo, ["work", "add", "a superseded outcome"]).out);
-    must(box, demo, ["work", "retire", retiredUnit, "--why", "moved elsewhere"]);
+    await approvedIn(box, demo, ["work", "retire", retiredUnit, "--why", "moved elsewhere"], retiredUnit);
     const runUnit = workIdIn(must(box, demo, ["work", "add", "a supervised outcome"]).out);
     must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
     must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
 }
 
-function writtenVocabulary(box, ws, demo)
+async function writtenVocabulary(box, ws, demo)
 {
-    writeCurrentVocabulary(box, demo);
+    await writeCurrentVocabulary(box, demo);
     const log = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8");
     return new Set(log.trim().split("\n").map((line) => JSON.parse(line).type));
 }
@@ -254,11 +254,11 @@ function eventMentions(markdown)
     return mentions;
 }
 
-test("event names the documents mention are the vocabulary the CLI writes", () =>
+test("event names the documents mention are the vocabulary the CLI writes", async () =>
 {
     const box = machine();
     const { ws, demo } = demoWorkspace(box);
-    const written = writtenVocabulary(box, ws, demo);
+    const written = await writtenVocabulary(box, ws, demo);
     for (const doc of TIER1)
     {
         for (const mention of eventMentions(tier1(doc)))

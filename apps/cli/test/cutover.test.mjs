@@ -7,12 +7,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = demoWorkspace(box);
 const log = join(box.root, "ws", ".superself", "projects", "demo", "log.jsonl");
 const self = (args) => selfIn(box, demo, args);
+// Destroying a record needs a person at a terminal (#173): the command line
+// runs in full and only the typed answer is stood in for.
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 function events()
 {
@@ -29,10 +32,10 @@ function shown(id)
     return must(box, demo, ["state", "show", id]).out;
 }
 
-test("B1: goal set records entity.confirmed at goal placement and supersedes the previous goal", () =>
+test("B1: goal set records entity.confirmed at goal placement and supersedes the previous goal", async () =>
 {
     const first = idIn(must(box, demo, ["goal", "set", "first direction"]).out);
-    const printed = must(box, demo, ["goal", "set", "second direction"]).out;
+    const printed = (await approved(["goal", "set", "second direction"], first)).printed;
     assert.match(printed, /entity\.confirmed recorded/);
     const second = idIn(printed);
     const recorded = eventFor(second, "entity.confirmed");
@@ -64,21 +67,21 @@ test("B3: decide --proposed records entity.proposed, and decide confirm answers 
     assert.ok(shown(id).includes("confirmed"));
 });
 
-test("B4: decline and retract record entity.retracted, and the declined proposal keeps its marker", () =>
+test("B4: decline and retract record entity.retracted, and the declined proposal keeps its marker", async () =>
 {
     const declined = idIn(must(box, demo, ["decide", "maybe queue", "--proposed"]).out);
     must(box, demo, ["decide", "decline", declined, "--why", "not now"]);
     assert.equal(eventFor(declined, "entity.retracted").payload.why, "not now");
     assert.match(must(box, demo, ["search", "maybe queue", "--type", "entity"]).out, /\[declined\]/);
     const retracted = idIn(must(box, demo, ["decide", "temp rule"]).out);
-    must(box, demo, ["decide", "retract", retracted, "--why", "walked back"]);
+    await approved(["decide", "retract", retracted, "--why", "walked back"], retracted);
     assert.match(must(box, demo, ["search", "temp rule", "--type", "entity"]).out, /\[retracted\]/);
 });
 
-test("B5: convention add records entity.confirmed at p30 full, with scope and supersedes carried", () =>
+test("B5: convention add records entity.confirmed at p30 full, with scope and supersedes carried", async () =>
 {
     const old = idIn(must(box, demo, ["convention", "add", "four spaces"]).out);
-    const corrected = idIn(must(box, demo, ["convention", "add", "four spaces, semicolons", "--supersedes", old]).out);
+    const corrected = idIn((await approved(["convention", "add", "four spaces, semicolons", "--supersedes", old], old)).printed);
     const recorded = eventFor(corrected, "entity.confirmed");
     assert.deepEqual(recorded.payload.labels, ["convention"]);
     assert.equal(recorded.payload.priority, 30);
@@ -89,11 +92,11 @@ test("B5: convention add records entity.confirmed at p30 full, with scope and su
     assert.equal(eventFor(scoped, "entity.confirmed").payload.scope, "workspace");
 });
 
-test("B6: convention drop records entity.retracted and the rule leaves the render", () =>
+test("B6: convention drop records entity.retracted and the rule leaves the render", async () =>
 {
     const id = idIn(must(box, demo, ["convention", "add", "tabs everywhere"]).out);
-    const printed = must(box, demo, ["convention", "drop", id, "--why", "spaces won"]);
-    assert.match(printed.out, /entity\.retracted recorded/);
+    const printed = await approved(["convention", "drop", id, "--why", "spaces won"], id);
+    assert.match(printed.printed, /entity\.retracted recorded/);
     assert.equal(eventFor(id, "entity.retracted").payload.why, "spaces won");
     assert.ok(!must(box, demo, ["context"]).out.includes("tabs everywhere"));
 });
@@ -127,10 +130,10 @@ test("B8: objective confirm and decline answer a proposal with entity events", (
 
 let preview;
 
-test("B9: objective revise supersedes with a new id carrying the links and target", () =>
+test("B9: objective revise supersedes with a new id carrying the links and target", async () =>
 {
     preview = must(box, demo, ["objective", "add", "old target", "--target", "2099-03-01"]).out.match(/\bo-[0-9a-z]{5}\b/)[0];
-    const printed = must(box, demo, ["objective", "revise", preview, "--why", "slipped", "--target", "2099-06-30"]).out;
+    const printed = (await approved(["objective", "revise", preview, "--why", "slipped", "--target", "2099-06-30"], preview)).printed;
     const successor = printed.match(/\bo-[0-9a-z]{5}\b/)[0];
     assert.notEqual(successor, preview, "a revision kept the record id");
     assert.ok(shown(preview).includes(`superseded by: ${successor}`));
@@ -141,14 +144,14 @@ test("B9: objective revise supersedes with a new id carrying the links and targe
     preview = successor;
 });
 
-test("B10: objective close maps reached to entity.done and dropped to entity.retired", () =>
+test("B10: objective close maps reached to entity.done and dropped to entity.retired", async () =>
 {
     const reached = must(box, demo, ["objective", "add", "land the tier"]).out.match(/\bo-[0-9a-z]{5}\b/)[0];
     const printed = must(box, demo, ["objective", "close", reached, "--as", "reached"]);
     assert.match(printed.out, /entity\.done recorded/);
     assert.ok(!must(box, demo, ["objective"]).out.includes("land the tier"), "a reached objective still lists as open");
     const dropped = must(box, demo, ["objective", "add", "dead end"]).out.match(/\bo-[0-9a-z]{5}\b/)[0];
-    must(box, demo, ["objective", "close", dropped, "--as", "dropped", "--why", "descoped"]);
+    await approved(["objective", "close", dropped, "--as", "dropped", "--why", "descoped"], dropped);
     assert.equal(eventFor(dropped, "entity.retired").payload.why, "descoped");
 });
 
@@ -166,7 +169,7 @@ test("B11: milestone add records entity.confirmed with criteria and its member-o
     assert.deepEqual(recorded.payload.links, [{ type: "member-of", target: preview }]);
 });
 
-test("B12: met covers, reach is the gated done, revise supersedes, drop retires", () =>
+test("B12: met covers, reach is the gated done, revise supersedes, drop retires", async () =>
 {
     assert.match(must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "ran green"]).out,
         /entity\.covered recorded/);
@@ -176,14 +179,14 @@ test("B12: met covers, reach is the gated done, revise supersedes, drop retires"
     must(box, demo, ["milestone", "met", milestone, "--criterion", "c2", "--why", "docs regenerated"]);
     assert.match(must(box, demo, ["milestone", "reach", milestone]).out, /entity\.done recorded/);
     const revised = must(box, demo, ["milestone", "add", "next checkpoint", "--objective", preview, "--exit", "one thing"]).out.match(/\bm-[0-9a-z]{5}\b/)[0];
-    const successor = must(box, demo, ["milestone", "revise", revised, "--why", "widened", "--exit", "another thing"]).out.match(/\bm-[0-9a-z]{5}\b/)[0];
+    const successor = (await approved(["milestone", "revise", revised, "--why", "widened", "--exit", "another thing"], revised)).printed.match(/\bm-[0-9a-z]{5}\b/)[0];
     assert.notEqual(successor, revised, "a revision kept the milestone id");
     assert.ok(shown(revised).includes(`superseded by: ${successor}`));
-    assert.match(must(box, demo, ["milestone", "drop", successor, "--why", "checkpoint removed"]).out, /entity\.retired recorded/);
+    assert.match((await approved(["milestone", "drop", successor, "--why", "checkpoint removed"], successor)).printed, /entity\.retired recorded/);
     assert.equal(eventFor(successor, "entity.retired").payload.why, "checkpoint removed");
 });
 
-test("B13: the work verbs record the entity lifecycle — add, propose, accept, decline, link, retire", () =>
+test("B13: the work verbs record the entity lifecycle — add, propose, accept, decline, link, retire", async () =>
 {
     const work = workIdIn(must(box, demo, ["work", "add", "ship the cutover"]).out);
     assert.deepEqual(eventFor(work, "entity.confirmed").payload.labels, ["work"]);
@@ -207,7 +210,7 @@ test("B13: the work verbs record the entity lifecycle — add, propose, accept, 
         "--confidence", "low", "--expires", "2099-01-01"]).out);
     must(box, demo, ["work", "decline", declined, "--why", "not worth it"]);
     assert.equal(eventFor(declined, "entity.retracted").payload.why, "not worth it");
-    must(box, demo, ["work", "retire", work, "--why", "moved", "--successor", proposal]);
+    await approved(["work", "retire", work, "--why", "moved", "--successor", proposal], work);
     const retired = eventFor(work, "entity.retired");
     assert.equal(retired.payload.successor, proposal);
     assert.match(must(box, demo, ["work", "show", work]).out, /Retired: moved — successor/);

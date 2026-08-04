@@ -19,11 +19,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STATEMENT_TYPES } from "../dist/model.js";
-import { demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = demoWorkspace(box);
 const self = (args) => selfIn(box, demo, args);
+// Destroying a record needs a person at a terminal (#173): where a case is
+// about what the destruction records, the command line runs in full and only
+// the typed answer is stood in for.
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 function entityIn(text)
 {
@@ -73,50 +77,50 @@ test("every statement type supersedes with --supersedes, spelled the same way", 
 
 /* ── K1-K6: --supersedes on every add verb ─────────────────────────── */
 
-test("K1: decide --supersedes replaces the decision, and the predecessor leaves the render", () =>
+test("K1: decide --supersedes replaces the decision, and the predecessor leaves the render", async () =>
 {
     const first = idIn(must(box, demo, ["decide", "K1 first wording"]).out);
-    assert.equal(self(["decide", "K1 corrected wording", "--supersedes", first]).code, 0);
+    assert.equal((await approved(["decide", "K1 corrected wording", "--supersedes", first], first)).code, 0);
     const context = must(box, demo, ["context"]).out;
     assert.ok(context.includes("K1 corrected wording"));
     assert.ok(!context.includes("K1 first wording"), "a superseded decision still renders as current");
 });
 
-test("K2: objective add --supersedes replaces the objective", () =>
+test("K2: objective add --supersedes replaces the objective", async () =>
 {
     const first = objective("K2 first outcome");
-    const replacing = self(["objective", "add", "K2 corrected outcome", "--supersedes", first]);
+    const replacing = await approved(["objective", "add", "K2 corrected outcome", "--supersedes", first], first);
     assert.equal(replacing.code, 0, replacing.out);
     assert.match(must(box, demo, ["state", "show", first]).out, /superseded/);
-    assert.match(must(box, demo, ["state", "show", entityIn(replacing.out)]).out, /confirmed/);
+    assert.match(must(box, demo, ["state", "show", entityIn(replacing.printed)]).out, /confirmed/);
 });
 
-test("K3: milestone add --supersedes replaces the checkpoint under its objective", () =>
+test("K3: milestone add --supersedes replaces the checkpoint under its objective", async () =>
 {
     const parent = objective("K3 objective");
     const first = entityIn(must(box, demo, ["milestone", "add", "K3 first checkpoint", "--objective", parent, "--exit", "the proof passes"]).out);
-    const replacing = self(["milestone", "add", "K3 corrected checkpoint", "--objective", parent, "--exit", "the proof passes", "--supersedes", first]);
+    const replacing = await approved(["milestone", "add", "K3 corrected checkpoint", "--objective", parent, "--exit", "the proof passes", "--supersedes", first], first);
     assert.equal(replacing.code, 0, replacing.out);
     assert.match(must(box, demo, ["state", "show", first]).out, /superseded/);
 });
 
-test("K4: convention add --supersedes replaces the rule in one event", () =>
+test("K4: convention add --supersedes replaces the rule in one event", async () =>
 {
     const first = idIn(must(box, demo, ["convention", "add", "K4 first rule"]).out);
-    assert.equal(self(["convention", "add", "K4 corrected rule", "--supersedes", first]).code, 0);
+    assert.equal((await approved(["convention", "add", "K4 corrected rule", "--supersedes", first], first)).code, 0);
     const context = must(box, demo, ["context"]).out;
     assert.ok(context.includes("K4 corrected rule"));
     assert.ok(!context.includes("K4 first rule"), "a superseded convention still renders as current");
 });
 
-test("K5: work add --supersedes creates the unit and retires the one it replaces, as its successor", () =>
+test("K5: work add --supersedes creates the unit and retires the one it replaces, as its successor", async () =>
 {
     const first = work("K5 first outcome");
-    const created = self(["work", "add", "K5 corrected outcome", "--supersedes", first, "--why", "the outcome was restated"]);
+    const created = await approved(["work", "add", "K5 corrected outcome", "--supersedes", first, "--why", "the outcome was restated"], first);
     assert.equal(created.code, 0, created.out);
-    const successor = workIdIn(created.out);
+    const successor = workIdIn(created.printed);
     // One state change, one append: the new unit and the retirement it causes.
-    assert.deepEqual(created.out.match(/entity\.\w+ recorded/g), ["entity.confirmed recorded", "entity.retired recorded"]);
+    assert.deepEqual(created.printed.match(/entity\.\w+ recorded/g), ["entity.confirmed recorded", "entity.retired recorded"]);
     const shown = must(box, demo, ["work", "show", first]).out;
     assert.match(shown, /Status: retired/);
     assert.match(shown, /the outcome was restated/);
@@ -124,38 +128,41 @@ test("K5: work add --supersedes creates the unit and retires the one it replaces
     assert.ok(!must(box, demo, ["work"]).out.includes("K5 first outcome"), "a superseded unit still lists as open");
 });
 
-test("K5: the events a work supersession records are the events retire --successor records", () =>
+test("K5: the events a work supersession records are the events retire --successor records", async () =>
 {
     const spelled = work("K5 oracle: the unit retire --successor moves");
     const successor = work("K5 oracle: the unit that carries it now");
-    must(box, demo, ["work", "retire", spelled, "--why", "moved to the successor", "--successor", successor]);
+    await approved(["work", "retire", spelled, "--why", "moved to the successor", "--successor", successor], spelled);
     const superseded = work("K5 oracle: the unit --supersedes moves");
-    const created = workIdIn(must(box, demo, ["work", "add", "K5 oracle: the unit that carries it now, too",
-        "--supersedes", superseded, "--why", "moved to the successor"]).out);
+    const created = workIdIn((await approved(["work", "add", "K5 oracle: the unit that carries it now, too",
+        "--supersedes", superseded, "--why", "moved to the successor"], superseded)).printed);
     const byRetire = retirementOf(spelled);
     const bySupersede = retirementOf(superseded);
     assert.deepEqual(Object.keys(bySupersede.payload).sort(), Object.keys(byRetire.payload).sort());
-    assert.deepEqual(bySupersede.payload, { entity: superseded, why: "moved to the successor", successor: created, successorProject: "demo" });
+    assert.deepEqual(bySupersede.payload, {
+        entity: superseded, why: "moved to the successor", successor: created, successorProject: "demo",
+        confirmation: { method: "tty", challenge: superseded }
+    });
     assert.equal(bySupersede.type, byRetire.type);
     assert.equal(bySupersede.origin.confirmed, byRetire.origin.confirmed);
 });
 
-test("K5-legacy: work retire --successor keeps working unchanged", () =>
+test("K5-legacy: work retire --successor keeps working unchanged", async () =>
 {
     const retired = work("K5 legacy outcome");
     const successor = work("K5 legacy successor");
-    assert.equal(self(["work", "retire", retired, "--why", "moved to the successor", "--successor", successor]).code, 0);
+    assert.equal((await approved(["work", "retire", retired, "--why", "moved to the successor", "--successor", successor], retired)).code, 0);
     const shown = must(box, demo, ["work", "show", retired]).out;
     assert.match(shown, /Status: retired/);
     assert.ok(shown.includes(successor));
 });
 
-test("K6: state add --supersedes replaces the entity, exactly as the link form does", () =>
+test("K6: state add --supersedes replaces the entity, exactly as the link form does", async () =>
 {
     const byFlag = entity("K6 first text");
     const byLink = entity("K6 first text, other copy");
-    const flagged = must(box, demo, ["state", "add", "K6 corrected text", "--supersedes", byFlag]).out;
-    const linked = must(box, demo, ["state", "add", "K6 corrected text, other copy", "--link", `supersedes:${byLink}`]).out;
+    const flagged = (await approved(["state", "add", "K6 corrected text", "--supersedes", byFlag], byFlag)).printed;
+    const linked = (await approved(["state", "add", "K6 corrected text, other copy", "--link", `supersedes:${byLink}`], byLink)).printed;
     const flaggedLinks = events().find((event) => event.payload.entity === flagged.match(/\be-[0-9a-z]{5}\b/)[0]).payload.links;
     const linkedLinks = events().find((event) => event.payload.entity === linked.match(/\be-[0-9a-z]{5}\b/)[0]).payload.links;
     assert.deepEqual(flaggedLinks, [{ type: "supersedes", target: byFlag }]);
@@ -163,10 +170,10 @@ test("K6: state add --supersedes replaces the entity, exactly as the link form d
     assert.match(must(box, demo, ["state", "show", byFlag]).out, /superseded/);
 });
 
-test("K6-legacy: --link supersedes:<id> keeps working unchanged", () =>
+test("K6-legacy: --link supersedes:<id> keeps working unchanged", async () =>
 {
     const target = entity("K6 legacy text");
-    assert.equal(self(["state", "add", "K6 legacy corrected text", "--link", `supersedes:${target}`]).code, 0);
+    assert.equal((await approved(["state", "add", "K6 legacy corrected text", "--link", `supersedes:${target}`], target)).code, 0);
     assert.match(must(box, demo, ["state", "show", target]).out, /superseded by/);
 });
 
@@ -239,10 +246,10 @@ test("B1: superseding a done unit refuses — retirement is not a transition fro
     assert.match(refused.out, /given up, not one that was reached/);
 });
 
-test("B2: superseding an already retired unit refuses, naming that it is retired", () =>
+test("B2: superseding an already retired unit refuses, naming that it is retired", async () =>
 {
     const unit = work("B2 outcome");
-    must(box, demo, ["work", "retire", unit, "--why", "given up earlier"]);
+    await approved(["work", "retire", unit, "--why", "given up earlier"], unit);
     const refused = self(["work", "add", "B2 corrected outcome", "--supersedes", unit, "--why", "w"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /is already retired/);
@@ -271,11 +278,11 @@ test("B4: superseding a unit without --why refuses — the retirement keeps its 
     assert.match(must(box, demo, ["work", "show", unit]).out, /Status: next/, "the unit was retired without its reason");
 });
 
-test("B5: one target named in both spellings records one supersedes link", () =>
+test("B5: one target named in both spellings records one supersedes link", async () =>
 {
     const target = entity("B5 text");
-    const created = must(box, demo, ["state", "add", "B5 corrected text", "--supersedes", target, "--link", `supersedes:${target}`]);
-    const id = created.out.match(/\be-[0-9a-z]{5}\b/)[0];
+    const created = await approved(["state", "add", "B5 corrected text", "--supersedes", target, "--link", `supersedes:${target}`], target);
+    const id = created.printed.match(/\be-[0-9a-z]{5}\b/)[0];
     assert.deepEqual(events().find((event) => event.payload.entity === id).payload.links,
         [{ type: "supersedes", target }]);
     assert.equal((must(box, demo, ["state", "show", id]).out.match(/link: supersedes/g) ?? []).length, 1);

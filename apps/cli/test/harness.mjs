@@ -63,13 +63,28 @@ export async function approvedIn(box, cwd, args, answer)
     process.stdout.isTTY = true;
     const typedWas = useTypedAnswer(() => answer);
     process.exitCode = 0;
+    // Same shape selfIn reports, because a refusal's text is part of the
+    // contract. The disclosure and the command's own result both land on
+    // stdout, so they are kept apart: `printed` is what the command said,
+    // `out` is everything the person saw.
+    let out = "";
+    let printed = "";
+    const write = process.stdout.write.bind(process.stdout);
+    const log = console.log;
+    const err = console.error;
+    process.stdout.write = (chunk) => { out += chunk; return true; };
+    console.log = (...parts) => { out += `${parts.join(" ")}\n`; printed += `${parts.join(" ")}\n`; };
+    console.error = (...parts) => { out += `${parts.join(" ")}\n`; printed += `${parts.join(" ")}\n`; };
     try
     {
         await runCli(args);
-        return process.exitCode ?? 0;
+        return { code: process.exitCode ?? 0, out, printed };
     }
     finally
     {
+        process.stdout.write = write;
+        console.log = log;
+        console.error = err;
         useTypedAnswer(typedWas);
         process.stdin.isTTY = inWas;
         process.stdout.isTTY = outWas;

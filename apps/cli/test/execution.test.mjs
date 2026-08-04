@@ -9,11 +9,15 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = demoWorkspace(box);
 const log = join(box.root, "ws", ".superself", "projects", "demo", "log.jsonl");
+
+// Destroying a record needs a person at a terminal (#173): the command line
+// runs in full and only the typed answer is stood in for.
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 let seq = 0;
 
@@ -29,7 +33,7 @@ function entityIdIn(text)
 
 // One fresh entity driven to the row's working state, so every cell starts
 // from exactly the state its row names.
-function entityAt(state)
+async function entityAt(state)
 {
     seq += 1;
     const id = entityIdIn(must(box, demo, ["state", "add", `unit ${seq}`]).out);
@@ -47,7 +51,7 @@ function entityAt(state)
     }
     if (state === "retired")
     {
-        must(box, demo, ["state", "retire", id, "--why", "outcome given up"]);
+        await approved(["state", "retire", id, "--why", "outcome given up"], id);
     }
     return id;
 }
@@ -61,31 +65,31 @@ function working(id)
 
 /* ── A. state transitions: 5 states × 5 verbs ──────────────────────── */
 
-test("A: open + start records in-progress", () =>
+test("A: open + start records in-progress", async () =>
 {
-    const id = entityAt("open");
+    const id = await entityAt("open");
     must(box, demo, ["state", "start", id]);
     assert.equal(working(id), "working: in-progress");
 });
 
-test("A: open + block records blocked", () =>
+test("A: open + block records blocked", async () =>
 {
-    const id = entityAt("open");
+    const id = await entityAt("open");
     must(box, demo, ["state", "block", id, "--on", "review", "--why", "queue full"]);
     assert.equal(working(id), "working: blocked on review — queue full");
 });
 
-test("A: open + unblock refuses as not blocked", () =>
+test("A: open + unblock refuses as not blocked", async () =>
 {
-    const id = entityAt("open");
+    const id = await entityAt("open");
     const result = selfIn(box, demo, ["state", "unblock", id]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /is not blocked/);
 });
 
-test("A: open + done passes through the evidence gate", () =>
+test("A: open + done passes through the evidence gate", async () =>
 {
-    const id = entityAt("open");
+    const id = await entityAt("open");
     const bare = selfIn(box, demo, ["state", "done", id]);
     assert.notEqual(bare.code, 0, "a done claim with no evidence was recorded");
     assert.match(bare.out, /done must carry evidence/);
@@ -93,39 +97,39 @@ test("A: open + done passes through the evidence gate", () =>
     assert.equal(working(id), "working: done — shipped and verified");
 });
 
-test("A: open + retire records retired", () =>
+test("A: open + retire records retired", async () =>
 {
-    const id = entityAt("open");
-    must(box, demo, ["state", "retire", id, "--why", "direction changed"]);
+    const id = await entityAt("open");
+    await approved(["state", "retire", id, "--why", "direction changed"], id);
     assert.equal(working(id), "working: retired — direction changed");
 });
 
-test("A: in-progress + start refuses as already started", () =>
+test("A: in-progress + start refuses as already started", async () =>
 {
-    const id = entityAt("in-progress");
+    const id = await entityAt("in-progress");
     const result = selfIn(box, demo, ["state", "start", id]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /already started/);
 });
 
-test("A: in-progress + block records blocked", () =>
+test("A: in-progress + block records blocked", async () =>
 {
-    const id = entityAt("in-progress");
+    const id = await entityAt("in-progress");
     must(box, demo, ["state", "block", id, "--why", "external wait"]);
     assert.equal(working(id), "working: blocked — external wait");
 });
 
-test("A: in-progress + unblock refuses as not blocked", () =>
+test("A: in-progress + unblock refuses as not blocked", async () =>
 {
-    const id = entityAt("in-progress");
+    const id = await entityAt("in-progress");
     const result = selfIn(box, demo, ["state", "unblock", id]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /is not blocked/);
 });
 
-test("A: in-progress + done passes through the evidence gate", () =>
+test("A: in-progress + done passes through the evidence gate", async () =>
 {
-    const id = entityAt("in-progress");
+    const id = await entityAt("in-progress");
     const bare = selfIn(box, demo, ["state", "done", id]);
     assert.notEqual(bare.code, 0);
     assert.match(bare.out, /done must carry evidence/);
@@ -133,53 +137,53 @@ test("A: in-progress + done passes through the evidence gate", () =>
     assert.equal(working(id), "working: done — finished with proof");
 });
 
-test("A: in-progress + retire records retired", () =>
+test("A: in-progress + retire records retired", async () =>
 {
-    const id = entityAt("in-progress");
-    must(box, demo, ["state", "retire", id, "--why", "moved elsewhere"]);
+    const id = await entityAt("in-progress");
+    await approved(["state", "retire", id, "--why", "moved elsewhere"], id);
     assert.equal(working(id), "working: retired — moved elsewhere");
 });
 
-test("A: blocked + start refuses toward unblock first", () =>
+test("A: blocked + start refuses toward unblock first", async () =>
 {
-    const id = entityAt("blocked");
+    const id = await entityAt("blocked");
     const result = selfIn(box, demo, ["state", "start", id]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /unblock it first/);
 });
 
-test("A: blocked + block refuses as already blocked", () =>
+test("A: blocked + block refuses as already blocked", async () =>
 {
-    const id = entityAt("blocked");
+    const id = await entityAt("blocked");
     const result = selfIn(box, demo, ["state", "block", id, "--why", "again"]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /already blocked/);
 });
 
-test("A: blocked + unblock records in-progress", () =>
+test("A: blocked + unblock records in-progress", async () =>
 {
-    const id = entityAt("blocked");
+    const id = await entityAt("blocked");
     must(box, demo, ["state", "unblock", id]);
     assert.equal(working(id), "working: in-progress");
 });
 
-test("A: blocked + done is allowed while blocked (ruling 1)", () =>
+test("A: blocked + done is allowed while blocked (ruling 1)", async () =>
 {
-    const id = entityAt("blocked");
+    const id = await entityAt("blocked");
     must(box, demo, ["state", "done", id, "--report", "outcome verified despite the block"]);
     assert.equal(working(id), "working: done — outcome verified despite the block");
 });
 
-test("A: blocked + retire records retired", () =>
+test("A: blocked + retire records retired", async () =>
 {
-    const id = entityAt("blocked");
-    must(box, demo, ["state", "retire", id, "--why", "the block never lifted"]);
+    const id = await entityAt("blocked");
+    await approved(["state", "retire", id, "--why", "the block never lifted"], id);
     assert.equal(working(id), "working: retired — the block never lifted");
 });
 
 // The done row shares one record: a refusal moves nothing, so every cell of
 // the row still speaks about the state its row names.
-const doneEntity = entityAt("done");
+const doneEntity = await entityAt("done");
 
 test("A: done + start refuses as terminal", () =>
 {
@@ -216,7 +220,7 @@ test("A: done + retire refuses as terminal", () =>
     assert.match(result.out, /already done — its working state is terminal/);
 });
 
-const retiredEntity = entityAt("retired");
+const retiredEntity = await entityAt("retired");
 
 test("A: retired + start refuses as terminal", () =>
 {
@@ -263,10 +267,10 @@ test("execution on a proposed entity refuses toward confirm", () =>
     assert.match(result.out, /still proposed/);
 });
 
-test("execution on a retracted entity refuses as withdrawn", () =>
+test("execution on a retracted entity refuses as withdrawn", async () =>
 {
     const retracted = entityIdIn(must(box, demo, ["state", "add", "soon withdrawn"]).out);
-    must(box, demo, ["state", "retract", retracted, "--why", "never held"]);
+    await approved(["state", "retract", retracted, "--why", "never held"], retracted);
     const result = selfIn(box, demo, ["state", "start", retracted]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /was retracted/);
@@ -436,12 +440,12 @@ test("C: open, unstarted work renders as a count, not a row", () =>
     assert.match(out, /- 3 more open work items; run `self work --project 'demo'`/);
 });
 
-test("C: done and retired work render nowhere, not even in the count", () =>
+test("C: done and retired work render nowhere, not even in the count", async () =>
 {
     const done = workIdIn(must(boxC, demoC, ["work", "add", "already delivered"]).out);
     must(boxC, demoC, ["work", "done", done, "--report", "delivered and verified"]);
     const retired = workIdIn(must(boxC, demoC, ["work", "add", "already given up"]).out);
-    must(boxC, demoC, ["work", "retire", retired, "--why", "superseded"]);
+    await approvedIn(boxC, demoC, ["work", "retire", retired, "--why", "superseded"], retired);
     const out = contextC();
     assert.ok(!out.includes("already delivered"), "a done unit rendered in context");
     assert.ok(!out.includes("already given up"), "a retired unit rendered in context");
@@ -491,9 +495,9 @@ test("D: two folds render the same execution state", () =>
 
 /* ── E. integrity ──────────────────────────────────────────────────── */
 
-test("E: every execution event records its actor", () =>
+test("E: every execution event records its actor", async () =>
 {
-    const id = entityAt("open");
+    const id = await entityAt("open");
     must(box, demo, ["state", "start", id]);
     must(box, demo, ["state", "done", id, "--report", "actor check"]);
     const events = readFileSync(log, "utf8").split("\n").filter((line) => line !== "")
@@ -507,9 +511,9 @@ test("E: every execution event records its actor", () =>
     }
 });
 
-test("E: a second done is refused and the log carries exactly one", () =>
+test("E: a second done is refused and the log carries exactly one", async () =>
 {
-    const id = entityAt("done");
+    const id = await entityAt("done");
     const again = selfIn(box, demo, ["state", "done", id, "--report", "twice"]);
     assert.notEqual(again.code, 0);
     assert.match(again.out, /is already done/);
@@ -519,11 +523,11 @@ test("E: a second done is refused and the log carries exactly one", () =>
     assert.equal(dones.length, 1);
 });
 
-test("E: retire --successor records the link and shows it", () =>
+test("E: retire --successor records the link and shows it", async () =>
 {
-    const gone = entityAt("open");
-    const carrier = entityAt("open");
-    must(box, demo, ["state", "retire", gone, "--why", "moved", "--successor", carrier]);
+    const gone = await entityAt("open");
+    const carrier = await entityAt("open");
+    await approved(["state", "retire", gone, "--why", "moved", "--successor", carrier], gone);
     assert.equal(working(gone), `working: retired — moved (successor ${carrier})`);
     const retired = readFileSync(log, "utf8").split("\n").filter((line) => line !== "")
         .map((line) => JSON.parse(line))

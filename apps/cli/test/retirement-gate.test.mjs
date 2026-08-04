@@ -23,8 +23,8 @@ test("the gate refuses a supersede from a process with no terminal, and records 
 test("the approved path records the supersession and the confirmation it was typed at", async () =>
 {
     const first = idIn(must(box, demo, ["decide", "the second policy"]).out);
-    const code = await approvedIn(box, demo, ["decide", "replaces it", "--supersedes", first], first);
-    assert.equal(code, 0);
+    const approved = await approvedIn(box, demo, ["decide", "replaces it", "--supersedes", first], first);
+    assert.equal(approved.code, 0, approved.out);
     const events = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8")
         .trim().split("\n").map((line) => JSON.parse(line));
     const written = events.at(-1);
@@ -38,8 +38,8 @@ test("a wrong answer at the terminal records nothing", async () =>
 {
     const first = idIn(must(box, demo, ["decide", "the third policy"]).out);
     const before = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8").trim().split("\n").length;
-    const code = await approvedIn(box, demo, ["decide", "replaces it", "--supersedes", first], "not-the-id");
-    assert.equal(code, 1);
+    const wrong = await approvedIn(box, demo, ["decide", "replaces it", "--supersedes", first], "not-the-id");
+    assert.equal(wrong.code, 1);
     const after = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8").trim().split("\n").length;
     assert.equal(after, before);
 });
