@@ -22,7 +22,7 @@ prints them during the same run.
 | --- | --- |
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
 | Projects and state remotes | `project add [path] [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
-| Outcomes | `goal set "<text>"`, `objective ...`, `milestone ...` |
+| Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
@@ -65,7 +65,9 @@ work, or a free-labeled entity — folds into one record kind with placement:
 
 ### Outcome and work commands
 
-- `goal set` records the long-term project outcome; the latest goal wins.
+- `goal add` records a long-term project outcome. A project holds as many as
+  it means to: recording one displaces nothing, the goal a new one replaces is
+  named with `--supersedes <id>`, and `goal retract` withdraws one.
 - `objective` manages time-boxed outcomes under the goal. Its states explain
   why an objective is open, confirmed, revised, reached, or dropped.
 - `milestone` manages checkpoints and exit criteria under an objective. A

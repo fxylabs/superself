@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { currentConventions, DecisionState, ProjectModel, WorkState } from "./model.js";
+import { currentConventions, DecisionState, otherGoals, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
@@ -302,7 +302,7 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
     return {
         slug: model.slug,
         description: model.description,
-        goal: model.goal,
+        goal: model.goal === undefined ? undefined : model.goal + otherGoals(model),
         updated: new Date().toISOString(),
         active: model.works.filter((w) => w.status === "active").map((w) => ({ id: w.id, outcome: w.outcome })),
         blockedCount: model.works.filter((w) => w.status === "blocked").length,
@@ -409,7 +409,7 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
     const objectives = openObjectives(model.goals);
     const proposals = proposalRows(model);
     const main = [
-        `<p class="c2-goal">${esc(model.goal ?? "goal not set")}</p>`,
+        `<p class="c2-goal">${esc(model.goal === undefined ? "goal not set" : model.goal + otherGoals(model))}</p>`,
         waitingPanel(waiting, model.slug, ""),
         objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "",
             objectives.map((objective) => objectiveBlock(model.slug, objective)).join("\n")),

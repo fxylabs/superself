@@ -16,6 +16,7 @@ import {
     BranchUnshipped,
     branchTotals,
     currentConventions,
+    otherGoals,
     ProjectModel,
     RecoveryTarget,
     ScopableVerb,
@@ -731,7 +732,7 @@ export function renderStatus(input: StatusInput): string[]
 {
     const { model } = input;
     const project = shellArgument(model.slug);
-    const lines = [`${bold(model.slug)} — ${model.goal === undefined ? dim("(goal not set)") : oneLine(model.goal)}`, ""];
+    const lines = [`${bold(model.slug)} — ${model.goal === undefined ? dim("(goal not set)") : oneLine(model.goal) + otherGoals(model)}`, ""];
     lines.push(heading("WORK", workCounts(model)));
     if (openObjectives(model.goals).length > 0)
     {
@@ -769,7 +770,7 @@ export function renderContext(input: SurfaceInput): string[]
     {
         lines.push(dim(fitDisplay(oneLine(model.description), columns())));
     }
-    lines.push(`Goal: ${fitDisplay(oneLine(model.goal ?? "(not set)"), columns() - 6)}`, "");
+    lines.push(`Goal: ${fitDisplay(oneLine(model.goal ?? "(not set)") + otherGoals(model), columns() - 6)}`, "");
     const open = model.works
         .filter((work) => work.status !== "done" && work.status !== "retired")
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));
@@ -814,7 +815,7 @@ export function renderWorkspace(models: ProjectModel[]): string[]
         cells: [
             { text: model.slug, paint: bold },
             { text: workCounts(model) },
-            { text: model.goal ?? "(no goal)" }
+            { text: (model.goal ?? "(no goal)") + otherGoals(model) }
         ],
         notes: model.health.length === 0
             ? []

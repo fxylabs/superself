@@ -33,7 +33,7 @@ let objective;
 
 test("context renders by placement: full block, anchored live state, index lines, search pointer", () =>
 {
-    must(box, demo, ["goal", "set", "own the niche"]);
+    must(box, demo, ["goal", "add", "own the niche"]);
     objective = shortIdIn(must(box, demo, ["objective", "add", "reach preview", "--target", "2030-01-01"]).out, "o");
     must(box, demo, ["convention", "add", "events only, no hand edits"]);
     decision = must(box, demo, ["decide", "keep sqlite", "--why", "simple"]).out.match(/\[([^\]]+)\]/)[1];

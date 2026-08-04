@@ -220,7 +220,7 @@ decision` as the pull path. A work-scoped context variant is unnecessary while
 ## Snapshot derivation (decided 2026-07-25)
 
 **What an event is.** One invocation of a write verb (`decide`, `report`,
-`work start`, `goal set`, …) = one event = one typed, append-only log entry
+`work start`, `goal add`, …) = one event = one typed, append-only log entry
 carrying timestamp, type, actor and origin (agent session id, human-confirmed
 flag), type-specific required fields, and references (commit hashes,
 artifacts, work ids). An event is a deliberate assertion made at the moment
@@ -345,7 +345,7 @@ The read-only principle stands: no viewer ever writes state.
 
 ## First vertical slice (decided 2026-07-25)
 
-Scope: `self init`, `self project add`, the event verbs (`goal set`, `decide`,
+Scope: `self init`, `self project add`, the event verbs (`goal add`, `decide`,
 `work add/start/block/unblock/done`, `report`, `convention add`), immediate
 fold, `self context`, the read commands (`status`, `work`, `log`), and
 `self search`. Deferred to the next slice: commit-trailer harvesting,
