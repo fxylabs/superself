@@ -10,7 +10,7 @@
 // them; the root list is composed in `main.ts`, the dispatcher. This module
 // holds the shapes, the resolution, and the checks — never a command body.
 
-import { OptionSpec, OptionSpecs, ParsedArguments, subcommand } from "./args.js";
+import { OptionSpec, OptionSpecs, ParsedArguments, Requirement, subcommand } from "./args.js";
 import { CliError } from "./types.js";
 
 /* ── shapes ────────────────────────────────────────────────────────── */
@@ -34,12 +34,10 @@ export interface CommandInput<T extends OptionSpecs = OptionSpecs>
 export type ParsedInput = ParsedArguments;
 
 export type CommandRun = (input: ParsedInput) => void | Promise<void>;
-export type RawRun = (args: string[]) => void | Promise<void>;
 
-export interface ParsedLeaf
+export interface CommandLeaf
 {
     kind: "leaf";
-    mode: "parsed";
     // Empty for the form a command takes when no verb is named.
     name: string;
     options: OptionSpecs;
@@ -47,24 +45,19 @@ export interface ParsedLeaf
     // Options deliberately absent from every help page: compatibility refusals
     // that only exist to name where a flag moved. The help checks skip these.
     undocumented: string[];
+    // What the verb cannot run without. The parse gate refuses all of them in
+    // one pass and the help page states them, both from this one declaration.
+    requires: Requirement[];
     run: CommandRun;
 }
 
-// A leaf whose handler still parses with node's parseArgs directly — the
-// second argument-parse path recorded as debt (#111). The dispatcher hands it
-// the raw argument list; the declared options are the same object its own
-// parser reads, so the help checks and the enumeration cannot drift from it.
-export interface RawLeaf
+// What a leaf declares beyond its options and positionals. Both fields are
+// rare enough that a verb states them by name rather than by position.
+export interface LeafExtras
 {
-    kind: "leaf";
-    mode: "raw";
-    name: string;
-    options: OptionSpecs;
-    undocumented: string[];
-    run: RawRun;
+    undocumented?: string[];
+    requires?: Requirement[];
 }
-
-export type CommandLeaf = ParsedLeaf | RawLeaf;
 
 // How a first token that names no child is read.
 //   refuse   every form of this command names its verb
@@ -118,17 +111,20 @@ export function leaf<const T extends OptionSpecs>(
     options: T,
     positionals: number,
     run: (input: CommandInput<T>) => void | Promise<void>,
-    undocumented: string[] = []
-): ParsedLeaf
+    extras: LeafExtras = {}
+): CommandLeaf
 {
     // The one place the declared option set is erased. Everything downstream
     // parses with `options`, so what a handler reads is what was declared.
-    return { kind: "leaf", mode: "parsed", name, options, positionals, undocumented, run: run as unknown as CommandRun };
-}
-
-export function rawLeaf(name: string, options: OptionSpecs, run: RawRun, undocumented: string[] = []): RawLeaf
-{
-    return { kind: "leaf", mode: "raw", name, options, undocumented, run };
+    return {
+        kind: "leaf",
+        name,
+        options,
+        positionals,
+        undocumented: extras.undocumented ?? [],
+        requires: extras.requires ?? [],
+        run: run as unknown as CommandRun
+    };
 }
 
 export function branch(spec: Omit<CommandBranch, "kind">): CommandBranch
@@ -143,6 +139,9 @@ export interface Resolved
     command: Command;
     leaf: CommandLeaf;
     args: string[];
+    // What the walk named, verb included: the refusals a leaf owes say
+    // `self work propose`, while the help they point at is the command's.
+    path: string;
 }
 
 export function findCommandByName(commands: Command[], name: string | undefined): Command | undefined
@@ -179,11 +178,11 @@ function reachedLeaf(command: Command, args: string[]): CommandLeaf | null
     }
 }
 
-function descend(node: CommandNode, path: string, args: string[]): { leaf: CommandLeaf; args: string[] }
+function descend(node: CommandNode, path: string, args: string[]): { leaf: CommandLeaf; args: string[]; path: string }
 {
     if (node.kind === "leaf")
     {
-        return { leaf: node, args };
+        return { leaf: node, args, path };
     }
     const chosen = select(node, path, args);
     return descend(chosen.node, chosen.name === "" ? path : `${path} ${chosen.name}`, chosen.args);
@@ -231,8 +230,7 @@ export interface DescribedOption
 // One dispatchable command, joined to the line that documents it. This is what
 // the enumeration and a future reference-documentation generator read; it
 // carries no handler, so nothing downstream of it can run a command by
-// describing one. `positionals` is null for the leaves whose own parser still
-// counts them (#111).
+// describing one.
 export interface CommandDescription
 {
     root: string;
@@ -242,7 +240,7 @@ export interface CommandDescription
     syntax: string;
     summary: string[];
     options: DescribedOption[];
-    positionals: number | null;
+    positionals: number;
 }
 
 export function describeCommands(commands: Command[]): CommandDescription[]
@@ -257,7 +255,7 @@ export function describeCommands(commands: Command[]): CommandDescription[]
             syntax: line?.syntax ?? "",
             summary: line?.description ?? [],
             options: describeOptions(entry.leaf.options),
-            positionals: entry.leaf.mode === "parsed" ? entry.leaf.positionals : null
+            positionals: entry.leaf.positionals
         };
     }));
 }
@@ -310,7 +308,7 @@ export function checkContract(commands: Command[]): string[]
         {
             problems.push(`"${command.name}" is declared twice in the root list`);
         }
-        problems.push(...checkCommand(command));
+        problems.push(...checkCommand(command), ...checkRequirements(commands, command));
     }
     return problems;
 }
@@ -325,6 +323,75 @@ function checkCommand(command: Command): string[]
         ...checkReachable(command, leaves),
         ...checkFlags(command, leaves)
     ];
+}
+
+/* ── what a verb cannot run without ────────────────────────────────── */
+
+// A requirement is refused by the parse gate and rendered by the help page, so
+// a flag it names that the leaf never declared would refuse a call nothing can
+// satisfy, and an unblocking path naming a verb that does not exist would send
+// the reader somewhere the CLI answers with "unknown". Only a parsed leaf can
+// carry requirements at all — `RawLeaf` has no field for them, so the type
+// refuses what would otherwise be a declaration nothing enforces.
+function checkRequirements(commands: Command[], command: Command): string[]
+{
+    return requirementsOf(command).flatMap(({ verb, requirement }) =>
+    {
+        const at = `${command.name}: "${label(command, verb)}"`;
+        if (requirement.flags.length === 0)
+        {
+            return [`${at} declares a requirement naming no flag`];
+        }
+        return [
+            ...requirement.flags.flatMap((flag) => checkRequiredFlag(at, flag, optionsOf(command, verb)[flag])),
+            ...unblockPaths(requirement.unblock).filter((path) => !dispatchable(commands, path))
+                .map((path) => `${at} points at \`self ${path}\`, which no command dispatches`)
+        ];
+    });
+}
+
+function checkRequiredFlag(at: string, flag: string, spec: OptionSpec | undefined): string[]
+{
+    if (spec === undefined)
+    {
+        return [`${at} requires --${flag}, which it does not declare as an option`];
+    }
+    // A boolean is absent or true, and a caller cannot state the true one is
+    // meant: demanding it would refuse every call that left it off by choice.
+    return spec.type === "boolean" ? [`${at} requires --${flag}, a boolean — a flag with no value states nothing`] : [];
+}
+
+interface DeclaredRequirement
+{
+    verb: string;
+    requirement: Requirement;
+}
+
+function requirementsOf(command: Command): DeclaredRequirement[]
+{
+    return commandLeaves(command).flatMap((entry) =>
+        entry.leaf.requires.map((requirement) => ({ verb: entry.verb, requirement })));
+}
+
+function optionsOf(command: Command, verb: string): OptionSpecs
+{
+    return commandLeaves(command).find((entry) => entry.verb === verb)?.leaf.options ?? {};
+}
+
+// The command paths an unblocking hint names, read out of the text it is
+// written in: `self objective add "<outcome>" --proposed` names `objective add`
+// and stops where the arguments start.
+function unblockPaths(unblock: string | undefined): string[]
+{
+    return unblock === undefined ? []
+        : [...unblock.matchAll(/\bself ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0-9-]*)*)/g)].map((found) => found[1]);
+}
+
+function dispatchable(commands: Command[], path: string): boolean
+{
+    const words = path.split(" ");
+    const command = findCommandByName(commands, words[0]);
+    return command !== undefined && reachedLeaf(command, words.slice(1)) !== null;
 }
 
 function checkCoverage(command: Command, leaves: CommandLeafEntry[], documented: string[]): string[]
@@ -477,8 +544,7 @@ function checkNode(node: CommandNode, path: string): string[]
 {
     if (node.kind === "leaf")
     {
-        return node.mode === "parsed" && node.positionals < 0
-            ? [`${path}: accepts a negative number of positionals`] : [];
+        return node.positionals < 0 ? [`${path}: accepts a negative number of positionals`] : [];
     }
     return [...checkBranch(node, path), ...node.children.flatMap((child) =>
         checkNode(child, child.name === "" ? path : `${path} ${child.name}`))];
