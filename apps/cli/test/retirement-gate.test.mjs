@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvedIn, demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
 
@@ -101,4 +101,54 @@ test("undo without --why is refused", () =>
     const refused = selfIn(box, demo, ["undo", "01zzzzz"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /--why/);
+});
+
+/* ── uniformity and merge safety ───────────────────────────────────── */
+
+// The guarantee the whole design rests on: a destructive event cannot reach
+// the log except through the gate. Stated as a rule about the source, because
+// a case-by-case test would pass while a new verb quietly added a sixteenth
+// way around it.
+test("no call site hands a destructive event straight to the event writer", () =>
+{
+    const DESTRUCTIVE = ["entity.retracted", "entity.retired"];
+    const offenders = [];
+    for (const name of readdirSync(new URL("../src", import.meta.url)))
+    {
+        if (!name.endsWith(".ts"))
+        {
+            continue;
+        }
+        const source = readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
+        for (const [index, line] of source.split("\n").entries())
+        {
+            const writes = /\brecordEvents?\s*\(/.test(line) && DESTRUCTIVE.some((type) => line.includes(`"${type}"`));
+            // Turning down a proposal writes the same event type and destroys
+            // nothing — the record it names was never held. `refs.declines` is
+            // what tells the two apart, in the fold and here alike.
+            if (writes && !line.includes("declines:"))
+            {
+                offenders.push(`${name}:${index + 1}`);
+            }
+        }
+    }
+    assert.deepEqual(offenders, [], "a destructive event is recorded without passing the retirement gate");
+});
+
+// Annulment binds to an event id, never to log order, which is what lets a
+// clone merge a restoration above or below the event it takes back. Shuffling
+// the log is the proof: the same lines fold to the same state either way.
+test("a shuffled log folds an undo to the same state", async () =>
+{
+    const id = idIn(must(box, demo, ["convention", "add", "merge: a rule that survives a reorder"]).out);
+    const dropped = await approvedIn(box, demo, ["convention", "drop", id, "--why", "dropped in error"], id);
+    must(box, demo, ["undo", idIn(dropped.printed), "--why", "the rule still holds"]);
+    const inOrder = must(box, demo, ["state", "show", id]).out;
+
+    const path = join(ws, ".superself", "projects", "demo", "log.jsonl");
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    // A union merge orders by neither time nor dependency: put the last line
+    // first and read the same question again.
+    writeFileSync(path, [lines.at(-1), ...lines.slice(0, -1)].join("\n") + "\n");
+    assert.equal(must(box, demo, ["state", "show", id]).out, inOrder, "log order changed what the undo folded to");
 });
