@@ -7,7 +7,7 @@ import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
-import { isLive } from "./entities.js";
+import { isLive, requireSupersedeKind } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
@@ -53,7 +53,7 @@ import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
 import { printContext, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
-import { CliError, EventRefs } from "./types.js";
+import { CliError, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
 {
@@ -225,6 +225,12 @@ const RETIRE_OPTIONS = {
     requirement: { type: "string" }
 } as const;
 
+// `--supersedes` is the correction path every add verb takes; on a work unit it
+// retires the unit it replaces, which is why the reason comes with it.
+const WORK_ADD_OPTIONS = { supersedes: { type: "string" }, why: { type: "string" } } as const;
+
+const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --why w]';
+
 const REPORT_OPTIONS = {
     evidence: { type: "string", multiple: true },
     artifact: { type: "string", multiple: true },
@@ -267,7 +273,7 @@ const DONE_OPTIONS = { why: { type: "string" }, report: { type: "string" } } as 
 // as a separator standing where a subcommand belongs.
 const WORK_CHILDREN: CommandLeaf[] = [
     leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
-    leaf("add", {}, 1, ({ positionals }) => cmdWorkAdd(positionals[0])),
+    leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd),
     leaf("show", SCOPE_OPTIONS, 1, cmdWorkShow),
     ...WORK_TRANSITIONS.map(([verb, type]) => leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input))),
     leaf("done", DONE_OPTIONS, 1, cmdWorkDone),
@@ -469,7 +475,11 @@ export const COMMANDS: Command[] = [
                 description: ["list open work, from any directory with --project", "(a terminal gets the ruled table; a pipe gets one line per unit)"],
                 verbs: [""]
             },
-            { syntax: 'work add "<required outcome>"', description: ["create a work unit"], verbs: ["add"] },
+            {
+                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w]',
+                description: ["create a work unit; --supersedes retires the unit it replaces, naming this one its successor"],
+                verbs: ["add"]
+            },
             {
                 syntax: "work show <id> [--project <slug>]",
                 description: ["print full work detail: brief, reports, evidence", "(resolves the owning project from any directory)"],
@@ -513,6 +523,12 @@ export const COMMANDS: Command[] = [
             "create and move units of work, and state what each contributes to.",
             "`work add` prints the new id.",
             "",
+            "a unit's outcome is immutable once recorded, so correcting it restates it:",
+            '`work add "<corrected outcome>" --supersedes <id> --why w` records the new unit',
+            "and retires the one it replaces with the new unit as its successor — the same",
+            "pair `work retire --successor` records, spelled the way every other add verb",
+            "spells a correction.",
+            "",
             "done is the judgment that the outcome was reached, and the claim must",
             "carry evidence: a report with a commit or an artifact, or a done-time",
             "--report stating what verifiably happened — a bare summary never",
@@ -521,7 +537,10 @@ export const COMMANDS: Command[] = [
             "",
             "  --project <slug>      list or show against this project, from any directory",
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
-            "  --why <text>          detail recorded with the block, a revision, or the done",
+            "  --why <text>          detail recorded with the block, a revision, or the done,",
+            "                        and why a superseded or retired unit gave up its outcome",
+            "  --supersedes <id>     the unit this one replaces: it retires with this unit as",
+            "                        its successor, and --why states why the outcome moved",
             "  --report <text>       what verifiably happened, recorded as a report with the done",
             "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
             "  --successor-project <slug>  the successor's project when its id is ambiguous",
@@ -1020,7 +1039,11 @@ function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>)
     }
     if (values.supersedes !== undefined && values.supersedes.length > 0)
     {
-        extra.links = values.supersedes.map((prefix) => ({ type: "supersedes", target: requireDecision(model, prefix).id }));
+        extra.links = values.supersedes.map((prefix) =>
+        {
+            requireSupersedeKind(model.entities, prefix, "decision");
+            return { type: "supersedes", target: requireDecision(model, prefix).id };
+        });
     }
     // The work link is stated, never inferred from what happens to be open:
     // most decisions belong to the project, not to a unit of work.
@@ -1131,12 +1154,24 @@ function decisionRefs(ctx: ProjectContext, options: DecisionOptions): EventRefs 
     return Object.keys(refs).length === 0 ? undefined : refs;
 }
 
-function cmdWorkAdd(value: string | undefined): void
+function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTIONS>): void
 {
-    const outcome = requireText(value, 'work add "<required outcome>"');
+    const outcome = requireText(positionals[0], WORK_ADD_USAGE);
     const ctx = requireProject(process.cwd());
-    const row = presetRow(ctx.storeDir, "work");
     const id = workId();
+    const retirement = supersededRetirement(ctx, id, values);
+    const events = [makeEvent(ctx.project, "entity.confirmed", workPayload(ctx, id, outcome))];
+    if (retirement !== undefined)
+    {
+        events.push(retirement);
+    }
+    recordEvents(ctx, events, `${id} ${outcome}`);
+    console.log(id);
+}
+
+function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<string, unknown>
+{
+    const row = presetRow(ctx.storeDir, "work");
     const payload: Record<string, unknown> = {
         entity: id,
         text: outcome,
@@ -1150,8 +1185,35 @@ function cmdWorkAdd(value: string | undefined): void
     {
         payload.priority = row.priority;
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", payload), `${id} ${outcome}`);
-    console.log(id);
+    return payload;
+}
+
+// A work correction is the retirement `work retire --successor` already
+// records — the same event, the same payload, the same gate on the unit being
+// retired — written beside the new unit so the pair is one append. Nothing
+// else about a work unit's outcome moves it, so `--supersedes` is a spelling
+// over that transition, never a second way to close a unit.
+function supersededRetirement(ctx: ProjectContext, successor: string, values: CommandInput<typeof WORK_ADD_OPTIONS>["values"]): SelfEvent | undefined
+{
+    if (values.supersedes === undefined)
+    {
+        if (values.why !== undefined)
+        {
+            throw new CliError("work add --why states why a replaced unit gave up its outcome — pass --supersedes <work-id> too, or record the reason with `self report`");
+        }
+        return undefined;
+    }
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    requireSupersedeKind(model.entities, values.supersedes, "work");
+    const work = requireRetirable(model, values.supersedes);
+    if (work.status === "retired")
+    {
+        // Not the no-op `work retire` answers with: the new unit is about to be
+        // recorded, and it would land claiming a supersession that never happened.
+        throw new CliError(`${work.id} is already retired — ${work.retiredWhy}`);
+    }
+    const why = requireText(values.why, `work add "<outcome>" --supersedes ${work.id} --why "<why the outcome moved to the new unit>"`);
+    return makeEvent(ctx.project, "entity.retired", { entity: work.id, why, successor, successorProject: ctx.project }, undefined, true);
 }
 
 function cmdWorkList({ values }: CommandInput<typeof SCOPED_RENDER_OPTIONS>): void
@@ -1250,7 +1312,7 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
         throw new CliError("`work retire` retires the unit itself — to retire one requirement, use `self work drop <id> --requirement r1 --why w`");
     }
     const ctx = requireProject(process.cwd());
-    const work = requireRetirable(ctx, positionals[0]);
+    const work = requireRetirable(buildModel(ctx.storeDir, ctx.project, new Date()), positionals[0]);
     if (work.status === "retired")
     {
         // Idempotent by design: the state the caller asked for already holds,
@@ -1263,12 +1325,14 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
     recordEvent(ctx, makeEvent(ctx.project, "entity.retired", payload, undefined, true), `${work.id} ${why}`);
 }
 
-// The unit a retirement speaks about: known, and not already closed as done.
-// Already-retired is the caller's case to answer — a no-op, not a refusal.
-function requireRetirable(ctx: ProjectContext, id: string | undefined): WorkState
+// The one answer to "may this unit be retired": known, and not already closed
+// as done. Read by `work retire` and by `work add --supersedes`, which records
+// the same retirement. Already-retired is the caller's case to answer — a
+// no-op for one, a refusal for the other.
+function requireRetirable(model: ProjectModel, id: string | undefined): WorkState
 {
     const wanted = requireText(id, "work retire <work-id> — run `self work` to list ids");
-    const work = buildModel(ctx.storeDir, ctx.project, new Date()).works.find((item) => item.id === wanted);
+    const work = model.works.find((item) => item.id === wanted);
     if (work === undefined)
     {
         throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
@@ -1501,6 +1565,7 @@ function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_O
     // how two contradicting conventions used to end up both current.
     if (values.supersedes !== undefined)
     {
+        values.supersedes.forEach((prefix) => requireSupersedeKind(model.entities, prefix, "convention"));
         extra.links = currentConventionIds(model, values.supersedes)
             .map((target) => ({ type: "supersedes", target }));
     }

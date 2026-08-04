@@ -338,6 +338,10 @@ export interface StatementType
     // appears as in that command's help. `decline` is absent for a type with no
     // proposals — there is nothing to turn down.
     command: string;
+    // Every type supersedes with `--supersedes` on its own add verb; only the
+    // placeholder differs, because a convention is named by its event id and a
+    // milestone by its sibling. A type spelling replacement any other way is
+    // the asymmetry `test/supersede.test.mjs` fails on.
     supersede: string;
     withdraw: string;
     decline?: string;
@@ -394,7 +398,7 @@ export const STATEMENT_TYPES: StatementType[] = [
         type: "work",
         namespaces: ["work"],
         command: "work",
-        supersede: "--successor <work-id>",
+        supersede: "--supersedes <id>",
         withdraw: "work retire",
         decline: "work accept|decline",
         closed: (model) => [
@@ -410,7 +414,7 @@ export const STATEMENT_TYPES: StatementType[] = [
         type: "entity",
         namespaces: ["entity"],
         command: "state",
-        supersede: "--link supersedes:<id>",
+        supersede: "--supersedes <id>",
         withdraw: "state retract",
         // `decline` is deliberately absent although entities have proposals:
         // the shared event grammar (#197 §5) carries one withdrawal event,

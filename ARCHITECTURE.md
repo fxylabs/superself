@@ -129,7 +129,7 @@ namespace, before it is admitted (#166):
 
 | Transition | What it means | Where it renders |
 | --- | --- | --- |
-| supersede | replaced by a linked successor; `--supersedes`, repeatable | predecessor folds to `superseded`, lineage kept |
+| supersede | replaced by a linked successor; `--supersedes <id>` on the type's own add verb | predecessor folds to `superseded`, lineage kept |
 | withdraw | taken back with `--why` and no successor | folds to `retracted`/`dropped`; leaves every current render |
 | decline | a proposal turned down with `--why`, beside `accept` and expiry | folds to `declined`; leaves "waiting on you" at once |
 
@@ -139,10 +139,21 @@ record is never deleted or rewritten: it keeps its text and its refs, so
 `--after` and `--blocks` pointing at it still resolve, and `self search` still
 returns it with its status in the result line.
 
+Correcting a record is spelled the same way for every type: `--supersedes <id>`
+on that type's own add verb, which restates the text and carries the lineage.
+The older spellings a type shipped before the unification keep working — `work
+retire --successor <work-id>` and `state add --link supersedes:<id>` are the
+same transitions under other names — but a new type ships the shared flag, and
+a `--supersedes` target belonging to another type is refused by naming that
+type's add verb, from the one table in `entities.ts`.
+
 `--why` is required on every transition but supersede — a supersession says
 why by naming its successor, and nothing else does. That covers `decide
 retract`, `decide decline`, `convention drop`, `objective decline`, `objective
-close --as dropped`, `milestone drop`, `work retire` and `work decline`.
+close --as dropped`, `milestone drop`, `work retire` and `work decline`. A work
+supersession is the one exception: `work add --supersedes` records the
+retirement `work retire --successor` records, and a retirement carries its
+reason, so the shorter spelling asks for `--why` rather than losing it.
 
 A withdrawal is terminal. Once a record is retracted, declined or dropped, a
 later event naming it does not move it back: the fold refuses the transition
