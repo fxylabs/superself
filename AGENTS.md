@@ -51,6 +51,12 @@ command is unavailable.
   folds into one entity with placement. `self state` lists them all,
   `self state show <id>` prints one, and `self state add "<text>" --label <l>`
   records a free-labeled one; `self alias add <verb>` makes a verb of a label.
+- A record's text is immutable once confirmed, so correct it by restating it:
+  `self state add "<corrected text>" --label <l> --link supersedes:<id>` records the
+  new wording and carries the lineage. That is the edit path for every record kind,
+  a work unit's outcome included. `state retract <id> --why` withdraws a record with
+  nothing replacing it, and retire is for an outcome given up or moved — never for
+  a wording fix.
 - Placement is scope × priority × exposure. `self state place <id> [--priority <n>]
   [--exposure full|index|search] [--scope project|workspace]` moves what context
   renders; a demotion records `--why`, and demoting out of full waits for the user:
