@@ -1,0 +1,289 @@
+// What `self <command> --help` cannot answer. A help page states how to type a
+// command; these pages state what the thing is, when to reach for it, and the
+// order the verbs go in. An agent working in someone else's project can reach
+// the managed block and the binary and nothing else, so the concepts have to
+// ship inside the binary or they do not exist for it (#221).
+//
+// This module holds prose and imports nothing: `help.ts` renders it, and the
+// dispatcher resolves a topic only after no command claims the name.
+
+export interface Topic
+{
+    name: string;
+    summary: string;
+    body: string[];
+}
+
+export const TOPICS: Topic[] = [
+    {
+        name: "agents",
+        summary: "how a session drives this CLI, start to finish",
+        body: [
+            "An agent session reads state, does work, and leaves the state true for the",
+            "next session. Three moments carry that.",
+            "",
+            "  1. Session start — `self context`",
+            "",
+            "     Everything the project has decided, rendered by priority. Treat it as",
+            "     current truth: it is folded from the log, not written by hand. What it",
+            "     omits was placed out of the rendered set on purpose, and `self state`",
+            "     lists the rest.",
+            "",
+            "  2. While working — a work unit carries it",
+            "",
+            "       self work add \"<required outcome>\"",
+            "       self work start <id>",
+            "       self report <id> \"<what happened>\"      # after committing",
+            "",
+            "     The outcome is what must become true, not the task. `report` attaches",
+            "     the current HEAD as evidence, which is what makes a later done claim",
+            "     admissible.",
+            "",
+            "  3. Closing — the claim carries evidence",
+            "",
+            "       self work done <id> --report \"<what verifiably happened>\"",
+            "",
+            "     A bare claim is refused. See `self help work`.",
+            "",
+            "What belongs in the log and what belongs in the conversation are different",
+            "questions. Records — events, decisions, reports, conventions — are written",
+            "in English so whoever opens them next can read them. Answers to the person",
+            "go in the person's language.",
+            "",
+            "Two habits that are cheap now and expensive later:",
+            "",
+            "  - Register approved work the moment it is approved. A plan that lives",
+            "    only in a conversation is lost when the conversation ends.",
+            "  - Attach a scoping brief to deferred work — `self report <id> --file",
+            "    <path>` with scope, design anchors and known pitfalls. A bare outcome",
+            "    line loses the context that produced it.",
+            "",
+            "Related: `self help work`, `self help records`, `self help context`."
+        ]
+    },
+    {
+        name: "context",
+        summary: "what `self context` renders, and why something is missing from it",
+        body: [
+            "`self context` is a projection, not a file. Every asserted record folds",
+            "into one entity, and placement decides which of them the projection",
+            "renders and in what order.",
+            "",
+            "Three exposure tiers, each answering a different question:",
+            "",
+            "  full     rendered whole. What a session cannot work correctly without.",
+            "  index    rendered as one line. Enough to know it exists and ask for it.",
+            "  search   not rendered. Live, and reached by naming it.",
+            "",
+            "So a record missing from context is not gone. It was placed at a tier that",
+            "does not render, or it was superseded, retracted or retired — and those",
+            "three are different from each other (`self help records`).",
+            "",
+            "Reading around the projection:",
+            "",
+            "  self state                  every live record with its tier and priority",
+            "  self state show <id>        one record, whole",
+            "  self search <query>         past state by text",
+            "",
+            "Retention caps bound the rendered tiers so context stays affordable. When",
+            "a tier is full, adding to it refuses until something is demoted — see",
+            "`self help placement`.",
+            "",
+            "The managed block in AGENTS.md and CLAUDE.md is a different surface: it is",
+            "written into the project repository and loaded by the agent tool every",
+            "session, so it stays short and hands detail to these pages."
+        ]
+    },
+    {
+        name: "records",
+        summary: "one entity behind every record kind, and how a record is corrected",
+        body: [
+            "Goal, decision, convention, objective, milestone, work — each folds into",
+            "the same entity. The preset verbs are spellings over one grammar, not",
+            "separate machinery, which is why placement, coverage and correction work",
+            "the same way on all of them.",
+            "",
+            "  self state add \"<text>\" --label <l>     record one, free-labeled",
+            "  self alias add <verb>                   make a verb of a label",
+            "  self decide \"<text>\" --why \"<reason>\"   the decision spelling",
+            "",
+            "A record's text is immutable once confirmed. Correcting it does not edit",
+            "it — it restates it and carries the lineage:",
+            "",
+            "  self state add \"<corrected text>\" --supersedes <id>",
+            "",
+            "Every add verb spells it that way, including a work unit's outcome, where",
+            "`--supersedes <id> --why \"<why it moved>\"` also retires the unit it",
+            "replaces.",
+            "",
+            "Three exits, and they are not interchangeable:",
+            "",
+            "  supersede   something replaces it — the successor says why",
+            "  retract     it no longer holds and nothing replaces it — carries --why",
+            "  retire      an outcome given up or moved, never reached — carries --why",
+            "",
+            "Neither retract nor retire is a way to fix wording.",
+            "",
+            "A proposal is a record waiting on a person. `--proposed` records one; the",
+            "person confirms it. A proposed record never displaces a confirmed one",
+            "until it is confirmed itself.",
+            "",
+            "Related: `self help placement`, `self help goals`."
+        ]
+    },
+    {
+        name: "placement",
+        summary: "scope, priority and exposure — how a record earns its place in context",
+        body: [
+            "Placement is three values on every record.",
+            "",
+            "  scope       which projects render it: this one, or the whole workspace",
+            "  priority    the order inside a tier, lowest number first",
+            "  exposure    full, index or search (`self help context`)",
+            "",
+            "  self state place <id> [--priority <n>] [--exposure full|index|search]",
+            "                       [--scope <slug>|workspace]",
+            "",
+            "Moving a record toward less rendering is a demotion, and a demotion",
+            "records `--why`: a record that left the rendered set with no reason on",
+            "record reads, a year later, exactly like one nobody wrote down.",
+            "",
+            "Demoting out of `full` waits for the person. Pass `--proposed`, and the",
+            "user runs `self state confirm <id>`. An agent never quietly stops",
+            "rendering something a person put in front of every session.",
+            "",
+            "Retention caps bound each rendered tier. Past a cap, `state add` and",
+            "`state place` refuse until `--demote <id>` names what frees the room:",
+            "",
+            "  self state add \"<text>\" --demote <id> --proposed",
+            "",
+            "The add and the demotion then land as a pair waiting on the user, so",
+            "nothing is quietly pushed out to make space.",
+            "",
+            "A workspace-scoped record renders in every project's context — its record",
+            "still lives in the store of the project that wrote it. `--scope workspace`",
+            "works on the state and alias verbs, and `self convention add \"<text>\"",
+            "--workspace` is the convention spelling."
+        ]
+    },
+    {
+        name: "work",
+        summary: "the work graph: outcomes, evidence, criteria, and proposals",
+        body: [
+            "A work unit states an outcome — what must become true — not a task list.",
+            "",
+            "  self work add \"<required outcome>\"      self work start <id>",
+            "  self work show <id>                     full brief and report history",
+            "  self work                               open units",
+            "",
+            "Reports are how a unit stays readable to the next session:",
+            "",
+            "  self report <id> \"<summary>\"            HEAD attached as evidence",
+            "  self report <id> --file <path>          a longer brief from a file",
+            "  self report <id> --artifact <path>      a file copied into the store",
+            "",
+            "Done is a judgment, and the claim carries evidence. `self work done <id>`",
+            "closes a unit only when a report carries a commit or an artifact, or the",
+            "done itself states one:",
+            "",
+            "  self work done <id> --report \"<what verifiably happened>\"",
+            "",
+            "Declared criteria gate it further: each must be covered — `self state",
+            "cover <id> --criterion \"<c>\" --why \"<how the evidence covers it>\"` —",
+            "before the claim is admitted.",
+            "",
+            "When work stops for a reason that is not completion:",
+            "",
+            "  self work block <id> --on decision|dependency|external --why \"...\"",
+            "  self work retire <id> --why \"...\" [--successor <work-id>]",
+            "",
+            "Retire is for an outcome given up or moved. Never mark such a unit done,",
+            "and never leave it falsely blocked.",
+            "",
+            "Found a gap between an objective and current state? Propose the work",
+            "rather than starting it: `self work propose \"<outcome>\"` with its full",
+            "brief — value, success, stop, risk, capacity, evidence plan, confidence,",
+            "expiry, and the objective or milestone it closes. The user accepts or",
+            "declines. `self work --help` lists the flags, and the refusal names every",
+            "one you left out at once.",
+            "",
+            "Related: `self help goals`."
+        ]
+    },
+    {
+        name: "goals",
+        summary: "the long-term goal, objectives, milestones, and what reaching one takes",
+        body: [
+            "Three levels, and they are separate state.",
+            "",
+            "  self goal set \"<text>\"                            the long-term goal",
+            "  self objective add \"<outcome>\" --target <date>    time-boxed",
+            "  self milestone add \"<outcome>\" --objective <id> --exit \"<criterion>\"",
+            "",
+            "  self objective        both levels, with the reason for each state",
+            "",
+            "A milestone declares its exit criteria when it is created. Reaching it is",
+            "not a matter of finishing the work under it — every criterion has to be",
+            "covered first, each with the evidence that covers it:",
+            "",
+            "  self milestone met <id> --criterion <c> --why \"<how it covers it>\"",
+            "  self milestone reach <id>",
+            "",
+            "Finishing work never reaches a milestone on its own, and progress is",
+            "never a percentage: a criterion is covered or it is not.",
+            "",
+            "Revising an objective or a milestone leaves what it already settled",
+            "stale — coverage binds to the record, and a revision is a new record.",
+            "Re-judge it at the current revision:",
+            "",
+            "  self milestone recheck <id> --criterion <c> --why \"<what you re-judged>\"",
+            "",
+            "State what a unit contributes to with `self work link <id> --milestone",
+            "<id>`. That is what makes an objective answerable: which work moves it.",
+            "",
+            "Related: `self help work`."
+        ]
+    },
+    {
+        name: "workspace",
+        summary: "the store, the projects in it, and moving it between machines",
+        body: [
+            "State lives in a workspace store outside every code repository, so a",
+            "project's history and its state are versioned separately.",
+            "",
+            "  self init                    make the current directory a workspace",
+            "  self project add [path]      register a project and write its agent block",
+            "  self project link [slug]     attach a registered project on this machine",
+            "  self setup                   what this directory resolves to",
+            "",
+            "Every checkout of a registered repository — worktrees included — resolves",
+            "on its own. Never run `self project add` inside another checkout of a",
+            "project that is already registered.",
+            "",
+            "Moving the store between machines is git, explicitly:",
+            "",
+            "  self remote add <url>        connect the store to a git remote",
+            "  self sync                    pull, refold, push",
+            "  self clone <url> [dir]       take the store onto another machine",
+            "",
+            "Generated files under `.superself/` are folded from the log. Never edit",
+            "them by hand — the log is canonical, and the next fold overwrites",
+            "anything written beside it.",
+            "",
+            "The agent block in AGENTS.md and CLAUDE.md is rewritten by the installed",
+            "CLI whenever the project records something, and `self connect` rewrites it",
+            "on demand. It carries the version that rendered it, so a block written by",
+            "an older CLI is visible as one."
+        ]
+    }
+];
+
+export function findTopic(name: string | undefined): Topic | undefined
+{
+    return name === undefined ? undefined : TOPICS.find((topic) => topic.name === name);
+}
+
+export function topicPage(topic: Topic): string
+{
+    return [`${topic.name} — ${topic.summary}`, ""].concat(topic.body).join("\n");
+}

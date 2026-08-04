@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { spell } from "./args.js";
 import { Command, commandLeaves, UsageLine } from "./contract.js";
+import { findTopic, TOPICS } from "./guide.js";
 
 // Where the description column starts in the verb list.
 const COLUMN = 45;
@@ -32,7 +33,16 @@ export function rootUsage(commands: Command[]): string
     return ["usage: self <command>", ""]
         .concat(commands.flatMap((command) => command.usage.flatMap(listLines)))
         .concat("", listLines(VERSION_LINE))
+        .concat("", topicLines())
         .join("\n");
+}
+
+// The verb list says what can be typed; the topics say when to type it. They
+// are listed here because a page nobody knows about answers nothing (#221).
+function topicLines(): string[]
+{
+    return ["concepts: self help <topic>"].concat(TOPICS.map((topic) =>
+        `  ${topic.name.padEnd(12)}${topic.summary}`));
 }
 
 // The version switch stands where a verb would rather than inside one, so the
@@ -54,10 +64,16 @@ export function cliVersion(): string
     return String(manifest.version);
 }
 
+// A command whose subject has a concept page prints both: the syntax first,
+// then what the thing is and when to reach for it. One page per subject beats
+// two names for it, and nothing a topic says becomes unreachable because a
+// command already owns the word (#221).
 export function commandUsage(command: Command): string
 {
     const header = command.usage.map((line, index) => (index === 0 ? "usage: self " : "       self ") + line.syntax);
-    return header.concat("", command.detail, required(command)).join("\n");
+    const topic = findTopic(command.name);
+    return header.concat("", command.detail, required(command),
+        topic === undefined ? [] : ["", ...topic.body]).join("\n");
 }
 
 /* ── the options a verb cannot run without ─────────────────────────── */
