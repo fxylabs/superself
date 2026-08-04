@@ -26,11 +26,14 @@ function entityIn(text)
 
 // The caps are user-set values in the store's config.json; the tests set them
 // the way a user does, by writing the config the CLI reads.
+// Caps are stated in tokens (#213), so these tests pin the scale at one token
+// per character: every number below is then the character count of the text it
+// gates, which is what makes the arithmetic in each case readable.
 function setCaps(activeBox, caps)
 {
     const file = join(activeBox.root, "ws", ".superself", "config.json");
     const config = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-    writeFileSync(file, JSON.stringify({ ...config, ...caps }) + "\n");
+    writeFileSync(file, JSON.stringify({ ...config, tokensPerCharacter: 1, tokensMeasured: true, ...caps }) + "\n");
 }
 
 test("place moves priority and exposure, and a priority change needs no why", () =>
@@ -105,11 +108,11 @@ const capSelf = (args) => selfIn(capBox, capDemo, args);
 
 test("adding past the index cap is refused with the cap, the usage, and the demote shape", () =>
 {
-    setCaps(capBox, { indexCap: 1 });
+    setCaps(capBox, { indexTokens: 17 });
     const first = entityIn(must(capBox, capDemo, ["state", "add", "first index note"]).out);
     const refused = capSelf(["state", "add", "second index note"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project index tier holds 1 of 1 entities/);
+    assert.match(refused.out, /the project index tier holds 16 of 17 tokens and this text adds 17 more/);
     assert.match(refused.out, /--demote <id>/);
     assert.match(refused.out, /self state place <id> --exposure search --why/);
     const second = entityIn(must(capBox, capDemo, ["state", "add", "second index note", "--demote", first]).out);
@@ -117,38 +120,38 @@ test("adding past the index cap is refused with the cap, the usage, and the demo
     assert.ok(must(capBox, capDemo, ["state", "show", second]).out.includes("placement: project · index"));
 });
 
-test("the full cap counts characters, and naming too little to free is refused with the shortfall", () =>
+test("the full cap counts tokens, and naming too little to free is refused with the shortfall", () =>
 {
-    setCaps(capBox, { indexCap: 50, fullCap: 30 });
+    setCaps(capBox, { indexTokens: 50, fullTokens: 30 });
     const small = entityIn(must(capBox, capDemo, ["state", "add", "tiny map", "--exposure", "full"]).out);
     const over = capSelf(["state", "add", "a rule of twenty-five ch.", "--exposure", "full"]);
     assert.notEqual(over.code, 0);
-    assert.match(over.out, /the project full tier holds 8 of 30 characters and this text adds 25 more/);
+    assert.match(over.out, /the project full tier holds 8 of 30 tokens and this text adds 25 more/);
     const still = capSelf(["state", "add", "this text is far too long for the cap", "--exposure", "full", "--demote", small]);
     assert.notEqual(still.code, 0);
-    assert.match(still.out, /still \d+ characters over the 30-character full cap/);
+    assert.match(still.out, /still \d+ tokens over the 30-token full cap/);
     must(capBox, capDemo, ["state", "add", "a rule of twenty-five ch.", "--exposure", "full", "--demote", small]);
     assert.ok(must(capBox, capDemo, ["state", "show", small]).out.includes("placement: project · index"));
 });
 
 test("a demotion into a capped tier is gated, and the chain always terminates at search", () =>
 {
-    setCaps(capBox, { indexCap: 1, fullCap: 30 });
+    setCaps(capBox, { indexTokens: 25, fullTokens: 30 });
     const fullOne = must(capBox, capDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*full)/)[0];
     const needless = capSelf(["state", "add", "searched only", "--exposure", "search", "--demote", fullOne]);
     assert.notEqual(needless.code, 0);
     assert.match(needless.out, /this command enters none/);
-    // The index tier stands at 2 of 1: a full → index demotion enters index,
+    // The index tier stands exactly at its cap: a full → index demotion enters index,
     // so it is gated exactly like an add (review F1) — with the destination
     // cap, the usage, and the chained-demotion shape in one refusal.
     const over = capSelf(["state", "place", fullOne, "--exposure", "index", "--why", "full is crowded"]);
     assert.notEqual(over.code, 0);
-    assert.match(over.out, /the project index tier holds 2 of 1 entities/);
+    assert.match(over.out, /the project index tier holds 25 of 25 tokens/);
     assert.match(over.out, /self state place <id> --exposure search --why/);
     const short = capSelf(["state", "place", fullOne, "--exposure", "index", "--why", "full is crowded",
         "--demote", must(capBox, capDemo, ["state", "list"]).out.match(/\be-[0-9a-z]{5}\b(?=.*index)/)[0]]);
     assert.notEqual(short.code, 0);
-    assert.match(short.out, /still 1 over the 1-entity index cap/);
+    assert.match(short.out, /still \d+ tokens over the 25-token index cap/);
     // Never wedged: index → search enters no capped tier, so an over-cap
     // store always drains toward search, then the full → index move fits.
     const indexIds = [...must(capBox, capDemo, ["state", "list"]).out.matchAll(/\be-[0-9a-z]{5}\b(?=.*index)/g)].map((m) => m[0]);
@@ -159,7 +162,7 @@ test("a demotion into a capped tier is gated, and the chain always terminates at
     // The place column, not the free text, says which tier a row holds.
     const seats = must(capBox, capDemo, ["state", "list"]).out.split("\n")
         .filter((line) => line.split("  ")[2]?.startsWith("index")).length;
-    assert.equal(seats, 1, "the index tier ended past its cap of 1");
+    assert.equal(seats, 1, "the index tier ended holding more than the one record that fits");
 });
 
 // A third machine for the paired proposal, so exactly one record holds the
@@ -170,7 +173,7 @@ const pairSelf = (args) => selfIn(pairBox, pairDemo, args);
 
 test("an agent adding past a cap lands a proposed add paired with a proposed demotion", () =>
 {
-    setCaps(pairBox, { indexCap: 1 });
+    setCaps(pairBox, { indexTokens: 24 });
     const holder = entityIn(must(pairBox, pairDemo, ["state", "add", "holds the one index seat"]).out);
     const added = entityIn(must(pairBox, pairDemo, ["state", "add", "wants the seat", "--proposed", "--demote", holder]).out);
     const holderShown = must(pairBox, pairDemo, ["state", "show", holder]).out;
@@ -229,12 +232,12 @@ const reviewSelf = (args) => selfIn(reviewBox, reviewDemo, args);
 
 test("review F1: a demotion cannot overfill the index tier", () =>
 {
-    setCaps(reviewBox, { indexCap: 1 });
+    setCaps(reviewBox, { indexTokens: 12 });
     const seat = entityIn(must(reviewBox, reviewDemo, ["state", "add", "seat holder"]).out);
     const dweller = entityIn(must(reviewBox, reviewDemo, ["state", "add", "full dweller", "--exposure", "full"]).out);
     const over = reviewSelf(["state", "place", dweller, "--exposure", "index", "--why", "leave full"]);
     assert.notEqual(over.code, 0, "a demotion past the index cap was accepted");
-    assert.match(over.out, /the project index tier holds 1 of 1 entities/);
+    assert.match(over.out, /the project index tier holds 11 of 12 tokens/);
     assert.match(over.out, /--demote <id>/);
     must(reviewBox, reviewDemo, ["state", "place", dweller, "--exposure", "index", "--why", "leave full", "--demote", seat]);
     assert.ok(must(reviewBox, reviewDemo, ["state", "show", seat]).out.includes("placement: project · search"));
@@ -245,11 +248,11 @@ test("review F1: a demotion cannot overfill the index tier", () =>
 
 test("review F2: confirming the promotion half cannot leave the full tier over its cap", () =>
 {
-    setCaps(reviewBox, { fullCap: 10, indexCap: 50 });
+    setCaps(reviewBox, { fullTokens: 10, indexTokens: 50 });
     const eight = entityIn(must(reviewBox, reviewDemo, ["state", "add", "8 chars!", "--exposure", "full"]).out);
     const five = entityIn(must(reviewBox, reviewDemo, ["state", "add", "5char"]).out);
     must(reviewBox, reviewDemo, ["state", "place", five, "--exposure", "full", "--proposed", "--demote", eight]);
-    // The F2 property: no single verb leaves full past 10 characters. The
+    // The F2 property: no single verb leaves full past 10 tokens. The
     // pair is one unit, so the promotion's confirm lands the demotion with
     // it — full ends at 5 of 10, never at 13.
     const swap = must(reviewBox, reviewDemo, ["state", "confirm", five]);
@@ -271,14 +274,14 @@ const edgeApproved = (args, answer) => approvedIn(edgeBox, edgeDemo, args, answe
 
 test("a lone pending placement the store outgrew gets the same capacity refusal", () =>
 {
-    setCaps(edgeBox, { fullCap: 30 });
+    setCaps(edgeBox, { fullTokens: 30 });
     must(edgeBox, edgeDemo, ["state", "add", "tiny map", "--exposure", "full"]);
     const twenty = entityIn(must(edgeBox, edgeDemo, ["state", "add", "12345678901234567890"]).out);
     must(edgeBox, edgeDemo, ["state", "place", twenty, "--exposure", "full", "--proposed"]);
     const thirteen = entityIn(must(edgeBox, edgeDemo, ["state", "add", "13 characters", "--exposure", "full"]).out);
     const outgrown = edgeSelf(["state", "confirm", twenty]);
     assert.notEqual(outgrown.code, 0, "a pending promotion landed past a cap the store grew into");
-    assert.match(outgrown.out, /would put the project full tier over its cap \(21 of 30 characters held\)/);
+    assert.match(outgrown.out, /would put the project full tier over its cap \(21 of 30 tokens held\)/);
     assert.match(outgrown.out, /free room first with `self state place <id> --exposure index --why/);
     must(edgeBox, edgeDemo, ["state", "place", thirteen, "--exposure", "index", "--why", "make room"]);
     must(edgeBox, edgeDemo, ["state", "confirm", twenty]);
@@ -287,7 +290,7 @@ test("a lone pending placement the store outgrew gets the same capacity refusal"
 
 test("retracting either half of a pair leaves the other confirmable and the caps honest", async () =>
 {
-    setCaps(edgeBox, { fullCap: 4000, indexCap: 2 });
+    setCaps(edgeBox, { fullTokens: 4000, indexTokens: 18 });
     const rowA = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row a"]).out);
     const rowB = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row b", "--proposed", "--demote", rowA]).out);
     // The demotion half's record is retracted: its seat frees, so the add
@@ -311,7 +314,7 @@ const f3Self = (args) => selfIn(f3Box, f3Demo, args);
 
 test("review F3: an exact-swap pair confirms as one unit instead of deadlocking", () =>
 {
-    setCaps(f3Box, { fullCap: 8, indexCap: 1 });
+    setCaps(f3Box, { fullTokens: 8, indexTokens: 8 });
     const dweller = entityIn(must(f3Box, f3Demo, ["state", "add", "12345678", "--exposure", "full"]).out);
     const idx = entityIn(must(f3Box, f3Demo, ["state", "add", "idx"]).out);
     must(f3Box, f3Demo, ["state", "place", idx, "--exposure", "full", "--proposed", "--demote", dweller]);
@@ -328,7 +331,7 @@ test("review F3: an exact-swap pair confirms as one unit instead of deadlocking"
 
 test("a paired full demotion is refused while its own index destination lacks room", () =>
 {
-    setCaps(edgeBox, { fullCap: 25, indexCap: 1 });
+    setCaps(edgeBox, { fullTokens: 25, indexTokens: 20 });
     // From the tests above: full holds "tiny map" (8) and the twenty-character
     // row; index holds exactly one record ("row b" left toward search).
     const list = must(edgeBox, edgeDemo, ["state", "list"]).out;
@@ -337,7 +340,7 @@ test("a paired full demotion is refused while its own index destination lacks ro
     const twenty = list.split("\n").find((line) => line.includes("12345678901234567890")).match(/\be-[0-9a-z]{5}\b/)[0];
     const blocked = edgeSelf(["state", "add", "ten chars!", "--exposure", "full", "--demote", twenty]);
     assert.notEqual(blocked.code, 0, "a paired demotion overfilled the index tier");
-    assert.match(blocked.out, /would put the project index tier at 2 of 1 entities/);
+    assert.match(blocked.out, /would put the project index tier at 33 of 20 tokens/);
     assert.match(blocked.out, /free index room first with `self state place <id> --exposure search --why/);
     must(edgeBox, edgeDemo, ["state", "place", thirteen, "--exposure", "search", "--why", "drained"]);
     must(edgeBox, edgeDemo, ["state", "add", "ten chars!", "--exposure", "full", "--demote", twenty]);

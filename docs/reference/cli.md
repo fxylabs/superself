@@ -34,7 +34,7 @@ prints them during the same run.
 The command catalogue currently includes these top-level verbs:
 
 ```text
-init workspace lang theme timezone project remote sync clone
+init workspace lang theme timezone tokens project remote sync clone
 goal objective milestone decide work report artifact convention state alias
 undo
 connect view context status setup
@@ -56,10 +56,14 @@ work, or a free-labeled entity — folds into one record kind with placement:
   (`full|index|search`), scope (`project|workspace`). A demotion records
   `--why`; demotion out of full is proposed by agents and confirmed by a
   person (`state confirm`).
-- Retention caps (`fullCap` and `indexCap` in the store's `config.json`;
-  defaults 4,000 characters of full text and 50 index entities, per scope)
-  gate `state add`, `state place`, and the alias verbs into a tier: past a
-  cap the verb refuses until `--demote <id>` names what frees the room.
+- Retention caps (`fullTokens` and `indexTokens` in the store's `config.json`;
+  defaults 1,000 and 12,000 context tokens, per scope) gate `state add`,
+  `state place`, and the alias verbs into a tier: past a cap the verb refuses
+  until `--demote <id>` names what frees the room, and every number in that
+  refusal is a token count.
+- `tokens` prints what one character costs in tokens, and records a
+  measurement that replaces the shipped estimate. The caps and the piped
+  context budget both read through it.
 - `alias` prints and edits the table the preset verbs read their label and
   default placement from; built-in rows can be overridden and restored.
 
@@ -107,8 +111,8 @@ entities in priority order — full text, then the derived live state, then the
 index lines — with pointers to what stays behind. A pipe, redirect, `--plain`,
 `TERM=dumb`, or a terminal too narrow for a table receives the plain render. A
 sufficiently wide interactive terminal receives the ruled render; `--pretty`
-forces the ruled render. The plain project context is capped at 12,000
-characters, and omissions name the command that recovers the omitted state.
+forces the ruled render. The plain project context is capped at 3,000 context
+tokens, and omissions name the command that recovers the omitted state.
 
 `self status` is the shorter attention and health projection. `self work show
 <id>` is the pull path for one unit's complete recovery line. `self search`

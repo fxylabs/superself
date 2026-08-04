@@ -902,15 +902,13 @@ function occupiesTier(entity: EntityState, scope: EntityScope, exposure: Exposur
     return entity.status === "confirmed" && isCurrent(entity) && entity.scope === scope && entity.exposure === exposure;
 }
 
-export function fullTierCharacters(entities: EntityState[], scope: EntityScope): number
+// Both capped tiers are measured the same way since #213 — the characters the
+// tier holds. The conversion into tokens happens once, where the cap is
+// compared, so a workspace tier summed across stores rounds a single time.
+export function tierCharacters(entities: EntityState[], scope: EntityScope, exposure: Exposure): number
 {
-    return entities.filter((item) => occupiesTier(item, scope, "full"))
+    return entities.filter((item) => occupiesTier(item, scope, exposure))
         .reduce((sum, item) => sum + countCharacters(item.text), 0);
-}
-
-export function indexTierCount(entities: EntityState[], scope: EntityScope): number
-{
-    return entities.filter((item) => occupiesTier(item, scope, "index")).length;
 }
 
 // Which transitions are demotions: exposure moving toward less-rendered —
