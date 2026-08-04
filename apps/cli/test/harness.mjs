@@ -8,7 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { foldProject } from "../dist/fold.js";
+import { useTypedAnswer } from "../dist/human.js";
 import { ulid } from "../dist/ids.js";
+import { runCli } from "../dist/main.js";
 
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 
@@ -40,6 +42,41 @@ export function selfIn(box, cwd, args)
     catch (error)
     {
         return { code: error.status ?? 1, out: `${error.stdout ?? ""}${error.stderr ?? ""}` };
+    }
+}
+
+// The same command line a person types, driven where a keyboard can be stood
+// in for. Destroying a record needs someone at a terminal (#173), so the only
+// place the approved path can run is in-process: the command line, the
+// resolution, the disclosure and the write all execute, and the typed answer
+// is the one thing supplied. Anything spawned as a child still faces the real
+// terminal check, which is why the refusals are asserted through selfIn.
+export async function approvedIn(box, cwd, args, answer)
+{
+    const env = { ...process.env };
+    const cwdWas = process.cwd();
+    const inWas = process.stdin.isTTY;
+    const outWas = process.stdout.isTTY;
+    Object.assign(process.env, box.env);
+    process.chdir(cwd);
+    process.stdin.isTTY = true;
+    process.stdout.isTTY = true;
+    const typedWas = useTypedAnswer(() => answer);
+    process.exitCode = 0;
+    try
+    {
+        await runCli(args);
+        return process.exitCode ?? 0;
+    }
+    finally
+    {
+        useTypedAnswer(typedWas);
+        process.stdin.isTTY = inWas;
+        process.stdout.isTTY = outWas;
+        process.chdir(cwdWas);
+        Object.keys(process.env).forEach((key) => delete process.env[key]);
+        Object.assign(process.env, env);
+        process.exitCode = 0;
     }
 }
 

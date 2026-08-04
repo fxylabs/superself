@@ -26,6 +26,44 @@ export interface RetirementIntent
     targets: EntityState[];
 }
 
+// What a verb hands the gate: the ids it already resolved, read back out of
+// the folded model it already built. A target the model does not carry is
+// dropped rather than guessed at — the verb's own refusals ran first.
+// What a verb hands the gate: the ids it already resolved, read back out of
+// the folded model it already built. Only a record that is still standing is
+// a target — a supersedes link naming something already superseded destroys
+// nothing, and the trigger is what this call displaces now, never which flag
+// was typed.
+export function retirementIntent(model: ProjectModel, kind: RetirementKind, ids: string[]): RetirementIntent
+{
+    const targets: EntityState[] = [];
+    for (const id of ids)
+    {
+        const target = model.entities.find((entity) => entity.id === id);
+        if (target !== undefined && target.status === "confirmed")
+        {
+            targets.push(target);
+        }
+    }
+    return { kind, targets };
+}
+
+// The records an add verb's payload displaces. Read off the payload rather
+// than off the flags, because every kind spells the correction differently
+// (`--supersedes`, `--link supersedes:<id>`, a type's own older spelling) and
+// they all arrive here as the same link.
+export function supersedeTargets(payload: Record<string, unknown>): string[]
+{
+    const links = payload.links;
+    if (!Array.isArray(links))
+    {
+        return [];
+    }
+    return links
+        .filter((link) => (link as { type?: string })?.type === "supersedes")
+        .map((link) => String((link as { target?: unknown }).target));
+}
+
 const SUBJECT: Record<RetirementKind, string> = {
     supersede: "retires",
     retract: "takes back",
@@ -59,16 +97,26 @@ export function requireHumanRetirement(intent: RetirementIntent, model: ProjectM
 // Destroying a record goes through the gate and then through the same single
 // writer every other event does: this is a caller of `recordEvents`, never a
 // second way into the log.
+//
+// A call that destroys nothing passes straight through. Every verb that can
+// destroy routes through here unconditionally, so whether the gate fires is
+// decided by what the call displaces rather than by each verb deciding for
+// itself — which is what keeps `decide --proposed --supersedes` out of the
+// gate and `decide confirm` on a proposal that carries one inside it.
 export function recordRetirement(
     ctx: CliContext,
     intent: RetirementIntent,
     model: ProjectModel,
-    events: (confirmation: HumanConfirmation) => SelfEvent[],
+    events: (confirmation?: HumanConfirmation) => SelfEvent[],
     summary: string
 ): void
 {
-    const confirmation = requireHumanRetirement(intent, model);
-    recordEvents(ctx, events(confirmation), summary);
+    if (intent.targets.length === 0)
+    {
+        recordEvents(ctx, events(), summary);
+        return;
+    }
+    recordEvents(ctx, events(requireHumanRetirement(intent, model)), summary);
 }
 
 // The refusal an agent reads. It ends with the command as it was typed, so

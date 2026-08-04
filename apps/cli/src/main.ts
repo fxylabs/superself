@@ -44,6 +44,7 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
@@ -1001,6 +1002,7 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 // decision has always answered to.
 function presetEntityEvent(
     ctx: ProjectContext,
+    model: ProjectModel,
     verb: string,
     text: string,
     extra: Record<string, unknown>,
@@ -1025,7 +1027,20 @@ function presetEntityEvent(
         payload.priority = row.priority;
     }
     event.payload = payload;
-    recordEvent(ctx, event, text);
+    // Every preset kind corrects a record the same way, so they all reach the
+    // gate through this one line rather than each add verb deciding. A
+    // proposal displaces nothing until it is confirmed, and passes through.
+    const displaced = proposed ? [] : supersedeTargets(payload);
+    recordRetirement(ctx, retirementIntent(model, "supersede", displaced), model,
+        (confirmation) =>
+        {
+            if (confirmation !== undefined)
+            {
+                event.payload = { ...payload, confirmation };
+            }
+            return [event];
+        },
+        text);
 }
 
 function cmdGoalSet(value: string | undefined): void
@@ -1036,7 +1051,7 @@ function cmdGoalSet(value: string | undefined): void
     // The latest goal wins, as it always has: the new statement supersedes
     // every live goal record, legacy-derived and native alike.
     const live = model.entities.filter((item) => item.source === "goal" && isLive(item));
-    presetEntityEvent(ctx, "goal", text, {
+    presetEntityEvent(ctx, model, "goal", text, {
         links: live.map((item) => ({ type: "supersedes", target: item.id }))
     }, undefined, false);
 }
@@ -1061,7 +1076,7 @@ function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>)
     }
     // The work link is stated, never inferred from what happens to be open:
     // most decisions belong to the project, not to a unit of work.
-    presetEntityEvent(ctx, "decide", text, extra, decisionRefs(ctx, values), values.proposed === true);
+    presetEntityEvent(ctx, model, "decide", text, extra, decisionRefs(ctx, values), values.proposed === true);
 }
 
 // Exact id first, then a unique prefix, over the folded records — legacy
@@ -1118,7 +1133,13 @@ function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", pref
     // The gate refused a call without one before this ran.
     const payload = { entity: decision.id, why: required(why) };
     const refs = verb === "retract" ? { retracts: decision.id } : { declines: decision.id };
-    recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", payload, refs, true), decision.text);
+    // A decline turns down a proposal, which was never held: only the retract
+    // of a confirmed decision reaches the gate.
+    const withdrawn = verb === "retract" ? [decision.id] : [];
+    recordRetirement(ctx, retirementIntent(model, "retract", withdrawn), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
+            confirmation === undefined ? payload : { ...payload, confirmation }, refs, true)],
+        decision.text);
 }
 
 // Each refusal names the state the record is actually in and the verb that
@@ -1173,14 +1194,21 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
 {
     const outcome = requireText(positionals[0], WORK_ADD_USAGE);
     const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const id = workId();
     const retirement = supersededRetirement(ctx, id, values);
-    const events = [makeEvent(ctx.project, "entity.confirmed", workPayload(ctx, id, outcome))];
-    if (retirement !== undefined)
-    {
-        events.push(retirement);
-    }
-    recordEvents(ctx, events, `${id} ${outcome}`);
+    recordRetirement(ctx, retirementIntent(model, "supersede", retirement === undefined ? [] : [String(retirement.payload.entity)]), model,
+        (confirmation) =>
+        {
+            const events = [makeEvent(ctx.project, "entity.confirmed", workPayload(ctx, id, outcome))];
+            if (retirement !== undefined)
+            {
+                retirement.payload = confirmation === undefined ? retirement.payload : { ...retirement.payload, confirmation };
+                events.push(retirement);
+            }
+            return events;
+        },
+        `${id} ${outcome}`);
     console.log(id);
 }
 
@@ -1327,7 +1355,8 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
         throw new CliError("`work retire` retires the unit itself — to retire one requirement, use `self work drop <id> --requirement r1 --why w`");
     }
     const ctx = requireProject(process.cwd());
-    const work = requireRetirable(buildModel(ctx.storeDir, ctx.project, new Date()), positionals[0]);
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const work = requireRetirable(model, positionals[0]);
     if (work.status === "retired")
     {
         // Idempotent by design: the state the caller asked for already holds,
@@ -1337,7 +1366,10 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
     }
     const why = required(values.why);
     const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
-    recordEvent(ctx, makeEvent(ctx.project, "entity.retired", payload, undefined, true), `${work.id} ${why}`);
+    recordRetirement(ctx, retirementIntent(model, "retire", [work.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retired",
+            confirmation === undefined ? payload : { ...payload, confirmation }, undefined, true)],
+        `${work.id} ${why}`);
 }
 
 // The one answer to "may this unit be retired": known, and not already closed
@@ -1592,7 +1624,7 @@ function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_O
         // every project's context while its record stays in this store.
         extra.scope = "workspace";
     }
-    presetEntityEvent(ctx, "convention", text, extra, undefined, false);
+    presetEntityEvent(ctx, model, "convention", text, extra, undefined, false);
 }
 
 function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
@@ -1617,7 +1649,10 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     // ever wrote down.
     const payload = { entity: id, why: required(values.why) };
     const text = model.conventions.find((item) => item.id === id)?.text ?? id;
-    recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", payload, { retracts: id }, true), text);
+    recordRetirement(ctx, retirementIntent(model, "retract", [id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
+            confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: id }, true)],
+        text);
 }
 
 // The ids of conventions that still hold, legacy and native alike. A
