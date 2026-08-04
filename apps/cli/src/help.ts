@@ -8,7 +8,8 @@
 // itself is one surface, and a per-command special case would be a second one.
 
 import { readFileSync } from "node:fs";
-import { Command, UsageLine } from "./contract.js";
+import { spell } from "./args.js";
+import { Command, commandLeaves, UsageLine } from "./contract.js";
 
 // Where the description column starts in the verb list.
 const COLUMN = 45;
@@ -56,5 +57,43 @@ export function cliVersion(): string
 export function commandUsage(command: Command): string
 {
     const header = command.usage.map((line, index) => (index === 0 ? "usage: self " : "       self ") + line.syntax);
-    return header.concat("", command.detail).join("\n");
+    return header.concat("", command.detail, required(command)).join("\n");
+}
+
+/* ── the options a verb cannot run without ─────────────────────────── */
+
+// Rendered from the leaves' own declarations, which is the same structure the
+// parse gate refuses against: a reader who assembles a call from this page
+// cannot be refused for a flag the page failed to mark (#106).
+const REQUIRED_WIDTH = 76;
+
+function required(command: Command): string[]
+{
+    const verbs = commandLeaves(command).flatMap((entry) => entry.leaf.requires.length === 0 ? []
+        : [{ path: entry.verb === "" ? command.name : `${command.name} ${entry.verb}`, leaf: entry.leaf }]);
+    if (verbs.length === 0)
+    {
+        return [];
+    }
+    const column = Math.max(...verbs.map((entry) => entry.path.length)) + 4;
+    return ["", "required, and refused in one pass when missing:"].concat(verbs.flatMap((entry) =>
+        wrapped(`  ${entry.path.padEnd(column)}`, entry.leaf.requires.map(spell))));
+}
+
+// A verb with nine required options would run off the page on one line, so the
+// list wraps under the column its first flag stands in.
+function wrapped(prefix: string, flags: string[]): string[]
+{
+    const lines: string[] = [];
+    let line = prefix;
+    for (const flag of flags)
+    {
+        if (line.trim() !== "" && line.length + flag.length + 1 > REQUIRED_WIDTH)
+        {
+            lines.push(line);
+            line = " ".repeat(prefix.length);
+        }
+        line = line.endsWith(" ") ? line + flag : `${line} ${flag}`;
+    }
+    return lines.concat(line);
 }

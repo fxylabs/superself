@@ -114,15 +114,21 @@ pnpm build
 A new verb ships as a set. A pull request that adds one without all five is
 incomplete:
 
-1. A `leaf` in the owning command's contract declaration, stating its options
-   and how many positionals it accepts — the dispatcher hands them to
-   `parseCommand`, so nothing a command accepts is declared anywhere else.
+1. A `leaf` in the owning command's contract declaration, stating its options,
+   how many positionals it accepts, and which options it cannot run without —
+   the dispatcher hands them to `parseCommand`, so nothing a command accepts or
+   demands is declared anywhere else. A requirement carries the hint that
+   explains it and, where its precondition lives on another verb, the exact
+   spelling that unblocks it; the handler never asks for it a second time.
 2. A usage line and detail in that same `Command` declaration — the one place
    the CLI describes itself, so `self` and `self <cmd> --help` stay in sync,
    and `test/contract.test.mjs` fails a verb that is documented without being
    dispatchable or the other way around.
 3. Every refusal as a one-line `CliError` that says what was refused and why,
-   in the user's terms. A refusal that only names a rule teaches nothing.
+   in the user's terms. A refusal that only names a rule teaches nothing. The
+   one refusal that runs to several lines is the required-option gate's, which
+   lists every missing option at once rather than revealing them one command
+   round at a time; it is rendered by the gate, never written by a command.
 4. Test coverage under `apps/cli/test/` for the behavior the verb adds,
    including the refusal path — a unit test where the behavior is in-process
    logic, a case in the integration tests where it is a CLI contract.

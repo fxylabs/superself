@@ -112,5 +112,6 @@ test("C6: coverage binds to the entity id — a revision starts uncovered and re
     assert.match(again.out, /already covered at the current record/);
     const bare = self(["milestone", "recheck", successor, "--why", "no criterion"]);
     assert.notEqual(bare.code, 0);
-    assert.match(bare.out, /pass --criterion/);
+    assert.match(bare.out, /needs --criterion/);
+    assert.match(bare.out, /successor starts uncovered/);
 });

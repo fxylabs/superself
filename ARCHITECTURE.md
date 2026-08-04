@@ -63,9 +63,7 @@ rule stands for whatever comes next:
 ## Single gates
 
 Each rule below has exactly one implementation. Adding a second path around one
-of them is a review finding, not a refactor note. The argument-parse gate has
-two paths, recorded under [Known debt](#known-debt), and a new command may not
-widen that.
+of them is a review finding, not a refactor note.
 
 | Gate | Module | Rule |
 | --- | --- | --- |
@@ -73,13 +71,14 @@ widen that.
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess` | the one writer and the one reader of the machine-local pid ledger; a pid never reaches a synced event |
-| Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Required of every new or migrated command surface |
+| Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Every command surface goes through it — `node:util` `parseArgs` is called from `parseCommand` and nowhere else |
+| Required options | `args.ts` `requireOptions`, called from `parseCommand` | the one answer to "may this verb run with what it was given": every missing required option is named in one refusal, with its hint and any unblocking verb. A handler that asked again would be a second implementation of the same rule (#106) |
 
-Unknown flags are named CLI-wide even in the surfaces that still call
-`node:util` `parseArgs` directly, because `main.ts` `userMessage` translates
-node's `ERR_PARSE_ARGS_*` codes centrally. That second path does not carry
-`parseCommand`'s unexpected-positional refusal, which is why it is debt rather
-than a sanctioned alternative.
+What a verb cannot run without is declared on its leaf, beside the options it
+accepts, and `help.ts` renders that same declaration — so a page cannot mark a
+flag optional that the gate refuses a call for. Requirements that depend on
+another flag's value or on folded state are not declarable, and stay in the
+handler that can judge them.
 
 - Adding a caller of a gate is normal. Adding a *second implementation* of what
   a gate decides is the violation — including a local re-check that duplicates
@@ -231,12 +230,6 @@ Standing rules, not per-issue reminders:
 Recorded here so the rules above can be stated without exceptions written into
 them. Do not use any of these as precedent.
 
-- Two argument-parse paths, not one. Most surfaces go through `args.ts`
-  `parseCommand`; the work-proposal surfaces of `goals.ts` still call
-  `node:util` `parseArgs` directly. Those sites get node's unknown-flag error
-  translated by `main.ts` `userMessage`, but not `parseCommand`'s
-  unexpected-positional refusal, so a stray argument is still dropped there
-  (#111 tracks the migration).
 - `main.ts` still holds command bodies (init, workspace, lang, project, view,
   sync, clone, context, status, theme, timezone) instead of dispatching to
   modules like the newer surfaces do.
