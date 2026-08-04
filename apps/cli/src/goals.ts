@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import { presetRow } from "./aliases.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf, rawLeaf } from "./contract.js";
 import { validDate } from "./dates.js";
+import { requireSupersedeKind } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { milestoneId, objectiveId, workId } from "./ids.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
@@ -212,7 +213,11 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
         entity: id,
         text: outcome,
         labels: [row.label],
-        links: (values.supersedes ?? []).map((prefix) => ({ type: "supersedes", target: requireObjective(model, prefix).id })),
+        links: (values.supersedes ?? []).map((prefix) =>
+        {
+            requireSupersedeKind(model.entities, prefix, "objective");
+            return { type: "supersedes", target: requireObjective(model, prefix).id };
+        }),
         criteria: [],
         exposure: row.exposure,
         scope: "project",
@@ -470,6 +475,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
     const links: Record<string, unknown>[] = [{ type: "member-of", target: objective.id }];
     if (values.supersedes !== undefined)
     {
+        requireSupersedeKind(model.entities, values.supersedes, "milestone");
         links.push({ type: "supersedes", target: requireSibling(objective, values.supersedes) });
     }
     const payload: Record<string, unknown> = {

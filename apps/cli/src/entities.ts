@@ -10,7 +10,7 @@
 
 import { MilestoneState, ObjectiveState } from "./objectives.js";
 import { countCharacters } from "./style.js";
-import { SelfEvent } from "./types.js";
+import { CliError, SelfEvent } from "./types.js";
 
 // Spelled once, for the verbs' refusals and the fold's own reading guards.
 export const EXPOSURES = ["full", "index", "search"] as const;
@@ -143,6 +143,59 @@ export interface EntityState
 export function isLive(entity: EntityState): boolean
 {
     return entity.status === "proposed" || entity.status === "confirmed";
+}
+
+/* ── correcting a record ───────────────────────────────────────────── */
+
+// The record kind an id answers as: its preset source, or the free-labeled
+// entity the raw verb records.
+export type EntityKind = EntitySource | "entity";
+
+// Correcting a record reads the same on every add verb — `--supersedes <id>`
+// restates the text and carries the lineage — so the only thing left to say
+// about a target of another kind is which add verb owns it. One table over the
+// record kinds, read by every surface that takes the flag, instead of a
+// spelling per surface.
+const SUPERSEDE_SPELLING: Record<EntityKind, string> = {
+    goal: '`self goal set "<text>"` (the latest goal supersedes the previous one)',
+    decision: '`self decide "<text>" --supersedes <id>`',
+    convention: '`self convention add "<text>" --supersedes <id>`',
+    objective: '`self objective add "<outcome>" --supersedes <id>`',
+    milestone: "`self milestone add … --supersedes <id>`",
+    work: '`self work add "<outcome>" --supersedes <id> --why w`',
+    entity: '`self state add "<text>" --supersedes <id>`'
+};
+
+// Refuses a `--supersedes` target that is another kind of record, naming the
+// add verb that corrects that kind. An id no record answers to is left to the
+// caller's own resolver, which can say how to list the ids it accepts.
+export function requireSupersedeKind(entities: EntityState[], wanted: string, kind: EntityKind): void
+{
+    const entity = supersedeTarget(entities, wanted);
+    if (entity === undefined)
+    {
+        return;
+    }
+    const found = entity.source ?? "entity";
+    if (found !== kind)
+    {
+        const article = /^[aeiou]/.test(found) ? "an" : "a";
+        throw new CliError(`${entity.id} is ${article} ${found} record — replace it with ${SUPERSEDE_SPELLING[found]}`);
+    }
+}
+
+// Exact id first, then a unique prefix — the preset kinds take a prefix of a
+// 26-character event id, and a prefix more than one record answers to says
+// nothing about kind.
+function supersedeTarget(entities: EntityState[], wanted: string): EntityState | undefined
+{
+    const exact = entities.find((item) => item.id === wanted);
+    if (exact !== undefined)
+    {
+        return exact;
+    }
+    const matches = entities.filter((item) => item.id.startsWith(wanted));
+    return matches.length === 1 ? matches[0] : undefined;
 }
 
 // One `entity.placed` line, collected rather than applied in the pass: a
