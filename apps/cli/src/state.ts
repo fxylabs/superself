@@ -25,6 +25,7 @@ import {
     LinkType,
     orderEntities,
     pendingSummary,
+    requireSupersedeKind,
     uncoveredCriteria
 } from "./entities.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
@@ -38,7 +39,7 @@ import { CliError, EventRefs, SelfEvent } from "./types.js";
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
     + ' | cover <id> --criterion c --why w | start <id> | block <id> | unblock <id> | done <id> --report r | retire <id> --why w';
 const ADD_USAGE = 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope project|workspace] '
-    + "[--target YYYY-MM-DD] [--criteria c] [--link [type:]<id>] [--why w] [--proposed] [--demote <id>]";
+    + "[--target YYYY-MM-DD] [--criteria c] [--supersedes <id>] [--link [type:]<id>] [--why w] [--proposed] [--demote <id>]";
 const PLACE_USAGE = "state place <id> [--priority <n>] [--exposure full|index|search] [--scope project|workspace] "
     + '[--why "<reason>"] [--proposed] [--demote <id>]';
 const RETRACT_USAGE = 'state retract <id> --why "<why it no longer holds>"';
@@ -51,6 +52,7 @@ const ADD_OPTIONS = {
     scope: { type: "string" },
     target: { type: "string" },
     criteria: { type: "string", multiple: true },
+    supersedes: { type: "string", multiple: true },
     link: { type: "string", multiple: true },
     why: { type: "string" },
     proposed: { type: "boolean" },
@@ -100,7 +102,7 @@ export const STATE_COMMAND: Command = {
         },
         {
             syntax: 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope project|workspace]',
-            description: ["record one raw entity; --link supersedes:<id> replaces an earlier one"],
+            description: ["record one raw entity; --supersedes <id> replaces an earlier one"],
             verbs: ["add"]
         },
         { syntax: "state show <id> [--project <slug>]", description: ["print an entity's current values"], verbs: ["show"] },
@@ -172,6 +174,9 @@ export const STATE_COMMAND: Command = {
         "  --criterion <c>       the declared criterion a coverage claim answers — its text, or cN",
         "  --evidence <commit>   a commit recorded with the coverage claim, repeatable",
         "  --work <id>           the work unit whose evidence covers the criterion",
+        "  --supersedes <id>     the entity this one replaces, repeatable — the correction path",
+        "                        every add verb spells the same way; --link supersedes:<id> records",
+        "                        the same edge, and naming one target both ways records it once",
         "  --link [type:]<id>    typed edge, repeatable: --link supersedes:<id> replaces an",
         "                        earlier entity, member-of:<id> groups, relates:<id> (a bare id) refers",
         "  --why <text>          rationale recorded with the entity, its placement, its retraction,",
@@ -269,7 +274,7 @@ function addPayload(
         entity: id,
         text,
         labels,
-        links: parseLinks(model, values.link ?? []),
+        links: supersedeLinks(model, values.link ?? [], values.supersedes ?? []),
         criteria: (values.criteria ?? []).map((criterion) => validText(criterion, "--criteria", "one criterion's text")),
         exposure,
         scope
@@ -1140,6 +1145,24 @@ function requireEntity(model: ProjectModel, value: string | undefined, usage: st
     return matches[0];
 }
 
+// `--supersedes <id>` is the one spelling every add verb takes, and here it is
+// the edge `--link supersedes:<id>` already records — the same parse, the same
+// refusals. One target named in both spellings states one intent and records
+// one link; repeating a single spelling is still the typo `parseLinks` names.
+function supersedeLinks(model: ProjectModel, raw: string[], supersedes: string[]): EntityLink[]
+{
+    const links = parseLinks(model, raw);
+    for (const target of supersedes)
+    {
+        const link = parseLink(model, `supersedes:${target}`);
+        if (!links.some((item) => item.type === link.type && item.target === link.target))
+        {
+            links.push(link);
+        }
+    }
+    return links;
+}
+
 function parseLinks(model: ProjectModel, raw: string[]): EntityLink[]
 {
     const links = raw.map((item) => parseLink(model, item));
@@ -1176,32 +1199,21 @@ function parseLink(model: ProjectModel, raw: string): EntityLink
     }
     if (type === "supersedes")
     {
-        requireSupersedable(entity);
+        requireSupersedable(model, entity);
     }
     return { type: type as LinkType, target };
 }
 
-function requireSupersedable(entity: EntityState): void
+// A supersession replaces a live record this verb owns: the preset kinds are
+// replaced through their own add verbs, which the shared table names.
+function requireSupersedable(model: ProjectModel, entity: EntityState): void
 {
-    if (entity.source !== undefined)
-    {
-        throw new CliError(`${entity.id} is a ${entity.source} record — replace it with ${OWNING_REPLACE[entity.source]}`);
-    }
+    requireSupersedeKind(model.entities, entity.id, "entity");
     if (!isLive(entity))
     {
         throw new CliError(`${entity.id} was already ${entity.status} — nothing is left to supersede`);
     }
 }
-
-// Where each preset record kind's own replacement lives.
-const OWNING_REPLACE: Record<EntitySource, string> = {
-    goal: '`self goal set "<text>"` (the latest goal supersedes the previous one)',
-    decision: '`self decide "<text>" --supersedes <id>`',
-    convention: '`self convention add "<text>" --supersedes <id>`',
-    objective: '`self objective add "<outcome>" --supersedes <id>`',
-    milestone: "`self milestone add … --supersedes <id>`",
-    work: "`self work retire <id> --why w --successor <work-id>`"
-};
 
 // Sparse whole numbers (#197 §3): 0 is the top of context and gaps leave room
 // to insert later. Anything else is refused rather than rounded — including a
