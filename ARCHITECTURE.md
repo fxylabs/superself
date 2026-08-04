@@ -147,13 +147,17 @@ same transitions under other names — but a new type ships the shared flag, and
 a `--supersedes` target belonging to another type is refused by naming that
 type's add verb, from the one table in `entities.ts`.
 
-`--why` is required on every transition but supersede — a supersession says
-why by naming its successor, and nothing else does. That covers `decide
-retract`, `decide decline`, `convention drop`, `objective decline`, `objective
-close --as dropped`, `milestone drop`, `work retire` and `work decline`. A work
-supersession is the one exception: `work add --supersedes` records the
-retirement `work retire --successor` records, and a retirement carries its
-reason, so the shorter spelling asks for `--why` rather than losing it.
+`--why` is required on every transition. A supersession is excused from it only
+where the successor's text is the reason — a decision replaced by a decision, a
+convention by a convention — because reading the new record answers why the old
+one stopped holding. A record of doing is not excused: a work unit's new outcome
+states what will be done next and never why the previous outcome stopped being
+reachable, which is the fact worth keeping. So `work add --supersedes` asks for
+`--why`, the same as the `work retire --successor` it records, and a record kind
+added later is excused only if its own text carries the reason. Withdrawals are
+never excused: `decide retract`, `decide decline`, `convention drop`, `objective
+decline`, `objective close --as dropped`, `milestone drop`, `work retire` and
+`work decline` all require it.
 
 A withdrawal is terminal. Once a record is retracted, declined or dropped, a
 later event naming it does not move it back: the fold refuses the transition
