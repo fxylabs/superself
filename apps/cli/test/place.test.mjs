@@ -6,11 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = demoWorkspace(box);
 const self = (args) => selfIn(box, demo, args);
+// Destroying a record needs a person at a terminal (#173).
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 function entityIn(text)
 {
@@ -50,7 +52,7 @@ test("place answers for the preset record kinds too", () =>
     assert.ok(must(box, demo, ["state", "show", decision]).out.includes("placement: project · index · priority 7"));
 });
 
-test("place refuses a missing change, a no-op, and the records that cannot move", () =>
+test("place refuses a missing change, a no-op, and the records that cannot move", async () =>
 {
     const id = entityIn(must(box, demo, ["state", "add", "movable", "--exposure", "index"]).out);
     const bare = self(["state", "place", id]);
@@ -67,12 +69,12 @@ test("place refuses a missing change, a no-op, and the records that cannot move"
     assert.notEqual(early.code, 0);
     assert.match(early.out, /still proposed — placement moves confirmed records/);
     const retracted = entityIn(must(box, demo, ["state", "add", "short lived"]).out);
-    must(box, demo, ["state", "retract", retracted, "--why", "done with it"]);
+    await approved(["state", "retract", retracted, "--why", "done with it"], retracted);
     const gone = self(["state", "place", retracted, "--priority", "1"]);
     assert.notEqual(gone.code, 0);
     assert.match(gone.out, /was retracted/);
     const old = entityIn(must(box, demo, ["state", "add", "old rule"]).out);
-    const successor = entityIn(must(box, demo, ["state", "add", "new rule", "--link", `supersedes:${old}`]).out);
+    const successor = entityIn((await approved(["state", "add", "new rule", "--link", `supersedes:${old}`], old)).printed);
     const replaced = self(["state", "place", old, "--priority", "1"]);
     assert.notEqual(replaced.code, 0);
     assert.match(replaced.out, new RegExp(`superseded by ${successor} — place the successor`));
@@ -265,6 +267,7 @@ test("review F2: confirming the promotion half cannot leave the full tier over i
 const edgeBox = machine();
 const edgeDemo = demoWorkspace(edgeBox).demo;
 const edgeSelf = (args) => selfIn(edgeBox, edgeDemo, args);
+const edgeApproved = (args, answer) => approvedIn(edgeBox, edgeDemo, args, answer);
 
 test("a lone pending placement the store outgrew gets the same capacity refusal", () =>
 {
@@ -282,20 +285,20 @@ test("a lone pending placement the store outgrew gets the same capacity refusal"
     assert.ok(must(edgeBox, edgeDemo, ["state", "show", twenty]).out.includes("placement: project · full"));
 });
 
-test("retracting either half of a pair leaves the other confirmable and the caps honest", () =>
+test("retracting either half of a pair leaves the other confirmable and the caps honest", async () =>
 {
     setCaps(edgeBox, { fullCap: 4000, indexCap: 2 });
     const rowA = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row a"]).out);
     const rowB = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row b", "--proposed", "--demote", rowA]).out);
     // The demotion half's record is retracted: its seat frees, so the add
     // half confirms without the demotion.
-    must(edgeBox, edgeDemo, ["state", "retract", rowA, "--why", "obsolete"]);
+    await edgeApproved(["state", "retract", rowA, "--why", "obsolete"], rowA);
     must(edgeBox, edgeDemo, ["state", "confirm", rowB]);
     assert.ok(must(edgeBox, edgeDemo, ["state", "show", rowB]).out.includes("placement: project · index"));
     // The add half is retracted: the pending demotion stays confirmable —
     // a move toward search always fits — just no longer forced.
     const rowC = entityIn(must(edgeBox, edgeDemo, ["state", "add", "row c", "--proposed", "--demote", rowB]).out);
-    must(edgeBox, edgeDemo, ["state", "retract", rowC, "--why", "withdrawn"]);
+    await edgeApproved(["state", "retract", rowC, "--why", "withdrawn"], rowC);
     must(edgeBox, edgeDemo, ["state", "confirm", rowB]);
     assert.ok(must(edgeBox, edgeDemo, ["state", "show", rowB]).out.includes("placement: project · search"));
 });

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = demoWorkspace(box);
@@ -93,12 +93,12 @@ test("C5: milestone met records the same entity.covered, carrying the work and e
     assert.match(must(box, demo, ["milestone", "show", milestone]).out, /c1 — tests pass _\(covered/);
 });
 
-test("C6: coverage binds to the entity id — a revision starts uncovered and recheck covers the successor", () =>
+test("C6: coverage binds to the entity id — a revision starts uncovered and recheck covers the successor", async () =>
 {
     const objective = must(box, demo, ["objective", "add", "quality bar"]).out.match(/\bo-[0-9a-z]{5}\b/)[0];
     const milestone = must(box, demo, ["milestone", "add", "checkpoint", "--objective", objective, "--exit", "the proof"]).out.match(/\bm-[0-9a-z]{5}\b/)[0];
     must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "first judgment"]);
-    const successor = must(box, demo, ["milestone", "revise", milestone, "--why", "widened", "--outcome", "checkpoint, widened"]).out.match(/\bm-[0-9a-z]{5}\b/)[0];
+    const successor = (await approvedIn(box, demo, ["milestone", "revise", milestone, "--why", "widened", "--outcome", "checkpoint, widened"], milestone)).printed.match(/\bm-[0-9a-z]{5}\b/)[0];
     const early = self(["milestone", "reach", successor]);
     assert.notEqual(early.code, 0, "a successor inherited its predecessor's coverage");
     assert.match(early.out, /uncovered exit criteria/);

@@ -43,7 +43,7 @@ export function confirmHuman(subject: string, challenge: string): HumanConfirmat
         };
     }
     process.stdout.write(`${subject}\ntype ${challenge} to confirm exactly what you are approving: `);
-    if (readLine() !== challenge)
+    if (typed() !== challenge)
     {
         return {
             code: "human_challenge_failed",
@@ -52,6 +52,26 @@ export function confirmHuman(subject: string, challenge: string): HumanConfirmat
         };
     }
     return { method: "tty", challenge };
+}
+
+// Where the typed answer comes from. Replaceable so a test can drive the
+// approved path in-process — without it, the branch that records an approved
+// destruction has no way to run at all, since no test can type at a keyboard.
+//
+// This is not a way past the gate, and it is deliberately the only thing that
+// moves. The interactive check above it does not: a process started from a
+// command line — an agent's, a script's, a CI job's — gets a fresh module with
+// the real keyboard, and faces the terminal test before it ever reaches here.
+// Reaching this seam means already running inside the same process, where
+// appending to the log directly was possible all along and is what the store's
+// own rules forbid.
+let typed: () => string = readLine;
+
+export function useTypedAnswer(next: () => string): () => string
+{
+    const previous = typed;
+    typed = next;
+    return previous;
 }
 
 // A blocking read of fd 0. The command surface is synchronous, and the read

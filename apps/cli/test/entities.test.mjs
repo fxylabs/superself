@@ -7,10 +7,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, idIn, machine, must } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must } from "./harness.mjs";
 
 const box = machine();
 const { demo } = demoWorkspace(box);
+
+// Destroying a record needs a person at a terminal (#173): the command line
+// runs in full and only the typed answer is stood in for.
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 // The record ids the goal verbs print on their own line: o-xxxxx, m-xxxxx.
 function shortIdIn(text, prefix)
@@ -23,10 +27,10 @@ function shortIdIn(text, prefix)
     return match[0];
 }
 
-test("a goal.set chain folds to exactly one live goal entity with supersede lineage", () =>
+test("a goal.set chain folds to exactly one live goal entity with supersede lineage", async () =>
 {
     const first = idIn(must(box, demo, ["goal", "set", "first direction"]).out);
-    const second = idIn(must(box, demo, ["goal", "set", "second direction"]).out);
+    const second = idIn((await approved(["goal", "set", "second direction"], first)).printed);
     const list = must(box, demo, ["state", "list"]).out;
     const goals = list.split("\n").filter((line) => /\bgoal\b/.test(line));
     assert.equal(goals.length, 1, `expected one live goal entity:\n${list}`);
@@ -38,14 +42,14 @@ test("a goal.set chain folds to exactly one live goal entity with supersede line
     assert.ok(must(box, demo, ["state", "show", second]).out.includes(`link: supersedes ${first}`));
 });
 
-test("decision lifecycles read as decision-labeled index entities", () =>
+test("decision lifecycles read as decision-labeled index entities", async () =>
 {
     const declined = idIn(must(box, demo, ["decide", "try direction a", "--proposed"]).out);
     must(box, demo, ["decide", "decline", declined, "--why", "not now"]);
     const retracted = idIn(must(box, demo, ["decide", "hold direction b"]).out);
-    must(box, demo, ["decide", "retract", retracted, "--why", "walked back"]);
+    await approved(["decide", "retract", retracted, "--why", "walked back"], retracted);
     const replaced = idIn(must(box, demo, ["decide", "ship weekly"]).out);
-    const successor = idIn(must(box, demo, ["decide", "ship daily", "--supersedes", replaced]).out);
+    const successor = idIn((await approved(["decide", "ship daily", "--supersedes", replaced], replaced)).printed);
     const live = must(box, demo, ["state", "show", successor]).out;
     assert.ok(live.includes("confirmed  (from decision)"));
     assert.ok(live.includes("labels: decision"));
@@ -64,16 +68,16 @@ test("decision lifecycles read as decision-labeled index entities", () =>
     assert.ok(list.includes("ship daily"));
 });
 
-test("a dropped convention reads retracted with its why; a correction supersedes", () =>
+test("a dropped convention reads retracted with its why; a correction supersedes", async () =>
 {
     const dropped = idIn(must(box, demo, ["convention", "add", "tabs everywhere"]).out);
-    must(box, demo, ["convention", "drop", dropped, "--why", "spaces won"]);
+    await approved(["convention", "drop", dropped, "--why", "spaces won"], dropped);
     const shown = must(box, demo, ["state", "show", dropped]).out;
     assert.ok(shown.includes("retracted"));
     assert.ok(shown.includes("closed: spaces won"));
     assert.ok(shown.includes("labels: convention"));
     const old = idIn(must(box, demo, ["convention", "add", "four space indent"]).out);
-    const corrected = idIn(must(box, demo, ["convention", "add", "four space indent, semicolons", "--supersedes", old]).out);
+    const corrected = idIn((await approved(["convention", "add", "four space indent, semicolons", "--supersedes", old], old)).printed);
     assert.ok(must(box, demo, ["state", "show", old]).out.includes(`superseded by: ${corrected}`));
     assert.ok(must(box, demo, ["state", "show", corrected]).out.includes("placement: project · full · priority 30"));
 });

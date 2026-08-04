@@ -9,7 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, deriveEntities, emptyEntityFold, EntityFold, EntityState, isLive, reconcileEntity } from "./entities.js";
+import { applyEntity, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityState, isLive, reconcileEntity } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -462,6 +462,9 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     const model = emptyModel(storeDir, slug);
     const events = readEvents(storeDir, slug);
     const entityFold = emptyEntityFold();
+    // What an undo took back, read before the fold begins: a restoration is a
+    // fact about the event it names, not a position in the log.
+    collectAnnulled(entityFold, events);
     const creations = new Map<string, SelfEvent>();
     for (const event of events)
     {
