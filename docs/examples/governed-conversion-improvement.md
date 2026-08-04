@@ -250,8 +250,10 @@ hypothesis, scope, customer segment, exposure, success rule, data access, cost,
 or rollback path creates plan v2 and closes the gate again. Approval text that
 cannot identify its subject is not authorization.
 
-**Shipped foundation:** current Superself work can require human approval, and
-integration approvals bind to exact repository state.
+**Shipped foundation:** the propose/confirm grammar exists for every asserted
+record — an agent records a proposal (`work propose`, `decide --proposed`,
+`state add --proposed`) and only a person's confirmation or acceptance makes
+it hold.
 
 **Target contract:** one public proposal lifecycle binds analysis, plan
 revision, disposition, work materialization, and later action proposals to
