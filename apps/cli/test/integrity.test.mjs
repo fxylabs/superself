@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, cpSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
 
@@ -61,7 +61,7 @@ const mixedBox = machine();
 const { demo: mixedDemo } = demoWorkspace(mixedBox);
 const mixedLog = join(mixedBox.root, "ws", ".superself", "projects", "demo", "log.jsonl");
 
-test("E2: lifecycle verbs target legacy-derived records and record entity events referencing them", () =>
+test("E2: lifecycle verbs target legacy-derived records and record entity events referencing them", async () =>
 {
     // A pre-cutover log fragment: a proposed decision and a convention, in
     // the event types only an old binary writes.
@@ -80,7 +80,7 @@ test("E2: lifecycle verbs target legacy-derived records and record entity events
     // Place the legacy convention by entity event, then withdraw it.
     must(mixedBox, mixedDemo, ["state", "place", "01hz00000000000000000000e2", "--priority", "5"]);
     assert.ok(must(mixedBox, mixedDemo, ["state", "show", "01hz00000000000000000000e2"]).out.includes("placement: project · full · priority 5"));
-    const dropped = must(mixedBox, mixedDemo, ["convention", "drop", "01hz00000000000000000000e2", "--why", "replaced by the gate"]);
+    const dropped = await approvedIn(mixedBox, mixedDemo, ["convention", "drop", "01hz00000000000000000000e2", "--why", "replaced by the gate"], "01hz00000000000000000000e2");
     assert.match(dropped.out, /entity\.retracted recorded/);
     assert.ok(!must(mixedBox, mixedDemo, ["context"]).out.includes("legacy standing rule"),
         "a legacy convention dropped through an entity event still renders");
@@ -123,7 +123,7 @@ test("E5: the done evidence refusal reads exactly as it did before the cutover",
 
 /* ── E6: honest output — the printed line names the entity event ───── */
 
-test("E6: one representative verb per family prints the entity event it records", () =>
+test("E6: one representative verb per family prints the entity event it records", async () =>
 {
     const box = machine();
     const { demo } = demoWorkspace(box);
@@ -136,7 +136,7 @@ test("E6: one representative verb per family prints the entity event it records"
     assert.match(must(box, demo, ["milestone", "reach", milestone]).out, /entity\.done recorded/);
     const work = workIdIn(must(box, demo, ["work", "add", "ship it"]).out);
     assert.match(must(box, demo, ["work", "start", work]).out, /entity\.started recorded/);
-    assert.match(must(box, demo, ["work", "retire", work, "--why", "moved on"]).out, /entity\.retired recorded/);
+    assert.match((await approvedIn(box, demo, ["work", "retire", work, "--why", "moved on"], work)).printed, /entity\.retired recorded/);
     const raw = must(box, demo, ["state", "add", "standing note"]).out.match(/\be-[0-9a-z]{5}\b/)[0];
     assert.match(must(box, demo, ["state", "place", raw, "--priority", "3"]).out, /entity\.placed recorded/);
 });

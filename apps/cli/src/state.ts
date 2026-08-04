@@ -33,6 +33,7 @@ import { entityId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
 import { ProjectContext, readRegistry, readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { countCharacters } from "./style.js";
 import { CliError, EventRefs, SelfEvent } from "./types.js";
 
@@ -263,11 +264,17 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     requireDemotionRoom(usage, caps, scope, demotions, false);
     const id = entityId();
     const proposed = values.proposed === true;
-    const events = [
-        makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", addPayload(model, id, text, exposure, scope, values, row), undefined, !proposed),
-        ...demotionEvents(ctx.project, demotions, id, proposed)
-    ];
-    recordEvents(ctx, events, `${id} ${text}`);
+    const payload = addPayload(model, id, text, exposure, scope, values, row);
+    // A proposal displaces nothing: its supersedes links wait for the confirm
+    // that makes them real, so the gate belongs there rather than here.
+    const displaced = proposed ? [] : supersedeTargets(payload);
+    recordRetirement(ctx, retirementIntent(model, "supersede", displaced), model,
+        (confirmation) => [
+            makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
+                confirmation === undefined ? payload : { ...payload, confirmation }, undefined, !proposed),
+            ...demotionEvents(ctx.project, demotions, id, proposed)
+        ],
+        `${id} ${text}`);
     console.log(id);
 }
 
@@ -888,7 +895,9 @@ function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>):
             : `${entity.id} was already superseded by ${entity.supersededBy ?? "a later entity"} — nothing is left to retract`);
     }
     const why = required(values.why);
-    recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why }, { retracts: entity.id }, true), entity.text);
+    recordRetirement(ctx, retirementIntent(model, "retract", [entity.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why, confirmation }, { retracts: entity.id }, true)],
+        entity.text);
 }
 
 /* ── the execution verbs (#197 §5, #205) ───────────────────────────── */
@@ -1024,7 +1033,9 @@ function stateExecRetire({ values, positionals }: CommandInput<typeof RETIRE_OPT
     {
         payload.successor = requireSuccessor(model, entity, values.successor).id;
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.retired", payload), entity.text);
+    recordRetirement(ctx, retirementIntent(model, "retire", [entity.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retired", { ...payload, confirmation })],
+        entity.text);
 }
 
 // The successor is resolved before anything is written: an unknown reference

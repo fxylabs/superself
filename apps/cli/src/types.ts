@@ -9,6 +9,11 @@ export interface EventRefs
 {
     confirms?: string;
     supersedes?: string[];
+    // The destructive event an `entity.restored` takes back. Naming the event
+    // rather than asserting a new state is what lets a withdrawal stay
+    // terminal against everything written in ignorance of it: an undo cannot
+    // have been written without seeing what it reverses.
+    annuls?: string;
     work?: string;
     // Git revisions in the project repo, and nothing else. Free-form evidence
     // is recorded as `payload.notes`, because everything listed here is handed

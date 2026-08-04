@@ -24,6 +24,7 @@ prints them during the same run.
 | Projects and state remotes | `project add [path] [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal set "<text>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
+| Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `artifact ...` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
@@ -35,6 +36,7 @@ The command catalogue currently includes these top-level verbs:
 ```text
 init workspace lang theme timezone project remote sync clone
 goal objective milestone decide work report artifact convention state alias
+undo
 connect view context status setup
 log search fold
 ```

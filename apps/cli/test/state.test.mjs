@@ -3,11 +3,15 @@
 // record kinds — which keep their own lifecycle verbs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = demoWorkspace(box);
 const self = (args) => selfIn(box, demo, args);
+
+// Destroying a record needs a person at a terminal (#173): the command line
+// runs in full and only the typed answer is stood in for.
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 function entityIn(text)
 {
@@ -44,13 +48,13 @@ test("a proposed entity waits for confirm, and confirming twice is named", () =>
     assert.match(again.out, /already confirmed/);
 });
 
-test("retract withdraws with a reason, is terminal, and stays findable in search", () =>
+test("retract withdraws with a reason, is terminal, and stays findable in search", async () =>
 {
     const id = entityIn(must(box, demo, ["state", "add", "temporary rule"]).out);
     const bare = self(["state", "retract", id]);
     assert.notEqual(bare.code, 0);
     assert.match(bare.out, /--why/);
-    must(box, demo, ["state", "retract", id, "--why", "no longer needed"]);
+    await approved(["state", "retract", id, "--why", "no longer needed"], id);
     assert.ok(!must(box, demo, ["state", "list"]).out.includes("temporary rule"));
     const shown = must(box, demo, ["state", "show", id]).out;
     assert.ok(shown.includes("retracted"));

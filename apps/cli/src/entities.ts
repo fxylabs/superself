@@ -290,6 +290,14 @@ export interface EntityFold
     // ids first is what lets a union merge order the confirm above the
     // proposal it answers.
     confirmations: Set<string>;
+    // Every destructive event an `entity.restored` took back, by id. An undo
+    // names the event it reverses rather than asserting a new state, so the
+    // fold skips what was annulled and every rule below keeps its shape:
+    // first-withdrawal-wins still holds among the withdrawals that stand.
+    // Binding to an id rather than to log order is also what keeps a merged
+    // log safe — two clones fold the same lines to the same state whatever
+    // order the merge produced.
+    annulled: Set<string>;
 }
 
 export function emptyEntityFold(): EntityFold
@@ -303,7 +311,8 @@ export function emptyEntityFold(): EntityFold
         retractions: [],
         links: [],
         coverage: [],
-        confirmations: new Set()
+        confirmations: new Set(),
+        annulled: new Set()
     };
 }
 
@@ -312,6 +321,21 @@ export function emptyEntityFold(): EntityFold
 // Creation events, the goal chain, and the supersession claims fold here, in
 // the same pass the rest of the model reads. The linking transitions run
 // through `reconcileEntity`, from this pass and the reconcile pass alike.
+// The annulments, read before anything else folds. A restoration can sit
+// below the event it reverses in a merged log, so the set is complete before
+// the first creation is read rather than accumulating alongside it.
+export function collectAnnulled(fold: EntityFold, events: SelfEvent[]): void
+{
+    for (const event of events)
+    {
+        const annuls = event.type === "entity.restored" ? event.refs?.annuls : undefined;
+        if (typeof annuls === "string" && annuls !== "")
+        {
+            fold.annulled.add(annuls);
+        }
+    }
+}
+
 export function applyEntity(fold: EntityFold, event: SelfEvent): void
 {
     if (event.type === "goal.set")
@@ -346,7 +370,7 @@ export function applyEntity(fold: EntityFold, event: SelfEvent): void
 // An `entity.confirmed` that names no proposal asserts a new record directly,
 // exactly as `decision.confirmed` does; with `refs.confirms` it is the
 // transition that answers one.
-function isEntityCreation(event: SelfEvent): boolean
+export function isEntityCreation(event: SelfEvent): boolean
 {
     return event.type === "entity.proposed"
         || (event.type === "entity.confirmed" && event.refs?.confirms === undefined);
@@ -368,7 +392,12 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
         ts: event.ts,
         text: String(event.payload.text ?? ""),
         labels,
-        links: readLinks(event.payload.links),
+        // An annulled creation keeps its record and loses only what it
+        // displaced: the accident an undo answers is a supersedes link that
+        // should never have been attached, not the record it was attached to.
+        links: fold.annulled.has(event.id)
+            ? readLinks(event.payload.links).filter((link) => link.type !== "supersedes")
+            : readLinks(event.payload.links),
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
         why: str(event.payload.why),
@@ -648,6 +677,10 @@ function applyRetractions(entities: EntityState[], fold: EntityFold): void
     const byId = new Map(entities.map((item) => [item.id, item]));
     for (const retraction of ordered(fold.retractions))
     {
+        if (fold.annulled.has(retraction.event))
+        {
+            continue;
+        }
         const target = byId.get(retraction.entity);
         if (target !== undefined && isLive(target))
         {
@@ -731,6 +764,10 @@ function applyExecutions(entities: EntityState[], fold: EntityFold): void
         left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
     for (const event of ordered)
     {
+        if (fold.annulled.has(event.event))
+        {
+            continue;
+        }
         const target = byId.get(event.entity);
         if (target !== undefined)
         {

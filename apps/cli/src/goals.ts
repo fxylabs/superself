@@ -24,6 +24,7 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { recordCoverage } from "./state.js";
 import { dim, errYellow, markdownHeadings, styled } from "./style.js";
 import { CliError } from "./types.js";
@@ -251,7 +252,10 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
         success: values.success ?? [],
         stop: values.stop ?? []
     };
-    recordEvent(ctx, makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", strip(payload), undefined, !proposed), `${id} ${outcome}`);
+    recordRetirement(ctx, retirementIntent(model, "supersede", proposed ? [] : supersedeTargets(payload)), model,
+        (confirmation) => [makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed)],
+        `${id} ${outcome}`);
     console.log(id);
 }
 
@@ -314,7 +318,10 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
         stop: values.stop ?? objective.stop,
         why
     };
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", strip(payload), undefined, true), `${id} ${why}`);
+    recordRetirement(ctx, retirementIntent(model, "supersede", [objective.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
+        `${id} ${why}`);
     console.log(id);
 }
 
@@ -380,7 +387,10 @@ function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_C
     const payload = values.as === "reached"
         ? strip({ entity: objective.id, report: values.why })
         : { entity: objective.id, why: values.why };
-    recordEvent(ctx, makeEvent(ctx.project, values.as === "reached" ? "entity.done" : "entity.retired", payload, undefined, true), `${objective.id} ${values.as}`);
+    recordRetirement(ctx, retirementIntent(model, "retire", values.as === "reached" ? [] : [objective.id]), model,
+        (confirmation) => [makeEvent(ctx.project, values.as === "reached" ? "entity.done" : "entity.retired",
+            confirmation === undefined ? payload : { ...payload, confirmation }, undefined, true)],
+        `${objective.id} ${values.as}`);
 }
 
 /* ── milestones ────────────────────────────────────────────────────── */
@@ -518,7 +528,10 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         after: (values.after ?? []).map((prefix) => requireSibling(objective, prefix)),
         target: values.target === undefined ? undefined : validDate(values.target)
     };
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", strip(payload), undefined, true), `${id} ${outcome}`);
+    recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload)), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
+        `${id} ${outcome}`);
     console.log(id);
 }
 
@@ -556,7 +569,10 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
         target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, milestone.target),
         why
     };
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", strip(payload), undefined, true), `${id} ${why}`);
+    recordRetirement(ctx, retirementIntent(model, "supersede", [milestone.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
+        `${id} ${why}`);
     console.log(id);
 }
 
@@ -565,7 +581,7 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
 // retirement of the execution grammar (#207 B12).
 function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>): void
 {
-    const { ctx, milestone } = milestoneTarget(positionals[0]);
+    const { ctx, model, milestone } = milestoneTarget(positionals[0]);
     const why = required(values.why);
     if (milestone.state === "reached")
     {
@@ -575,7 +591,10 @@ function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>)
     {
         throw new CliError(`${milestone.id} is already closed — ${milestone.reason}`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.retired", { entity: milestone.id, why }, undefined, true), `${milestone.id} ${why}`);
+    recordRetirement(ctx, retirementIntent(model, "retire", [milestone.id]), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retired",
+            { entity: milestone.id, why, ...(confirmation === undefined ? {} : { confirmation }) }, undefined, true)],
+        `${milestone.id} ${why}`);
 }
 
 // Sugar over the coverage grammar (#207 C5): `met` records the same

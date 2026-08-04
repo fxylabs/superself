@@ -4,11 +4,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { STATEMENT_TYPES } from "../dist/model.js";
-import { demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = demoWorkspace(box);
 const self = (args, cwd = demo) => selfIn(box, cwd, args);
+// Destroying a record needs a person at a terminal (#173): the command line
+// runs in full and only the typed answer is stood in for.
+const approved = (args, answer) => approvedIn(box, demo, args, answer);
 
 test("every statement type ships its lifecycle verbs in its own help", () =>
 {
@@ -25,22 +28,22 @@ test("every statement type ships its lifecycle verbs in its own help", () =>
     }
 });
 
-test("a proposed decision confirms, and a superseded one leaves the render", () =>
+test("a proposed decision confirms, and a superseded one leaves the render", async () =>
 {
     const proposed = idIn(must(box, demo, ["decide", "first direction", "--proposed"]).out);
     must(box, demo, ["decide", "confirm", proposed]);
-    const successor = must(box, demo, ["decide", "second direction", "--why", "replaces the first", "--supersedes", proposed]);
+    const successor = await approved(["decide", "second direction", "--why", "replaces the first", "--supersedes", proposed], proposed);
     assert.equal(successor.code, 0);
     const context = must(box, demo, ["context"]).out;
     assert.ok(context.includes("second direction"));
     assert.ok(!context.includes("first direction"), "a superseded decision still renders as current");
 });
 
-test("a dropped convention leaves the render and stays in search", () =>
+test("a dropped convention leaves the render and stays in search", async () =>
 {
     const id = idIn(must(box, demo, ["convention", "add", "state changes go through events"]).out);
     assert.ok(must(box, demo, ["context"]).out.includes("state changes go through events"));
-    must(box, demo, ["convention", "drop", id, "--why", "replaced by the event gate"]);
+    await approved(["convention", "drop", id, "--why", "replaced by the event gate"], id);
     assert.ok(!must(box, demo, ["context"]).out.includes("state changes go through events"));
     assert.ok(must(box, demo, ["search", "state changes go through"]).out.includes("state changes"), "a dropped convention vanished from history");
 });
@@ -60,10 +63,10 @@ test("the work spine: add, start, report, evidenced done as a judgment", () =>
     assert.ok(must(box, demo, ["work", "show", work]).out.includes("tier landed"), "the report history left the record");
 });
 
-test("a retired unit stops counting as open and keeps its why", () =>
+test("a retired unit stops counting as open and keeps its why", async () =>
 {
     const work = workIdIn(must(box, demo, ["work", "add", "a direction given up"]).out);
-    must(box, demo, ["work", "retire", work, "--why", "superseded by the fast tier"]);
+    await approved(["work", "retire", work, "--why", "superseded by the fast tier"], work);
     assert.ok(!must(box, demo, ["work"]).out.includes("a direction given up"));
     assert.ok(must(box, demo, ["work", "show", work]).out.includes("superseded by the fast tier"));
 });
