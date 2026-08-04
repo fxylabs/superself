@@ -10,7 +10,7 @@
 - A change that adds a flat top-level subsystem, a second path around a single
   gate, or a sibling event namespace is sent back regardless of how it tests.
 
-<!-- superself:begin -->
+<!-- superself:begin v0.5.1 -->
 ## Project state (superself)
 
 Project state — goals, decisions, work units, reports — is version-controlled
@@ -25,50 +25,21 @@ command is unavailable.
 - Substantive work attaches to a work unit: `self work add "<required outcome>"`,
   then `self work start <id>`. Report progress with `self report <id> "<summary>"`
   after committing — HEAD is attached as evidence automatically.
-- The long-term goal and time-boxed objectives are separate state: `self goal set`
-  keeps the goal, `self objective add "<outcome>" --target <date>`
-  adds an objective, and `self milestone add "<outcome>" --objective <id> --exit "<criterion>"`
-  adds a checkpoint under it. `self objective` lists both with the reason for each state.
-- Every asserted record — goal, decision, convention, objective, milestone, work —
-  folds into one entity with placement. `self state` lists them all,
-  `self state show <id>` prints one, and `self state add "<text>" --label <l>`
-  records a free-labeled one; `self alias add <verb>` makes a verb of a label.
-- A record's text is immutable once confirmed, so a correction restates it, and
-  every add verb spells that the same way: `--supersedes <id>` records the new
-  wording and carries the lineage — `self state add "<corrected text>" --supersedes <id>`,
-  and for a unit's outcome `self work add "<corrected outcome>" --supersedes <id>
-  --why "<why it moved>"`, which retires the unit it replaces. `retract` withdraws a
-  record with nothing replacing it, and retire is for an outcome given up or moved
-  — neither is a wording fix.
-- Placement is scope × priority × exposure. `self state place <id> [--priority <n>]
-  [--exposure full|index|search] [--scope project|workspace]` moves what context
-  renders; a demotion records `--why`, and demoting out of full waits for the user:
-  pass `--proposed`, then the user runs `self state confirm <id>`.
-- Retention caps bound the rendered tiers. Past a cap, `state add` and `state place`
-  refuse until `--demote <id>` names what frees the room — pass `--proposed` so the
-  add and the demotion land as a pair waiting on the user.
-- A workspace-scoped record renders in every project's context: `--scope workspace`
-  on a state or alias verb, or `self convention add "<text>" --workspace`.
-- State what work contributes to: `self work link <id> --milestone <id>`. A milestone
-  is reached only when every exit criterion is covered — `self milestone met <id>
-  --criterion <c> --why "<how the evidence covers it>"`, then `self milestone reach <id>`.
-  Finishing work never reaches a milestone on its own, and progress is never a percentage.
-- Revising an objective or a milestone leaves what it already settled stale. Re-judge it
-  at the current revision with `self milestone recheck <id> --criterion <c> --why "<what
-  you re-judged>"` — a reach still needs every live criterion covered first.
-- Done is a judgment, and the claim must carry evidence: `self work done <id>` closes
-  the unit only when a report carries a commit or an artifact, or the done itself
-  states one — `self work done <id> --report "<what verifiably happened>"`.
-  A bare claim is refused, and declared criteria gate done until each is covered.
-- Found a gap between an objective and current state? Propose the work with
-  `self work propose` and its full brief; the user accepts or declines it.
+- Done is a judgment, and the claim must carry evidence: `self work done <id>`
+  closes the unit only when a report carries a commit or an artifact, or the
+  done itself states one — `self work done <id> --report "<what verifiably
+  happened>"`. A bare claim is refused, and declared criteria gate it.
+- A record's text is immutable once confirmed, so a correction restates it:
+  `--supersedes <id>` on any add verb records the new wording and carries the
+  lineage. `retract` withdraws a record with nothing replacing it, and `retire`
+  is for an outcome given up or moved — neither is a wording fix.
 - Record decisions the user confirmed: `self decide "<text>" --why "<reason>"`.
   Use `--proposed` when the user has not confirmed. One decision per event.
 - Blocked? `self work block <id> --on decision|dependency|external --why "..."`.
-- Superseded or moved to another unit or project? `self work retire <id> --why "..."
-  [--successor <work-id>]` — never mark it done and never leave it falsely blocked.
-- Picking up existing work? `self work show <id>` prints its full brief and
-  report history. Leave a brief for the next session with `self report <id> --file <path>`.
+  Superseded or moved? `self work retire <id> --why "..." [--successor <id>]` —
+  never mark it done and never leave it falsely blocked.
+- Found a gap between an objective and current state? Propose the work with
+  `self work propose` and its full brief; the user accepts or declines it.
 - Proposed next work, or suggested continuing in the next session, and the
   user approved? Register it with `self work add` right then, with the
   context behind the proposal — an approved plan that is never registered is lost.
@@ -77,8 +48,18 @@ command is unavailable.
   pitfalls — a bare outcome line loses the context that created the work.
 - A branch reaches main through a GitHub pull request: PR review and CI own
   merge control. superself owns context and the work graph, not the merge gate.
-- Search past state with `self search <query>`; list work with `self work`.
 - Never hand-edit generated state files or anything under `.superself/`.
+
+This block is the short form. The installed CLI carries the rest — what each
+concept is, when to reach for it, and the order the verbs go in:
+
+- `self help agents` — how a session drives this CLI, start to finish
+- `self help context` — what `self context` renders, and why something is missing from it
+- `self help records` — one entity behind every record kind, and how a record is corrected
+- `self help placement` — scope, priority and exposure — how a record earns its place in context
+- `self help work` — the work graph: outcomes, evidence, criteria, and proposals
+- `self help goals` — the long-term goal, objectives, milestones, and what reaching one takes
+- `self help workspace` — the store, the projects in it, and moving it between machines
 
 ### Conventions
 
