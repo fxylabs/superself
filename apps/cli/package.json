@@ -1,6 +1,6 @@
 {
   "name": "superself",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Version control for your project's state. Installs the `self` CLI.",
   "license": "Apache-2.0",
   "repository": {

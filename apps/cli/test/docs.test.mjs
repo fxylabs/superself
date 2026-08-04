@@ -271,7 +271,9 @@ test("event names the documents mention are the vocabulary the CLI writes", () =
 
 /* ── proof 4: the checked-in managed blocks carry the shipped template ── */
 
-const BLOCK_BEGIN = "<!-- superself:begin -->";
+// The marker carries the version that rendered it (#221), so a block is found
+// by its prefix — a pinned literal would only match one release.
+const BLOCK_BEGIN = "<!-- superself:begin";
 const BLOCK_END = "<!-- superself:end -->";
 
 function managedBlock(name, content)

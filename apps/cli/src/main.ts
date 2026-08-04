@@ -9,6 +9,7 @@ import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Re
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { isLive, requireSupersedeKind } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
+import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
@@ -142,7 +143,15 @@ function helpText(argv: string[]): string | null
         return commandUsage(command);
     }
     const alias = name === undefined ? null : resolveAliasCommand(process.cwd(), name);
-    return alias === null ? rootUsage(COMMANDS) : commandUsage(alias);
+    if (alias !== null)
+    {
+        return commandUsage(alias);
+    }
+    // A concept page answers the question a syntax page cannot (#221). It is
+    // resolved last, so a name a command or an alias verb owns is never taken
+    // by a topic.
+    const topic = findTopic(name);
+    return topic === undefined ? rootUsage(COMMANDS) : topicPage(topic);
 }
 
 // After `--` a flag is a positional the user meant literally, not a request.
