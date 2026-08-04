@@ -78,6 +78,22 @@ export function countCharacters(text: string): number
     return Array.from(text).length;
 }
 
+// What that character count costs in context tokens. Rounded up, so a cap is
+// never passed by a fraction the render then spends. The scale is a store
+// setting a measurement replaces (#213) — there is no second counter here,
+// only a conversion of the one above.
+export function tokensOf(characters: number, perCharacter: number): number
+{
+    return Math.ceil(characters * perCharacter);
+}
+
+// The characters a token budget buys, the same conversion read backwards.
+// Rounded down for the same reason the other rounds up.
+export function charactersFor(tokens: number, perCharacter: number): number
+{
+    return Math.floor(tokens / perCharacter);
+}
+
 // Truncation in the same unit the counting charges, so a cut can never split
 // a surrogate pair and change the count it was made against.
 export function takeCharacters(text: string, count: number): string

@@ -309,10 +309,18 @@ export interface StoreConfig
     // The zone every target date is judged in. Without it the same log would
     // read on-track on one machine and missed on another.
     timezone?: string;
-    // The retention caps (#197 §4), user-set in the store's config.json and
-    // enforced by the entity verbs: full in characters of entity text, index
-    // in entities, each per scope. They gate `state add` and `state place`
-    // only — rendering never refuses, however far over a legacy store stands.
+    // The retention caps (#197 §4, #213), user-set in the store's config.json
+    // and enforced by the entity verbs: both tiers in context tokens, each per
+    // scope. They gate `state add` and `state place` only — rendering never
+    // refuses, however far over a legacy store stands.
+    fullTokens?: number;
+    indexTokens?: number;
+    // What one character costs in tokens, and whether that number came from a
+    // real measurement or is still the shipped estimate. `self tokens` records
+    // an observation; nothing else writes these.
+    tokensPerCharacter?: number;
+    tokensMeasured?: boolean;
+    // Retired by #213 and never read as a cap again — see requireTokenCaps.
     fullCap?: number;
     indexCap?: number;
     // The alias table (#207 A): user rows over the built-in preset defaults,
@@ -343,17 +351,82 @@ export interface RetentionCaps
     index: number;
 }
 
-// The defaults are user-ruled (2026-08-03): full ≤ 4,000 characters because
-// tokens are the real constraint, index ≤ 50 entities. A malformed configured
-// value reads as the default rather than as no cap at all.
+// The defaults are user-ruled (2026-08-05): the full tier ≤ 1,000 tokens, the
+// index tier ≤ 12,000. The index cap is deliberately the larger — a cap
+// measures what a store may hold, the render budget measures what one render
+// may spend, and the budget already cuts rows and leaves a pointer to the rest.
+// A malformed configured value reads as the default rather than as no cap.
 export function retentionCaps(config: StoreConfig): RetentionCaps
 {
-    return { full: capValue(config.fullCap, 4_000), index: capValue(config.indexCap, 50) };
+    requireTokenCaps(config);
+    return { full: capValue(config.fullTokens, 1_000), index: capValue(config.indexTokens, 12_000) };
 }
 
 function capValue(value: number | undefined, fallback: number): number
 {
     return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+// What each retired key measured, and the key that replaced it.
+const RETIRED_CAPS = [
+    { old: "fullCap", now: "fullTokens", measured: "characters of full-exposure text" },
+    { old: "indexCap", now: "indexTokens", measured: "index entities" }
+] as const;
+
+// A store written against the character-and-count caps is refused rather than
+// re-interpreted (#213). `indexCap` counts entities, which has no conversion
+// into tokens at all, so reading either key as a token cap would change what
+// the store enforces without ever saying so.
+function requireTokenCaps(config: StoreConfig): void
+{
+    for (const { old, now, measured } of RETIRED_CAPS)
+    {
+        if (config[old] !== undefined)
+        {
+            throw new CliError(`config.json still sets ${old}, which counted ${measured}; caps are measured in `
+                + `context tokens now — ${remedy(old, now, config)}`);
+        }
+    }
+}
+
+// What to do about the retired key. Where the new key is already set the old
+// one is only in the way; where it is not, the refusal names the value to put
+// there — converted for a character count, and stated as the default for an
+// entity count, which converts into nothing.
+function remedy(old: string, now: "fullTokens" | "indexTokens", config: StoreConfig): string
+{
+    if (config[now] !== undefined)
+    {
+        return `${now} is already set, so remove ${old}`;
+    }
+    if (old === "indexCap")
+    {
+        return `replace it with ${now} (an entity count has no token conversion; the default is 12,000)`;
+    }
+    const characters = capValue(config.fullCap, 4_000);
+    return `replace it with ${now} (${characters} characters is about `
+        + `${Math.ceil(characters * tokenScale(config).perCharacter)} tokens)`;
+}
+
+export const DEFAULT_TOKENS_PER_CHARACTER = 0.25;
+
+export interface TokenScale
+{
+    perCharacter: number;
+    // False while the ratio is the shipped estimate, so every number derived
+    // from it can say which it is.
+    measured: boolean;
+}
+
+// The conversion the caps and the render budget both speak through. A value
+// outside (0, 1] reads as absent: no tokenizer emits more tokens than the text
+// has characters, so such a number is a mistyped entry rather than a setting.
+export function tokenScale(config: StoreConfig): TokenScale
+{
+    const value = config.tokensPerCharacter;
+    return typeof value === "number" && value > 0 && value <= 1
+        ? { perCharacter: value, measured: config.tokensMeasured === true }
+        : { perCharacter: DEFAULT_TOKENS_PER_CHARACTER, measured: false };
 }
 
 // settled: reachable from the default branch — counts as progress, final.

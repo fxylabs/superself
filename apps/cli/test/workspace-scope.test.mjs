@@ -27,7 +27,9 @@ function setCaps(caps, root = ws)
 {
     const file = join(root, ".superself", "config.json");
     const config = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-    writeFileSync(file, JSON.stringify({ ...config, ...caps }) + "\n");
+    // One token per character, so the cap below is the character count of the
+    // text it gates (#213).
+    writeFileSync(file, JSON.stringify({ ...config, tokensPerCharacter: 1, tokensMeasured: true, ...caps }) + "\n");
 }
 
 function otherContext()
@@ -72,17 +74,17 @@ let capShared;
 
 test("D4: the caps count per scope value, so the tiers fill and gate independently", () =>
 {
-    setCaps({ indexCap: 1 }, capWs);
+    setCaps({ indexTokens: 14 }, capWs);
     must(capBox, capDemo, ["state", "add", "project seat"]);
     const projectRefused = capSelf(["state", "add", "one over"]);
     assert.notEqual(projectRefused.code, 0);
-    assert.match(projectRefused.out, /the project index tier holds 1 of 1 entities/);
+    assert.match(projectRefused.out, /the project index tier holds 12 of 14 tokens/);
     // The full project tier does not gate the workspace tier: the first
     // workspace add still fits, and only the second hits the workspace cap.
     capShared = entityIn(must(capBox, capDemo, ["state", "add", "workspace seat", "--scope", "workspace"]).out);
     const workspaceRefused = capSelf(["state", "add", "workspace over", "--scope", "workspace"]);
     assert.notEqual(workspaceRefused.code, 0);
-    assert.match(workspaceRefused.out, /the workspace index tier holds 1 of 1 entities/);
+    assert.match(workspaceRefused.out, /the workspace index tier holds 14 of 14 tokens/);
 });
 
 test("D5: a capped workspace tier refuses with the same one-pass shape, and --demote frees it", () =>

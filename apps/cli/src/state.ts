@@ -16,8 +16,6 @@ import {
     executionSummary,
     Exposure,
     EXPOSURES,
-    fullTierCharacters,
-    indexTierCount,
     isCurrent,
     isDemotion,
     isLive,
@@ -26,15 +24,27 @@ import {
     orderEntities,
     pendingSummary,
     requireSupersedeKind,
+    tierCharacters,
     uncoveredCriteria
 } from "./entities.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { entityId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { ProjectContext, readRegistry, readScopes, readStoreConfig, requireProject, retentionCaps, RetentionCaps, SCOPE_OPTIONS } from "./paths.js";
+import {
+    ProjectContext,
+    readRegistry,
+    readScopes,
+    readStoreConfig,
+    requireProject,
+    retentionCaps,
+    RetentionCaps,
+    SCOPE_OPTIONS,
+    tokenScale,
+    TokenScale
+} from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
-import { countCharacters } from "./style.js";
+import { countCharacters, tokensOf } from "./style.js";
 import { CliError, EventRefs, SelfEvent } from "./types.js";
 
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
@@ -172,11 +182,12 @@ export const STATE_COMMAND: Command = {
         "full is human-owned: an agent passes --proposed, and the move waits until",
         "a person runs `state confirm <id>`.",
         "",
-        "retention caps (config.json fullCap and indexCap; defaults 4,000 characters",
-        "of full-exposure text and 50 index entities, per scope) gate add and place",
-        "into a tier: past a cap the verb refuses until --demote names what frees",
-        "the room. An agent adds --proposed to land the add and the demotion as a",
-        "pair that waits on a person; rendering itself never refuses.",
+        "retention caps (config.json fullTokens and indexTokens; defaults 1,000 and",
+        "12,000 context tokens, per scope) gate add and place into a tier: past a",
+        "cap the verb refuses until --demote names what frees the room, and every",
+        "number in that refusal is a token count. An agent adds --proposed to land",
+        "the add and the demotion as a pair that waits on a person; rendering itself",
+        "never refuses. `self tokens` records what a character costs.",
         "",
         "  --label <text>        free label, repeatable; presets use goal, objective, convention, …",
         "  --priority <n>        render order: a whole number, 0 first; leave gaps (0, 10, 20)",
@@ -257,11 +268,13 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const exposure = values.exposure !== undefined ? validExposure(values.exposure) : row?.exposure ?? "index";
     const scope = validScope(values.scope ?? "project");
-    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
-    const usage = usageReader(ctx, model);
+    const config = readStoreConfig(ctx.storeDir);
+    const caps = retentionCaps(config);
+    const scale = tokenScale(config);
+    const usage = usageReader(ctx, model, scale);
     const demotions = demotionsFor(model, values.demote ?? [], tierOf(scope, exposure), undefined, row === undefined ? ADD_USAGE : `${row.label} add "<text>"`);
-    requireRoom(usage, caps, tierOf(scope, exposure), countCharacters(text), demotions);
-    requireDemotionRoom(usage, caps, scope, demotions, false);
+    requireRoom(usage, caps, tierOf(scope, exposure), countCharacters(text), demotions, scale);
+    requireDemotionRoom(usage, caps, scope, demotions, 0, scale);
     const id = entityId();
     const proposed = values.proposed === true;
     const payload = addPayload(model, id, text, exposure, scope, values, row);
@@ -325,13 +338,18 @@ function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>)
     const scope = values.scope === undefined ? undefined : validScope(values.scope);
     requirePlacementChange(entity, priority, exposure, scope);
     const why = requireDemotionWhy(entity, exposure, values.why);
-    const caps = retentionCaps(readStoreConfig(ctx.storeDir));
-    const usage = usageReader(ctx, model);
+    const config = readStoreConfig(ctx.storeDir);
+    const caps = retentionCaps(config);
+    const scale = tokenScale(config);
+    const usage = usageReader(ctx, model, scale);
     const entered = enteredTier(entity, exposure, scope);
     const demotions = demotionsFor(model, values.demote ?? [], entered, entity.id, PLACE_USAGE);
-    requireRoom(usage, caps, entered, countCharacters(entity.text), demotions);
-    const vacatesIndex = entered !== undefined && entity.scope === entered.scope && entity.exposure === "index";
-    requireDemotionRoom(usage, caps, entered?.scope ?? entity.scope, demotions, vacatesIndex);
+    requireRoom(usage, caps, entered, countCharacters(entity.text), demotions, scale);
+    // The room the placed record itself frees when it leaves that scope's
+    // index for full, so a swap at an exactly-full cap still passes.
+    const vacates = entered !== undefined && entity.scope === entered.scope && entity.exposure === "index"
+        ? countCharacters(entity.text) : 0;
+    requireDemotionRoom(usage, caps, entered?.scope ?? entity.scope, demotions, vacates, scale);
     const proposed = values.proposed === true;
     const events = [
         makeEvent(ctx.project, "entity.placed", placePayload(entity.id, priority, exposure, scope, why, proposed), undefined, !proposed),
@@ -452,14 +470,16 @@ function enteredTier(entity: EntityState, exposure: Exposure | undefined, scope:
     return { scope: toScope, tier: toExposure };
 }
 
-// What a capped tier currently holds. The project tiers count this project's
-// entities; the workspace tier is one rendered set across every registered
-// project (#207 D1), so its usage counts workspace-scoped entities from every
-// store — the entity's events stay in their home store, and only the count
-// travels. Memoized per invocation: the folds behind it are not free.
+// What a capped tier currently holds, in tokens. The project tiers count this
+// project's entities; the workspace tier is one rendered set across every
+// registered project (#207 D1), so its usage counts workspace-scoped entities
+// from every store — the entity's events stay in their home store, and only
+// the count travels. Characters are summed across stores and converted once,
+// so the answer never drifts by a rounding per store. Memoized per
+// invocation: the folds behind it are not free.
 type UsageReader = (scope: EntityScope, tier: "full" | "index") => number;
 
-function usageReader(ctx: ProjectContext, model: ProjectModel): UsageReader
+function usageReader(ctx: ProjectContext, model: ProjectModel, scale: TokenScale): UsageReader
 {
     const cache = new Map<string, number>();
     return (scope, tier) =>
@@ -470,77 +490,67 @@ function usageReader(ctx: ProjectContext, model: ProjectModel): UsageReader
         {
             return cached;
         }
-        const count = (entities: EntityState[]): number =>
-            tier === "full" ? fullTierCharacters(entities, scope) : indexTierCount(entities, scope);
-        let total = count(model.entities);
+        let characters = tierCharacters(model.entities, scope, tier);
         if (scope === "workspace")
         {
             for (const entry of readRegistry(ctx.storeDir).filter((item) => item.slug !== ctx.project))
             {
-                total += count(buildModel(ctx.storeDir, entry.slug, new Date()).entities);
+                characters += tierCharacters(buildModel(ctx.storeDir, entry.slug, new Date()).entities, scope, tier);
             }
         }
+        const total = tokensOf(characters, scale.perCharacter);
         cache.set(key, total);
         return total;
     };
 }
 
-function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTier | undefined, adding: number, demotions: EntityState[]): void
+// Both capped tiers are measured the same way now (#213), so one check answers
+// for both: what the tier holds in tokens, what this text adds, and what the
+// named demotions free.
+function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTier | undefined,
+    adding: number, demotions: EntityState[], scale: TokenScale): void
 {
-    if (entered?.tier === "full")
+    if (entered === undefined)
     {
-        requireFullRoom(usage, entered.scope, caps.full, adding, demotions);
+        return;
     }
-    else if (entered?.tier === "index")
-    {
-        requireIndexRoom(usage, entered.scope, caps.index, demotions);
-    }
+    const cap = entered.tier === "full" ? caps.full : caps.index;
+    requireTokenRoom(usage, entered, cap, tokensOf(adding, scale.perCharacter), demotions, scale);
 }
 
-// One refusal hands the whole contract: the cap, the current usage, and the
-// exact command shape that names a demotion.
-function requireFullRoom(usage: UsageReader, scope: EntityScope, cap: number, adding: number, demotions: EntityState[]): void
+// One refusal hands the whole contract: the cap, what the tier holds, what
+// this adds, and the exact command shape that names a demotion. Every number
+// is in tokens, and an unmeasured scale says so — a caller choosing what to
+// demote is owed a real number rather than a row count (#213).
+function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
+    adding: number, demotions: EntityState[], scale: TokenScale): void
 {
-    const held = usage(scope, "full");
+    const held = usage(entered.scope, entered.tier);
     if (held + adding <= cap)
     {
-        requireDemotionsNeeded(demotions, scope, "full");
+        requireDemotionsNeeded(demotions, entered.scope, entered.tier);
         return;
     }
     if (demotions.length === 0)
     {
-        throw new CliError(`the ${scope} full tier holds ${held} of ${cap} characters and this text adds ${adding} more — `
-            + "name what demotes: pass `--demote <id>` (that full entity moves to index), "
-            + 'or demote first with `self state place <id> --exposure index --why "<reason>"`');
+        throw new CliError(`the ${entered.scope} ${entered.tier} tier holds ${held} of ${cap} tokens `
+            + `and this text adds ${adding} more${estimateNote(scale)} — name what demotes: pass `
+            + `\`--demote <id>\` (that ${entered.tier} entity moves to ${DEMOTION_TARGET[entered.tier]}), or demote `
+            + `first with \`self state place <id> --exposure ${DEMOTION_TARGET[entered.tier]} --why "<reason>"\``);
     }
-    const freed = demotions.reduce((sum, item) => sum + countCharacters(item.text), 0);
+    const freed = tokensOf(demotions.reduce((sum, item) => sum + countCharacters(item.text), 0), scale.perCharacter);
     if (held - freed + adding > cap)
     {
-        throw new CliError(`still ${held - freed + adding - cap} characters over the ${cap}-character full cap `
-            + `after the named demotion${demotions.length === 1 ? "" : "s"} — name more with --demote`);
+        throw new CliError(`still ${held - freed + adding - cap} tokens over the ${cap}-token ${entered.tier} cap `
+            + `after the named demotion${demotions.length === 1 ? "" : "s"}, which free ${freed} — name more with --demote`);
     }
 }
 
-function requireIndexRoom(usage: UsageReader, scope: EntityScope, cap: number, demotions: EntityState[]): void
+// Said once wherever a token number is printed, so a reader always knows
+// whether the figure came from a measurement or from the shipped estimate.
+function estimateNote(scale: TokenScale): string
 {
-    const held = usage(scope, "index");
-    if (held < cap)
-    {
-        requireDemotionsNeeded(demotions, scope, "index");
-        return;
-    }
-    if (demotions.length === 0)
-    {
-        throw new CliError(`the ${scope} index tier holds ${held} of ${cap} entities — `
-            + "name what demotes: pass `--demote <id>` (that index entity moves to search), "
-            + 'or demote first with `self state place <id> --exposure search --why "<reason>"`');
-    }
-    const over = held - demotions.length + 1 - cap;
-    if (over > 0)
-    {
-        throw new CliError(`still ${over} over the ${cap}-entity index cap after `
-            + `${demotions.length} named demotion${demotions.length === 1 ? "" : "s"} — name more with --demote`);
-    }
+    return scale.measured ? "" : ` (estimated at ${scale.perCharacter} tokens per character; \`self tokens\` records a measurement)`;
 }
 
 // A named full → index demotion enters the index tier itself — the gating
@@ -548,18 +558,20 @@ function requireIndexRoom(usage: UsageReader, scope: EntityScope, cap: number, d
 // destination lacks room, toward the drain that always fits: index → search.
 // `vacates` is the seat the placed record itself frees when it leaves that
 // scope's index for full, so a swap at an exactly-full cap still passes.
-function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, scope: EntityScope, demotions: EntityState[], vacates: boolean): void
+function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, scope: EntityScope,
+    demotions: EntityState[], vacates: number, scale: TokenScale): void
 {
-    const entering = demotions.filter((item) => item.exposure === "full").length;
-    if (entering === 0)
+    const arriving = demotions.filter((item) => item.exposure === "full");
+    if (arriving.length === 0)
     {
         return;
     }
-    const after = usage(scope, "index") + entering - (vacates ? 1 : 0);
+    const entering = tokensOf(arriving.reduce((sum, item) => sum + countCharacters(item.text), 0), scale.perCharacter);
+    const after = usage(scope, "index") + entering - tokensOf(vacates, scale.perCharacter);
     if (after > caps.index)
     {
-        throw new CliError(`the named demotion${entering === 1 ? "" : "s"} would put the ${scope} index tier at `
-            + `${after} of ${caps.index} entities — free index room first with `
+        throw new CliError(`the named demotion${arriving.length === 1 ? "" : "s"} would put the ${scope} index tier at `
+            + `${after} of ${caps.index} tokens${estimateNote(scale)} — free index room first with `
             + '`self state place <id> --exposure search --why "<reason>"`');
     }
 }
@@ -597,21 +609,21 @@ function unitMoves(unit: ConfirmMember[]): SeatMove[]
 // same crediting the write path does — under the same counts the write
 // verbs gate on. A tier the unit only drains is never gated, so an over-cap
 // store keeps its way down.
-function requireUnitRoom(usage: UsageReader, caps: RetentionCaps, unit: ConfirmMember[]): void
+function requireUnitRoom(usage: UsageReader, caps: RetentionCaps, unit: ConfirmMember[], scale: TokenScale): void
 {
     const moves = unitMoves(unit);
     for (const scope of ["project", "workspace"] as const)
     {
         for (const tier of ["full", "index"] as const)
         {
-            requireTierRoom(usage, caps, { scope, tier }, moves);
+            requireTierRoom(usage, caps, { scope, tier }, moves, scale);
         }
     }
 }
 
-function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier, moves: SeatMove[]): void
+function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier, moves: SeatMove[], scale: TokenScale): void
 {
-    const weigh = (move: SeatMove): number => at.tier === "full" ? move.characters : 1;
+    const weigh = (move: SeatMove): number => tokensOf(move.characters, scale.perCharacter);
     const inTier = (seat: { scope: EntityScope; exposure: Exposure } | undefined): boolean =>
         seat !== undefined && seat.scope === at.scope && seat.exposure === at.tier;
     const entering = moves.filter((move) => inTier(move.to)).reduce((sum, move) => sum + weigh(move), 0);
@@ -625,7 +637,7 @@ function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier
     if (held + entering - leaving > cap)
     {
         throw new CliError(`confirming this would put the ${at.scope} ${at.tier} tier over its cap `
-            + `(${held} of ${cap} ${at.tier === "full" ? "characters" : "entities"} held) — `
+            + `(${held} of ${cap} tokens held)${estimateNote(scale)} — `
             + `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[at.tier]} --why "<reason>"\``);
     }
 }
@@ -713,7 +725,9 @@ function stateConfirm({ positionals }: CommandInput): void
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const entity = requireEntity(model, positionals[0], "state confirm <id>");
     const unit = confirmableUnit(model, entity);
-    requireUnitRoom(usageReader(ctx, model), retentionCaps(readStoreConfig(ctx.storeDir)), unit);
+    const config = readStoreConfig(ctx.storeDir);
+    const scale = tokenScale(config);
+    requireUnitRoom(usageReader(ctx, model, scale), retentionCaps(config), unit, scale);
     recordEvents(ctx, unit.map((member) => confirmEvent(ctx.project, member)), entity.text);
 }
 
