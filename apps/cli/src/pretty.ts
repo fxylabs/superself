@@ -759,7 +759,7 @@ const OPEN_FIRST: Record<string, number> = { active: 0, blocked: 1, next: 2 };
 
 // `self context` on a terminal is the same state the piped render carries,
 // ordered for a glance: what is moving, what waits on a person, then the
-// standing rules. It never runs through the 12,000-character budget — that cap
+// standing rules. It never runs through the 3,000-token budget — that cap
 // exists to fit an agent's window, and a terminal has no such window.
 export function renderContext(input: SurfaceInput): string[]
 {

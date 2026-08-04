@@ -39,6 +39,7 @@ import {
     requireWorkspace,
     SCOPE_OPTIONS,
     siblingSlug,
+    tokenScale,
     STORE_DIR,
     StoreConfig,
     WORKSPACE_SCOPE_OPTIONS
@@ -357,6 +358,22 @@ export const COMMANDS: Command[] = [
             "Asia/Seoul, set it and re-render every project view."
         ],
         node: leaf("", {}, 1, ({ positionals }) => cmdTimezone(positionals[0]))
+    },
+    {
+        name: "tokens",
+        usage: [{ syntax: "tokens [<tokens> <characters>]", description: ["show or record what a character costs in context tokens"], verbs: [""] }],
+        detail: [
+            "the retention caps and the context budget are stated in tokens, and the",
+            "CLI counts characters, so one number converts between them. With no",
+            "arguments, print it and say whether it was measured or is still the",
+            "shipped estimate.",
+            "",
+            "with a measurement — the tokens some text cost and the characters it",
+            "held — record it, and every cap and budget reads through it from then on.",
+            "a session's own model cannot see what one tool result cost, so the",
+            "number comes from a token-counting call or from what a harness reported."
+        ],
+        node: leaf("", {}, 2, ({ positionals }) => cmdTokens(positionals[0], positionals[1]))
     },
     {
         name: "project",
@@ -723,7 +740,7 @@ export const COMMANDS: Command[] = [
             "decisions, everything asserted — in priority order and at their exposure,",
             "with the derived live state (work moving, waits, deadlines) anchored after",
             "the full-text block.",
-            "piped output is capped at 12,000 characters per project; every omission names",
+            "piped output is capped at 3,000 context tokens per project; every omission names",
             "the command that recovers the omitted state in full.",
             "a terminal gets the ruled render instead, which carries no cap; --plain forces",
             "the capped agent output anywhere, --pretty forces the ruled render.",
@@ -933,6 +950,38 @@ function cmdTheme(name: string | undefined): void
     const theme = validTheme(name);
     writeConfig(ctx, { theme }, `theme set ${theme}`);
     console.log(`views now render with the "${theme}" accent`);
+}
+
+function cmdTokens(tokens: string | undefined, characters: string | undefined): void
+{
+    const ctx = requireWorkspace(process.cwd());
+    if (tokens === undefined)
+    {
+        const scale = tokenScale(readStoreConfig(ctx.storeDir));
+        console.log(`${scale.perCharacter} tokens per character — ${scale.measured ? "measured" : "the shipped estimate"}`);
+        return;
+    }
+    const measured = countArgument(tokens, "tokens");
+    const held = countArgument(characters, "characters");
+    if (measured > held)
+    {
+        throw new CliError(`${measured} tokens from ${held} characters — no tokenizer emits more tokens than the text has `
+            + "characters, so the arguments are the wrong way round: `self tokens <tokens> <characters>`");
+    }
+    writeConfig(ctx, { tokensPerCharacter: measured / held, tokensMeasured: true },
+        `tokens measured at ${measured / held} per character`);
+    console.log(`${measured / held} tokens per character — measured from ${measured} tokens of ${held} characters`);
+}
+
+// Both arguments are counts of real things, so both are whole and positive.
+function countArgument(value: string | undefined, name: string): number
+{
+    const parsed = Number(requireText(value, "tokens [<tokens> <characters>]"));
+    if (!Number.isSafeInteger(parsed) || parsed <= 0)
+    {
+        throw new CliError(`${name} must be a whole number above zero — a measurement counts something that was there`);
+    }
+    return parsed;
 }
 
 // A view setting reaches every page only through a refold, so writing the

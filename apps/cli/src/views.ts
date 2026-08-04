@@ -14,7 +14,7 @@ import {
     WorkState
 } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
-import { CliContext, ProjectScope, readRegistry, readVerdicts } from "./paths.js";
+import { CliContext, ProjectScope, readRegistry, readStoreConfig, readVerdicts, tokenScale, TokenScale } from "./paths.js";
 import {
     AttemptRow,
     Pointer,
@@ -29,12 +29,22 @@ import {
     workspacePointer
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
-import { blue, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
+import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { SelfEvent } from "./types.js";
 
-const CONTEXT_LIMIT = 12_000;
-// The command writes one final newline; the rendered body owns the rest.
-const CONTEXT_BODY_LIMIT = CONTEXT_LIMIT - 1;
+// What one piped render may spend (#213). A cap measures what a store may
+// hold; this measures what a single render costs the reader it is handed to,
+// which is why the index cap is the larger of the two.
+const CONTEXT_TOKENS = 3_000;
+
+// The budget as the fitting code charges it. The rows are cut in characters —
+// one physical counter, as `style.ts` requires — so the token budget is
+// converted to its character allowance once, here. The command writes one
+// final newline; the rendered body owns the rest.
+function contextBodyLimit(scale: TokenScale): number
+{
+    return charactersFor(CONTEXT_TOKENS, scale.perCharacter) - 1;
+}
 const REPORT_EXCERPT_LIMIT = 500;
 
 // Console surfaces reuse the verdicts persisted by the last fold, so they
@@ -49,7 +59,7 @@ function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 }
 
 // The pretty render is reached before the budget, never through it: the
-// 12,000-character cap exists to fit an agent's context window, and inflating
+// 3,000-token cap exists to fit an agent's context window, and inflating
 // it with box rules and escape sequences would spend the agent's budget on
 // decoration it never receives.
 export function printContext(ctx: CliContext, render: RenderMode): void
@@ -62,7 +72,7 @@ export function printContext(ctx: CliContext, render: RenderMode): void
             console.log(renderWorkspace(models).join("\n"));
             return;
         }
-        writeContext(renderWorkspaceContext(models));
+        writeContext(renderWorkspaceContext(models, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir)))));
         return;
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
@@ -71,7 +81,7 @@ export function printContext(ctx: CliContext, render: RenderMode): void
         console.log(renderContext({ model, waiting: unrankedWaitingLines(model) }).join("\n"));
         return;
     }
-    writeContext(renderProjectContext(model, foreignWorkspaceEntities(ctx)));
+    writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))), foreignWorkspaceEntities(ctx)));
 }
 
 // A workspace-scoped entity renders in every project's context (#197 §3,
@@ -99,7 +109,7 @@ interface ContextSection
     omission: (count: number) => string;
 }
 
-function renderProjectContext(model: ProjectModel, foreign: EntityState[] = []): string
+function renderProjectContext(model: ProjectModel, limit: number, foreign: EntityState[] = []): string
 {
     const project = shellArgument(model.slug);
     // Collect is scope-aware (#197 §6): this project's current records plus
@@ -117,7 +127,7 @@ function renderProjectContext(model: ProjectModel, foreign: EntityState[] = []):
         ...liveSections(model, project),
         indexSection(placed, project)
     ];
-    return fitContext([`# ${model.slug}`, ""], sections);
+    return fitContext([`# ${model.slug}`, ""], sections, limit);
 }
 
 function descriptionSection(model: ProjectModel, project: string): ContextSection
@@ -307,13 +317,13 @@ function assembleContext(head: string[], sections: ContextSection[], keeps: numb
 // to one pointer row that counts what it holds and names the recovery
 // command. A row that does not fit whole is never truncated: it joins the
 // counted omission instead, and the pointer recovers it intact.
-function fitContext(head: string[], sections: ContextSection[]): string
+function fitContext(head: string[], sections: ContextSection[], limit: number): string
 {
     const keeps = sections.map((section) => section.rows.length);
     let rendered = assembleContext(head, sections, keeps);
-    for (let index = sections.length - 1; index >= 0 && countCharacters(rendered) > CONTEXT_BODY_LIMIT; index--)
+    for (let index = sections.length - 1; index >= 0 && countCharacters(rendered) > limit; index--)
     {
-        while (keeps[index] > 0 && countCharacters(rendered) > CONTEXT_BODY_LIMIT)
+        while (keeps[index] > 0 && countCharacters(rendered) > limit)
         {
             keeps[index] -= 1;
             rendered = assembleContext(head, sections, keeps);
@@ -455,14 +465,14 @@ function detail(text: string, limit: number, recovery: Pointer): string
     return `${takeCharacters(text.trim().replace(/\s+/g, " "), limit)}… (full: \`${recovery}\`)`;
 }
 
-function renderWorkspaceContext(models: ProjectModel[]): string
+function renderWorkspaceContext(models: ProjectModel[], limit: number): string
 {
     if (models.length === 0)
     {
         return "no projects registered — run `self project add` inside a project directory";
     }
     const full = models.map(workspaceContextLine).join("\n");
-    if (countCharacters(full) <= CONTEXT_BODY_LIMIT)
+    if (countCharacters(full) <= limit)
     {
         return full;
     }
@@ -475,7 +485,7 @@ function renderWorkspaceContext(models: ProjectModel[]): string
         {
             next.push(workspaceOmission(omitted));
         }
-        if (countCharacters(next.join("\n")) > CONTEXT_BODY_LIMIT)
+        if (countCharacters(next.join("\n")) > limit)
         {
             break;
         }

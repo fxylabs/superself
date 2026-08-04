@@ -1,7 +1,7 @@
 // The placement projection (#202, #197 §6): `self context` renders entities
 // by priority and exposure — full text, one line, absent-with-pointer — with
 // the derived live state anchored between the full block and the index lines,
-// under the unchanged 12,000-character budget.
+// under the render budget, which is 3,000 context tokens (#213).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -25,7 +25,9 @@ function setCaps(activeBox, caps)
 {
     const file = join(activeBox.root, "ws", ".superself", "config.json");
     const config = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-    writeFileSync(file, JSON.stringify({ ...config, ...caps }) + "\n");
+    // One token per character, so every cap number below is the character
+    // count of the text it gates (#213).
+    writeFileSync(file, JSON.stringify({ ...config, tokensPerCharacter: 1, tokensMeasured: true, ...caps }) + "\n");
 }
 
 let decision;
@@ -115,7 +117,8 @@ test("a fresh store renders no empty section headers, and live state renders wit
 test("budget exhaustion mid-block leaves pointer rows that name the recovery command", () =>
 {
     // Preset conventions are not cap-gated, so the full tier can exceed the
-    // whole 12,000-character budget: three rules of 5,000 characters.
+    // whole budget: three rules of 5,000 characters, against 3,000 tokens
+    // which the shipped estimate buys 12,000 characters of.
     for (const name of ["one", "two", "three"])
     {
         must(freshBox, freshDemo, ["convention", "add", `rule ${name} ${"x".repeat(5_000)}`]);
@@ -137,7 +140,7 @@ const legacySelf = (args) => selfIn(legacyBox, legacyDemo, args);
 
 test("a legacy store over a cap renders in full while state add stays gated", () =>
 {
-    setCaps(legacyBox, { indexCap: 1 });
+    setCaps(legacyBox, { indexTokens: 20 });
     const first = must(legacyBox, legacyDemo, ["decide", "legacy ruling one"]).out.match(/\[([^\]]+)\]/)[1];
     const second = must(legacyBox, legacyDemo, ["decide", "legacy ruling two"]).out.match(/\[([^\]]+)\]/)[1];
     const out = must(legacyBox, legacyDemo, ["context"]).out;
@@ -145,10 +148,10 @@ test("a legacy store over a cap renders in full while state add stays gated", ()
     assert.ok(out.includes("- [decision] legacy ruling two"));
     const refused = legacySelf(["state", "add", "a third index row"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project index tier holds 2 of 1 entities/);
+    assert.match(refused.out, /the project index tier holds 34 of 20 tokens/);
     const short = legacySelf(["state", "add", "a third index row", "--demote", first]);
     assert.notEqual(short.code, 0);
-    assert.match(short.out, /still 1 over the 1-entity index cap after 1 named demotion/);
+    assert.match(short.out, /still 14 tokens over the 20-token index cap after the named demotion/);
     must(legacyBox, legacyDemo, ["state", "add", "a third index row", "--demote", first, "--demote", second]);
     assert.ok(must(legacyBox, legacyDemo, ["state", "show", first]).out.includes("placement: project · search"));
     assert.ok(must(legacyBox, legacyDemo, ["state", "show", second]).out.includes("placement: project · search"));

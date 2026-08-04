@@ -158,10 +158,15 @@ with `--proposed`, and it waits until a person runs `self state confirm`.
 ### Retention caps
 
 The always-rendered set is bounded by policy: user-set caps, enforced by the
-engine on `state add`, `state place`, and the alias verbs, per scope. The
-defaults are 4,000 characters of full-exposure text and 50 index entities
-(`fullCap` and `indexCap` in the store's `config.json`) — characters for full
-because tokens are the real constraint, count for index.
+engine on `state add`, `state place`, and the alias verbs, per scope. Both
+tiers are measured in context tokens — the unit the budget is actually spent
+in — and the defaults are 1,000 tokens of full-exposure text and 12,000 for
+the index (`fullTokens` and `indexTokens` in the store's `config.json`).
+
+The CLI counts characters and converts with one number, which `self tokens`
+prints and a measurement replaces. It ships as an estimate and says so in
+every refusal it produced, because two models tokenize the same sentence
+differently and no single exact count exists to hard-code.
 
 Adding or placing past a cap is refused until the caller names what demotes:
 `--demote <id>` frees the room by moving a named entity one tier down. An
@@ -201,7 +206,7 @@ Different consumers still need different amounts of the same state:
 | `self log [-n N]` | Recent event inspection for operational or forensic reading |
 
 The agent-facing render — a pipe, a redirect, `--plain`, `TERM=dumb`, or a
-narrow terminal — enforces a 12,000-character budget and keeps omitted detail
+narrow terminal — enforces a 3,000-token budget and keeps omitted detail
 reachable through recovery pointers that name the project they are about. The
 human-oriented TTY presentation deliberately bypasses that budget.
 

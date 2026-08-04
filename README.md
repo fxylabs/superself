@@ -87,11 +87,12 @@ as operating outcomes and separates it from what is not complete.
   full text, one line, or a search pointer — `self state place` moves any of
   the three, demotions record why, and an agent demoting out of full passes
   `--proposed` so the move waits for a person to confirm;
-- retention caps bound the always-rendered set (defaults: 4,000 characters of
-  full text and 50 index entities, per scope) — `state add`, `state place`,
-  and the alias verbs refuse past a cap until `--demote` names what frees the
-  room, and `--proposed` lands the pair for a person to confirm; the preset
-  verbs are not cap-gated yet;
+- retention caps bound the always-rendered set in context tokens (defaults:
+  1,000 for full text and 12,000 for the index, per scope) — `state add`,
+  `state place`, and the alias verbs refuse past a cap until `--demote` names
+  what frees the room, and `--proposed` lands the pair for a person to confirm;
+  `self tokens` records what a character costs, replacing the shipped estimate;
+  the preset verbs are not cap-gated yet;
 - the outcome layer above work — `objective add/revise/close`, `milestone
   add/revise/met/reach/recheck`, `work link/unlink`, and `work
   propose/accept/decline` — connects the goal to verified progress: a milestone
