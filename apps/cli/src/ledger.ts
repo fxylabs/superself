@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { sessionPid } from "./machine.js";
 
 // The process ledger: which OS process is running a work unit on this
 // machine. A pid is machine-local and never syncs — the sanitization gate
@@ -121,12 +122,12 @@ interface SessionLiveness
     at: string;
 }
 
-export function recordSession(session: string, pid: number, seenAt: string): void
+function recordSession(session: string, pid: number, seenAt: string): void
 {
     appendEntry(stateFile("sessions.jsonl"), { session, pid, seenAt });
 }
 
-export function judgeSession(session: string): SessionLiveness | null
+function judgeSession(session: string): SessionLiveness | null
 {
     const entries = readEntries<SessionEntry>(stateFile("sessions.jsonl")).filter((entry) => entry.session === session);
     const latest = entries[entries.length - 1];
@@ -185,4 +186,40 @@ export function claimNote(claim: WorkClaim | undefined, mine: string | undefined
 function minute(ts: string): string
 {
     return ts.slice(0, 16).replace("T", " ");
+}
+
+// Whether a start by this session takes the claim: an unclaimed record, one
+// whose holder ended, and one started before sessions were stamped. The same
+// session needs no second claim, and a live holder is disclosed rather than
+// displaced — nothing here refuses.
+//
+// One implementation, read by every verb that records a start (#231). Both
+// `work start` and `state start` write the same `entity.started`, and two
+// answers to whether it moves the claim would drift into two behaviours for
+// one transition.
+export function claimMoves(claim: WorkClaim | undefined, mine: string | undefined, process?: { state: string; at: string }): boolean
+{
+    const holder = claim?.session;
+    if (holder === undefined)
+    {
+        return true;
+    }
+    if (holder === mine)
+    {
+        return false;
+    }
+    return process?.state === "exited" || judgeSession(holder)?.state === "ended";
+}
+
+// The pid that answers whether this session is still running, kept beside the
+// log on this machine alone. A session with no resolvable identity or no
+// resolvable process records nothing, and every reader answers "unknown"
+// rather than inventing a liveness it cannot see.
+export function noteSessionSeen(session: string | undefined, at: string): void
+{
+    const pid = sessionPid();
+    if (session !== undefined && pid !== undefined)
+    {
+        recordSession(session, pid, at);
+    }
 }

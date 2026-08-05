@@ -104,12 +104,17 @@ test("A: open + retire records retired", async () =>
     assert.equal(working(id), "working: retired — direction changed");
 });
 
-test("A: in-progress + start refuses as already started", async () =>
+// Replaces the "already started" refusal this cell asserted before #231: a
+// start on a record another session is on is disclosed, never refused. The
+// working state is what this table is about, and it is unchanged — a second
+// start leaves the record in-progress. Who holds it, and what a second session
+// is told, is the subject of claim.test.mjs.
+test("A: in-progress + start stays in-progress and is not refused", async () =>
 {
     const id = await entityAt("in-progress");
     const result = selfIn(box, demo, ["state", "start", id]);
-    assert.notEqual(result.code, 0);
-    assert.match(result.out, /already started/);
+    assert.equal(result.code, 0);
+    assert.equal(working(id), "working: in-progress");
 });
 
 test("A: in-progress + block records blocked", async () =>

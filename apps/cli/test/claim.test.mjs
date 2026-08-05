@@ -202,6 +202,117 @@ test("the holder renders in context and in the work list", () =>
     assert.match(must(box, demo, ["work"], asSession("alpha", ALIVE)).out, /held by this session/);
 });
 
+/* ── state start answers the same way work start does (#231) ───────── */
+
+// The nine cells of #231's table. `state start` writes the same
+// `entity.started` as `work start`, so the claim judgment behind it is one
+// implementation and these cells assert that both verbs reach it.
+
+function entityIdIn(text)
+{
+    const match = text.match(/\be-[0-9a-z]{5}\b/);
+    if (match === null)
+    {
+        throw new Error(`no entity id in: ${text}`);
+    }
+    return match[0];
+}
+
+function freshEntity()
+{
+    seq += 1;
+    return entityIdIn(must(box, demo, ["state", "add", `raw record ${seq}`]).out);
+}
+
+function entityStartsOf(id)
+{
+    return startsOf(id);
+}
+
+test("state start: cells 1 and 6 — an unclaimed record is claimed", () =>
+{
+    const open = freshEntity();
+    const first = must(box, demo, ["state", "start", open], asSession("alpha", ALIVE));
+    assert.doesNotMatch(first.out, /held by/, "cell 1: nothing held it");
+    assert.equal(entityStartsOf(open).length, 1);
+
+    const legacy = freshEntity();
+    // Cell 6: in-progress from a start that carried no session, as every log
+    // written before #230 did.
+    retireFixture(box, ws, "demo", "entity.started", { entity: legacy });
+    const taken = must(box, demo, ["state", "start", legacy], asSession("alpha", ALIVE));
+    assert.doesNotMatch(taken.out, /held by/, "cell 6: no session on the event is no holder");
+    assert.equal(entityStartsOf(legacy).length, 2, "the claim lands over it");
+});
+
+test("state start: cell 2 — the holding session is told, and records no second claim", () =>
+{
+    const id = freshEntity();
+    must(box, demo, ["state", "start", id], asSession("alpha", ALIVE));
+    const again = must(box, demo, ["state", "start", id], asSession("alpha", ALIVE));
+    assert.match(again.out, /held by this session/);
+    assert.equal(entityStartsOf(id).length, 1);
+});
+
+test("state start: cell 3 — a live holder is disclosed and not refused", () =>
+{
+    const id = freshEntity();
+    must(box, demo, ["state", "start", id], asSession("alpha", ALIVE));
+    const other = selfIn(box, demo, ["state", "start", id], asSession("beta", ALIVE));
+    assert.equal(other.code, 0, "the refusal this issue removes");
+    assert.match(other.out, /held by another session, running since/);
+    assert.equal(entityStartsOf(id).length, 1, "a live holder keeps the claim");
+});
+
+test("state start: cell 4 — a holder this machine cannot judge reads as last recorded", () =>
+{
+    const id = freshEntity();
+    must(box, demo, ["state", "start", id], asSession("alpha"));
+    const other = selfIn(box, demo, ["state", "start", id], asSession("beta", ALIVE));
+    assert.equal(other.code, 0);
+    assert.match(other.out, /held by another session, last recorded/);
+    assert.equal(entityStartsOf(id).length, 1);
+});
+
+test("state start: cell 5 — a holder whose process is gone hands the claim over", () =>
+{
+    const id = freshEntity();
+    must(box, demo, ["state", "start", id], asSession("alpha", GONE));
+    const other = must(box, demo, ["state", "start", id], asSession("beta", ALIVE));
+    assert.match(other.out, /was held by another session, ended/);
+    assert.equal(entityStartsOf(id).length, 2);
+});
+
+test("state start: cells 7 and 8 — the blocked and terminal refusals are untouched", async () =>
+{
+    const blocked = freshEntity();
+    must(box, demo, ["state", "start", blocked], asSession("alpha", ALIVE));
+    must(box, demo, ["state", "block", blocked, "--why", "waiting on upstream"], asSession("alpha", ALIVE));
+    const onBlocked = selfIn(box, demo, ["state", "start", blocked], asSession("beta", ALIVE));
+    assert.equal(onBlocked.code, 1, "cell 7");
+    assert.match(onBlocked.out, /is blocked — unblock it first/);
+
+    const done = freshEntity();
+    must(box, demo, ["state", "done", done, "--report", "verified output landed"], asSession("alpha", ALIVE));
+    const onDone = selfIn(box, demo, ["state", "start", done], asSession("beta", ALIVE));
+    assert.equal(onDone.code, 1, "cell 8");
+    assert.match(onDone.out, /terminal/);
+});
+
+// Cell 9 as filed read "on a non-work entity, cells 1-6 apply identically",
+// which is what every cell above already drives. The cell worth asserting is
+// the boundary underneath it: the two verbs never reach the same record, so
+// what keeps them consistent is the shared judgment, not a shared target.
+test("state start: cell 9 — a work record keeps its own verb, and the judgment is still shared", () =>
+{
+    const unit = freshUnit();
+    must(box, demo, ["work", "start", unit], asSession("alpha", ALIVE));
+    const viaState = selfIn(box, demo, ["state", "start", unit], asSession("beta", ALIVE));
+    assert.equal(viaState.code, 1, "a preset record's lifecycle stays with its own verbs");
+    assert.match(viaState.out, /is a work record/);
+    assert.equal(startsOf(unit).length, 1, "and nothing was recorded on the way to the refusal");
+});
+
 test("no pid and no machine name reach the synced log", () =>
 {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line.trim() !== "");

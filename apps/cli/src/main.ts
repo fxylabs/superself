@@ -15,7 +15,7 @@ import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headC
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
-import { machineWorkspace, sessionPid, sessionToken, setMachineWorkspace } from "./machine.js";
+import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import {
     checkoutMatches,
@@ -47,7 +47,7 @@ import {
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
-import { claimNote, judgeSession, recordProcess, recordSession } from "./ledger.js";
+import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { STATE_COMMAND } from "./state.js";
@@ -1484,44 +1484,13 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
     {
         console.log(held);
     }
-    if (claimMoves(work, mine))
+    if (claimMoves(work.claim, mine, work.process))
     {
         recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: work.id }), `${work.id} ${work.outcome}`);
     }
-    rememberSession(mine);
+    noteSessionSeen(mine, new Date().toISOString());
     console.log(markdownHeadings(renderWorkBody(work, buildModel(ctx.storeDir, ctx.project, new Date()),
         readVerdicts(ctx.storeDir, ctx.project)).trimEnd()));
-}
-
-// Cells 1, 5 and 8 of the table in issue #230: an unclaimed unit, one whose
-// holder ended, and one started before sessions were stamped. Cells 2, 3 and 4
-// leave the claim where it is — the same session needs no second claim, and a
-// live holder is disclosed rather than displaced. Nothing here refuses.
-function claimMoves(work: WorkState, mine: string | undefined): boolean
-{
-    const holder = work.claim?.session;
-    if (holder === undefined)
-    {
-        return true;
-    }
-    if (holder === mine)
-    {
-        return false;
-    }
-    return work.process?.state === "exited" || judgeSession(holder)?.state === "ended";
-}
-
-// The pid that answers whether this session is still running, kept beside the
-// log on this machine alone. A session with no resolvable identity or no
-// resolvable process records nothing, and every reader answers "unknown"
-// rather than inventing a liveness it cannot see.
-function rememberSession(session: string | undefined): void
-{
-    const pid = sessionPid();
-    if (session !== undefined && pid !== undefined)
-    {
-        recordSession(session, pid, new Date().toISOString());
-    }
 }
 
 // What a reader is told about who holds a unit, or nothing when no session
