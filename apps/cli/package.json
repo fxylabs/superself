@@ -35,7 +35,8 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
-    "test": "tsc && node --test test/*.test.mjs"
+    "test": "tsc && node --test test/*.test.mjs",
+    "structure": "node test/structure.mjs"
   },
   "devDependencies": {
     "@types/node": "22.10.5",

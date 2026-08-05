@@ -10,6 +10,7 @@
   "scripts": {
     "build": "pnpm --filter superself build",
     "test": "pnpm --filter superself test",
+    "structure": "pnpm --filter superself structure",
     "typecheck": "pnpm --filter superself typecheck"
   }
 }

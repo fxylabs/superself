@@ -57,8 +57,16 @@ rule stands for whatever comes next:
 - Core modules never import from a subsystem directory.
 - Exports are narrowed to what importers actually use. A subsystem that exports
   its whole surface has no boundary.
-- Enforcement: review, plus the import-graph spot-check in the pull request
-  template.
+- Enforcement: `pnpm structure`, run in the CI verify job and locally
+  (`apps/cli/test/structure.mjs`). It reads the whole `src/` tree, so a core
+  module importing a subsystem, or a subsystem importing another outside a
+  sanctioned edge, fails the build with the file, line and rule. The sanctioned
+  edge list is empty: every edge this document once granted named code that
+  decision `01kz2nczhtde554qx5tqpqzrt3` deleted. There are no subsystem
+  directories today, so the section passes vacuously — its first subject is
+  whatever directory appears next, caught at its first wrong import.
+- The same check counts exports no importer reads, and fails a pull request
+  that raises that count above its merge base. A test is an importer.
 
 ## Single gates
 
