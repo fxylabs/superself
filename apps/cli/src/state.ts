@@ -29,6 +29,8 @@ import {
 } from "./entities.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { entityId } from "./ids.js";
+import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
+import { sessionToken } from "./machine.js";
 import { buildModel, ProjectModel } from "./model.js";
 import {
     ProjectContext,
@@ -970,19 +972,33 @@ function requireMovable(entity: EntityState, verb: string): void
     }
 }
 
+// A start on a record another session already has is disclosed, never refused
+// (#231). The refusal that used to stand here read "already started" and
+// answered a second session with a lock — on a state it could not tell was
+// still live, which is the case a refusal gets wrong. `work start` had already
+// been ruled the other way (#230), and one transition cannot answer two ways.
+//
+// The blocked refusal below stays: it is about the record's own state rather
+// than about who put it there, and `state unblock` is the verb that clears it.
 function stateStart({ positionals }: CommandInput): void
 {
     const { ctx, entity } = executionTarget(positionals[0], "state start <id>");
     requireMovable(entity, "start");
-    if (entity.execution?.status === "in-progress")
-    {
-        throw new CliError(`${entity.id} is already started`);
-    }
     if (entity.execution?.status === "blocked")
     {
         throw new CliError(`${entity.id} is blocked — unblock it first with \`self state unblock ${entity.id}\``);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: entity.id }), entity.text);
+    const mine = sessionToken();
+    const held = claimNote(entity.claim, mine);
+    if (held !== null)
+    {
+        console.log(held);
+    }
+    if (claimMoves(entity.claim, mine))
+    {
+        recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: entity.id }), entity.text);
+    }
+    noteSessionSeen(mine, new Date().toISOString());
 }
 
 function stateBlock({ values, positionals }: CommandInput<typeof BLOCK_OPTIONS>): void
