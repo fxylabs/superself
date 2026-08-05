@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { foldProject } from "./fold.js";
 import { commitAll, currentBranch } from "./gitutil.js";
 import { ulid } from "./ids.js";
+import { sessionToken } from "./machine.js";
 import { CliContext, ensureDir, invalidateResolution, projectStateDir } from "./paths.js";
 import { assertSanitized } from "./sanitize.js";
 import { bold, dim, green, styled } from "./style.js";
@@ -25,7 +26,7 @@ export function makeEvent(
         id: ulid(),
         ts: new Date().toISOString(),
         type,
-        origin: { actor: "agent", session: process.env.SUPERSELF_SESSION, confirmed: humanConfirmed },
+        origin: { actor: "agent", session: sessionToken(), confirmed: humanConfirmed },
         project,
         payload
     };

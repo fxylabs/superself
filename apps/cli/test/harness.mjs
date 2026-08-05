@@ -26,18 +26,35 @@ export function machine()
         XDG_CONFIG_HOME: join(root, "config"),
         XDG_STATE_HOME: join(root, "state"),
         GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
-        GIT_CONFIG_SYSTEM: "/dev/null"
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        // A session identity is read from the environment (#230), so the real
+        // one running this suite would otherwise leak in and make a scratch
+        // machine behave differently here than on the runner. Blank is what
+        // the resolver reads as "no session", and a test opts out by naming
+        // its own.
+        SUPERSELF_SESSION_PID: "",
+        CLAUDE_CODE_SESSION_ID: "",
+        CLAUDE_PID: ""
     };
+    // Deleted rather than blanked: `human.ts` treats `SUPERSELF_SESSION`
+    // existing at all as the mark of an agent's process, so an empty string
+    // here would make every scratch machine one.
+    delete env.SUPERSELF_SESSION;
     return { root, env };
 }
 
 // Runs the built CLI and reports what a caller can assert on: exit code and
 // the merged output, because a refusal's text is part of the contract.
-export function selfIn(box, cwd, args)
+//
+// `extra` overrides environment for this call alone. Two sessions against one
+// workspace is a real case the CLI answers differently (#230), and the only
+// thing that separates them is what the environment says the session is.
+export function selfIn(box, cwd, args, extra = {})
 {
+    const env = { ...box.env, ...extra };
     try
     {
-        return { code: 0, out: execFileSync(process.execPath, [bin, ...args], { cwd, env: box.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+        return { code: 0, out: execFileSync(process.execPath, [bin, ...args], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
     }
     catch (error)
     {
@@ -136,9 +153,9 @@ export function demoWorkspace(box)
     return { ws, demo };
 }
 
-export function must(box, cwd, args)
+export function must(box, cwd, args, extra = {})
 {
-    const result = selfIn(box, cwd, args);
+    const result = selfIn(box, cwd, args, extra);
     if (result.code !== 0)
     {
         throw new Error(`self ${args.join(" ")} failed:\n${result.out}`);

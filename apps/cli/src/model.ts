@@ -146,6 +146,12 @@ export interface WorkState
     // synced `work.run-started`/`work.run-exited` events. The pid never syncs;
     // `ledger.ts` refines running into stale on the machine that recorded it.
     process?: { state: "running" | "exited"; code?: number; at: string };
+    // Which session picked this unit up, and when (#230). Derived from the
+    // newest `entity.started`, never asserted by a verb of its own: the
+    // command that hands over the brief is the one that records the claim, so
+    // there is nothing else to fold. It discloses and never refuses — a second
+    // session reads who holds the unit and decides for itself.
+    claim?: { session?: string; ts: string };
     // What this unit has to cover, who has to approve it, and what its
     // implementation had to be — the semantic half of done, which no attempt
     // and no transition ever settles on its own.
@@ -1171,6 +1177,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         retiredWhy: entity.execution?.status === "retired" ? entity.execution.why ?? "retired" : undefined,
         successor: entity.execution?.successor === undefined ? undefined
             : { work: entity.execution.successor, project: entity.execution.successorProject },
+        claim: entity.claim,
         reports: [],
         evidence: [],
         notes: [],
@@ -1256,13 +1263,20 @@ function routeEntityWorkFacts(model: ProjectModel, fold: EntityFold): void
     }
 }
 
-function applyExecutionToWork(work: WorkState, event: { ts: string; type: string; on?: string; why?: string; successor?: string; successorProject?: string }): void
+function applyExecutionToWork(work: WorkState, event: { ts: string; type: string; session?: string; on?: string; why?: string; successor?: string; successorProject?: string }): void
 {
     if (work.status === "done" || work.status === "retired")
     {
         return;
     }
     work.lastEventTs = event.ts;
+    // The newest start is the claim, whatever it does to the status: a start
+    // against a blocked unit changes no state and still says a session picked
+    // the work up, which is the fact a second session reads before choosing.
+    if (event.type === "entity.started")
+    {
+        work.claim = { session: event.session, ts: event.ts };
+    }
     applyBlockTransition(work, event);
     if (event.type === "entity.done")
     {

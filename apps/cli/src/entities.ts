@@ -138,6 +138,10 @@ export interface EntityState
     // Absent until an execution event names the entity: open is the default
     // working state, not a recorded one.
     execution?: EntityExecution;
+    // Which session last picked the record up, and when (#230). Kept beside
+    // the working state rather than inside it, because a block or an unblock
+    // replaces the working state and says nothing about who is on the work.
+    claim?: { session?: string; ts: string };
 }
 
 export function isLive(entity: EntityState): boolean
@@ -230,6 +234,11 @@ interface ExecutionEvent
     report?: string;
     successor?: string;
     successorProject?: string;
+    // Which session recorded the transition, carried off `origin` rather than
+    // the payload because every event has it. A start is what claims a unit
+    // (#230), and an event written before sessions were stamped simply has
+    // none — which reads as unclaimed, never as an anonymous holder.
+    session?: string;
 }
 
 // A confirm, a retraction, a link edge, and a coverage claim collect exactly
@@ -495,7 +504,8 @@ function collectExecution(fold: EntityFold, event: SelfEvent): void
         why: str(event.payload.why),
         report: str(event.payload.report),
         successor: str(event.payload.successor),
-        successorProject: str(event.payload.successorProject)
+        successorProject: str(event.payload.successorProject),
+        session: event.origin.session
     });
 }
 
@@ -779,26 +789,46 @@ function applyExecution(target: EntityState, event: ExecutionEvent): void
     {
         return;
     }
+    // The claim lands whatever the start does to the working state: a start
+    // against a blocked record changes no status and still says a session
+    // picked the work up, which is the fact a second session reads (#230).
+    if (event.type === "entity.started")
+    {
+        target.claim = { session: event.session, ts: event.ts };
+    }
+    const next = nextExecution(status, event);
+    if (next !== null)
+    {
+        target.execution = next;
+    }
+}
+
+// The working state a transition moves to, or null where the verb matrix
+// would have refused it: a start on a blocked record, an unblock on one that
+// is not blocked.
+function nextExecution(status: ExecutionStatus | undefined, event: ExecutionEvent): EntityExecution | null
+{
     if (event.type === "entity.started" && status !== "blocked")
     {
-        target.execution = { status: "in-progress", ts: event.ts };
+        return { status: "in-progress", ts: event.ts };
     }
     if (event.type === "entity.blocked" && status !== "blocked")
     {
-        target.execution = { status: "blocked", ts: event.ts, on: event.on, why: event.why };
+        return { status: "blocked", ts: event.ts, on: event.on, why: event.why };
     }
     if (event.type === "entity.unblocked" && status === "blocked")
     {
-        target.execution = { status: "in-progress", ts: event.ts };
+        return { status: "in-progress", ts: event.ts };
     }
     if (event.type === "entity.done")
     {
-        target.execution = { status: "done", ts: event.ts, report: event.report };
+        return { status: "done", ts: event.ts, report: event.report };
     }
     if (event.type === "entity.retired")
     {
-        target.execution = { status: "retired", ts: event.ts, why: event.why, successor: event.successor, successorProject: event.successorProject };
+        return { status: "retired", ts: event.ts, why: event.why, successor: event.successor, successorProject: event.successorProject };
     }
+    return null;
 }
 
 // How a working state reads on a page: `state show` prints it, and a second

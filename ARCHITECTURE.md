@@ -80,7 +80,7 @@ of them is a review finding, not a refactor note.
 | Event append | `pipeline.ts` `recordEvent` / `recordEvents` | the only writer of `log.jsonl`; every event verb goes through it |
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
-| Process ledger | `ledger.ts` `recordProcess` / `judgeProcess` | the one writer and the one reader of the machine-local pid ledger; a pid never reaches a synced event |
+| Process ledger | `ledger.ts` `recordProcess` / `judgeProcess`, `recordSession` / `judgeSession` | the one writer and the one reader of the machine-local pid ledger, for a work unit's process and for the agent session that claimed it; a pid never reaches a synced event, and the sentence a reader is given about liveness is minted here too (`claimNote`) rather than re-derived per surface |
 | Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Every command surface goes through it — `node:util` `parseArgs` is called from `parseCommand` and nowhere else |
 | Retirement approval | `retirement.ts` `requireHumanRetirement`, called from `recordRetirement` | the one answer to "may this call destroy a record": every verb that supersedes, withdraws or retires a confirmed record routes through it, and it discloses the target and reads a typed confirmation from a terminal before anything is written (#173). A call that displaces nothing passes straight through, so the trigger is what a call destroys rather than which flag was typed |
 | Required options | `args.ts` `requireOptions`, called from `parseCommand` | the one answer to "may this verb run with what it was given": every missing required option is named in one refusal, with its hint and any unblocking verb. A handler that asked again would be a second implementation of the same rule (#106) |
@@ -213,9 +213,24 @@ Standing rules, not per-issue reminders:
   history left on a work unit. It is read-only history now; extend it only if
   a surviving surface needs more of that history, and never declare a parallel
   summary type.
-- One process ledger. `ledger.ts` owns the machine-local pid file — its path,
-  its append, its liveness judgment. Code that wants to say whether a unit's
-  process is alive calls `judgeProcess`; it does not read the file itself.
+- One process ledger. `ledger.ts` owns the machine-local pid files — their
+  paths, their appends, their liveness judgments. Code that wants to say
+  whether a unit's process is alive calls `judgeProcess`, and whether the
+  session holding a unit is still running calls `judgeSession`; neither reads
+  a file itself.
+- One session identity, and it names nobody. `origin.session` is stamped on
+  every event by `pipeline.ts` from `machine.ts` `sessionToken`, and it is an
+  opaque token: a hostname, a machine label or a user name there would name
+  the person holding the clone in an append-only log, which is what the
+  sanitization gate refuses absolute home paths for. Decision
+  `01kz8c83me299m37gk8rjjydw0` settles it. A session's pid is machine-local
+  and stays in the ledger.
+- A claim is a disclosure, never a lock. The session that picked a work unit
+  up is derived from the newest `entity.started` (#230) — no verb asserts it
+  and no event type is minted for it — and every surface that renders it
+  states who holds the unit without refusing anyone else. Adding a refusal
+  there would be the write coordination decision `01kz57aqsxym2g2g8wasp6vv7j`
+  rules out, under another name.
 - One artifact declaration shape: `{name, sha256, bytes}`. `name`, never
   `path`.
 - One scope contract, and one resolver behind it. A read verb answers for the
