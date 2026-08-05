@@ -8,7 +8,7 @@ import { CliContext, readRegistry, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
 
-export interface ArtifactRecord extends ArtifactMeta
+interface ArtifactRecord extends ArtifactMeta
 {
     project: string;
     work?: string;
@@ -18,7 +18,7 @@ export interface ArtifactRecord extends ArtifactMeta
 
 // Bytes already in the store, waiting for the event that names them. Nothing
 // outside this module may keep them without writing that event.
-export interface StagedArtifacts
+interface StagedArtifacts
 {
     artifacts: ArtifactMeta[];
     discard: () => void;
@@ -178,20 +178,24 @@ function copyPlanned(storeDir: string, planned: PlannedArtifact[], staging: Stag
             copyFileSync(item.source, target, constants.COPYFILE_EXCL);
             item.digest = digestFile(target);
         });
-        if (failure === null)
+        if (failure !== null)
         {
-            continue;
+            return copyFailure(failure, item, staging);
         }
-        if (codeOf(failure) === "EEXIST")
-        {
-            // Whoever wrote that name got there first; rollback must not reach
-            // for a file this command did not create.
-            staging.files.pop();
-            return new CliError(`artifact id ${item.id} is already stored — run the report again`);
-        }
-        return new CliError(`artifact "${item.name}" could not be copied into the store: ${failure.message}`);
     }
     return null;
+}
+
+function copyFailure(failure: Error, item: PlannedArtifact, staging: Staging): Error
+{
+    if (codeOf(failure) === "EEXIST")
+    {
+        // Whoever wrote that name got there first; rollback must not reach for
+        // a file this command did not create.
+        staging.files.pop();
+        return new CliError(`artifact id ${item.id} is already stored — run the report again`);
+    }
+    return new CliError(`artifact "${item.name}" could not be copied into the store: ${failure.message}`);
 }
 
 // Rollback removes what this command made and nothing more: the files it
@@ -245,7 +249,7 @@ function capture(action: () => void): Error | null
     }
 }
 
-export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]
+function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]
 {
     const records: ArtifactRecord[] = [];
     for (const slug of slugs)
@@ -380,6 +384,25 @@ function printRecords(records: ArtifactRecord[]): void
     }
 }
 
+// An id is minted per artifact, not per workspace, so two projects can hold the
+// same one. Opening whichever the fold listed first would show bytes nobody
+// asked for; the ambiguity is stated instead.
+function requireArtifact(storeDir: string, slugs: string[], wanted: string): ArtifactRecord
+{
+    const matches = listArtifacts(storeDir, slugs).filter((item) => item.id === wanted);
+    if (matches.length === 0)
+    {
+        throw new CliError(`unknown artifact "${wanted}" — run \`self artifact list\` to see ids`);
+    }
+    const stored = [...new Map(matches.map((item): [string, ArtifactRecord] => [item.path, item])).values()];
+    if (stored.length > 1)
+    {
+        const where = stored.map((item) => `${item.project}/${item.name}`).join(", ");
+        throw new CliError(`artifact id "${wanted}" names ${stored.length} stored files (${where}) — narrow it with \`--project <slug>\``);
+    }
+    return stored[0];
+}
+
 function openArtifact(ctx: CliContext, id: string | undefined, project: string | undefined): void
 {
     const wanted = id?.trim();
@@ -390,21 +413,7 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
     const slugs = project === undefined
         ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
         : [requireRegistered(ctx, project)];
-    const matches = listArtifacts(ctx.storeDir, slugs).filter((item) => item.id === wanted);
-    if (matches.length === 0)
-    {
-        throw new CliError(`unknown artifact "${wanted}" — run \`self artifact list\` to see ids`);
-    }
-    // An id is minted per artifact, not per workspace, so two projects can
-    // hold the same one. Opening whichever the fold listed first would show
-    // bytes nobody asked for; the ambiguity is stated instead.
-    const stored = [...new Map(matches.map((item): [string, ArtifactRecord] => [item.path, item])).values()];
-    if (stored.length > 1)
-    {
-        const where = stored.map((item) => `${item.project}/${item.name}`).join(", ");
-        throw new CliError(`artifact id "${wanted}" names ${stored.length} stored files (${where}) — narrow it with \`--project <slug>\``);
-    }
-    const record = stored[0];
+    const record = requireArtifact(ctx.storeDir, slugs, wanted);
     const file = join(ctx.storeDir, record.path);
     if (!existsSync(file))
     {

@@ -39,7 +39,7 @@ export function commitAll(storeDir: string, message: string): void
     git(storeDir, "commit", "-qm", message);
 }
 
-export interface ClassifiedEvidence
+interface ClassifiedEvidence
 {
     commits: string[];
     notes: string[];
@@ -64,6 +64,21 @@ const DECLARED = /^(commit|note):([\s\S]*)$/;
 // That is what stops a ticket id from being reported later as a rewritten
 // history, and what keeps an uppercase or four-character revision — both of
 // which git resolves — from being quietly demoted to a note.
+// Undeclared evidence is whatever the repository says it is. A revision is
+// recorded in the spelling git names objects with: an uppercase spelling is
+// user input for the same object, and one spelling per object keeps one verdict
+// per object — and keeps the event guard's sha exemption reading it as the sha
+// it is.
+function classifyUndeclared(projectDir: string, value: string, into: ClassifiedEvidence): void
+{
+    if (resolvesInRepo(projectDir, value))
+    {
+        into.commits.push(value.toLowerCase());
+        return;
+    }
+    into.notes.push(value);
+}
+
 export function classifyEvidence(projectDir: string, offered: string[]): ClassifiedEvidence
 {
     const classified: ClassifiedEvidence = { commits: [], notes: [] };
@@ -72,18 +87,7 @@ export function classifyEvidence(projectDir: string, offered: string[]): Classif
         const declared = DECLARED.exec(value);
         if (declared === null)
         {
-            // A revision is recorded in the spelling git names objects with:
-            // an uppercase spelling is user input for the same object, and one
-            // spelling per object keeps one verdict per object — and keeps the
-            // event guard's sha exemption reading it as the sha it is.
-            if (resolvesInRepo(projectDir, value))
-            {
-                classified.commits.push(value.toLowerCase());
-            }
-            else
-            {
-                classified.notes.push(value);
-            }
+            classifyUndeclared(projectDir, value, classified);
         }
         else if (declared[1] === "commit")
         {
@@ -110,7 +114,7 @@ function resolvesInRepo(projectDir: string, value: string): boolean
 // `note:` is a form they read, while `work met` and `milestone met` take a
 // bare object name and have no typed form at all. A shared refusal sent those
 // two to a spelling they reject, which only produced a worse error (#132).
-export type RevisionRefusal = (typed: string) => string;
+type RevisionRefusal = (typed: string) => string;
 
 const typedEvidence: RevisionRefusal = (typed) =>
     `evidence "commit:${typed}" is not a Git object name — record free-form evidence as "note:${typed}"`;
@@ -162,7 +166,7 @@ export function headCommit(dir: string): string | null
     return result.ok ? result.out : null;
 }
 
-export function gitCommonDir(dir: string): string | null
+function gitCommonDir(dir: string): string | null
 {
     const result = git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir");
     return result.ok ? realPath(result.out) : null;

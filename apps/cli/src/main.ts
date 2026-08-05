@@ -80,18 +80,18 @@ async function main(argv: string[]): Promise<void>
         await runLeaf(resolved);
         return;
     }
-    // A first token no command owns resolves against the alias table (#207
-    // A1): `self idea`, `self roadmap`, and every user-added verb dispatch
-    // through the same contract machinery as a composed command. No table
-    // row — or no workspace to read one from — keeps the unknown-command
-    // refusal exactly as it was (A6).
+    await runAlias(argv);
+}
+
+// A first token no command owns resolves against the alias table (#207 A1):
+// `self idea`, `self roadmap`, and every user-added verb dispatch through the
+// same contract machinery as a composed command. No table row — or no
+// workspace to read one from — keeps the unknown-command refusal exactly as it
+// was (A6).
+async function runAlias(argv: string[]): Promise<void>
+{
     const alias = resolveAliasCommand(process.cwd(), argv[0]);
-    if (alias === null)
-    {
-        cmdUnknown(argv[0] ?? "");
-        return;
-    }
-    const aliased = resolveCommand([alias], argv);
+    const aliased = alias === null ? null : resolveCommand([alias], argv);
     if (aliased === null)
     {
         cmdUnknown(argv[0] ?? "");
@@ -994,20 +994,27 @@ function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
     commitAll(ctx.storeDir, message);
 }
 
+// Two ways the same project is already here: another checkout of it, or the
+// slug itself.
+function refuseDuplicateProject(storeDir: string, projectDir: string, slug: string): void
+{
+    const sibling = siblingSlug(storeDir, projectDir);
+    if (sibling !== null)
+    {
+        throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling}\` instead of registering a duplicate`);
+    }
+    if (readRegistry(storeDir).some((entry) => entry.slug === slug))
+    {
+        throw new CliError(`project "${slug}" is already registered`);
+    }
+}
+
 function projectAdd({ values, positionals }: CommandInput<typeof PROJECT_ADD_OPTIONS>): void
 {
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(positionals[0] ?? process.cwd());
     const slug = values.name ?? basename(projectDir);
-    const sibling = siblingSlug(ctx.storeDir, projectDir);
-    if (sibling !== null)
-    {
-        throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling}\` instead of registering a duplicate`);
-    }
-    if (readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
-    {
-        throw new CliError(`project "${slug}" is already registered`);
-    }
+    refuseDuplicateProject(ctx.storeDir, projectDir, slug);
     const entry: Record<string, unknown> = { slug, added: new Date().toISOString() };
     if (values.desc !== undefined)
     {
@@ -1104,20 +1111,10 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 // and the printed line names the entity event it recorded (ruling ②). The
 // entity id is the creation event's own id, exactly the id a goal or a
 // decision has always answered to.
-function presetEntityEvent(
-    ctx: ProjectContext,
-    model: ProjectModel,
-    verb: string,
-    text: string,
-    extra: Record<string, unknown>,
-    refs: EventRefs | undefined,
-    proposed: boolean
-): void
+function presetPayload(row: ReturnType<typeof presetRow>, id: string, text: string, extra: Record<string, unknown>): Record<string, unknown>
 {
-    const row = presetRow(ctx.storeDir, verb);
-    const event = makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", {}, refs, !proposed);
     const payload: Record<string, unknown> = {
-        entity: event.id,
+        entity: id,
         text,
         labels: [row.label],
         links: [],
@@ -1130,6 +1127,21 @@ function presetEntityEvent(
     {
         payload.priority = row.priority;
     }
+    return payload;
+}
+
+function presetEntityEvent(
+    ctx: ProjectContext,
+    model: ProjectModel,
+    verb: string,
+    text: string,
+    extra: Record<string, unknown>,
+    refs: EventRefs | undefined,
+    proposed: boolean
+): void
+{
+    const event = makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", {}, refs, !proposed);
+    const payload = presetPayload(presetRow(ctx.storeDir, verb), event.id, text, extra);
     event.payload = payload;
     // Every preset kind corrects a record the same way, so they all reach the
     // gate through this one line rather than each add verb deciding. A
@@ -1660,22 +1672,16 @@ function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>)
     recordEvents(ctx, events, `${work.id} ${work.outcome}`);
 }
 
-function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): void
+function attachEvidence(ctx: ProjectContext, values: CommandInput<typeof REPORT_OPTIONS>["values"],
+    refs: EventRefs, payload: Record<string, unknown>): void
 {
-    const ctx = requireProject(process.cwd());
-    const work = requireOpenWork(ctx, positionals[0]);
-    const text = values.file === undefined
-        ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
-        : readReportFile(values.file);
     const { commits, notes } = classifyEvidence(ctx.projectDir, values.evidence ?? headEvidence(ctx));
-    const refs: EventRefs = { work: work.id };
-    const payload: Record<string, unknown> = { text };
     if (commits.length > 0)
     {
         refs.commits = commits;
         // Says the split already happened, against the repository that could
-        // answer it. A reader of this event must take these as revisions
-        // rather than guess at their shape a second time.
+        // answer it. A reader of this event must take these as revisions rather
+        // than guess at their shape a second time.
         payload.evidenceTyped = true;
     }
     if (notes.length > 0)
@@ -1686,6 +1692,18 @@ function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>)
     {
         payload.next = values.next;
     }
+}
+
+function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): void
+{
+    const ctx = requireProject(process.cwd());
+    const work = requireOpenWork(ctx, positionals[0]);
+    const text = values.file === undefined
+        ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
+        : readReportFile(values.file);
+    const refs: EventRefs = { work: work.id };
+    const payload: Record<string, unknown> = { text };
+    attachEvidence(ctx, values, refs, payload);
     const staged = stageArtifacts(ctx.storeDir, ctx.project, values.artifact);
     if (staged.artifacts.length > 0)
     {

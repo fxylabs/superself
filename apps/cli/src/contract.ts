@@ -21,7 +21,7 @@ type OptionValue<S> = S extends { multiple: true }
     ? (S extends { type: "boolean" } ? boolean[] : string[])
     : (S extends { type: "boolean" } ? boolean : string);
 
-export type ParsedOptions<T extends OptionSpecs> = { -readonly [K in keyof T]?: OptionValue<T[K]> };
+type ParsedOptions<T extends OptionSpecs> = { -readonly [K in keyof T]?: OptionValue<T[K]> };
 
 export interface CommandInput<T extends OptionSpecs = OptionSpecs>
 {
@@ -31,9 +31,9 @@ export interface CommandInput<T extends OptionSpecs = OptionSpecs>
 
 // What the dispatcher hands a leaf once the declared option set is no longer in
 // the type. `leaf` is the only place the two shapes meet.
-export type ParsedInput = ParsedArguments;
+type ParsedInput = ParsedArguments;
 
-export type CommandRun = (input: ParsedInput) => void | Promise<void>;
+type CommandRun = (input: ParsedInput) => void | Promise<void>;
 
 export interface CommandLeaf
 {
@@ -53,7 +53,7 @@ export interface CommandLeaf
 
 // What a leaf declares beyond its options and positionals. Both fields are
 // rare enough that a verb states them by name rather than by position.
-export interface LeafExtras
+interface LeafExtras
 {
     undocumented?: string[];
     requires?: Requirement[];
@@ -67,11 +67,11 @@ export interface LeafExtras
 //            unnamed form; a word is still a verb, and `--` or a short flag is
 //            still explained by `subcommand` — `self work --project x` against
 //            `self work add`
-export type Unnamed = "refuse" | "text" | "options";
+type Unnamed = "refuse" | "text" | "options";
 
-export type Refusal = string | ((verb: string | undefined) => string);
+type Refusal = string | ((verb: string | undefined) => string);
 
-export interface CommandBranch
+interface CommandBranch
 {
     kind: "branch";
     name: string;
@@ -81,7 +81,7 @@ export interface CommandBranch
     refusal: Refusal;
 }
 
-export type CommandNode = CommandLeaf | CommandBranch;
+type CommandNode = CommandLeaf | CommandBranch;
 
 // One line of a command's syntax, and the verbs it documents. A line that
 // documents several verbs at once — `work start|block|unblock|done <id>` —
@@ -219,45 +219,12 @@ function takesUnnamed(node: CommandBranch, first: string | undefined): boolean
 
 /* ── the read-only consumer surface ────────────────────────────────── */
 
-export interface DescribedOption
+interface DescribedOption
 {
     name: string;
     type: "string" | "boolean";
     multiple: boolean;
     short?: string;
-}
-
-// One dispatchable command, joined to the line that documents it. This is what
-// the enumeration and a future reference-documentation generator read; it
-// carries no handler, so nothing downstream of it can run a command by
-// describing one.
-export interface CommandDescription
-{
-    root: string;
-    // The verb below the root; empty for the unnamed form.
-    verb: string;
-    path: string;
-    syntax: string;
-    summary: string[];
-    options: DescribedOption[];
-    positionals: number;
-}
-
-export function describeCommands(commands: Command[]): CommandDescription[]
-{
-    return commands.flatMap((command) => commandLeaves(command).map((entry) =>
-    {
-        const line = command.usage.find((usage) => usage.verbs.includes(entry.verb));
-        return {
-            root: command.name,
-            verb: entry.verb,
-            path: entry.verb === "" ? command.name : `${command.name} ${entry.verb}`,
-            syntax: line?.syntax ?? "",
-            summary: line?.description ?? [],
-            options: describeOptions(entry.leaf.options),
-            positionals: entry.leaf.positionals
-        };
-    }));
 }
 
 function describeOptions(options: OptionSpecs): DescribedOption[]
@@ -270,7 +237,7 @@ function describeOptions(options: OptionSpecs): DescribedOption[]
     }));
 }
 
-export interface CommandLeafEntry
+interface CommandLeafEntry
 {
     verb: string;
     leaf: CommandLeaf;

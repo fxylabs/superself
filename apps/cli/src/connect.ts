@@ -116,10 +116,9 @@ function renderMachineBlock(): string
     ].join("\n");
 }
 
-function renderBlock(model: ProjectModel): string
-{
-    const lines: string[] = [
-        marker(BEGIN),
+// The managed block's fixed text. It is content, not logic: the reader of this
+// file is an agent session, and the wording is reviewed as prose.
+const BLOCK_BODY: readonly string[] = [
         "## Project state (superself)",
         "",
         "Project state — goals, decisions, work units, reports — is version-controlled",
@@ -161,8 +160,12 @@ function renderBlock(model: ProjectModel): string
         "",
         "This block is the short form. The installed CLI carries the rest — what each",
         "concept is, when to reach for it, and the order the verbs go in:",
-        ""
-    ];
+    ""
+];
+
+function renderBlock(model: ProjectModel): string
+{
+    const lines: string[] = [marker(BEGIN), ...BLOCK_BODY];
     for (const topic of TOPICS)
     {
         lines.push(`- \`self help ${topic.name}\` — ${topic.summary}`);

@@ -7,7 +7,7 @@ import { WorkState } from "./model.js";
 import { digestFile } from "./repo.js";
 import { ArtifactMeta } from "./types.js";
 
-export interface Evidence
+interface Evidence
 {
     hash: string;
     branch?: string;
@@ -177,6 +177,24 @@ function classifyAll(
 // Where the commit sits once it is known to exist: merged, live on some ref,
 // or reachable from nothing. Two `rev-list` processes for the whole set, which
 // is what makes the cost flat in the number of commits (#128).
+// No default branch in this checkout means nothing can be called merged, so
+// nothing is excluded and every commit stays a candidate.
+function unmergedOids(projectDir: string, mainRef: string | null, items: Evidence[], resolved: Map<string, string>): Set<string> | null
+{
+    const oids = items.map((item) => resolved.get(item.hash) as string);
+    return mainRef === null ? new Set(oids) : revListExcept(projectDir, oids, ["--not", mainRef]);
+}
+
+// `--single-worktree` keeps `--all` to this working tree's HEAD, which is the
+// one `merge-base --is-ancestor <hash> HEAD` asked about. Without it a sibling
+// worktree's detached HEAD would start rescuing commits, and that would be a
+// verdict this fold never used to reach.
+function danglingOids(projectDir: string, unsettled: Evidence[], resolved: Map<string, string>): Set<string> | null
+{
+    return revListExcept(projectDir, unsettled.map((item) => resolved.get(item.hash) as string),
+        ["--single-worktree", "--not", "--all"]);
+}
+
 function walkVerdicts(
     projectDir: string,
     state: RepositoryState,
@@ -190,22 +208,13 @@ function walkVerdicts(
         return verdicts;
     }
     const mainRef = defaultRef(projectDir);
-    const oids = (of: Evidence[]): string[] => of.map((item) => resolved.get(item.hash) as string);
-    // No default branch in this checkout means nothing can be called merged,
-    // so nothing is excluded and every commit stays a candidate.
-    const unmerged = mainRef === null
-        ? new Set(oids(items))
-        : revListExcept(projectDir, oids(items), ["--not", mainRef]);
+    const unmerged = unmergedOids(projectDir, mainRef, items, resolved);
     if (unmerged === null)
     {
         return null;
     }
     const unsettled = items.filter((item) => unmerged.has(resolved.get(item.hash) as string));
-    // `--single-worktree` keeps `--all` to this working tree's HEAD, which is
-    // the one `merge-base --is-ancestor <hash> HEAD` asked about. Without it a
-    // sibling worktree's detached HEAD would start rescuing commits, and that
-    // would be a verdict this fold never used to reach.
-    const dangling = revListExcept(projectDir, oids(unsettled), ["--single-worktree", "--not", "--all"]);
+    const dangling = danglingOids(projectDir, unsettled, resolved);
     if (dangling === null)
     {
         return null;

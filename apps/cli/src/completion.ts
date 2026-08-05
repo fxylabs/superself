@@ -17,7 +17,7 @@ import { SelfEvent } from "./types.js";
 // layer's counterpart of: declare, revise, drop, `met --requirement --why`,
 // and `recheck` for what a revision left stale. One vocabulary, two layers.
 
-export interface Requirement
+interface Requirement
 {
     id: string;
     text: string;
@@ -34,7 +34,7 @@ export interface Requirement
 // What a requirement was covered by, and the revision it was judged against.
 // The evidence is named by reference — a commit, an artifact, or a report the
 // work unit already carries — never copied.
-export interface RequirementCoverage
+interface RequirementCoverage
 {
     requirement: string;
     ts: string;
@@ -49,7 +49,7 @@ export interface RequirementCoverage
 // An approval is human only when the event carries the record of how the human
 // was verified. `origin.confirmed` alone is a bit any process can set; the
 // confirmation method is the typed input the gate actually read.
-export interface WorkApproval
+interface WorkApproval
 {
     id: string;
     ts: string;
@@ -61,7 +61,7 @@ export interface WorkApproval
 // What the implementation of this unit has to have been, beyond producing a
 // result. Both halves are about who did the work rather than about what came
 // out of it, which is why no gate over the output can enforce them.
-export interface CompletionPolicy
+interface CompletionPolicy
 {
     ts: string;
     // The model class an implementation attempt must have run under.
@@ -75,7 +75,7 @@ export interface CompletionPolicy
 // A review receipt that named this work unit. Ingested through
 // `self review ingest` like every other receipt — this is the projection of it
 // onto the work, not a second way to mint one.
-export interface WorkReview
+interface WorkReview
 {
     receipt: string;
     ts: string;
@@ -107,7 +107,7 @@ export function emptyCompletion(): CompletionState
 // What the completion check reads about a work unit. Kept structural rather
 // than importing WorkState, so the check stays a function of the fold instead
 // of a second consumer of the model's shape.
-export interface Completable
+interface Completable
 {
     id: string;
     completion: CompletionState;
@@ -156,41 +156,57 @@ function mintRequirementId(state: CompletionState, event: SelfEvent): string
     return id;
 }
 
-export function applyCompletion(state: CompletionState, event: SelfEvent): void
+function newRequirement(state: CompletionState, event: SelfEvent): CompletionState["requirements"][number]
+{
+    return { id: mintRequirementId(state, event), text: String(event.payload.text), revision: 1, event: event.id };
+}
+
+function policyOf(event: SelfEvent): CompletionState["policy"]
+{
+    return {
+        ts: event.ts,
+        model: str(event.payload.model),
+        freshReview: event.payload.freshReview === true,
+        why: str(event.payload.why)
+    };
+}
+
+// Events that speak about the unit's completion as a whole. Answers whether it
+// consumed the event; what is left names a single requirement.
+function applyToCompletion(state: CompletionState, event: SelfEvent): boolean
 {
     if (event.type === "work.required")
     {
-        state.requirements.push({
-            id: mintRequirementId(state, event),
-            text: String(event.payload.text),
-            revision: 1,
-            event: event.id
-        });
-        return;
+        state.requirements.push(newRequirement(state, event));
+        return true;
     }
     if (event.type === "work.approval-required")
     {
         state.approvalRequired = { ts: event.ts, why: str(event.payload.why) };
-        return;
+        return true;
     }
     if (event.type === "work.approved")
     {
         state.approvals.push(approvalOf(event));
-        return;
+        return true;
     }
     if (event.type === "work.policy-declared")
     {
-        state.policy = {
-            ts: event.ts,
-            model: str(event.payload.model),
-            freshReview: event.payload.freshReview === true,
-            why: str(event.payload.why)
-        };
-        return;
+        state.policy = policyOf(event);
+        return true;
     }
     if (event.type === "work.covered" || event.type === "work.rechecked")
     {
         state.coverage.push(coverageOf(event));
+        return true;
+    }
+    return false;
+}
+
+export function applyCompletion(state: CompletionState, event: SelfEvent): void
+{
+    if (applyToCompletion(state, event))
+    {
         return;
     }
     const requirement = state.requirements.find((item) => item.id === event.payload.requirement);
@@ -337,26 +353,6 @@ export function completionRefusal(work: Completable, doneReport?: string): strin
         + `or attach evidence with \`self report ${work.id} "<summary>" --evidence <commit>\``;
 }
 
-export function implementers(work: Completable): { id: string; state: string; model?: string }[]
-{
-    return work.attempts.filter((attempt) => attempt.state === "completed");
-}
-
-// A class matches a model name when it is the whole name or one of the parts it
-// is built from: "opus" answers for "claude-opus-5", and the exact identifier
-// answers for itself. Nothing here guesses an ordering between model names —
-// a policy states the class it means.
-export function matchesModel(model: string | undefined, wanted: string): boolean
-{
-    if (model === undefined)
-    {
-        return false;
-    }
-    const name = model.toLowerCase();
-    const want = wanted.toLowerCase();
-    return name === want || name.split(/[^a-z0-9]+/).includes(want) || name.startsWith(`${want}-`);
-}
-
 // What the daemon's wake path reads. An approval that has not been granted is
 // the unit saying a person has to answer before anything may be dispatched at
 // it, and a supervisor that dispatched it anyway would be answering for them.
@@ -366,22 +362,9 @@ export function approvalPending(work: Completable): boolean
         && !work.completion.approvals.some((item) => item.humanConfirmed);
 }
 
-export function requirementOf(state: CompletionState, id: string): Requirement | undefined
-{
-    return state.requirements.find((item) => item.id === id && item.retired !== true);
-}
-
-export function liveRequirements(state: CompletionState): Requirement[]
+function liveRequirements(state: CompletionState): Requirement[]
 {
     return state.requirements.filter((item) => item.retired !== true);
-}
-
-// Requirement ids are never reused: a retired r2 stays retired so coverage
-// recorded against it keeps pointing at what it actually satisfied.
-export function nextRequirementId(state: CompletionState): string
-{
-    const highest = state.requirements.reduce((max, item) => Math.max(max, Number(item.id.slice(1)) || 0), 0);
-    return `r${highest + 1}`;
 }
 
 function str(value: unknown): string | undefined

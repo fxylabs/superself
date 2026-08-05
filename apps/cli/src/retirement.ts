@@ -15,9 +15,9 @@ import { CliError, SelfEvent } from "./types.js";
 
 // What the three transitions are called where a person reads them. The verb
 // each one arrives from varies; what is being lost does not.
-export type RetirementKind = "supersede" | "retract" | "retire";
+type RetirementKind = "supersede" | "retract" | "retire";
 
-export interface RetirementIntent
+interface RetirementIntent
 {
     kind: RetirementKind;
     // The records this call destroys, already resolved and already checked
@@ -78,7 +78,7 @@ const TEXT_LINE_LIMIT = 20;
 // The gate. Returns the record of how the person was verified, which the
 // caller puts in the event payload — `origin.confirmed` alone is a bit any
 // process can set, so the payload carries what was actually typed.
-export function requireHumanRetirement(intent: RetirementIntent, model: ProjectModel): HumanConfirmation
+function requireHumanRetirement(intent: RetirementIntent, model: ProjectModel): HumanConfirmation
 {
     const disclosure = renderDisclosure(intent, model);
     const challenge = intent.targets.map((target) => target.id).join(" ");

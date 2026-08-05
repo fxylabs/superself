@@ -224,16 +224,12 @@ function scopeModel(scope: ProjectScope): ProjectModel
     return buildModel(scope.storeDir, scope.project, new Date());
 }
 
-function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>): void
+// The horizon enum was removed as structure and kept as optional metadata
+// (#197 §7, #207 B7): whatever span the caller states is recorded.
+function objectiveAddPayload(id: string, outcome: string, row: ReturnType<typeof presetRow>, model: ProjectModel,
+    values: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>["values"]): Record<string, unknown>
 {
-    const { ctx, model } = writeTarget();
-    const outcome = requireText(positionals[0], 'objective add "<desired outcome>"');
-    const id = objectiveId();
-    const row = presetRow(ctx.storeDir, "objective");
-    const proposed = values.proposed === true;
-    // The horizon enum was removed as structure and kept as optional metadata
-    // (#197 §7, #207 B7): whatever span the caller states is recorded.
-    const payload: Record<string, unknown> = {
+    return {
         entity: id,
         text: outcome,
         labels: [row.label],
@@ -252,6 +248,18 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
         success: values.success ?? [],
         stop: values.stop ?? []
     };
+}
+
+function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>): void
+{
+    const { ctx, model } = writeTarget();
+    const outcome = requireText(positionals[0], 'objective add "<desired outcome>"');
+    const id = objectiveId();
+    const row = presetRow(ctx.storeDir, "objective");
+    const proposed = values.proposed === true;
+    // The horizon enum was removed as structure and kept as optional metadata
+    // (#197 §7, #207 B7): whatever span the caller states is recorded.
+    const payload = objectiveAddPayload(id, outcome, row, model, values);
     recordRetirement(ctx, retirementIntent(model, "supersede", proposed ? [] : supersedeTargets(payload)), model,
         (confirmation) => [makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed)],
@@ -288,11 +296,8 @@ function declineObjective({ values, positionals }: CommandInput<typeof WHY_OPTIO
 // A revision is a supersession (#207 B9): a new objective entity carries the
 // links and the revised fields, the predecessor reads superseded, and prior
 // coverage under it is stale by construction — the record id changes.
-function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): void
+function refuseObjectiveRevise(objective: ObjectiveState, values: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>["values"]): void
 {
-    const { ctx, model } = writeTarget();
-    const objective = requireObjective(model, positionals[0]);
-    const why = required(values.why);
     if (isTerminalObjective(objective) || objective.status === "superseded")
     {
         throw new CliError(`${objective.id} is already ${objective.status} — a closed objective is not revised; add a new one`);
@@ -302,15 +307,22 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
     {
         throw new CliError("objective revise needs at least one of --outcome, --horizon, --target, --priority, --success, --stop");
     }
+}
+
+function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): void
+{
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
+    const why = required(values.why);
+    refuseObjectiveRevise(objective, values);
     const id = objectiveId();
-    const carried = carriedPlacement(model, objective.id);
     const payload: Record<string, unknown> = {
         entity: id,
         text: restated(values.outcome, "objective") ?? objective.outcome,
         labels: [presetRow(ctx.storeDir, "objective").label],
         links: [{ type: "supersedes", target: objective.id }],
         criteria: [],
-        ...carried,
+        ...carriedPlacement(model, objective.id),
         horizon: revisedField(values.horizon, objective.horizon),
         target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, objective.target),
         rank: revisedField(withdrawable(values.priority, validPriority) as number | null | undefined, objective.priority),
@@ -353,23 +365,22 @@ function carriedPlacement(model: ProjectModel, id: string): Record<string, unkno
     return carried;
 }
 
-function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_CLOSE_OPTIONS>): void
+// Everything that refuses the call, in one pass, before anything is recorded.
+function refuseObjectiveClose(objective: ObjectiveState, as: string | undefined, why: string | undefined): void
 {
-    const { ctx, model } = writeTarget();
-    const objective = requireObjective(model, positionals[0]);
     // The gate demanded --as; what is left is whether the closure it names is
     // one the lifecycle has.
-    if (values.as !== "reached" && values.as !== "dropped")
+    if (as !== "reached" && as !== "dropped")
     {
-        throw new CliError(`objective close --as must be reached or dropped — "${values.as}" is neither`);
+        throw new CliError(`objective close --as must be reached or dropped — "${as}" is neither`);
     }
     // Dropping is a withdrawal, and every withdrawal in the lifecycle carries
     // its reason: an objective given up on with no reason recorded leaves the
     // next reader unable to tell it from one nobody got to. Reaching one needs
     // no reason — the coverage it was reached on is the record.
-    if (values.as === "dropped")
+    if (as === "dropped")
     {
-        requireText(values.why, 'objective close <id> --as dropped --why "<why it was given up>"');
+        requireText(why, 'objective close <id> --as dropped --why "<why it was given up>"');
     }
     // The fold refuses a transition on a terminal objective, so recording one
     // would print "recorded" and change nothing.
@@ -378,10 +389,17 @@ function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_C
         throw new CliError(`${objective.id} is already ${objective.status}${objective.closedWhy === undefined ? "" : ` — ${objective.closedWhy}`}`);
     }
     const open = objective.milestones.filter((milestone) => milestone.state !== "reached" && milestone.state !== "closed");
-    if (values.as === "reached" && open.length > 0)
+    if (as === "reached" && open.length > 0)
     {
         throw new CliError(`${objective.id} still has unreached milestones (${open.map((m) => m.id).join(", ")}) — reach or supersede them first`);
     }
+}
+
+function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_CLOSE_OPTIONS>): void
+{
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
+    refuseObjectiveClose(objective, values.as, values.why);
     // Reached is the criteria-gated done claim; dropped is the retirement
     // (#207 B10) — the outcome layer speaks the execution grammar too.
     const payload = values.as === "reached"
@@ -503,6 +521,24 @@ function milestoneTarget(id: string | undefined): MilestoneTarget
     return { ctx, model, ...requireMilestone(model, id) };
 }
 
+function milestoneAddPayload(id: string, outcome: string, row: ReturnType<typeof presetRow>,
+    links: Record<string, unknown>[], objective: ObjectiveState,
+    values: CommandInput<typeof MILESTONE_ADD_OPTIONS>["values"]): Record<string, unknown>
+{
+    return {
+        entity: id,
+        text: outcome,
+        labels: [row.label],
+        links,
+        criteria: values.exit,
+        exposure: row.exposure,
+        scope: "project",
+        priority: row.priority,
+        after: (values.after ?? []).map((prefix) => requireSibling(objective, prefix)),
+        target: values.target === undefined ? undefined : validDate(values.target)
+    };
+}
+
 function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD_OPTIONS>): void
 {
     const { ctx, model } = writeTarget();
@@ -516,18 +552,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         requireSupersedeKind(model.entities, values.supersedes, "milestone");
         links.push({ type: "supersedes", target: requireSibling(objective, values.supersedes) });
     }
-    const payload: Record<string, unknown> = {
-        entity: id,
-        text: outcome,
-        labels: [row.label],
-        links,
-        criteria: values.exit,
-        exposure: row.exposure,
-        scope: "project",
-        priority: row.priority,
-        after: (values.after ?? []).map((prefix) => requireSibling(objective, prefix)),
-        target: values.target === undefined ? undefined : validDate(values.target)
-    };
+    const payload = milestoneAddPayload(id, outcome, row, links, objective, values);
     recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload)), model,
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
@@ -535,13 +560,8 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
     console.log(id);
 }
 
-// A revision is a supersession (#207 B12): a new milestone entity carries the
-// revised criteria and the grouping, the predecessor reads superseded, and
-// its coverage is stale by construction — claims bind to the entity id.
-function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): void
+function refuseMilestoneRevise(milestone: MilestoneState, values: CommandInput<typeof MILESTONE_REVISE_OPTIONS>["values"]): void
 {
-    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
-    const why = required(values.why);
     if (milestone.supersededBy !== undefined || milestone.droppedWhy !== undefined)
     {
         throw new CliError(`${milestone.id} is already closed — a withdrawn or replaced checkpoint is not revised`);
@@ -552,6 +572,16 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
     {
         throw new CliError("milestone revise needs at least one of --outcome, --target, --exit, --drop-exit");
     }
+}
+
+// A revision is a supersession (#207 B12): a new milestone entity carries the
+// revised criteria and the grouping, the predecessor reads superseded, and its
+// coverage is stale by construction — claims bind to the entity id.
+function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): void
+{
+    const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
+    const why = required(values.why);
+    refuseMilestoneRevise(milestone, values);
     const dropped = new Set((values["drop-exit"] ?? []).map((id) => requireCriterion(milestone, id).id));
     const criteria = [
         ...milestone.exit.filter((item) => item.dropped !== true && !dropped.has(item.id)).map((item) => item.text),
@@ -936,7 +966,7 @@ function stateMark(state: string): string
 
 /* ── lookups and validation ────────────────────────────────────────── */
 
-export function requireObjective(model: ProjectModel, id: string | undefined): ObjectiveState
+function requireObjective(model: ProjectModel, id: string | undefined): ObjectiveState
 {
     const wanted = requireText(id, "… <objective-id> — run `self objective` to list ids");
     const objective = model.goals.objectives.find((item) => item.id === wanted);
@@ -947,7 +977,7 @@ export function requireObjective(model: ProjectModel, id: string | undefined): O
     return objective;
 }
 
-export function requireMilestone(model: ProjectModel, id: string | undefined): { objective: ObjectiveState; milestone: MilestoneState }
+function requireMilestone(model: ProjectModel, id: string | undefined): { objective: ObjectiveState; milestone: MilestoneState }
 {
     const wanted = requireText(id, "… <milestone-id> — run `self milestone` to list ids");
     const found = findMilestone(model.goals, wanted);

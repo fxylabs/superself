@@ -21,7 +21,7 @@ import { join } from "node:path";
 // The resolved shape a preset verb writes under: the label it records, and
 // the placement it defaults to. `priority` absent means "no stated priority",
 // which sorts after every stated one (#197 §3).
-export interface PresetRow
+interface PresetRow
 {
     label: string;
     priority?: number;
@@ -83,7 +83,7 @@ function userRow(row: AliasRow | undefined): Partial<PresetRow>
 
 // The merged table: every built-in row, overridden field-wise by the user's
 // row of the same verb, plus every user-added verb.
-export function aliasTable(config: StoreConfig): Record<string, PresetRow>
+function aliasTable(config: StoreConfig): Record<string, PresetRow>
 {
     const table: Record<string, PresetRow> = { ...BUILTIN_ROWS };
     for (const [verb, row] of Object.entries(config.aliases ?? {}))
@@ -296,7 +296,33 @@ function requireLabel(value: string): string
 // `self roadmap`, and every user-added verb. One synthetic declaration per
 // verb, parsed through the same contract machinery as a composed command, so
 // the argument gate and the help render hold for these too.
-export function aliasCommand(verb: string, row: PresetRow): Command
+// The help page every alias verb shares. Content, not logic — it is read as
+// prose on `self <verb> --help`.
+function aliasDetail(verb: string, row: PresetRow): string[]
+{
+    return [
+        `an alias verb over the entity grammar: \`${verb} add\` records one entity`,
+        `labeled "${row.label}" with the alias row's default placement. Explicit`,
+        "placement flags beat the row's defaults (#197 §7); everything else works",
+        "as `self state add` does, retention caps included.",
+        "",
+        "a write verb: it records into the project it runs in and takes no",
+        "--project flag. Read the records back with `self state list`.",
+        "",
+        "  --label <text>        an extra label beside the row's, repeatable",
+        "  --priority <n>        render order, overriding the row's default",
+        "  --exposure <form>     full, index, or search, overriding the row's default",
+        "  --scope <scope>       project (default) or workspace — where it renders",
+        "  --target <date>       a YYYY-MM-DD deadline for the derived views to judge",
+        "  --criteria <text>     an exit criterion that gates done claims, repeatable",
+        "  --link [type:]<id>    typed edge, repeatable, as `state add` takes it",
+        "  --why <text>          rationale recorded with the entity",
+        "  --proposed            record as a proposal; `state confirm` makes it hold",
+        "  --demote <id>         past a retention cap: what frees the room, repeatable"
+    ];
+}
+
+function aliasCommand(verb: string, row: PresetRow): Command
 {
     const place = `${row.exposure}${row.priority === undefined ? "" : ` · priority ${row.priority}`}`;
     return {
@@ -308,26 +334,7 @@ export function aliasCommand(verb: string, row: PresetRow): Command
                 verbs: ["add"]
             }
         ],
-        detail: [
-            `an alias verb over the entity grammar: \`${verb} add\` records one entity`,
-            `labeled "${row.label}" with the alias row's default placement. Explicit`,
-            "placement flags beat the row's defaults (#197 §7); everything else works",
-            "as `self state add` does, retention caps included.",
-            "",
-            "a write verb: it records into the project it runs in and takes no",
-            "--project flag. Read the records back with `self state list`.",
-            "",
-            "  --label <text>        an extra label beside the row's, repeatable",
-            "  --priority <n>        render order, overriding the row's default",
-            "  --exposure <form>     full, index, or search, overriding the row's default",
-            "  --scope <scope>       project (default) or workspace — where it renders",
-            "  --target <date>       a YYYY-MM-DD deadline for the derived views to judge",
-            "  --criteria <text>     an exit criterion that gates done claims, repeatable",
-            "  --link [type:]<id>    typed edge, repeatable, as `state add` takes it",
-            "  --why <text>          rationale recorded with the entity",
-            "  --proposed            record as a proposal; `state confirm` makes it hold",
-            "  --demote <id>         past a retention cap: what frees the room, repeatable"
-        ],
+        detail: aliasDetail(verb, row),
         node: branch({
             name: verb,
             unnamed: "refuse",

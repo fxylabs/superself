@@ -150,6 +150,42 @@ let LANG = "en";
 let THEME = "violet";
 let USER_THEME = "";
 
+type RailFor = (depth: number, active?: string) => Rail;
+
+function railFactory(storeDir: string, summaries: ProjectSummary[], feed: SummaryEvent[]): RailFor
+{
+    const workspace = basename(dirname(storeDir));
+    return (depth, active) => ({
+        workspace,
+        projects: summaries.map((s) => ({ slug: s.slug, warn: waitingOf(s).length > 0 })),
+        active,
+        foldId: shortId(feed[0]?.id ?? ""),
+        foldTime: stamp(),
+        depth
+    });
+}
+
+// Every objective keeps a page, closed ones included, exactly as done work
+// units do. A page that stopped being rewritten when its objective closed
+// would keep asserting the last state it was open in, and the work pages that
+// link to it would keep sending readers there.
+function writeProjectPages(dir: string, model: ProjectModel, feed: SummaryEvent[], verdicts: Record<string, Verdict>, rail: RailFor): void
+{
+    writeFileSync(join(dir, `${model.slug}.html`), renderProjectPage(model, feed, verdicts, rail(0, model.slug)));
+    const workDir = ensureDir(join(dir, model.slug));
+    for (const work of model.works)
+    {
+        writeFileSync(join(workDir, `${work.id}.html`), renderWorkPage(model, work, verdicts, rail(1, model.slug)));
+    }
+    for (const objective of model.goals.objectives)
+    {
+        writeFileSync(join(workDir, `${objective.id}.html`), renderObjectivePage(model, objective, rail(1, model.slug)));
+    }
+    writeFileSync(join(workDir, "decisions.html"), renderDecisionsPage(model, rail(1, model.slug)));
+    writeFileSync(join(workDir, "events.html"), renderEventsPage(model, feed, rail(1, model.slug)));
+    writeFileSync(join(workDir, "artifacts.html"), renderArtifactsPage(model, rail(1, model.slug)));
+}
+
 export function writeViews(storeDir: string, model: ProjectModel, config: StoreConfig, verdicts: Record<string, Verdict> = {}): void
 {
     LANG = config.lang ?? "en";
@@ -159,38 +195,12 @@ export function writeViews(storeDir: string, model: ProjectModel, config: StoreC
     excludeLocally(storeDir, VIEW_DIR + "/");
     excludeLocally(storeDir, THEME_FILE);
     const events = readEvents(storeDir, model.slug);
-    const labels = buildLabels(events);
-    const feed = toFeed([...events].reverse(), labels);
+    const feed = toFeed([...events].reverse(), buildLabels(events));
     writeFileSync(join(dir, `${model.slug}.json`), JSON.stringify(summarize(model, feed)) + "\n");
 
     const summaries = readSummaries(dir);
-    const workspace = basename(dirname(storeDir));
-    const rail = (depth: number, active?: string): Rail => ({
-        workspace,
-        projects: summaries.map((s) => ({ slug: s.slug, warn: waitingOf(s).length > 0 })),
-        active,
-        foldId: shortId(feed[0]?.id ?? ""),
-        foldTime: stamp(),
-        depth
-    });
-
-    writeFileSync(join(dir, `${model.slug}.html`), renderProjectPage(model, feed, verdicts, rail(0, model.slug)));
-    const workDir = ensureDir(join(dir, model.slug));
-    for (const work of model.works)
-    {
-        writeFileSync(join(workDir, `${work.id}.html`), renderWorkPage(model, work, verdicts, rail(1, model.slug)));
-    }
-    // Every objective keeps a page, closed ones included, exactly as done work
-    // units do. A page that stopped being rewritten when its objective closed
-    // would keep asserting the last state it was open in, and the work pages
-    // that link to it would keep sending readers there.
-    for (const objective of model.goals.objectives)
-    {
-        writeFileSync(join(workDir, `${objective.id}.html`), renderObjectivePage(model, objective, rail(1, model.slug)));
-    }
-    writeFileSync(join(workDir, "decisions.html"), renderDecisionsPage(model, rail(1, model.slug)));
-    writeFileSync(join(workDir, "events.html"), renderEventsPage(model, feed, rail(1, model.slug)));
-    writeFileSync(join(workDir, "artifacts.html"), renderArtifactsPage(model, rail(1, model.slug)));
+    const rail = railFactory(storeDir, summaries, feed);
+    writeProjectPages(dir, model, feed, verdicts, rail);
     writeFileSync(join(dir, "workspace.html"), renderWorkspacePage(summaries, rail(0)));
 }
 
@@ -297,6 +307,32 @@ function atTerminal(): boolean
         && process.stdout.isTTY === true;
 }
 
+// Spread in place: the summary is written as JSON, so the key order these
+// return is the key order on disk.
+function summaryCounts(model: ProjectModel): Pick<ProjectSummary, "blockedCount" | "nextCount" | "doneCount" | "retiredCount">
+{
+    return {
+        blockedCount: model.works.filter((w) => w.status === "blocked").length,
+        nextCount: model.works.filter((w) => w.status === "next").length,
+        doneCount: model.works.filter((w) => w.status === "done").length,
+        retiredCount: model.works.filter((w) => w.status === "retired").length
+    };
+}
+
+function summaryObjectives(model: ProjectModel): ProjectSummary["objectives"]
+{
+    return openObjectives(model.goals).map((objective) => ({
+        id: objective.id,
+        outcome: objective.outcome,
+        state: objective.state,
+        reason: objective.reason,
+        met: objective.met,
+        total: objective.total,
+        milestones: objective.milestones.length,
+        reached: objective.milestones.filter((milestone) => milestone.state === "reached").length
+    }));
+}
+
 function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
 {
     return {
@@ -305,10 +341,7 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
         goal: model.goal === undefined ? undefined : model.goal + otherGoals(model),
         updated: new Date().toISOString(),
         active: model.works.filter((w) => w.status === "active").map((w) => ({ id: w.id, outcome: w.outcome })),
-        blockedCount: model.works.filter((w) => w.status === "blocked").length,
-        nextCount: model.works.filter((w) => w.status === "next").length,
-        doneCount: model.works.filter((w) => w.status === "done").length,
-        retiredCount: model.works.filter((w) => w.status === "retired").length,
+        ...summaryCounts(model),
         health: model.health,
         openQuestions: model.openQuestions,
         proposedCount: model.decisions.filter((d) => d.status === "proposed" && !d.expired).length,
@@ -319,16 +352,7 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
             .map((d) => ({ ts: d.ts, text: d.text })),
         waiting: waitingRows(model),
         foldId: shortId(feed[0]?.id ?? ""),
-        objectives: openObjectives(model.goals).map((objective) => ({
-            id: objective.id,
-            outcome: objective.outcome,
-            state: objective.state,
-            reason: objective.reason,
-            met: objective.met,
-            total: objective.total,
-            milestones: objective.milestones.length,
-            reached: objective.milestones.filter((milestone) => milestone.state === "reached").length
-        }))
+        objectives: summaryObjectives(model)
     };
 }
 
@@ -351,15 +375,31 @@ function waitingRows(model: ProjectModel): WaitingRow[]
         .filter((w) => w.status === "blocked")
         .map((w) => `${w.id} is waiting on a decision: ${w.blockedWhy ?? w.outcome}`));
     return [
-        ...model.works.filter((w) => w.status === "blocked").map((w) => ({
-            kind: "blocked",
-            text: firstLine(`${w.outcome} — waiting on ${w.blockedOn ?? "?"}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`),
-            ref: w.id,
-            action: "open",
-            href: `${w.id}.html`,
-            warn: true
-        })),
+        ...blockedRows(model),
         ...model.health.map((h) => ({ kind: "health", text: firstLine(h), ref: "", action: "inspect", warn: true })),
+        ...rulingRows(model),
+        ...model.openQuestions.filter((q) => !generated.has(q))
+            .map((q) => ({ kind: "question", text: firstLine(q), ref: "", action: "" }))
+    ];
+}
+
+function blockedRows(model: ProjectModel): WaitingRow[]
+{
+    return model.works.filter((w) => w.status === "blocked").map((w) => ({
+        kind: "blocked",
+        text: firstLine(`${w.outcome} — waiting on ${w.blockedOn ?? "?"}${w.blockedWhy === undefined ? "" : `: ${w.blockedWhy}`}`),
+        ref: w.id,
+        action: "open",
+        href: `${w.id}.html`,
+        warn: true
+    }));
+}
+
+// The two records only the reader can close: a proposed decision and a work
+// proposal.
+function rulingRows(model: ProjectModel): WaitingRow[]
+{
+    return [
         ...model.decisions.filter((d) => d.status === "proposed" && !d.expired).map((d) => ({
             kind: "proposal",
             text: firstLine(d.text),
@@ -371,9 +411,7 @@ function waitingRows(model: ProjectModel): WaitingRow[]
             text: firstLine(`${proposal.outcome} — ${proposalBrief(proposal)}`, 240),
             ref: shortId(proposal.id),
             action: "accept"
-        })),
-        ...model.openQuestions.filter((q) => !generated.has(q))
-            .map((q) => ({ kind: "question", text: firstLine(q), ref: "", action: "" }))
+        }))
     ];
 }
 
@@ -394,31 +432,29 @@ function waitingOf(summary: ProjectSummary): WaitingRow[]
 
 /* ── project dashboard ─────────────────────────────────────────────── */
 
-function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts: Record<string, Verdict>, rail: Rail): string
+function workPanels(model: ProjectModel, verdicts: Record<string, Verdict>): string[]
 {
     const active = model.works.filter((w) => w.status === "active");
     const next = model.works.filter((w) => w.status === "next");
-    const done = model.works.filter((w) => w.status === "done");
-    const retired = model.works.filter((w) => w.status === "retired");
-    const waiting = waitingRows(model);
-    const decisions = decisionOrder(model.decisions);
-    const artifacts = artifactRows(model);
-    // Decisions carry a sentence of text and a reason, so they read in the
-    // main column; the 300px record column reflowed them into a ragged
-    // ribbon. Artifacts are a name and two ids and stay one glance away.
-    const objectives = openObjectives(model.goals);
     const proposals = proposalRows(model);
-    const main = [
-        `<p class="c2-goal">${esc(model.goal === undefined ? "goal not set" : model.goal + otherGoals(model))}</p>`,
-        waitingPanel(waiting, model.slug, ""),
-        objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "",
-            objectives.map((objective) => objectiveBlock(model.slug, objective)).join("\n")),
+    return [
         panel("IN PROGRESS", active.length, "",
             active.length === 0 ? empty("no active work") : table(active.map((w) => workRow(model, w, verdicts)))),
         panel("NEXT", next.length, "",
             next.length === 0 ? empty("queue is empty") : capped(
                 next.map((w) => nextRow(model.slug, w)), CAP_NEXT, "next work")),
-        proposals.length === 0 ? "" : panel("PROPOSED WORK", proposals.length, "", table(proposals)),
+        proposals.length === 0 ? "" : panel("PROPOSED WORK", proposals.length, "", table(proposals))
+    ];
+}
+
+// The folds under the live panels: what was decided, what the log holds, and
+// the two closed states a unit ends in.
+function closedPanels(model: ProjectModel, events: SummaryEvent[]): string[]
+{
+    const decisions = decisionOrder(model.decisions);
+    const done = model.works.filter((w) => w.status === "done");
+    const retired = model.works.filter((w) => w.status === "retired");
+    return [
         panel("DECISIONS", 0, `${model.slug}/decisions.html`,
             decisions.length === 0 ? empty("no decisions yet")
                 : table(decisions.slice(0, CAP_DECISIONS).map(decisionCells)),
@@ -428,14 +464,36 @@ function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts
         foldPanel("DONE", done.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}</p></div>`)),
         foldPanel("RETIRED", retired.map((w) => `<div class="dr-dec"><time>${day(w.lastEventTs)}</time><p>${workLink(model.slug, w)} ${esc(w.outcome)}` +
             `${w.retiredWhy === undefined ? "" : ` <i class="dr-prop">${esc(w.retiredWhy)}</i>`}</p></div>`))
-    ].filter((part) => part !== "").join("\n");
-    // With decisions moved into the main column the record column carries
-    // artifacts alone, so a project that has none gets the width back instead
-    // of a 300px column saying so.
-    const record = artifacts.length === 0 ? undefined
+    ];
+}
+
+// With decisions moved into the main column the record column carries
+// artifacts alone, so a project that has none gets the width back instead of a
+// 300px column saying so.
+function projectRecord(model: ProjectModel): string | undefined
+{
+    const artifacts = artifactRows(model);
+    return artifacts.length === 0 ? undefined
         : panel("ARTIFACTS", artifacts.length, `${model.slug}/artifacts.html`,
             artifacts.slice(0, CAP_ARTIFACTS).map((r) => artifactRow(r, "..")).join("\n"),
             more(artifacts.length, CAP_ARTIFACTS, `${model.slug}/artifacts.html`, "all artifacts"));
+}
+
+function renderProjectPage(model: ProjectModel, events: SummaryEvent[], verdicts: Record<string, Verdict>, rail: Rail): string
+{
+    // Decisions carry a sentence of text and a reason, so they read in the main
+    // column; the 300px record column reflowed them into a ragged ribbon.
+    // Artifacts are a name and two ids and stay one glance away.
+    const objectives = openObjectives(model.goals);
+    const main = [
+        `<p class="c2-goal">${esc(model.goal === undefined ? "goal not set" : model.goal + otherGoals(model))}</p>`,
+        waitingPanel(waitingRows(model), model.slug, ""),
+        objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "",
+            objectives.map((objective) => objectiveBlock(model.slug, objective)).join("\n")),
+        ...workPanels(model, verdicts),
+        ...closedPanels(model, events)
+    ].filter((part) => part !== "").join("\n");
+    const record = projectRecord(model);
     return page({
         title: model.slug,
         crumb: `${esc(rail.workspace)} / <b>${esc(model.slug)}</b>`,
@@ -531,15 +589,31 @@ function progressBar(met: number, total: number): string
         `<p class="ob-num">${met} of ${total} exit criteria covered</p>`;
 }
 
-function renderObjectivePage(model: ProjectModel, objective: ObjectiveState, rail: Rail): string
+function objectiveChips(objective: ObjectiveState): string
 {
-    const chips = [
+    return [
         objective.horizon === undefined ? "" : `<span class="wd-chip">${esc(objective.horizon)}</span>`,
         objective.target === undefined ? "" : `<span class="wd-chip">target ${esc(objective.target)}</span>`,
         `<span class="wd-chip">revision ${objective.revision}</span>`,
         objective.priority === undefined ? "" : `<span class="wd-chip">priority ${objective.priority}</span>`,
         ...objective.supersedes.map((id) => `<span class="wd-chip">supersedes ${esc(id)}</span>`)
     ].filter((chip) => chip !== "").join("");
+}
+
+function objectiveRecord(objective: ObjectiveState): string
+{
+    return [
+        criteriaPanel("SUCCESS CRITERIA", objective.success),
+        criteriaPanel("STOP CRITERIA", objective.stop),
+        objective.history.length === 0 ? "" : panel("REVISIONS", objective.history.length, "",
+            objective.history.map((entry) =>
+                `<div class="dr-dec"><time>${day(entry.ts)}</time><p>revision ${entry.revision} — ${esc(entry.why)}</p></div>`).join("\n"))
+    ].filter((part) => part !== "").join("\n");
+}
+
+function renderObjectivePage(model: ProjectModel, objective: ObjectiveState, rail: Rail): string
+{
+    const chips = objectiveChips(objective);
     const main = [
         `<div class="wd-head"><span class="n">${esc(objective.id)}</span>` +
             `<span class="pill s-${objective.state}">${esc(objective.state)}</span></div>`,
@@ -549,13 +623,7 @@ function renderObjectivePage(model: ProjectModel, objective: ObjectiveState, rai
         progressBar(objective.met, objective.total),
         ...objective.milestones.map((milestone) => milestonePanel(model.slug, milestone))
     ].filter((part) => part !== "").join("\n");
-    const record = [
-        criteriaPanel("SUCCESS CRITERIA", objective.success),
-        criteriaPanel("STOP CRITERIA", objective.stop),
-        objective.history.length === 0 ? "" : panel("REVISIONS", objective.history.length, "",
-            objective.history.map((entry) =>
-                `<div class="dr-dec"><time>${day(entry.ts)}</time><p>revision ${entry.revision} — ${esc(entry.why)}</p></div>`).join("\n"))
-    ].filter((part) => part !== "").join("\n");
+    const record = objectiveRecord(objective);
     return page({
         title: `${objective.id} — ${model.slug}`,
         crumb: `${esc(rail.workspace)} / <a href="../${esc(model.slug)}.html">${esc(model.slug)}</a> / <b>${esc(objective.id)}</b>`,
@@ -629,50 +697,76 @@ function nextRow(slug: string, work: WorkState): string
 
 /* ── work detail ───────────────────────────────────────────────────── */
 
-function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<string, Verdict>, rail: Rail): string
+type Contributions = ReturnType<typeof contributionsOf>;
+
+function workChips(work: WorkState, toward: Contributions): string
 {
-    const toward = contributionsOf(model.goals, work);
-    const chips = [
+    return [
         `<span class="wd-chip">created ${day(work.ts)}</span>`,
         work.next === undefined ? "" : `<span class="wd-chip">next: ${esc(work.next)}</span>`,
         ...toward.map((item) => `<span class="wd-chip">toward ${esc(item.id)}${item.criticalPath ? " · critical path" : ""}</span>`),
         ...work.branches.map((b) => `<span class="wd-chip">branch ${esc(b)}</span>`)
     ].filter((chip) => chip !== "").join("");
-    const blocked = work.status === "blocked"
-        ? `<p class="wd-note">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`
-        : "";
-    const retired = work.status === "retired"
-        ? `<p class="wd-note">retired: ${esc(work.retiredWhy ?? "")}${successorLink(model.slug, work)}</p>`
-        : "";
-    const supersedes = model.works
-        .filter((w2) => w2.status === "retired" && w2.successor?.work === work.id
-            && (w2.successor.project === undefined || w2.successor.project === model.slug))
-        .map((w2) => `<p class="wd-note">supersedes <a href="${esc(w2.id)}.html">${esc(w2.id)}</a>: ${esc(w2.retiredWhy ?? "")}</p>`)
-        .join("");
-    const reports = [...work.reports].reverse().map((report, index) =>
+}
+
+// Blocked, retired and supersedes stay separate parts: two of them can stand
+// at once, and the caller's filter is what decides the blank line between them.
+function workNotes(model: ProjectModel, work: WorkState): string[]
+{
+    return [
+        work.status === "blocked"
+            ? `<p class="wd-note">waiting on ${esc(work.blockedOn ?? "?")}${work.blockedWhy === undefined ? "" : `: ${esc(work.blockedWhy)}`}</p>`
+            : "",
+        work.status === "retired"
+            ? `<p class="wd-note">retired: ${esc(work.retiredWhy ?? "")}${successorLink(model.slug, work)}</p>`
+            : "",
+        model.works
+            .filter((w2) => w2.status === "retired" && w2.successor?.work === work.id
+                && (w2.successor.project === undefined || w2.successor.project === model.slug))
+            .map((w2) => `<p class="wd-note">supersedes <a href="${esc(w2.id)}.html">${esc(w2.id)}</a>: ${esc(w2.retiredWhy ?? "")}</p>`)
+            .join("")
+    ];
+}
+
+function workReportSections(work: WorkState): string[]
+{
+    return [...work.reports].reverse().map((report, index) =>
         `<section class="wd-report${index === 0 ? "" : " is-past"}" aria-label="report">` +
         `<div class="wd-report-head"><time>${day(report.ts)}</time>` +
         `<span class="n">${report.commits.map(esc).join(" ") || "—"}</span></div>` +
         `<div class="wd-prose">${esc(report.text)}</div></section>`);
-    const main = [
+}
+
+function workMain(model: ProjectModel, work: WorkState, toward: Contributions): string
+{
+    const chips = workChips(work, toward);
+    const reports = workReportSections(work);
+    return [
         `<div class="wd-head"><span class="n">${esc(work.id)}</span>` +
             `<span class="pill p-${work.status}">${work.status}</span></div>`,
         `<h1 class="wd-title">${esc(work.outcome)}</h1>`,
         chips === "" ? "" : `<div class="wd-meta">${chips}</div>`,
-        blocked,
-        retired,
-        supersedes,
+        ...workNotes(model, work),
         reports.length === 0 ? `<p class="c2-empty">no reports yet</p>` : reports.join("\n")
     ].filter((part) => part !== "").join("\n");
+}
+
+function contributesPanel(toward: Contributions): string
+{
+    return toward.length === 0 ? "" : panel("CONTRIBUTES TO", toward.length, "",
+        toward.map((item) =>
+            `<div class="dr-dec"><p>${item.kind === "objective"
+                ? `<a href="${esc(item.id)}.html">${esc(item.id)}</a>` : esc(item.id)} ${esc(item.outcome)}` +
+            `<i class="ob-mark s-${item.state}">${esc(item.state)}</i>` +
+            `${item.criticalPath ? `<i class="ob-mark warn">critical path</i>` : ""}</p></div>`).join("\n"));
+}
+
+function workRecord(model: ProjectModel, work: WorkState, verdicts: Record<string, Verdict>, toward: Contributions): string
+{
     const artifacts = workArtifactRows(work);
     const linked = decisionOrder(model.decisions).filter((d) => d.work === work.id);
-    const record = [
-        toward.length === 0 ? "" : panel("CONTRIBUTES TO", toward.length, "",
-            toward.map((item) =>
-                `<div class="dr-dec"><p>${item.kind === "objective"
-                    ? `<a href="${esc(item.id)}.html">${esc(item.id)}</a>` : esc(item.id)} ${esc(item.outcome)}` +
-                `<i class="ob-mark s-${item.state}">${esc(item.state)}</i>` +
-                `${item.criticalPath ? `<i class="ob-mark warn">critical path</i>` : ""}</p></div>`).join("\n")),
+    return [
+        contributesPanel(toward),
         panel("EVIDENCE", work.evidence.length + work.notes.length, "",
             work.evidence.length + work.notes.length === 0 ? empty("no evidence yet")
                 : [
@@ -684,6 +778,13 @@ function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<s
                 : artifacts.map((r) => artifactRow(r, "../..")).join("\n")),
         linked.length === 0 ? "" : panel("DECISIONS FROM THIS WORK", linked.length, "", linked.map(decisionRow).join("\n"))
     ].filter((part) => part !== "").join("\n");
+}
+
+function renderWorkPage(model: ProjectModel, work: WorkState, verdicts: Record<string, Verdict>, rail: Rail): string
+{
+    const toward = contributionsOf(model.goals, work);
+    const main = workMain(model, work, toward);
+    const record = workRecord(model, work, verdicts, toward);
     return page({
         title: `${work.id} — ${model.slug}`,
         crumb: `${esc(rail.workspace)} / <a href="../${esc(model.slug)}.html">${esc(model.slug)}</a> / <b>${esc(work.id)}</b>`,
@@ -778,50 +879,76 @@ function listPage(slug: string, name: string, query: string, main: string, rail:
 
 /* ── workspace dashboard ───────────────────────────────────────────── */
 
+// Each workspace panel reads the same shape: take one list per project, tag it
+// with the slug, order newest first, and cut it to the panel's cap.
+function newestAcross<T extends { ts: string }>(summaries: ProjectSummary[], pick: (s: ProjectSummary) => T[], cap: number): Array<T & { slug: string }>
+{
+    return summaries
+        .flatMap((s) => pick(s).map((item) => ({ ...item, slug: s.slug })))
+        .sort((a, b) => b.ts.localeCompare(a.ts))
+        .slice(0, cap);
+}
+
+function workspaceWaiting(summaries: ProjectSummary[]): Array<{ row: ReturnType<typeof waitingOf>[number]; slug: string }>
+{
+    return summaries.flatMap((s) => waitingOf(s).map((row) => ({ row, slug: s.slug })));
+}
+
+function workspaceObjectivePanel(summaries: ProjectSummary[]): string
+{
+    const objectives = summaries.flatMap((s) => (s.objectives ?? []).map((o) => ({ ...o, slug: s.slug })));
+    return objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "", table(objectives.map((o) =>
+        `<tr><td class="n"><a href="${esc(o.slug)}/${esc(o.id)}.html">${esc(o.id)}</a></td>` +
+        `<td>${esc(o.outcome)}<span class="hf-sub">${esc(o.reason)}</span></td>` +
+        `<td class="r"><span class="pill s-${o.state}">${esc(o.state)}</span>` +
+        `<span class="hf-sub">${o.reached}/${o.milestones} milestones · ${o.met}/${o.total} criteria</span></td></tr>`)));
+}
+
+function workspaceEventPanel(summaries: ProjectSummary[]): string
+{
+    const events = newestAcross(summaries, (s) => s.recentEvents ?? [], CAP_EVENTS);
+    return events.length === 0 ? panel("EVENTS", 0, "", empty("no events yet"))
+        : `<section class="c2-panel c2-feed" aria-label="events">` +
+            `<div class="c2-panel-head"><h2>EVENTS</h2><span class="c2-live">live</span></div>` +
+            events.map((e) => eventRow(e, e.slug)).join("\n") + `</section>`;
+}
+
+function workspaceDecisionPanel(summaries: ProjectSummary[]): string
+{
+    const decisions = newestAcross(summaries, (s) => s.recentDecisions ?? [], CAP_DECISIONS);
+    return panel("DECISIONS", 0, "",
+        decisions.length === 0 ? empty("no decisions yet")
+            : table(decisions.map((d) =>
+                `<tr><td class="n"><a href="${esc(d.slug)}.html">${esc(d.slug)}</a></td>` +
+                `<td class="n">${day(d.ts)}</td><td>${esc(d.text)}</td></tr>`)));
+}
+
+function workspaceRecord(summaries: ProjectSummary[]): string | undefined
+{
+    const artifacts = newestAcross(summaries, (s) => (s.recentArtifacts ?? []).map((a) =>
+        ({ meta: { id: a.id, name: a.name, path: a.path }, workId: a.workId, ts: a.ts, project: s.slug })), CAP_WORKSPACE_ARTIFACTS);
+    return artifacts.length === 0 ? undefined
+        : panel("ARTIFACTS", artifacts.length, "", artifacts.map((r) => artifactRow(r, "..")).join("\n"));
+}
+
 function renderWorkspacePage(summaries: ProjectSummary[], rail: Rail): string
 {
-    const waiting = summaries.flatMap((s) => waitingOf(s).map((row) => ({ row, slug: s.slug })));
+    const waiting = workspaceWaiting(summaries);
     const waitingBody = waiting.length === 0 ? empty("nothing waiting on you")
         : capped(waiting.map(({ row, slug }) =>
             `<tr><td class="n"><a href="${esc(slug)}.html">${esc(slug)}</a></td>` +
             `<td class="k${warnClass(row)}">${esc(row.kind)}</td><td>${esc(row.text)}</td>` +
             `<td class="act">${esc(row.action)}</td></tr>`), CAP_WAITING, "item");
-    const events = summaries
-        .flatMap((s) => (s.recentEvents ?? []).map((e) => ({ ...e, slug: s.slug })))
-        .sort((a, b) => b.ts.localeCompare(a.ts))
-        .slice(0, CAP_EVENTS);
-    const decisions = summaries
-        .flatMap((s) => (s.recentDecisions ?? []).map((d) => ({ ...d, slug: s.slug })))
-        .sort((a, b) => b.ts.localeCompare(a.ts))
-        .slice(0, CAP_DECISIONS);
-    const artifacts = summaries
-        .flatMap((s) => (s.recentArtifacts ?? []).map((a) =>
-            ({ meta: { id: a.id, name: a.name, path: a.path }, workId: a.workId, ts: a.ts, project: s.slug })))
-        .sort((a, b) => b.ts.localeCompare(a.ts))
-        .slice(0, CAP_WORKSPACE_ARTIFACTS);
-    const objectives = summaries.flatMap((s) => (s.objectives ?? []).map((o) => ({ ...o, slug: s.slug })));
     const main = [
         `<p class="c2-goal">Workspace — ${count(summaries.length, "project")}, ${count(waiting.length, "item")} waiting on you</p>`,
         panel("WAITING ON YOU", waiting.length, "", waitingBody, "", true),
-        objectives.length === 0 ? "" : panel("OBJECTIVES", objectives.length, "", table(objectives.map((o) =>
-            `<tr><td class="n"><a href="${esc(o.slug)}/${esc(o.id)}.html">${esc(o.id)}</a></td>` +
-            `<td>${esc(o.outcome)}<span class="hf-sub">${esc(o.reason)}</span></td>` +
-            `<td class="r"><span class="pill s-${o.state}">${esc(o.state)}</span>` +
-            `<span class="hf-sub">${o.reached}/${o.milestones} milestones · ${o.met}/${o.total} criteria</span></td></tr>`))),
+        workspaceObjectivePanel(summaries),
         panel("PROJECTS", summaries.length, "",
             summaries.length === 0 ? empty("no projects registered") : table(summaries.map(projectRow))),
-        panel("DECISIONS", 0, "",
-            decisions.length === 0 ? empty("no decisions yet")
-                : table(decisions.map((d) =>
-                    `<tr><td class="n"><a href="${esc(d.slug)}.html">${esc(d.slug)}</a></td>` +
-                    `<td class="n">${day(d.ts)}</td><td>${esc(d.text)}</td></tr>`))),
-        events.length === 0 ? panel("EVENTS", 0, "", empty("no events yet"))
-            : `<section class="c2-panel c2-feed" aria-label="events">` +
-                `<div class="c2-panel-head"><h2>EVENTS</h2><span class="c2-live">live</span></div>` +
-                events.map((e) => eventRow(e, e.slug)).join("\n") + `</section>`
+        workspaceDecisionPanel(summaries),
+        workspaceEventPanel(summaries)
     ].filter((part) => part !== "").join("\n");
-    const record = artifacts.length === 0 ? undefined
-        : panel("ARTIFACTS", artifacts.length, "", artifacts.map((r) => artifactRow(r, "..")).join("\n"));
+    const record = workspaceRecord(summaries);
     return page({
         title: "Workspace",
         crumb: `<b>${esc(rail.workspace)}</b>`,
@@ -1146,12 +1273,11 @@ function renderRail(rail: Rail): string
         `<div class="dr-foot">fold ${esc(rail.foldId)}<br>${esc(rail.foldTime)} UTC</div></aside>`;
 }
 
-function page(shell: Shell): string
+function pageBody(shell: Shell): string
 {
-    const userTheme = USER_THEME === "" ? "" : `/* user theme — <store>/theme.css */\n${USER_THEME}\n`;
     const back = shell.back === undefined ? "" :
         `<a class="c2-back" href="${esc(shell.back)}" aria-label="back">←</a>`;
-    const body = `<div class="sv-shell${shell.record === undefined ? " two" : ""}">` +
+    return `<div class="sv-shell${shell.record === undefined ? " two" : ""}">` +
         renderRail(shell.rail) +
         `<div class="dr-main"><header class="c2-bar">${back}` +
         `<span class="c2-crumb">${shell.crumb}</span>` +
@@ -1159,6 +1285,12 @@ function page(shell: Shell): string
         `<main class="c2-body${shell.doc === true ? " wd-doc" : ""}">\n${shell.main}\n</main></div>` +
         (shell.record === undefined ? "" : `<aside class="dr-side" aria-label="record column">${shell.record}</aside>`) +
         `</div>`;
+}
+
+function page(shell: Shell): string
+{
+    const userTheme = USER_THEME === "" ? "" : `/* user theme — <store>/theme.css */\n${USER_THEME}\n`;
+    const body = pageBody(shell);
     return `<!doctype html>
 <html lang="${esc(LANG)}" data-theme="${esc(THEME)}">
 <head>

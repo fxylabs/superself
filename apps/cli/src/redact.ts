@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { isEventId } from "./ids.js";
 
-export const REDACTED = "«redacted»";
+const REDACTED = "«redacted»";
 
 // Values the caller knows are secret — the environment variables the plan
 // declared. A prompt-injected echo of one of them is caught by value even when
@@ -103,7 +103,7 @@ const MIN_DISTINCT = 12;
 // characters out of every word that happens to contain them would shred
 // ordinary output. The floor is exported so a plan that declares a secret this
 // short is told at launch rather than silently receiving no coverage.
-export const MIN_LITERAL = 4;
+const MIN_LITERAL = 4;
 
 // A generated key is one unbroken run of mixed characters; a name a person
 // assembled is short words joined by separators. Judging the whole token
@@ -155,24 +155,6 @@ function mixedRun(run: string): boolean
     return run.length >= MIN_MIXED_RUN && /[0-9]/.test(run) && /[A-Za-z]/.test(run);
 }
 
-// Everything a spool keeps goes through at least this. A private path is not
-// a secret to the machine that owns the spool, so the home rewrite is a
-// separate step: applied to raw provider output and to anything crossing into
-// the synced log, withheld where the machine's own records need real paths.
-export function redactSecrets(text: string, scope: RedactionScope = { literals: [] }): string
-{
-    let out = redactLiterals(text, scope);
-    for (const { pattern, replacement } of PATTERNS)
-    {
-        out = out.replace(pattern, replacement);
-    }
-    for (const { pattern } of BACKSTOPS)
-    {
-        out = out.replace(pattern, (span) => looksGenerated(span) ? REDACTED : span);
-    }
-    return out;
-}
-
 // The declared half of redaction on its own. A caller that has to tell a leaked
 // declared value from a value that merely looks like a credential cannot get
 // that from the combined pass: the patterns rewrite the same span either way.
@@ -187,11 +169,6 @@ export function redactLiterals(text: string, scope: RedactionScope): string
         }
     }
     return out;
-}
-
-export function redact(text: string, scope: RedactionScope = { literals: [] }): string
-{
-    return redactHome(redactSecrets(text, scope));
 }
 
 // A spool is machine-local, but its sanitized summaries travel into synced
@@ -269,27 +246,10 @@ export function secretEnvNames(): string[]
     return Object.keys(process.env).filter(namesSecret);
 }
 
-// Whether the text carries something only a credential produces — the question
-// a caller that refuses outright has to answer, where redaction only has to
-// decide which bytes to blank.
-//
-// Each rule is judged where it matched, never over the string around it. An
-// eager rule is held to key material inside its own span, so "reduced token
-// counting overhead" stays recordable while `Bearer <key>` does not; the
-// explicit encodings are a leak whatever their entropy, which is the case a
-// pasted config snippet and a human-chosen password fall into. Judging the
-// whole string instead would let a commit sha or a branch slug anywhere in a
-// sentence arm the eager rules, and would disarm the explicit ones for exactly
-// the short secrets that most need refusing.
-export function carriesCredential(text: string): boolean
-{
-    return findCredential(text) !== null;
-}
-
 // What a refusal is allowed to say about the match: the rule that fired, and
 // the span as redaction would leave it. Together they let an operator rephrase
 // without guessing, which a bare "shaped like a credential" never did.
-export interface CredentialMatch
+interface CredentialMatch
 {
     rule: string;
     preview: string;
@@ -356,18 +316,6 @@ function carriesKeyMaterial(text: string): boolean
     return UUID.test(text) || (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated);
 }
 
-// The names — never the values — of declared secrets too short to be redacted
-// by value. The plan author believes the declaration covers them, and the one
-// honest moment to say otherwise is before the attempt starts.
-export function unredactableSecrets(secretNames: string[]): string[]
-{
-    return secretNames.filter((name) =>
-    {
-        const value = process.env[name];
-        return value !== undefined && value.trim() !== "" && value.length < MIN_LITERAL;
-    });
-}
-
 // Raw provider output arrives in chunks whose boundaries fall wherever the
 // pipe happened to break. A credential split across two of them matches
 // nothing on either side and both halves reach the log, so a chunk is not
@@ -383,29 +331,6 @@ export function unredactableSecrets(secretNames: string[]): string[]
 // keeps a literal whose tail has not arrived yet out of the flush, and it
 // steps back past any literal that has arrived and would be split.
 const MAX_HELD = 1_048_576;
-
-export function safeCut(pending: string, scope: RedactionScope): number
-{
-    // Only the literals redaction actually covers: a shorter one is left alone
-    // by redactSecrets, so holding output back for it would buy nothing.
-    const literals = scope.literals.filter((literal) => literal.length >= MIN_LITERAL);
-    const reserve = Math.max(0, ...literals.map((literal) => literal.length - 1));
-    const limit = pending.length - reserve;
-    let cut = limit <= 0 ? 0 : lineStartBefore(pending, limit);
-    for (let split = straddleStart(pending, cut, literals); cut > 0 && split !== -1; split = straddleStart(pending, cut, literals))
-    {
-        cut = lineStartBefore(pending, split);
-    }
-    if (cut > 0)
-    {
-        return cut;
-    }
-    // A provider that emits no line break at all must not be buffered without
-    // bound; past this much held output the tail is written as it stands — at
-    // a position that still splits no declared literal, because that is the
-    // one thing this hold-back exists to prevent.
-    return pending.length > MAX_HELD ? clearOfLiterals(pending, Math.max(0, limit), literals) : 0;
-}
 
 // The start of the line the given position sits on, which is where a cut may
 // land without any pattern rule straddling it.
