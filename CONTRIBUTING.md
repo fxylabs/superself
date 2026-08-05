@@ -98,6 +98,10 @@ pnpm build
 
 - Functions stay within 20-30 lines and do one thing. A function that routes
   subcommands routes them; it does not also implement one of them inline.
+  `pnpm structure` enforces this on the diff. Its ceiling is 60 rather than 30
+  because the tree still carries functions above it; issue #227 splits those
+  and drops the ceiling to the number stated here. A function your branch adds
+  or edits is measured; one you did not touch is not.
 - Allman braces: the opening brace of every block goes on its own line.
 - Four spaces, semicolons required.
 - Reuse the helper that exists; do not re-derive it locally. Current shared
@@ -208,7 +212,12 @@ Run the same checks as CI:
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm structure
 ```
+
+`pnpm structure` needs history to diff against, so it refuses on a shallow
+clone and names the fix rather than passing empty. Point it at another base
+with `--base <ref>` or `STRUCTURE_BASE` when you are not branched off `main`.
 
 Pull requests should:
 
@@ -236,8 +245,8 @@ much as to hand-written work:
   the commit author.
 - The pull request title names the issue's outcome, and the body contains
   `Closes #N` for the single accepted issue.
-- Run `pnpm typecheck`, `pnpm test` and `pnpm build` locally — CI runs the
-  same three on every pull request.
+- Run `pnpm typecheck`, `pnpm test`, `pnpm build` and `pnpm structure` locally
+  — CI runs the same four on every pull request.
 - Do not use `gh pr edit`; it rewrites fields you did not intend to touch. Set
   the title and body at `gh pr create` time, or PATCH the specific field through
   the API.
