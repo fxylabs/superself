@@ -202,7 +202,8 @@ Different consumers still need different amounts of the same state:
 | `self context` inside a registered project | That project's placed entities plus live state |
 | `self context` outside a registered project | A workspace overview: each registered project's goal, work-status counts, and health-signal count |
 | `self work show <id>` | The full recovery line for one unit: outcome, current status, reports, evidence |
-| `self search <query>` | Pull access across registered projects, with the current project ranked first |
+| `self search <query>` | Live records context does not render, across registered projects, with the current project ranked first |
+| `self state show <id> --history` | One record's own events, oldest first — the only path to history |
 | `self log [-n N]` | Recent event inspection for operational or forensic reading |
 
 The agent-facing render — a pipe, a redirect, `--plain`, `TERM=dumb`, or a

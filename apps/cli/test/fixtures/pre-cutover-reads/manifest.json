@@ -167,32 +167,5 @@
       "--project",
       "demo"
     ]
-  ],
-  [
-    "search-decision",
-    [
-      "search",
-      "ship",
-      "--type",
-      "decision"
-    ]
-  ],
-  [
-    "search-entity",
-    [
-      "search",
-      "raw",
-      "--type",
-      "entity"
-    ]
-  ],
-  [
-    "search-convention",
-    [
-      "search",
-      "spaces",
-      "--type",
-      "convention"
-    ]
   ]
 ]

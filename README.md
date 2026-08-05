@@ -109,8 +109,9 @@ as operating outcomes and separates it from what is not complete.
   file per open work unit) and lands as exactly one commit in the workspace
   repository, so state has log, blame, and revert;
 - `self context` prints the derived context an agent needs at session start;
-  `self status`, `self work`, and `self log` read state; `self search` greps the
-  whole workspace with current-project results ranked first; `self setup` shows
+  `self status`, `self work`, and `self log` read state; `self search` answers
+  over the live records context does not render, across the whole workspace with
+  current-project results ranked first; `self setup` shows
   the project, workspace, store, and machine pointer the current directory
   resolves to;
 - canonical files are generated output — hand edits are detected as drift and
@@ -352,8 +353,9 @@ self context
 ```
 
 `self context` is what an agent reads at session start. `self work show <id>`
-recovers the complete history of one unit, and `self search <query>` pulls older
-or cross-project state on demand.
+recovers the complete state of one unit and `--history` pages over its own
+events; `self search <query>` pulls the live records context left out, across
+every registered project.
 
 Follow the [getting started guide](docs/guides/getting-started.md) for the full
 setup path, including the separate state repository, managed agent blocks,

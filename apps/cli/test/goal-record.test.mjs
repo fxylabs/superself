@@ -270,13 +270,17 @@ test("D7: goal retract takes no --supersedes, and says which verb replaces a goa
     assert.match(refused.out, /goal add/);
 });
 
-test("D8: a retracted goal leaves the render and stays in search", async () =>
+test("D8: a retracted goal leaves the render and stays reachable by naming it", async () =>
 {
     const dir = project("d8");
     const only = addGoal(dir, "D8 the withdrawn direction");
     assert.equal((await approvedIn(box, dir, ["goal", "retract", only, "--why", "it no longer holds"], only)).code, 0);
     assert.doesNotMatch(must(box, dir, ["context"]).out, /D8 the withdrawn direction/);
-    assert.match(must(box, dir, ["search", "D8 the withdrawn"]).out, /D8 the withdrawn direction/);
+    // Search answers over live records (#212); the withdrawn goal's own text
+    // and history are reached by naming it, which is what keeps nothing
+    // unreachable.
+    assert.equal(must(box, dir, ["search", "D8 the withdrawn"]).out.trim(), "no matches");
+    assert.match(must(box, dir, ["state", "show", only, "--history"]).out, /D8 the withdrawn direction/);
 });
 
 /* ── E: the bare verb ──────────────────────────────────────────────── */
