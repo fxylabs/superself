@@ -135,11 +135,17 @@ export interface EntityState
     text: string;
     labels: string[];
     links: EntityLink[];
-    // Reserved metadata (#197 §2). The vocabulary is `target` and `criteria`
-    // and grows only by design decision: the verb refuses anything else, and
-    // the fold ignores unknown keys a hand-appended line might carry.
+    // Reserved metadata (#197 §2). The vocabulary is `target`, `criteria` and
+    // `from`, and grows only by design decision: the verb refuses anything
+    // else, and the fold ignores unknown keys a hand-appended line might carry.
     target?: string;
     criteria: string[];
+    // Which project this one came from, by slug (#75). A slug rather than a
+    // record id, which is why it is reserved metadata and not an `EntityLink`,
+    // and a machine-read value rather than a free label spelling, which is why
+    // the verb can validate it. Decision `01kz96jysmppnk0npgz6gbr696` is the
+    // design decision this key grows the vocabulary by.
+    from?: string;
     why?: string;
     scope: EntityScope;
     priority?: number;
@@ -175,6 +181,24 @@ export interface EntityState
 export function isLive(entity: EntityState): boolean
 {
     return entity.status === "proposed" || entity.status === "confirmed";
+}
+
+// The label that makes a record the derivation of a project (#75). Spelled
+// once, so the verb that records the relation and every surface that resolves
+// it read the same word.
+export const DERIVATION_LABEL = "derivation";
+
+// Which project the records of one log say their project came from: the live
+// derivation record, or nothing. A withdrawn or superseded one is not an
+// answer, which is what makes a correction and a retraction work with no
+// second mechanism. `self project from` refuses a second live one, but a log
+// merged from another clone can still carry two, so the newest wins with the
+// id breaking the tie — two clones of one store answer the same.
+export function derivationOf(entities: EntityState[]): EntityState | undefined
+{
+    return entities
+        .filter((item) => isLive(item) && (item.from ?? "") !== "" && item.labels.includes(DERIVATION_LABEL))
+        .sort((left, right) => right.ts.localeCompare(left.ts) || left.id.localeCompare(right.id))[0];
 }
 
 /* ── correcting a record ───────────────────────────────────────────── */
@@ -446,6 +470,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         links: createdLinks(fold, event),
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
+        from: str(event.payload.from),
         why: str(event.payload.why),
         scope: readScopeValue(event.payload.scope),
         priority: readPriority(event.payload.priority),

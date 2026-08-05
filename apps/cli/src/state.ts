@@ -285,7 +285,29 @@ export function aliasEntityAdd(row: AliasDefaults, { values, positionals }: Comm
     entityAdd(values, positionals, row);
 }
 
-function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positionals: string[], row: AliasDefaults | undefined): void
+// What a verb that composes its own record still hands the raw add path: the
+// reason it carries, the record it corrects, and the demotion a full tier
+// demands. Everything else about such a record — its text, its label, its
+// placement, its reserved metadata — is the verb's own statement.
+interface ComposedValues
+{
+    why?: string;
+    supersedes?: string[];
+    demote?: string[];
+}
+
+// The add path a verb runs when it composes the record itself (#75): the
+// caller states the label, the placement and the reserved metadata, and the
+// caps, the supersession and the retirement gate stay where they already are.
+// A second add path would be a second answer to what a tier holds.
+export function composedEntityAdd(row: AliasDefaults, reserved: Record<string, unknown>,
+    values: ComposedValues, text: string): void
+{
+    entityAdd(values, [text], row, reserved);
+}
+
+function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positionals: string[],
+    row: AliasDefaults | undefined, reserved: Record<string, unknown> = {}): void
 {
     const ctx = requireProject(process.cwd());
     const usageText = row === undefined ? ADD_USAGE : `${row.label} add "<text>"`;
@@ -296,7 +318,7 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     const demotions = admittingDemotions(ctx, models, values, tierOf(target, exposure), usageText, countCharacters(text));
     const id = entityId();
     const proposed = values.proposed === true;
-    const payload = addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row);
+    const payload = { ...addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row), ...reserved };
     // A proposal displaces nothing: its supersedes links wait for the confirm
     // that makes them real, so the gate belongs there rather than here.
     const displaced = proposed ? [] : supersedeTargets(payload);
@@ -1292,6 +1314,7 @@ function renderEntity(found: Placed): string
 {
     const entity = found.entity;
     const lines = placementLines(found);
+    optional(lines, "from", entity.from);
     optional(lines, "why", entity.why);
     optional(lines, "target", entity.target);
     entity.criteria.forEach((criterion) => lines.push(`criterion: ${criterion}`));
