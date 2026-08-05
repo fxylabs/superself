@@ -9,7 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityState, isLive, reconcileEntity } from "./entities.js";
+import { applyEntity, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityScope, EntityState, HOME_SCOPE, isLive, reconcileEntity } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -531,6 +531,25 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     deriveSignals(model, now);
     deriveVerdictReads(model, storeDir, slug);
     return model;
+}
+
+// Which project a work unit renders in. The placement lives on the unit's
+// entity (#181 D1); a unit still folded from the pre-cutover `work.*` events
+// has no entity and renders at home, exactly as it always did.
+export function workScope(model: ProjectModel, work: WorkState): EntityScope
+{
+    return model.entities.find((item) => item.id === work.id)?.scope ?? HOME_SCOPE;
+}
+
+// Every registered project's fold, the named one first. A record renders where
+// its scope points rather than where its log sits (#181 D1), so answering for
+// one project — what it renders, what its tiers hold — reads every store.
+export function workspaceModels(storeDir: string, first?: string): ProjectModel[]
+{
+    const slugs = readRegistry(storeDir).map((entry) => entry.slug);
+    const rest = slugs.filter((slug) => slug !== first);
+    const now = new Date();
+    return (first === undefined ? rest : [first, ...rest]).map((slug) => buildModel(storeDir, slug, now));
 }
 
 // The event that asserted each native entity, kept for the projection: the

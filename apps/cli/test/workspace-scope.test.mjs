@@ -58,8 +58,9 @@ test("D2: state place --scope workspace moves an entity into every context by pl
     must(box, demo, ["state", "place", local, "--scope", "workspace"]);
     assert.ok(must(box, demo, ["state", "show", local]).out.includes("placement: workspace · index · priority 6"));
     assert.ok(otherContext().includes("promoted note"), "a workspace placement did not reach the other context");
-    // D3: back to one project's context only.
-    must(box, demo, ["state", "place", local, "--scope", "project"]);
+    // D3: back to one project's context only. The `project` keyword was retired
+    // by #181, so the home project is named by its slug.
+    must(box, demo, ["state", "place", local, "--scope", "demo"]);
     assert.ok(!otherContext().includes("promoted note"), "a project placement still renders workspace-wide");
     assert.ok(must(box, demo, ["context"]).out.includes("promoted note"));
 });

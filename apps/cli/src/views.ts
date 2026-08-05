@@ -1,4 +1,4 @@
-import { EntityState, isCurrent, orderEntities, pendingSummary } from "./entities.js";
+import { EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { eventSummary, readEvents } from "./logfile.js";
@@ -12,6 +12,7 @@ import {
     otherGoals,
     ProjectModel,
     WaitingItem,
+    workScope,
     WorkState
 } from "./model.js";
 import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
@@ -54,9 +55,52 @@ const REPORT_EXCERPT_LIMIT = 500;
 // which project checkout this command ran from.
 function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 {
-    const model = buildModel(storeDir, slug, new Date());
-    model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, slug)), ...artifactSignals(storeDir, model.works));
+    return withVerdicts(storeDir, renderedModel(storeDir, slug));
+}
+
+function withVerdicts(storeDir: string, model: ProjectModel): ProjectModel
+{
+    model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, model.slug)),
+        ...artifactSignals(storeDir, model.works));
     return model;
+}
+
+// The fold, as this project renders it (#181 D1/D2): its own work minus what
+// moved to another project, plus every unit another project's log scoped in
+// here. Nothing is copied — each unit is still the fold of the log that owns
+// it, and only where it renders has changed.
+function renderedModel(storeDir: string, slug: string): ProjectModel
+{
+    const model = buildModel(storeDir, slug, new Date());
+    model.works = [
+        ...scopedWorks(model, slug),
+        ...foreignModels(storeDir, slug).flatMap((other) => scopedWorks(other, slug))
+    ];
+    return model;
+}
+
+// Every registered project as it renders, from one fold each. The workspace
+// surfaces answer for all of them at once, and folding per project per answer
+// would cost one fold for every pair — well past #128's half-second budget.
+function renderedModels(storeDir: string): ProjectModel[]
+{
+    const folded = readRegistry(storeDir).map((entry) => buildModel(storeDir, entry.slug, new Date()));
+    // Collected before anything is assigned: a model's own works are still the
+    // fold's while the next model is reading them.
+    const scoped = folded.map((model) => folded.flatMap((other) => scopedWorks(other, model.slug)));
+    folded.forEach((model, index) => { model.works = scoped[index]; });
+    return folded;
+}
+
+function foreignModels(storeDir: string, slug: string | undefined): ProjectModel[]
+{
+    return readRegistry(storeDir).filter((entry) => entry.slug !== slug)
+        .map((entry) => buildModel(storeDir, entry.slug, new Date()));
+}
+
+function scopedWorks(model: ProjectModel, viewer: string): WorkState[]
+{
+    return model.works.filter((work) => rendersIn({ scope: workScope(model, work) }, model.slug, viewer));
 }
 
 // The pretty render is reached before the budget, never through it: the
@@ -67,7 +111,7 @@ export function printContext(ctx: CliContext, render: RenderMode): void
 {
     if (ctx.project === undefined)
     {
-        const models = readRegistry(ctx.storeDir).map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
+        const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
         if (render === "pretty" && models.length > 0)
         {
             console.log(renderWorkspace(models).join("\n"));
@@ -82,19 +126,21 @@ export function printContext(ctx: CliContext, render: RenderMode): void
         console.log(renderContext({ model, waiting: unrankedWaitingLines(model) }).join("\n"));
         return;
     }
-    writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))), foreignWorkspaceEntities(ctx)));
+    writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))), foreignEntities(ctx)));
 }
 
-// A workspace-scoped entity renders in every project's context (#197 §3,
-// #207 D1) while its events stay in its home store — so the collect step
-// reads every other registered project's fold and carries only the
-// workspace-scoped, current records into this render.
-function foreignWorkspaceEntities(ctx: CliContext): EntityState[]
+// A record renders in the project its scope names while its events stay in the
+// store that already holds them (#197 §3, #207 D1, #181 D1) — so the collect
+// step reads every other registered project's fold and carries in the current
+// records that name this project, plus the workspace-scoped ones, which name
+// every project.
+function foreignEntities(ctx: CliContext): EntityState[]
 {
-    return readRegistry(ctx.storeDir)
-        .filter((entry) => entry.slug !== ctx.project)
-        .flatMap((entry) => buildModel(ctx.storeDir, entry.slug, new Date()).entities)
-        .filter((entity) => entity.scope === "workspace" && entity.status === "confirmed" && isCurrent(entity));
+    const here = ctx.project;
+    return foreignModels(ctx.storeDir, here)
+        .flatMap((model) => model.entities.filter((entity) =>
+            here !== undefined && rendersIn(entity, model.slug, here)
+            && entity.status === "confirmed" && isCurrent(entity)));
 }
 
 // The placement projection (#197 §6, #202): collect the live entities, order
@@ -119,7 +165,8 @@ function renderProjectContext(model: ProjectModel, limit: number, foreign: Entit
     // records are deliberately absent: the derived live state below is the
     // render a work unit gets (#197 §7 — "live state shows the active ones").
     const placed = orderEntities([
-        ...model.entities.filter((item) => item.status === "confirmed" && isCurrent(item)),
+        ...model.entities.filter((item) => item.status === "confirmed" && isCurrent(item)
+            && rendersIn(item, model.slug, model.slug)),
         ...foreign
     ].filter((item) => item.source !== "work"));
     const sections = [
@@ -260,7 +307,8 @@ function entityWaitingRows(model: ProjectModel): string[]
 function deadlineRows(model: ProjectModel): string[]
 {
     return model.entities
-        .filter((item) => item.status === "confirmed" && isCurrent(item) && item.target !== undefined)
+        .filter((item) => item.status === "confirmed" && isCurrent(item) && item.target !== undefined
+            && rendersIn(item, model.slug, model.slug))
         .sort((left, right) => (left.target ?? "").localeCompare(right.target ?? "") || left.id.localeCompare(right.id))
         .map((item) => `- ${item.target}: ${entityLabel(item)}${oneLine(item.text)}`);
 }
@@ -624,7 +672,7 @@ function printWorkspaceOverview(ctx: CliContext, render: RenderMode): void
         console.log("no projects registered — run `self project add` inside a project directory");
         return;
     }
-    const models = registry.map((entry) => modelWithVerdicts(ctx.storeDir, entry.slug));
+    const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
     if (render === "pretty")
     {
         console.log(renderWorkspace(models).join("\n"));
@@ -647,7 +695,7 @@ function countLine(works: WorkState[]): string
 
 export function printWorkList(ctx: ProjectScope, render: RenderMode): void
 {
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const model = renderedModel(ctx.storeDir, ctx.project);
     const project = shellArgument(model.slug);
     if (render === "pretty")
     {
