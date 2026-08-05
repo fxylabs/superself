@@ -1,4 +1,4 @@
-export interface Origin
+interface Origin
 {
     actor: "agent" | "human";
     session?: string;

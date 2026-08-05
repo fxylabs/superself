@@ -66,7 +66,9 @@ rule stands for whatever comes next:
   directories today, so the section passes vacuously — its first subject is
   whatever directory appears next, caught at its first wrong import.
 - The same check counts exports no importer reads, and fails a pull request
-  that raises that count above its merge base. A test is an importer.
+  that raises that count above its merge base. A test is an importer, and it
+  reaches this package through `dist/`, which the check resolves back to
+  `src/`. The count is 0 and stays there.
 
 ## Single gates
 

@@ -465,17 +465,11 @@ function detail(text: string, limit: number, recovery: Pointer): string
     return `${takeCharacters(text.trim().replace(/\s+/g, " "), limit)}… (full: \`${recovery}\`)`;
 }
 
-function renderWorkspaceContext(models: ProjectModel[], limit: number): string
+// Each line is tried with the omission notice that would follow it, because
+// the notice costs characters too and a line kept without room for it would
+// push the render past the budget.
+function keptWithinLimit(models: ProjectModel[], limit: number): string[]
 {
-    if (models.length === 0)
-    {
-        return "no projects registered — run `self project add` inside a project directory";
-    }
-    const full = models.map(workspaceContextLine).join("\n");
-    if (countCharacters(full) <= limit)
-    {
-        return full;
-    }
     const kept: string[] = [];
     for (let index = 0; index < models.length; index++)
     {
@@ -491,6 +485,21 @@ function renderWorkspaceContext(models: ProjectModel[], limit: number): string
         }
         kept.push(workspaceContextLine(models[index]));
     }
+    return kept;
+}
+
+function renderWorkspaceContext(models: ProjectModel[], limit: number): string
+{
+    if (models.length === 0)
+    {
+        return "no projects registered — run `self project add` inside a project directory";
+    }
+    const full = models.map(workspaceContextLine).join("\n");
+    if (countCharacters(full) <= limit)
+    {
+        return full;
+    }
+    const kept = keptWithinLimit(models, limit);
     const omitted = models.length - kept.length;
     if (omitted > 0)
     {
@@ -591,7 +600,7 @@ function objectiveCountLine(model: ProjectModel): string
         `${milestones.length} milestones reached, ${met} of ${total} exit criteria covered`;
 }
 
-export function waitingCount(model: ProjectModel): number
+function waitingCount(model: ProjectModel): number
 {
     return model.openQuestions.length + attentionRows(model).length + openProposals(model.goals).length;
 }

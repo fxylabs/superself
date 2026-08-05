@@ -3,20 +3,20 @@ import { SelfEvent } from "./types.js";
 
 // A target is called at-risk this many days before it falls due, and only
 // while exit criteria are still open. Reached work never becomes at-risk.
-export const AT_RISK_DAYS = 3;
+const AT_RISK_DAYS = 3;
 
 // The outcome layer above work. An objective is not a task and a milestone is
 // not a task: a milestone is an outcome checkpoint that several work units may
 // satisfy, and no work transition ever reaches one on its own.
-export type TargetState = "reached" | "missed" | "blocked" | "at-risk" | "unstarted" | "on-track" | "closed";
+type TargetState = "reached" | "missed" | "blocked" | "at-risk" | "unstarted" | "on-track" | "closed";
 
 // The lifecycle every statement-type record shares, in this type's words:
 // live (`proposed`/`active`), replaced by a linked successor
 // (`superseded`), withdrawn with no successor (`dropped`), turned down
 // as a proposal (`declined`), or finished (`reached`).
-export type ObjectiveStatus = "proposed" | "active" | "reached" | "dropped" | "superseded" | "declined";
+type ObjectiveStatus = "proposed" | "active" | "reached" | "dropped" | "superseded" | "declined";
 
-export interface Criterion
+interface Criterion
 {
     id: string;
     text: string;
@@ -74,7 +74,7 @@ export interface MilestoneState
     criticalPath: boolean;
 }
 
-export interface ObjectiveRevision
+interface ObjectiveRevision
 {
     ts: string;
     revision: number;
@@ -131,7 +131,7 @@ export interface WorkProposal
     declinedWhy?: string;
 }
 
-export interface LinkedWork
+interface LinkedWork
 {
     id: string;
     status: string;
@@ -155,6 +155,25 @@ export function emptyGoals(): GoalState
 
 /* ── fold ──────────────────────────────────────────────────────────── */
 
+// Confirming and declining both answer a proposal, and only a proposal. An
+// objective already active was confirmed once, and saying so again changes
+// nothing.
+function answerProposal(objective: ObjectiveState, event: SelfEvent): void
+{
+    if (objective.status !== "proposed")
+    {
+        return;
+    }
+    if (event.type === "objective.confirmed")
+    {
+        objective.status = "active";
+        objective.humanConfirmed = event.origin.confirmed;
+        return;
+    }
+    objective.status = "declined";
+    objective.closedWhy = str(event.payload.why);
+}
+
 export function applyObjective(goals: GoalState, event: SelfEvent): void
 {
     if (event.type === "objective.created")
@@ -177,24 +196,14 @@ export function applyObjective(goals: GoalState, event: SelfEvent): void
     {
         return;
     }
-    if (event.type === "objective.confirmed")
+    applyToObjective(objective, event);
+}
+
+function applyToObjective(objective: ObjectiveState, event: SelfEvent): void
+{
+    if (event.type === "objective.confirmed" || event.type === "objective.declined")
     {
-        // Confirming answers a proposal. An objective already active was
-        // confirmed once, and saying so again changes nothing.
-        if (objective.status === "proposed")
-        {
-            objective.status = "active";
-            objective.humanConfirmed = event.origin.confirmed;
-        }
-        return;
-    }
-    if (event.type === "objective.declined")
-    {
-        if (objective.status === "proposed")
-        {
-            objective.status = "declined";
-            objective.closedWhy = str(event.payload.why);
-        }
+        answerProposal(objective, event);
         return;
     }
     if (event.type === "objective.revised")
@@ -293,17 +302,36 @@ export function applySupersededObjectives(goals: GoalState): void
     }
 }
 
+function createMilestone(goals: GoalState, event: SelfEvent): void
+{
+    const objective = goals.objectives.find((item) => item.id === event.payload.objective);
+    objective?.milestones.push(newMilestone(event));
+    const replaced = findMilestone(goals, String(event.payload.supersedes ?? ""));
+    if (replaced !== null)
+    {
+        replaced.milestone.supersededBy = String(event.payload.milestone);
+    }
+}
+
+// A recheck is a fresh judgment against the revisions current when it was made.
+// Coverage gains an entry rather than losing one, and a re-judged reach sits
+// beside the reach it re-affirms — the day the milestone was first reached
+// stays exactly where it was.
+function recheckMilestone(milestone: MilestoneState, event: SelfEvent): void
+{
+    if (event.payload.criterion === undefined)
+    {
+        milestone.reaffirmed = newReached(event);
+        return;
+    }
+    milestone.coverage.push(newCoverage(event));
+}
+
 export function applyMilestone(goals: GoalState, event: SelfEvent): void
 {
     if (event.type === "milestone.created")
     {
-        const objective = goals.objectives.find((item) => item.id === event.payload.objective);
-        objective?.milestones.push(newMilestone(event));
-        const replaced = findMilestone(goals, String(event.payload.supersedes ?? ""));
-        if (replaced !== null)
-        {
-            replaced.milestone.supersededBy = String(event.payload.milestone);
-        }
+        createMilestone(goals, event);
         return;
     }
     const found = findMilestone(goals, String(event.payload.milestone));
@@ -321,40 +349,36 @@ export function applyMilestone(goals: GoalState, event: SelfEvent): void
     {
         return;
     }
+    applyToMilestone(found.milestone, event);
+}
+
+function applyToMilestone(milestone: MilestoneState, event: SelfEvent): void
+{
     if (event.type === "milestone.revised")
     {
-        reviseMilestone(found.milestone, event);
+        reviseMilestone(milestone, event);
         return;
     }
     // The first withdrawal is the one that happened; a second event naming the
     // same milestone never rewrites the reason recorded with it.
     if (event.type === "milestone.dropped")
     {
-        found.milestone.droppedWhy = found.milestone.droppedWhy ?? String(event.payload.why);
+        milestone.droppedWhy = milestone.droppedWhy ?? String(event.payload.why);
         return;
     }
     if (event.type === "milestone.covered")
     {
-        found.milestone.coverage.push(newCoverage(event));
+        milestone.coverage.push(newCoverage(event));
         return;
     }
-    // A recheck is a fresh judgment against the revisions current when it was
-    // made. Coverage gains an entry rather than losing one, and a re-judged
-    // reach sits beside the reach it re-affirms — the day the milestone was
-    // first reached stays exactly where it was.
     if (event.type === "milestone.rechecked")
     {
-        if (event.payload.criterion === undefined)
-        {
-            found.milestone.reaffirmed = newReached(event);
-            return;
-        }
-        found.milestone.coverage.push(newCoverage(event));
+        recheckMilestone(milestone, event);
         return;
     }
     if (event.type === "milestone.reached")
     {
-        found.milestone.reached = newReached(event);
+        milestone.reached = newReached(event);
     }
 }
 
@@ -372,7 +396,7 @@ function newReached(event: SelfEvent): Reached
 // Given up on, or replaced by a successor. A reached milestone is absent on
 // purpose: `milestone recheck` re-judges a reach, so reaching is a verdict that
 // can be revisited rather than a state the record never leaves.
-export function isTerminalMilestone(milestone: MilestoneState): boolean
+function isTerminalMilestone(milestone: MilestoneState): boolean
 {
     return milestone.droppedWhy !== undefined || milestone.supersededBy !== undefined;
 }
@@ -572,6 +596,19 @@ function milestoneState(milestone: MilestoneState, objective: ObjectiveState, to
     return milestone.works.length === 0 ? "unstarted" : "on-track";
 }
 
+// Three ways a milestone ends without being reached, and the reader needs to
+// know which one this was.
+function closedMilestoneReason(milestone: MilestoneState, covered: string): string
+{
+    if (milestone.droppedWhy !== undefined)
+    {
+        return `dropped — ${milestone.droppedWhy}`;
+    }
+    return milestone.supersededBy === undefined
+        ? `its objective is closed — ${covered}`
+        : `superseded by ${milestone.supersededBy} — ${covered}`;
+}
+
 function milestoneReason(milestone: MilestoneState, total: number, today: string): string
 {
     const covered = `${milestone.met.length} of ${total} exit criteria covered`;
@@ -581,13 +618,7 @@ function milestoneReason(milestone: MilestoneState, total: number, today: string
     }
     if (milestone.state === "closed")
     {
-        if (milestone.droppedWhy !== undefined)
-        {
-            return `dropped — ${milestone.droppedWhy}`;
-        }
-        return milestone.supersededBy === undefined
-            ? `its objective is closed — ${covered}`
-            : `superseded by ${milestone.supersededBy} — ${covered}`;
+        return closedMilestoneReason(milestone, covered);
     }
     if (milestone.state === "missed")
     {
@@ -642,15 +673,21 @@ function deriveObjective(objective: ObjectiveState, works: LinkedWork[], today: 
     objective.reason = objectiveReason(objective, live, today);
 }
 
-function objectiveState(objective: ObjectiveState, live: MilestoneState[], today: string): TargetState
+function closedObjectiveState(objective: ObjectiveState): TargetState | undefined
 {
     if (objective.status === "reached")
     {
         return "reached";
     }
-    if (objective.status === "dropped" || objective.status === "superseded")
+    return objective.status === "dropped" || objective.status === "superseded" ? "closed" : undefined;
+}
+
+function objectiveState(objective: ObjectiveState, live: MilestoneState[], today: string): TargetState
+{
+    const closed = closedObjectiveState(objective);
+    if (closed !== undefined)
     {
-        return "closed";
+        return closed;
     }
     const has = (state: TargetState): boolean => live.some((milestone) => milestone.state === state);
     // Every checkpoint landed, so a date that has since passed missed nothing —
@@ -696,54 +733,57 @@ function objectiveReason(objective: ObjectiveState, live: MilestoneState[], toda
     return worst === undefined ? covered : `${worst.id}: ${worst.reason}`;
 }
 
+// A judgment is made against the revisions current when it was made, so a later
+// revision can widen what the milestone asks for. Saying the judgment is stale
+// beats letting a settled "covered" or "reached" stand for criteria it never
+// saw. A re-judgment recorded since is the one that counts.
+function staleJudgmentSignals(objective: ObjectiveState, milestone: MilestoneState): string[]
+{
+    const signals = milestone.stale.map((stale) =>
+        `${milestone.id} coverage of ${stale.criterion} was judged against ${objective.id} revision ` +
+        `${stale.objectiveRevision}/${stale.milestoneRevision}, now ${objective.revision}/${milestone.revision} — ` +
+        `recheck it with \`self milestone recheck ${milestone.id} --criterion ${stale.criterion} --why "<what you re-judged>"\``);
+    const reached = milestone.reaffirmed ?? milestone.reached;
+    if (reached !== undefined
+        && (reached.objectiveRevision !== objective.revision || reached.milestoneRevision !== milestone.revision))
+    {
+        signals.push(`${milestone.id} was reached against ${objective.id} revision ` +
+            `${reached.objectiveRevision}/${reached.milestoneRevision}, now ${objective.revision}/${milestone.revision} — ` +
+            `recheck it with \`self milestone recheck ${milestone.id} --why "<what you re-judged>"\``);
+    }
+    return signals;
+}
+
+function milestoneStateSignals(milestone: MilestoneState): string[]
+{
+    if (milestone.state === "missed")
+    {
+        return [`${milestone.id} missed its target — ${milestone.reason}`];
+    }
+    if (milestone.state === "at-risk")
+    {
+        return [`${milestone.id} is at risk — ${milestone.reason}`];
+    }
+    return milestone.state === "blocked" && milestone.criticalPath
+        ? [`${milestone.id} is on the critical path and ${milestone.reason}`]
+        : [];
+}
+
 function objectiveSignals(objective: ObjectiveState): string[]
 {
     if (objective.status !== "active")
     {
         return [];
     }
-    const signals: string[] = [];
-    for (const milestone of objective.milestones)
-    {
-        // A superseded milestone asks nothing of anyone: its successor carries
-        // whatever is still owed, so neither its coverage nor its reach is
-        // work the reader can act on.
-        if (milestone.supersededBy !== undefined)
-        {
-            continue;
-        }
-        for (const stale of milestone.stale)
-        {
-            signals.push(`${milestone.id} coverage of ${stale.criterion} was judged against ${objective.id} revision ` +
-                `${stale.objectiveRevision}/${stale.milestoneRevision}, now ${objective.revision}/${milestone.revision} — ` +
-                `recheck it with \`self milestone recheck ${milestone.id} --criterion ${stale.criterion} --why "<what you re-judged>"\``);
-        }
-        // The reach itself is a judgment against a revision. A later revision
-        // can widen what the milestone asks for, so say the reach is stale
-        // rather than let a settled "reached" stand for criteria it never saw.
-        // A re-judgment recorded since is the reach that counts.
-        const reached = milestone.reaffirmed ?? milestone.reached;
-        if (reached !== undefined
-            && (reached.objectiveRevision !== objective.revision || reached.milestoneRevision !== milestone.revision))
-        {
-            signals.push(`${milestone.id} was reached against ${objective.id} revision ` +
-                `${reached.objectiveRevision}/${reached.milestoneRevision}, now ${objective.revision}/${milestone.revision} — ` +
-                `recheck it with \`self milestone recheck ${milestone.id} --why "<what you re-judged>"\``);
-        }
-        if (milestone.state === "missed")
-        {
-            signals.push(`${milestone.id} missed its target — ${milestone.reason}`);
-        }
-        if (milestone.state === "at-risk")
-        {
-            signals.push(`${milestone.id} is at risk — ${milestone.reason}`);
-        }
-        if (milestone.state === "blocked" && milestone.criticalPath)
-        {
-            signals.push(`${milestone.id} is on the critical path and ${milestone.reason}`);
-        }
-    }
-    return signals;
+    // A superseded milestone asks nothing of anyone: its successor carries
+    // whatever is still owed, so neither its coverage nor its reach is work the
+    // reader can act on.
+    return objective.milestones
+        .filter((milestone) => milestone.supersededBy === undefined)
+        .flatMap((milestone) => [
+            ...staleJudgmentSignals(objective, milestone),
+            ...milestoneStateSignals(milestone)
+        ]);
 }
 
 /* ── lookup ────────────────────────────────────────────────────────── */
@@ -776,7 +816,7 @@ export function openProposals(goals: GoalState): WorkProposal[]
     return goals.proposals.filter((proposal) => proposal.status === "open" && !proposal.expired);
 }
 
-export interface Contribution
+interface Contribution
 {
     kind: "objective" | "milestone";
     id: string;
