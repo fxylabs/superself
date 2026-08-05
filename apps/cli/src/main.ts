@@ -7,6 +7,7 @@ import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
+import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
 import { EntityState, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
@@ -16,7 +17,7 @@ import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
-import { buildModel, DecisionState, ProjectModel, workScope, workspaceModels, WorkState } from "./model.js";
+import { buildModel, DecisionState, ProjectModel, readableModels, workScope, workspaceModels, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -392,7 +393,10 @@ export const COMMANDS: Command[] = [
         usage: [
             {
                 syntax: "project",
-                description: ["list the registered slugs, and any scope naming a project this workspace lost"],
+                description: [
+                    "list the registered slugs, which project each came from,",
+                    "and any scope naming a project this workspace lost"
+                ],
                 verbs: ["", "list"]
             },
             {
@@ -404,31 +408,49 @@ export const COMMANDS: Command[] = [
                 syntax: "project link [slug] [path]",
                 description: ["attach a registered project's directory on this machine"],
                 verbs: ["link"]
+            },
+            {
+                syntax: 'project from <parent-slug> --why "<reason>" [--supersedes <id>]',
+                description: ["record that this project came from another registered one"],
+                verbs: ["from"]
             }
         ],
         detail: [
-            "list the projects this workspace holds, register one with it, or attach one",
-            "registered on another machine. Every checkout of a registered git repository",
-            "— worktrees included — resolves on its own; `link` with no slug infers it",
-            "from the repository and only saves the probe.",
+            "list the projects this workspace holds, register one with it, attach one",
+            "registered on another machine, or record which project this one came from.",
+            "Every checkout of a registered git repository — worktrees included —",
+            "resolves on its own; `link` with no slug infers it from the repository and",
+            "only saves the probe.",
             "",
             "the bare list is the answer to \"which slugs does --scope and --project take\",",
-            "and it reads the whole workspace: it takes neither flag, and add and link are",
-            "writes that record into the workspace store they run against.",
+            "and it reads the whole workspace: it takes neither flag, while add and link",
+            "are writes that record into the workspace store they run against and from is",
+            "a write that records into the project it runs in.",
             "",
-            "  --name <slug>   register under this slug instead of the directory name",
-            "  --desc <text>   one-line description shown in the workspace view",
-            "  --no-connect    skip writing the managed block into AGENTS.md and CLAUDE.md"
+            "`from` records one relation — this project came from that one — as a record",
+            "carrying the parent's slug, its reason and its time. It runs in the child,",
+            "and the listing above answers both directions: the parent on the child's row,",
+            "and every child on the parent's. A project comes from one place, so a second",
+            "`from` is refused and a correction restates it with --supersedes.",
+            "",
+            "  --name <slug>       register under this slug instead of the directory name",
+            "  --desc <text>       one-line description shown in the workspace view",
+            "  --no-connect        skip writing the managed block into AGENTS.md and CLAUDE.md",
+            "  --why <text>        why this project came from that one, kept with the relation",
+            "  --supersedes <id>   the derivation record this one corrects",
+            "  --demote <id>       past the index cap: the index record that frees its place"
         ],
         node: branch({
             name: "project",
             unnamed: "options",
-            refusal: 'usage: self project | add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]',
+            refusal: 'usage: self project | add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]'
+                + ' | from <parent-slug> --why "<reason>"',
             children: [
                 leaf("", {}, 0, projectList),
                 leaf("list", {}, 0, projectList),
                 leaf("add", PROJECT_ADD_OPTIONS, 1, projectAdd),
-                leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1]))
+                leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1])),
+                PROJECT_FROM_LEAF
             ]
         })
     },
@@ -1109,23 +1131,34 @@ function projectAdd({ values, positionals }: CommandInput<typeof PROJECT_ADD_OPT
 // <slug>` refusal points a caller at, and the one diagnostic the registry can
 // answer on its own: a record whose scope names a project this workspace does
 // not have renders nowhere (#181 T3.10), so it is named here rather than
-// silently disappearing from every context.
+// silently disappearing from every context. It is also where both directions
+// of the derivation relation are read (#75 R2): the parent under the child's
+// row, the children under the parent's. A project whose state cannot be read
+// is named and skipped rather than thrown (T4.5) — this verb answers about the
+// workspace as a whole, and one broken store must not take the rest with it.
 function projectList(): void
 {
     const ctx = requireWorkspace(process.cwd());
-    const models = workspaceModels(ctx.storeDir);
-    if (models.length === 0)
+    const { models, unreadable } = readableModels(ctx.storeDir);
+    if (models.length === 0 && unreadable.length === 0)
     {
         console.log("no projects registered — run `self project add` inside a project directory");
         return;
     }
-    const registered = new Set(models.map((model) => model.slug));
+    const registered = new Set(readRegistry(ctx.storeDir).map((entry) => entry.slug));
     for (const model of models)
     {
-        const here = model.slug === ctx.project ? "  (this directory)" : "";
-        console.log(`${model.slug}${model.description === undefined ? "" : ` — ${model.description}`}${here}`);
+        console.log(projectRow(model, ctx.project));
+        derivationLines(models, model, registered).forEach((line) => console.log(line));
     }
+    unreadable.forEach((line) => console.log(line));
     danglingScopes(models, registered).forEach((line) => console.log(line));
+}
+
+function projectRow(model: ProjectModel, here: string | undefined): string
+{
+    const mark = model.slug === here ? "  (this directory)" : "";
+    return `${model.slug}${model.description === undefined ? "" : ` — ${model.description}`}${mark}`;
 }
 
 function danglingScopes(models: ProjectModel[], registered: Set<string>): string[]

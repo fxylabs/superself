@@ -552,6 +552,31 @@ export function workspaceModels(storeDir: string, first?: string): ProjectModel[
     return (first === undefined ? rest : [first, ...rest]).map((slug) => buildModel(storeDir, slug, now));
 }
 
+// What a workspace-wide listing reads: every registered project that folds,
+// and a line naming each one that does not (#75 T4.5). `self project` answers
+// about the workspace as a whole — which slugs exist, and which project came
+// from which — so one store nothing can read must not take the answer for
+// every other project down with it. Every other surface still folds through
+// `workspaceModels`, where an unreadable store is a failure worth stopping on.
+export function readableModels(storeDir: string): { models: ProjectModel[]; unreadable: string[] }
+{
+    const now = new Date();
+    const models: ProjectModel[] = [];
+    const unreadable: string[] = [];
+    for (const entry of readRegistry(storeDir))
+    {
+        try
+        {
+            models.push(buildModel(storeDir, entry.slug, now));
+        }
+        catch (error)
+        {
+            unreadable.push(`${entry.slug}: its state could not be read, so it is skipped here — ${(error as Error).message}`);
+        }
+    }
+    return { models, unreadable };
+}
+
 // The event that asserted each native entity, kept for the projection: the
 // preset verbs record their extra fields — a decision's refs, an objective's
 // horizon, a proposal's brief — on the creation event, and the entity schema
