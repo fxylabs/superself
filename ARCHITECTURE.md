@@ -31,7 +31,7 @@ it. The layers, lowest first:
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
-| Commands | `main.ts`, `goals.ts`, `state.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
