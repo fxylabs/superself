@@ -158,9 +158,13 @@ cannot land without its lifecycle verbs in its own help.
 ## Tests
 
 `pnpm test` runs the whole tier — unit tests plus the CLI integration tests —
-in seconds, on every pull request. The integration tests run on a
-contributor's macOS laptop and on the ubuntu CI runner, against whatever git
-the host has. Write them checkout-agnostic:
+on every pull request. It takes minutes, not seconds: around twelve at the
+current suite size, and the figure grows as the suite does. The run prints
+nothing until it finishes, so a long silence is the normal case and not a
+hang — do not kill it, and give any watchdog wrapping it room for a run that
+long. The integration tests run on a contributor's macOS laptop and on the
+ubuntu CI runner, against whatever git the host has. Write them
+checkout-agnostic:
 
 - Never assume a default branch name. Pin it: `git init -q -b main`, or set
   `init.defaultBranch` in the scratch home before the first `git init`. A script
