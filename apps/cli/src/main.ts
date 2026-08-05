@@ -15,7 +15,7 @@ import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headC
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
-import { machineWorkspace, setMachineWorkspace } from "./machine.js";
+import { machineWorkspace, sessionPid, sessionToken, setMachineWorkspace } from "./machine.js";
 import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
 import {
     checkoutMatches,
@@ -47,7 +47,7 @@ import {
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
-import { recordProcess } from "./ledger.js";
+import { claimNote, judgeSession, recordProcess, recordSession } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
 import { STATE_COMMAND } from "./state.js";
@@ -270,8 +270,9 @@ const SEARCH_OPTIONS = { type: { type: "string" }, project: { type: "string" } }
 
 // The shared execution grammar (#207 B14): a work verb records the same
 // `entity.*` fact the raw state verbs record, whichever kind of unit it moves.
+// `start` is not among these: it hands over the brief as well as recording the
+// transition (#230), which is the whole reason a session calls it at all.
 const WORK_TRANSITIONS: [string, string, Requirement[]][] = [
-    ["start", "entity.started", []],
     ["block", "entity.blocked", [{ flags: ["on"], value: "<reason>", hint: "what the unit waits on: decision, dependency, or external" }]],
     ["unblock", "entity.unblocked", []]
 ];
@@ -293,6 +294,7 @@ const WORK_CHILDREN: CommandLeaf[] = [
     leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
     leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd),
     leaf("show", SCOPE_OPTIONS, 1, cmdWorkShow),
+    leaf("start", TRANSITION_OPTIONS, 1, cmdWorkStart),
     ...WORK_TRANSITIONS.map(([verb, type, requires]) =>
         leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input), { requires })),
     leaf("done", DONE_OPTIONS, 1, cmdWorkDone),
@@ -546,9 +548,14 @@ export const COMMANDS: Command[] = [
                 verbs: ["show"]
             },
             {
-                syntax: "work start|block|unblock <id>",
+                syntax: "work start <id>",
+                description: ["pick a unit up: prints its brief and reports, and records the claim", "(if another session holds it, that is disclosed — never refused)"],
+                verbs: ["start"]
+            },
+            {
+                syntax: "work block|unblock <id>",
                 description: ["move a work unit (block: --on decision|dependency|external [--why w])"],
-                verbs: ["start", "block", "unblock"]
+                verbs: ["block", "unblock"]
             },
             {
                 syntax: 'work done <id> [--report "<what verifiably happened>"] [--why w]',
@@ -582,6 +589,12 @@ export const COMMANDS: Command[] = [
         detail: [
             "create and move units of work, and state what each contributes to.",
             "`work add` prints the new id.",
+            "",
+            "`work start` is how a session picks a unit up: it prints the brief and the",
+            "report history, and records that this session took it. `work show` is the",
+            "same reading with nothing recorded, so looking at a unit is never a claim.",
+            "A unit another session already holds is disclosed with when it was taken,",
+            "and never refused — the claim tells you who is on it, it does not lock it.",
             "",
             "a unit's outcome is immutable once recorded, so correcting it restates it:",
             '`work add "<corrected outcome>" --supersedes <id> --why w` records the new unit',
@@ -1443,7 +1456,91 @@ function cmdWorkShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>
     {
         throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
     }
+    // Printed here rather than inside `renderWorkBody`, which also writes the
+    // synced `work/<id>.md`: liveness is this machine's answer, and a synced
+    // file carrying it would tell another clone what only this one can judge.
+    const held = holderNote(found.work);
+    if (held !== null)
+    {
+        console.log(held);
+    }
     console.log(markdownHeadings(renderWorkBody(found.work, found.model, readVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
+}
+
+// The brief is the one thing a session cannot skip before starting, so the
+// command that hands it over is the command that records the claim (#230).
+// `show` stays a pure read — three looks must not be three claims — and this
+// verb is what an agent calls because it needs what comes back, not because a
+// managed block told it to.
+function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>): void
+{
+    const ctx = requireProject(process.cwd());
+    const work = requireOpenWork(ctx, positionals[0]);
+    const mine = sessionToken();
+    // Read before anything is written, and printed before it too: the fact a
+    // session is deciding on is who held the unit when it walked up.
+    const held = holderNote(work);
+    if (held !== null)
+    {
+        console.log(held);
+    }
+    if (claimMoves(work, mine))
+    {
+        recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: work.id }), `${work.id} ${work.outcome}`);
+    }
+    rememberSession(mine);
+    console.log(markdownHeadings(renderWorkBody(work, buildModel(ctx.storeDir, ctx.project, new Date()),
+        readVerdicts(ctx.storeDir, ctx.project)).trimEnd()));
+}
+
+// Cells 1, 5 and 8 of the table in issue #230: an unclaimed unit, one whose
+// holder ended, and one started before sessions were stamped. Cells 2, 3 and 4
+// leave the claim where it is — the same session needs no second claim, and a
+// live holder is disclosed rather than displaced. Nothing here refuses.
+function claimMoves(work: WorkState, mine: string | undefined): boolean
+{
+    const holder = work.claim?.session;
+    if (holder === undefined)
+    {
+        return true;
+    }
+    if (holder === mine)
+    {
+        return false;
+    }
+    return work.process?.state === "exited" || judgeSession(holder)?.state === "ended";
+}
+
+// The pid that answers whether this session is still running, kept beside the
+// log on this machine alone. A session with no resolvable identity or no
+// resolvable process records nothing, and every reader answers "unknown"
+// rather than inventing a liveness it cannot see.
+function rememberSession(session: string | undefined): void
+{
+    const pid = sessionPid();
+    if (session !== undefined && pid !== undefined)
+    {
+        recordSession(session, pid, new Date().toISOString());
+    }
+}
+
+// What a reader is told about who holds a unit, or nothing when no session
+// has claimed it.
+function holderNote(work: WorkState): string | null
+{
+    return claimNote(work.claim, sessionToken(), work.process);
+}
+
+// Cell 7 of #230's table: a non-holder acting on a unit is told, never
+// refused. The unit may genuinely have moved to this session, and a stale
+// claim from a session that died is exactly the case a refusal would get
+// wrong. The holder itself is told nothing — it already knows.
+function announceOtherHolder(work: WorkState): void
+{
+    if (work.claim?.session !== undefined && work.claim.session !== sessionToken())
+    {
+        console.log(holderNote(work));
+    }
 }
 
 // Read-time reverse provenance for the cross-project case: a retire event
@@ -1535,6 +1632,9 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
         return;
     }
     const why = required(values.why);
+    // Before the approval prompt, not after: a person deciding whether to
+    // destroy the record should read that another session is on it first.
+    announceOtherHolder(work);
     const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
     recordRetirement(ctx, retirementIntent(model, "retire", [work.id]), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retired",
@@ -1666,6 +1766,7 @@ function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>)
     {
         payload.why = values.why;
     }
+    announceOtherHolder(work);
     const events = report === undefined ? []
         : [makeEvent(ctx.project, "report.added", { text: report }, { work: work.id })];
     events.push(makeEvent(ctx.project, "entity.done", payload));
@@ -1701,6 +1802,7 @@ function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>)
     const text = values.file === undefined
         ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
         : readReportFile(values.file);
+    announceOtherHolder(work);
     const refs: EventRefs = { work: work.id };
     const payload: Record<string, unknown> = { text };
     attachEvidence(ctx, values, refs, payload);

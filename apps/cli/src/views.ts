@@ -1,5 +1,6 @@
 import { EntityState, isCurrent, orderEntities, pendingSummary } from "./entities.js";
-import { judgeProcess } from "./ledger.js";
+import { claimNote, judgeProcess } from "./ledger.js";
+import { sessionToken } from "./machine.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import {
     AttentionRow,
@@ -276,8 +277,18 @@ function inProgressLines(model: ProjectModel): string[]
         const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, project);
         const next = work.next === undefined ? "" : ` (next: ${work.next})`;
         const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
-        return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${report}${next}`;
+        return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${heldNote(work)}${report}${next}`;
     });
+}
+
+// Whether another session is on this unit right now, rendered where a reader
+// chooses what to pick up (#230). It reads before the report excerpt, because
+// a unit somebody else is holding is a fact about whether to start at all
+// rather than a detail of how far it got.
+function heldNote(work: WorkState): string
+{
+    const note = claimNote(work.claim, sessionToken(), work.process);
+    return note === null ? "" : `  [${note}]`;
 }
 
 // A report can be pages; its row carries a bounded excerpt and the command
@@ -670,7 +681,7 @@ function plainWorkLine(work: WorkState, toward: string, project: string): string
     const reports = work.reports.length > 0
         ? `  — ${work.reports.length} report(s), see \`${pointerTo({ verb: "work-show", id: work.id }, project)}\`` : "";
     return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}`
-        + `${gatedNote(work)}${reports}`;
+        + `${gatedNote(work)}${heldNote(work)}${reports}`;
 }
 
 // A unit that never started can still be gated, which is the whole point of

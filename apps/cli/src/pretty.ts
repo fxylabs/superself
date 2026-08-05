@@ -22,6 +22,8 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
+import { claimNote } from "./ledger.js";
+import { sessionToken } from "./machine.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
 import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, oneLine, padDisplay, plural, red, termColumns, yellow } from "./style.js";
 import { CliError } from "./types.js";
@@ -409,7 +411,21 @@ const STATE_PAINT: Record<string, Paint> = {
 
 function workRow(model: ProjectModel, work: WorkState): Row
 {
-    const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
+    return {
+        cells: [
+            { text: work.id, paint: dim },
+            { text: work.status, paint: STATE_PAINT[work.status] ?? plain },
+            { text: work.outcome },
+            { text: String(work.reports.length) }
+        ],
+        notes: workNotes(model, work)
+    };
+}
+
+// Everything the four columns cannot hold, in the order a reader needs it:
+// what stops the unit, then who is on it, then what it serves.
+function workNotes(model: ProjectModel, work: WorkState): Cell[]
+{
     const notes: Cell[] = [];
     if (work.status === "blocked")
     {
@@ -422,19 +438,20 @@ function workRow(model: ProjectModel, work: WorkState): Row
     {
         notes.push({ text: `gated by ${work.gatedBy.join(", ")} · ${scoped("self status", shellArgument(model.slug))}`, paint: yellow });
     }
+    // Yellow, beside the other things that give a reader pause: a unit another
+    // session is holding is not refused, but picking it up anyway is a choice
+    // rather than an oversight (#230).
+    const held = claimNote(work.claim, sessionToken(), work.process);
+    if (held !== null)
+    {
+        notes.push({ text: held, paint: yellow });
+    }
+    const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
     if (toward !== "")
     {
         notes.push({ text: `toward ${toward}`, paint: dim });
     }
-    return {
-        cells: [
-            { text: work.id, paint: dim },
-            { text: work.status, paint: STATE_PAINT[work.status] ?? plain },
-            { text: work.outcome },
-            { text: String(work.reports.length) }
-        ],
-        notes
-    };
+    return notes;
 }
 
 export function renderWorkList(model: ProjectModel): string[]
