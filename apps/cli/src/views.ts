@@ -1,7 +1,7 @@
 import { EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
-import { eventSummary, readEvents } from "./logfile.js";
+import { eventRecord, eventSummary, readEvents } from "./logfile.js";
 import {
     AttentionRow,
     ATTENTION_ORDER,
@@ -9,6 +9,7 @@ import {
     BranchUnshipped,
     branchTotals,
     buildModel,
+    closedRecords,
     otherGoals,
     ProjectModel,
     WaitingItem,
@@ -32,7 +33,7 @@ import {
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
-import { SelfEvent } from "./types.js";
+import { CliError, SelfEvent } from "./types.js";
 
 // What one piped render may spend (#213). A cap measures what a store may
 // hold; this measures what a single render costs the reader it is handed to,
@@ -153,10 +154,21 @@ interface ContextSection
 {
     header?: string;
     rows: string[];
+    // The record each row renders, positionally, where the rows are records at
+    // all. Search's default membership is "live and not shown here" (#212 R1),
+    // and reading it off the rows the budget kept is what keeps the two
+    // surfaces from drifting apart.
+    ids?: string[];
     omission: (count: number) => string;
 }
 
 function renderProjectContext(model: ProjectModel, limit: number, foreign: EntityState[] = []): string
+{
+    const { head, sections } = projectContextSections(model, foreign);
+    return assembleContext(head, sections, fitKeeps(head, sections, limit));
+}
+
+function projectContextSections(model: ProjectModel, foreign: EntityState[]): { head: string[]; sections: ContextSection[] }
 {
     const project = shellArgument(model.slug);
     // Collect is scope-aware (#197 §6): this project's current records plus
@@ -169,13 +181,15 @@ function renderProjectContext(model: ProjectModel, limit: number, foreign: Entit
             && rendersIn(item, model.slug, model.slug)),
         ...foreign
     ].filter((item) => item.source !== "work"));
-    const sections = [
-        descriptionSection(model, project),
-        fullSection(placed, project),
-        ...liveSections(model, project),
-        indexSection(placed, project)
-    ];
-    return fitContext([`# ${model.slug}`, ""], sections, limit);
+    return {
+        head: [`# ${model.slug}`, ""],
+        sections: [
+            descriptionSection(model, project),
+            fullSection(placed, project),
+            ...liveSections(model, project),
+            indexSection(placed, project)
+        ]
+    };
 }
 
 function descriptionSection(model: ProjectModel, project: string): ContextSection
@@ -188,8 +202,10 @@ function descriptionSection(model: ProjectModel, project: string): ContextSectio
 
 function fullSection(placed: EntityState[], project: string): ContextSection
 {
+    const full = placed.filter((item) => item.exposure === "full");
     return {
-        rows: placed.filter((item) => item.exposure === "full").map(fullEntityRow),
+        rows: full.map(fullEntityRow),
+        ids: full.map((item) => item.id),
         omission: (count) => `- … ${plural(count, "full-exposure entity", "full-exposure entities")} omitted; run \`${scoped("self state", project)}\``
     };
 }
@@ -204,10 +220,19 @@ function fullEntityRow(entity: EntityState): string
     return `- ${entityLabel(entity)}${entity.text}${target}${why}`;
 }
 
-function indexEntityRow(entity: EntityState): string
+// One record on one line: its labels, its text and the reason it carries. The
+// index block prints it with a bullet, and `self search` prints it with the
+// columns that say which project and which id (#212 T4) — one body, so a
+// record cannot read two ways across the two surfaces that answer for it.
+export function recordLine(entity: EntityState): string
 {
     const why = entity.why === undefined ? "" : ` — ${entity.why}`;
-    return `- ${entityLabel(entity)}${oneLine(entity.text)}${oneLine(why)}`;
+    return `${entityLabel(entity)}${oneLine(entity.text)}${oneLine(why)}`;
+}
+
+function indexEntityRow(entity: EntityState): string
+{
+    return `- ${recordLine(entity)}`;
 }
 
 function entityLabel(entity: EntityState): string
@@ -220,7 +245,8 @@ function entityLabel(entity: EntityState): string
 function indexSection(placed: EntityState[], project: string): ContextSection
 {
     const searchable = placed.filter((item) => item.exposure === "search").length;
-    const rows = placed.filter((item) => item.exposure === "index").map(indexEntityRow);
+    const indexed = placed.filter((item) => item.exposure === "index");
+    const rows = indexed.map(indexEntityRow);
     if (searchable > 0)
     {
         rows.push(`- ${plural(searchable, "entity", "entities")} at search exposure; run \`${scoped("self state", project)}\``);
@@ -228,6 +254,9 @@ function indexSection(placed: EntityState[], project: string): ContextSection
     return {
         header: "## Index",
         rows,
+        // The trailing search-exposure count renders no record of its own, so
+        // it carries no id: the tier it counts is exactly what search answers.
+        ids: indexed.map((item) => item.id),
         omission: (count) => `- … ${plural(count, "index row")} omitted; run \`${scoped("self state", project)}\``
     };
 }
@@ -376,7 +405,11 @@ function assembleContext(head: string[], sections: ContextSection[], keeps: numb
 // to one pointer row that counts what it holds and names the recovery
 // command. A row that does not fit whole is never truncated: it joins the
 // counted omission instead, and the pointer recovers it intact.
-function fitContext(head: string[], sections: ContextSection[], limit: number): string
+//
+// How many rows each section keeps, rather than the rendered text: the render
+// assembles from this, and search reads the same answer to find out which
+// records the budget cut (#212 R1).
+function fitKeeps(head: string[], sections: ContextSection[], limit: number): number[]
 {
     const keeps = sections.map((section) => section.rows.length);
     let rendered = assembleContext(head, sections, keeps);
@@ -388,7 +421,52 @@ function fitContext(head: string[], sections: ContextSection[], limit: number): 
             rendered = assembleContext(head, sections, keeps);
         }
     }
-    return rendered;
+    return keeps;
+}
+
+/* ── what context showed, for the surface that answers over the rest ─ */
+
+// R1 (#212): every record the current context render actually shows. The
+// default `self search` answers over the live records this set does not hold —
+// the search tier, plus the index and full records the budget cut — so the
+// membership is read off the very sections `printContext` renders instead of
+// being restated as a tier, and the two cannot drift apart.
+export function contextRendered(storeDir: string, models: ProjectModel[]): Set<string>
+{
+    const limit = contextBodyLimit(tokenScale(readStoreConfig(storeDir)));
+    const shown = new Set<string>();
+    for (const model of models)
+    {
+        const { head, sections } = projectContextSections(contextView(storeDir, models, model), scopedIn(models, model.slug));
+        const keeps = fitKeeps(head, sections, limit);
+        sections.forEach((section, index) =>
+            (section.ids ?? []).slice(0, keeps[index]).forEach((id) => shown.add(id)));
+    }
+    return shown;
+}
+
+// The model as `printContext` renders it: the works its scope carries and the
+// signals the console surfaces recheck, both of which spend budget. Copied
+// rather than assigned onto the fold — the caller reads the same folds again
+// for the next project.
+function contextView(storeDir: string, models: ProjectModel[], model: ProjectModel): ProjectModel
+{
+    const works = models.flatMap((other) => scopedWorks(other, model.slug));
+    return {
+        ...model,
+        works,
+        health: [...model.health, ...verdictSignals(works, readVerdicts(storeDir, model.slug)),
+            ...artifactSignals(storeDir, works)]
+    };
+}
+
+// Every other project's records that render here (#181 D2) — the collect
+// `foreignEntities` does for the printed render, over folds already in hand.
+function scopedIn(models: ProjectModel[], viewer: string): EntityState[]
+{
+    return models.filter((model) => model.slug !== viewer)
+        .flatMap((model) => model.entities.filter((entity) =>
+            rendersIn(entity, model.slug, viewer) && entity.status === "confirmed" && isCurrent(entity)));
 }
 
 // What the ruled render takes: the same items the plain render sentences,
@@ -746,6 +824,93 @@ export function printLog(ctx: ProjectScope, limit: number): void
     {
         console.log(logLine(event, undefined));
     }
+}
+
+/* ── one record's own history (#212 R3) ────────────────────────────── */
+
+// History is per-entity and explicit: there is no global history search, so
+// the caller has already resolved which record is wanted and which log holds
+// it. Everything below renders that record's events as the rows `self log`
+// prints — a raw event object is never an answer (#212 T6.7).
+const HISTORY_PAGE = 10;
+
+interface HistoryRecord
+{
+    id: string;
+    storeDir: string;
+    // The project whose log holds the record, which is not always the project
+    // it renders in (#181 D1).
+    owner: string;
+    // The project the reader asked about, for the pointer to the next page.
+    project: string;
+    // Which show verb the reader typed, so the next page is reachable by
+    // repeating their own command.
+    command: "state" | "work";
+    // The owner's fold, for the settled status this record answers as.
+    model: ProjectModel;
+    // Named, never folded in: a successor has a history of its own.
+    successor?: string;
+}
+
+export function printHistory(record: HistoryRecord, asked: string | undefined): void
+{
+    const page = requirePage(asked);
+    const events = historyEvents(record);
+    const pages = Math.max(1, Math.ceil(events.length / HISTORY_PAGE));
+    console.log(historyHead(record, events.length));
+    if (page > pages)
+    {
+        console.log(`no events on page ${page} — ${record.id} has ${plural(pages, "page")}`);
+        return;
+    }
+    const start = (page - 1) * HISTORY_PAGE;
+    for (const event of events.slice(start, start + HISTORY_PAGE))
+    {
+        console.log(logLine(event, undefined));
+    }
+    if (start + HISTORY_PAGE < events.length)
+    {
+        console.log(`… ${events.length - start - HISTORY_PAGE} more; run \`${nextPage(record, page + 1)}\``);
+    }
+}
+
+// A page is counted from one. A page past the last is answered rather than
+// refused (#212 T6.5); a page that is not a page at all is a mistake in the
+// command line, which is refused before anything is read.
+function requirePage(asked: string | undefined): number
+{
+    if (asked === undefined)
+    {
+        return 1;
+    }
+    const page = Number.parseInt(asked, 10);
+    if (Number.isNaN(page) || page <= 0 || String(page) !== asked.trim())
+    {
+        throw new CliError(`--page expects a page number from 1, not "${asked}"`);
+    }
+    return page;
+}
+
+// Only the events that speak about this record, oldest first. A merged log
+// orders by neither time nor dependency, so the page is sorted rather than
+// taken in append order.
+function historyEvents(record: HistoryRecord): SelfEvent[]
+{
+    return readEvents(record.storeDir, record.owner)
+        .filter((event) => eventRecord(event) === record.id)
+        .sort(compareDated);
+}
+
+function historyHead(record: HistoryRecord, count: number): string
+{
+    const status = closedRecords(record.model).get(record.id) ?? "live";
+    const successor = record.successor === undefined ? "" : ` · superseded by ${record.successor}`;
+    return `${record.id}  ${status}${successor}  ${plural(count, "event")}`;
+}
+
+function nextPage(record: HistoryRecord, page: number): string
+{
+    return `self ${record.command} show ${record.id} --history --page ${page} --project ${shellArgument(record.project)}`;
 }
 
 // Every registered project's events on one timeline, newest last, cut to the

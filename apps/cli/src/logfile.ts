@@ -30,6 +30,36 @@ export function findEventByPrefix(storeDir: string, slug: string, prefix: string
     return matches[0];
 }
 
+// Which record an event speaks about. Decided by the event's own type wherever
+// its payload names more than one record, because a payload id alone answers
+// the wrong question: `work.proposed` carries the objective and milestone the
+// proposal serves, and a proposal is identified by the event that opened it,
+// so reading the payload would attribute a declined proposal's events to its
+// objective — or to nothing.
+//
+// The rest fall through to the payload, most specific first: a requirement
+// event names its work unit too, and answering with the unit would file the
+// requirement's own events under the unit. A decision and a convention are
+// named by the event that opened them, which is why the event id is the last
+// resort. Read here rather than in a renderer because per-entity history
+// (#212 R3) is the one surface that asks it, and it is a fact about the log.
+const PROPOSAL_TRANSITIONS = ["work.accepted", "work.declined"];
+
+export function eventRecord(event: SelfEvent): string
+{
+    if (event.type === "work.proposed")
+    {
+        return event.id;
+    }
+    if (PROPOSAL_TRANSITIONS.includes(event.type))
+    {
+        return String(event.payload.proposal ?? event.id);
+    }
+    const named = event.payload.requirement ?? event.payload.milestone
+        ?? event.payload.objective ?? event.payload.entity ?? event.payload.work;
+    return named === undefined ? event.id : String(named);
+}
+
 export function eventSummary(event: SelfEvent): string
 {
     const payload = event.payload;

@@ -48,7 +48,7 @@ test("a proposed entity waits for confirm, and confirming twice is named", () =>
     assert.match(again.out, /already confirmed/);
 });
 
-test("retract withdraws with a reason, is terminal, and stays findable in search", async () =>
+test("retract withdraws with a reason, is terminal, and stays reachable by naming it", async () =>
 {
     const id = entityIn(must(box, demo, ["state", "add", "temporary rule"]).out);
     const bare = self(["state", "retract", id]);
@@ -62,7 +62,10 @@ test("retract withdraws with a reason, is terminal, and stays findable in search
     const again = self(["state", "retract", id, "--why", "twice"]);
     assert.notEqual(again.code, 0);
     assert.match(again.out, /already retracted/);
-    assert.match(must(box, demo, ["search", "temporary rule", "--type", "entity"]).out, /\[retracted\]/);
+    // Search answers over live records (#212), so a withdrawn record left that
+    // answer; its text, its reason and its own events are reached by naming it.
+    assert.equal(must(box, demo, ["search", "temporary rule"]).out.trim(), "no matches");
+    assert.match(must(box, demo, ["state", "show", id, "--history"]).out, /retracted/);
 });
 
 test("a confirmed successor supersedes; a proposal displaces nothing until confirmed", () =>

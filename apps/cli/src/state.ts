@@ -50,6 +50,7 @@ import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { countCharacters, tokensOf } from "./style.js";
 import { CliError, EventRefs, SelfEvent } from "./types.js";
+import { printHistory } from "./views.js";
 
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
     + ' | cover <id> --criterion c --why w | start <id> | block <id> | unblock <id> | done <id> --report r | retire <id> --why w';
@@ -94,6 +95,11 @@ const COVER_OPTIONS = {
     work: { type: "string" }
 } as const;
 
+// `show` reads for one project and, with `--history`, prints that record's own
+// events (#212 R3) — the one path to history, since no global history search
+// remains.
+const SHOW_OPTIONS = { ...SCOPE_OPTIONS, history: { type: "boolean" }, page: { type: "string" } } as const;
+
 const WHY_OPTION = { why: { type: "string" } } as const;
 
 const BLOCK_OPTIONS = { on: { type: "string" }, why: { type: "string" } } as const;
@@ -133,7 +139,11 @@ export const STATE_COMMAND: Command = {
             description: ["record one raw entity; --supersedes <id> replaces an earlier one"],
             verbs: ["add"]
         },
-        { syntax: "state show <id> [--project <slug>]", description: ["print an entity's current values"], verbs: ["show"] },
+        {
+            syntax: "state show <id> [--history [--page n]] [--project <slug>]",
+            description: ["print an entity's current values; --history prints its own events instead"],
+            verbs: ["show"]
+        },
         {
             syntax: "state place <id> [--priority <n>] [--exposure full|index|search] [--scope <slug>|workspace]",
             description: ["move an entity in context: render order, render form, the project it renders in"],
@@ -195,6 +205,13 @@ export const STATE_COMMAND: Command = {
         "the add and the demotion as a pair that waits on a person; rendering itself",
         "never refuses. `self tokens` records what a character costs.",
         "",
+        "history is per record and explicit: `state show <id> --history` prints the",
+        "events of that record alone, oldest first, ten to a page. A superseded,",
+        "retracted or retired record answers there too — nothing is made unreachable,",
+        "and a superseded record names its successor rather than folding it in.",
+        "",
+        "  --history             print this record's own events instead of its values",
+        "  --page <n>            which page of that history, ten events to a page",
         "  --label <text>        free label, repeatable; presets use goal, objective, convention, …",
         "  --priority <n>        render order: a whole number, 0 first; leave gaps (0, 10, 20)",
         "  --exposure <form>     how context renders it: full, index, or search",
@@ -229,7 +246,7 @@ export const STATE_COMMAND: Command = {
             leaf("", SCOPE_OPTIONS, 0, stateList),
             leaf("list", SCOPE_OPTIONS, 0, stateList),
             leaf("add", ADD_OPTIONS, 1, stateAdd),
-            leaf("show", SCOPE_OPTIONS, 1, stateShow),
+            leaf("show", SHOW_OPTIONS, 1, stateShow),
             leaf("place", PLACE_OPTIONS, 1, statePlace),
             leaf("confirm", {}, 1, stateConfirm),
             leaf("retract", WHY_OPTION, 1, stateRetract, { requires: [WHY_NO_LONGER_HOLDS] }),
@@ -1238,13 +1255,29 @@ function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
 // The page answers for any record this project resolves (#181 D5): its own,
 // whatever project they render in, plus the records scoped in from elsewhere.
 // A record that moved keeps its page — reading it is how a caller finds out
-// where it went.
-function stateShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
+// where it went. `--history` answers with that record's own events instead:
+// history is per-entity and explicit (#212 R3), so it is read here rather than
+// on a verb of its own.
+function stateShow({ values, positionals }: CommandInput<typeof SHOW_OPTIONS>): void
 {
     const scope = readScopes(process.cwd(), values)[0];
     const records = allRecords(workspaceModels(scope.storeDir, scope.project));
-    console.log(renderEntity(requirePlaced(resolvableRecords(records, scope.project), positionals[0],
-        "state show <id> [--project <slug>]")));
+    const found = requirePlaced(resolvableRecords(records, scope.project), positionals[0],
+        "state show <id> [--history [--page n]] [--project <slug>]", FIND_WITH_SEARCH);
+    if (values.history !== true)
+    {
+        console.log(renderEntity(found));
+        return;
+    }
+    printHistory({
+        id: found.entity.id,
+        storeDir: scope.storeDir,
+        owner: found.owner,
+        project: values.project ?? scope.project,
+        command: "state",
+        model: found.model,
+        successor: found.entity.supersededBy
+    }, values.page);
 }
 
 function stateLine(entity: EntityState): string
@@ -1340,7 +1373,7 @@ function requireEntity(model: ProjectModel, value: string | undefined, usage: st
 // project a placement may speak about (#181 D5). Exact id first, then a unique
 // prefix; a prefix two projects both answer to says nothing about which record
 // was meant, so it is refused rather than guessed.
-function requirePlaced(records: Placed[], value: string | undefined, usage: string): Placed
+function requirePlaced(records: Placed[], value: string | undefined, usage: string, hint = FIND_BY_LISTING): Placed
 {
     const wanted = requireText(value, usage);
     const exact = records.filter((item) => item.entity.id === wanted);
@@ -1352,10 +1385,16 @@ function requirePlaced(records: Placed[], value: string | undefined, usage: stri
     if (matches.length === 0)
     {
         refuseCarried(records, wanted);
-        throw new CliError(`unknown entity "${wanted}" — run \`self state list\` for ids`);
+        throw new CliError(`unknown entity "${wanted}" — ${hint}`);
     }
     return matches[0];
 }
+
+// A placement moves a record the list already shows; a `show` reaches records
+// the list does not, including the ones context left out — so search is what
+// finds an id there (#212 T6.6).
+const FIND_BY_LISTING = "run `self state list` for ids";
+const FIND_WITH_SEARCH = 'run `self search "<text>"` to find one, or `self state list` for the rendered ids';
 
 // A report and an artifact are carried by a work unit, never placed on their
 // own: they move when the unit moves, so naming one here is answered with the

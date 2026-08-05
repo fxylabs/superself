@@ -146,8 +146,11 @@ namespace, before it is admitted (#166):
 The verbs keep each type's existing vocabulary — `decide retract`, `convention
 drop`, `work retire` — but no type may be missing a transition. A withdrawn
 record is never deleted or rewritten: it keeps its text and its refs, so
-`--after` and `--blocks` pointing at it still resolve, and `self search` still
-returns it with its status in the result line.
+`--after` and `--blocks` pointing at it still resolve, and naming it —
+`self state show <id>`, `self state show <id> --history`, `self work show <id>
+--history` — still answers with its text, its status and its own events. What
+it leaves is the answer to "what is true now": `self search` reads live records
+(#212), so a withdrawn record is not in that answer and no flag reaches it.
 
 Correcting a record is spelled the same way for every type: `--supersedes <id>`
 on that type's own add verb, which restates the text and carries the lineage.
@@ -196,9 +199,9 @@ not.
   `--supersedes` and no withdrawal leaves records that can only be replaced,
   never taken back, which is the state #166 was opened over.
 - The statement types are declared once in code, as `STATEMENT_TYPES` in
-  `model.ts`. It is load-bearing rather than documentation: `search.ts` builds
-  its historical-status markers from it, so a type missing an entry stops
-  saying which of its records still hold.
+  `model.ts`. It is load-bearing rather than documentation: the per-record
+  history `views.ts` renders reads a record's settled status from it, so a type
+  missing an entry stops saying which of its records still hold.
 - Enforcement: `test/lifecycle.test.mjs` reads `STATEMENT_TYPES` out of the
   built module, fails when an entry's verbs are missing from its command's
   help, and exercises withdrawal actually leaving the current renders. Review

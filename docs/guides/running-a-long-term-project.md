@@ -142,12 +142,18 @@ self status
 self work show w-xxxxx
 ```
 
-Pull older or cross-project state only when needed:
+Pull the live state context left out, and one record's own history, only when
+needed:
 
 ```bash
 self search "customer data"
 self search "rollback" --project my-project
+self state show <id> --history
 ```
+
+`self search` answers over live records: a superseded, retired, retracted or
+done record is not in its answer, and naming the record is how its history is
+reached.
 
 Before acting, the new session should be able to answer:
 

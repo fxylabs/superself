@@ -39,13 +39,18 @@ test("a proposed decision confirms, and a superseded one leaves the render", asy
     assert.ok(!context.includes("first direction"), "a superseded decision still renders as current");
 });
 
-test("a dropped convention leaves the render and stays in search", async () =>
+test("a dropped convention leaves the render and stays reachable by naming it", async () =>
 {
     const id = idIn(must(box, demo, ["convention", "add", "state changes go through events"]).out);
     assert.ok(must(box, demo, ["context"]).out.includes("state changes go through events"));
     await approved(["convention", "drop", id, "--why", "replaced by the event gate"], id);
     assert.ok(!must(box, demo, ["context"]).out.includes("state changes go through events"));
-    assert.ok(must(box, demo, ["search", "state changes go through"]).out.includes("state changes"), "a dropped convention vanished from history");
+    // Search answers over live records (#212), so a dropped rule is not in its
+    // answer; its text and its history are reached by naming the record.
+    assert.equal(must(box, demo, ["search", "state changes go through"]).out.trim(), "no matches",
+        "a dropped convention still answered a live-record search");
+    assert.ok(must(box, demo, ["state", "show", id, "--history"]).out.includes("state changes go through events"),
+        "a dropped convention vanished from history");
 });
 
 test("the work spine: add, start, report, evidenced done as a judgment", () =>
