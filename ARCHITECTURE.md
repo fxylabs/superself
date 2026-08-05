@@ -77,7 +77,7 @@ of them is a review finding, not a refactor note.
 
 | Gate | Module | Rule |
 | --- | --- | --- |
-| Event append | `pipeline.ts` `recordEvent` / `recordEvents` | the only writer of `log.jsonl`; every event verb goes through it |
+| Event append | `pipeline.ts` `recordEvent` / `recordEvents` | the only writer of `log.jsonl`; every event verb goes through it. Each event names the project whose log it belongs to, and the append is grouped by that name — one write per log — so a placement that moves a record between projects still cannot leave half a state change in either (#181) |
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess`, `recordSession` / `judgeSession` | the one writer and the one reader of the machine-local pid ledger, for a work unit's process and for the agent session that claimed it; a pid never reaches a synced event, and the sentence a reader is given about liveness is minted here too (`claimNote`) rather than re-derived per surface |
@@ -245,6 +245,23 @@ Standing rules, not per-issue reminders:
   to a project it does not belong to. A write verb has no scope flag: it records
   into the project it runs in, and `--project` on one is an option that command
   never declared, so the argument-parse gate names it instead of dropping it.
+- One placement scope, and it is a render target rather than a storage location
+  (#181). `--scope` on `state add`, `state place` and the alias adds names which
+  project renders a record: omitted is the project the directory resolves to, a
+  registered slug is that project, `workspace` is all of them. The retired
+  `project` keyword is refused by name, never read as the omission. A record's
+  events stay in the log that already holds them however often its scope moves,
+  so `entities.ts` `scopeTarget` and `rendersIn` are the one place a stored
+  scope becomes an answer about a project, and the caps count per render target
+  across every store. This is not the read scope above and never merges with it:
+  `--project` asks which project a read answers for, `--scope` states where a
+  record belongs.
+- An entity write appends to the log that owns the entity (#181). A record
+  scoped into this project resolves here — `state place`, `state show`,
+  `work start`, `report`, `work done` and `work block` all answer for it — and
+  the event they compose names the owning project, so the append gate lands it
+  at home. An *add* is unchanged: a new record is born in the project the
+  directory resolves to.
 - A recovery pointer a render prints is a type, not a string. Every rendered
   surface that says "run this for the rest" names the project it is about, or
   a reader pastes it somewhere else and is answered about their own checkout.

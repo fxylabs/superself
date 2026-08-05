@@ -21,7 +21,7 @@ prints them during the same run.
 | Family | Current entry points |
 | --- | --- |
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
-| Projects and state remotes | `project add [path] [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
+| Projects and state remotes | `project`, `project add [path] [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
@@ -53,9 +53,13 @@ work, or a free-labeled entity — folds into one record kind with placement:
 - `state add "<text>"` records an entity under any label; `state list` and
   `state show <id>` read every asserted record back, presets included.
 - `state place <id>` moves an entity's placement — priority, exposure
-  (`full|index|search`), scope (`project|workspace`). A demotion records
-  `--why`; demotion out of full is proposed by agents and confirmed by a
-  person (`state confirm`).
+  (`full|index|search`), and scope: which project renders it. Omit `--scope`
+  for the project you are in, name another registered slug to move the record
+  there, or `--scope workspace` to render it in every project. A move leaves
+  every event where it is, so the record's brief, reports, artifacts, evidence
+  and timestamps travel by not moving at all, and its writes keep landing in
+  the log that owns it. A demotion records `--why`; demotion out of full is
+  proposed by agents and confirmed by a person (`state confirm`).
 - Retention caps (`fullTokens` and `indexTokens` in the store's `config.json`;
   defaults 1,000 and 12,000 context tokens, per scope) gate `state add`,
   `state place`, and the alias verbs into a tier: past a cap the verb refuses

@@ -312,7 +312,8 @@ function aliasDetail(verb: string, row: PresetRow): string[]
         "  --label <text>        an extra label beside the row's, repeatable",
         "  --priority <n>        render order, overriding the row's default",
         "  --exposure <form>     full, index, or search, overriding the row's default",
-        "  --scope <scope>       project (default) or workspace — where it renders",
+        "  --scope <where>       where it renders: omit for this project, another",
+        "                        registered project's slug, or workspace",
         "  --target <date>       a YYYY-MM-DD deadline for the derived views to judge",
         "  --criteria <text>     an exit criterion that gates done claims, repeatable",
         "  --link [type:]<id>    typed edge, repeatable, as `state add` takes it",
@@ -329,7 +330,7 @@ function aliasCommand(verb: string, row: PresetRow): Command
         name: verb,
         usage: [
             {
-                syntax: `${verb} add "<text>" [--priority n] [--exposure full|index|search] [--scope project|workspace]`,
+                syntax: `${verb} add "<text>" [--priority n] [--exposure full|index|search] [--scope <slug>|workspace]`,
                 description: [`record a ${row.label}-labeled entity (default placement: ${place})`],
                 verbs: ["add"]
             }
@@ -338,7 +339,7 @@ function aliasCommand(verb: string, row: PresetRow): Command
         node: branch({
             name: verb,
             unnamed: "refuse",
-            refusal: `usage: self ${verb} add "<text>" [--priority n] [--exposure full|index|search] [--scope project|workspace]`,
+            refusal: `usage: self ${verb} add "<text>" [--priority n] [--exposure full|index|search] [--scope <slug>|workspace]`,
             children: [
                 leaf("add", ALIAS_ADD_OPTIONS, 1, (input) => aliasEntityAdd(row, input))
             ]

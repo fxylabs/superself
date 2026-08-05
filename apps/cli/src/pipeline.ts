@@ -62,9 +62,11 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     {
         events.forEach((event) => { event.refs = { ...event.refs, branch }; });
     }
-    const project = events[0].project;
-    const dir = ensureDir(projectStateDir(ctx.storeDir, project));
-    appendFileSync(join(dir, "log.jsonl"), events.map((event) => JSON.stringify(event) + "\n").join(""));
+    // Grouped by the project each event names, because a placement that moves a
+    // record between projects writes into the log that owns the record and into
+    // the log that owns the seat it frees (#181 D3). Each group is one append,
+    // so a reader of any one log still never finds half a state change.
+    const projects = appendGrouped(ctx, events);
     // The store has changed, so nothing derived from it that this process
     // worked out before the write may be reused after it. Resolution is cached
     // in memory until something clears it, and a daemon tick appends through
@@ -76,9 +78,23 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     // from the log and is redone by the next fold, so a failure there costs a
     // refold — never the events, and never what they name.
     onRecorded?.();
-    foldProject(ctx.storeDir, project);
-    commitAll(ctx.storeDir, `${events.map((event) => event.type).join(" ")} ${project}: ${truncate(summary, 60)}`);
+    projects.forEach((project) => foldProject(ctx.storeDir, project));
+    commitAll(ctx.storeDir, `${events.map((event) => event.type).join(" ")} ${projects.join(" ")}: ${truncate(summary, 60)}`);
     announce(events, summary);
+}
+
+// One append per log, in the order the events were composed, and the projects
+// written back so the caller refolds exactly those.
+function appendGrouped(ctx: CliContext, events: SelfEvent[]): string[]
+{
+    const projects = [...new Set(events.map((event) => event.project))];
+    for (const project of projects)
+    {
+        const dir = ensureDir(projectStateDir(ctx.storeDir, project));
+        appendFileSync(join(dir, "log.jsonl"), events.filter((event) => event.project === project)
+            .map((event) => JSON.stringify(event) + "\n").join(""));
+    }
+    return projects;
 }
 
 function announce(events: SelfEvent[], summary: string): void

@@ -60,7 +60,7 @@ test("place refuses a missing change, a no-op, and the records that cannot move"
     const id = entityIn(must(box, demo, ["state", "add", "movable", "--exposure", "index"]).out);
     const bare = self(["state", "place", id]);
     assert.notEqual(bare.code, 0);
-    assert.match(bare.out, /pass --priority <n>, --exposure full\|index\|search, or both/);
+    assert.match(bare.out, /pass --priority <n>, --exposure full\|index\|search, --scope <slug>\|workspace, or several/);
     const noop = self(["state", "place", id, "--exposure", "index"]);
     assert.notEqual(noop.code, 0);
     assert.match(noop.out, /already sits at that placement/);

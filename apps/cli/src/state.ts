@@ -10,12 +10,12 @@ import { validDate } from "./dates.js";
 import {
     DEMOTION_TARGET,
     EntityLink,
-    EntityScope,
     EntitySource,
     EntityState,
     executionSummary,
     Exposure,
     EXPOSURES,
+    HOME_SCOPE,
     isCurrent,
     isDemotion,
     isLive,
@@ -23,7 +23,9 @@ import {
     LinkType,
     orderEntities,
     pendingSummary,
+    rendersIn,
     requireSupersedeKind,
+    scopeTarget,
     tierCharacters,
     uncoveredCriteria
 } from "./entities.js";
@@ -31,7 +33,7 @@ import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { entityId } from "./ids.js";
 import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
 import { sessionToken } from "./machine.js";
-import { buildModel, ProjectModel } from "./model.js";
+import { buildModel, ProjectModel, workspaceModels } from "./model.js";
 import {
     ProjectContext,
     readRegistry,
@@ -51,9 +53,9 @@ import { CliError, EventRefs, SelfEvent } from "./types.js";
 
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
     + ' | cover <id> --criterion c --why w | start <id> | block <id> | unblock <id> | done <id> --report r | retire <id> --why w';
-const ADD_USAGE = 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope project|workspace] '
+const ADD_USAGE = 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope <slug>|workspace] '
     + "[--target YYYY-MM-DD] [--criteria c] [--supersedes <id>] [--link [type:]<id>] [--why w] [--proposed] [--demote <id>]";
-const PLACE_USAGE = "state place <id> [--priority <n>] [--exposure full|index|search] [--scope project|workspace] "
+const PLACE_USAGE = "state place <id> [--priority <n>] [--exposure full|index|search] [--scope <slug>|workspace] "
     + '[--why "<reason>"] [--proposed] [--demote <id>]';
 const RETRACT_USAGE = 'state retract <id> --why "<why it no longer holds>"';
 const COVER_USAGE = 'state cover <id> --criterion "<c>" --why "<how the evidence covers it>" [--evidence <commit>] [--work <id>]';
@@ -127,14 +129,14 @@ export const STATE_COMMAND: Command = {
             verbs: ["", "list"]
         },
         {
-            syntax: 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope project|workspace]',
+            syntax: 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope <slug>|workspace]',
             description: ["record one raw entity; --supersedes <id> replaces an earlier one"],
             verbs: ["add"]
         },
         { syntax: "state show <id> [--project <slug>]", description: ["print an entity's current values"], verbs: ["show"] },
         {
-            syntax: "state place <id> [--priority <n>] [--exposure full|index|search] [--scope project|workspace]",
-            description: ["move an entity in context: render order, render form, scope; a demotion needs --why"],
+            syntax: "state place <id> [--priority <n>] [--exposure full|index|search] [--scope <slug>|workspace]",
+            description: ["move an entity in context: render order, render form, the project it renders in"],
             verbs: ["place"]
         },
         { syntax: "state confirm <id>", description: ["confirm a proposed entity, or a placement waiting on you"], verbs: ["confirm"] },
@@ -170,9 +172,11 @@ export const STATE_COMMAND: Command = {
         "add, place, confirm, retract, cover and the execution verbs (start, block,",
         "unblock, done, retire) write: they take no read-scope flag and record into",
         "the project they run in. list and show read for the project this directory",
-        "resolves to. --scope is a placement value, not a read scope: a",
-        "workspace-scoped entity renders in every project's context while its",
-        "events stay in this project's store.",
+        "resolves to. --scope is a placement value, not a read scope: it names the",
+        "project a record renders in — this one by default, another registered one",
+        "by slug, or every one of them with workspace — while its events stay in the",
+        "store that already holds them. place resolves any record rendering here,",
+        "so a record moved in from elsewhere can be moved on or moved back.",
         "",
         "the execution verbs record facts about doing, not assertions: no --proposed",
         "form exists on them, and each records its actor. done must carry evidence —",
@@ -194,8 +198,9 @@ export const STATE_COMMAND: Command = {
         "  --label <text>        free label, repeatable; presets use goal, objective, convention, …",
         "  --priority <n>        render order: a whole number, 0 first; leave gaps (0, 10, 20)",
         "  --exposure <form>     how context renders it: full, index, or search",
-        "  --scope <scope>       project (this project's context, the default) or workspace",
-        "                        (every project's context); caps count per scope",
+        "  --scope <where>       where the record renders: omit for this project, another",
+        "                        registered project's slug, or workspace (every project's",
+        "                        context); caps count per destination",
         "  --target <date>       a YYYY-MM-DD deadline for the derived views to judge",
         "  --criteria <text>     an exit criterion that gates done claims, repeatable",
         "  --criterion <c>       the declared criterion a coverage claim answers — its text, or cN",
@@ -266,31 +271,42 @@ export function aliasEntityAdd(row: AliasDefaults, { values, positionals }: Comm
 function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positionals: string[], row: AliasDefaults | undefined): void
 {
     const ctx = requireProject(process.cwd());
-    const text = requireText(positionals[0], row === undefined ? ADD_USAGE : `${row.label} add "<text>"`);
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const usageText = row === undefined ? ADD_USAGE : `${row.label} add "<text>"`;
+    const text = requireText(positionals[0], usageText);
+    const models = workspaceModels(ctx.storeDir, ctx.project);
     const exposure = values.exposure !== undefined ? validExposure(values.exposure) : row?.exposure ?? "index";
-    const scope = validScope(values.scope ?? "project");
-    const config = readStoreConfig(ctx.storeDir);
-    const caps = retentionCaps(config);
-    const scale = tokenScale(config);
-    const usage = usageReader(ctx, model, scale);
-    const demotions = demotionsFor(model, values.demote ?? [], tierOf(scope, exposure), undefined, row === undefined ? ADD_USAGE : `${row.label} add "<text>"`);
-    requireRoom(usage, caps, tierOf(scope, exposure), countCharacters(text), demotions, scale);
-    requireDemotionRoom(usage, caps, scope, demotions, 0, scale);
+    const target = values.scope === undefined ? ctx.project : validScope(ctx, values.scope);
+    const demotions = admittingDemotions(ctx, models, values, tierOf(target, exposure), usageText, countCharacters(text));
     const id = entityId();
     const proposed = values.proposed === true;
-    const payload = addPayload(model, id, text, exposure, scope, values, row);
+    const payload = addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row);
     // A proposal displaces nothing: its supersedes links wait for the confirm
     // that makes them real, so the gate belongs there rather than here.
     const displaced = proposed ? [] : supersedeTargets(payload);
-    recordRetirement(ctx, retirementIntent(model, "supersede", displaced), model,
+    recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced), models[0],
         (confirmation) => [
             makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
                 confirmation === undefined ? payload : { ...payload, confirmation }, undefined, !proposed),
-            ...demotionEvents(ctx.project, demotions, id, proposed)
+            ...demotionEvents(demotions, id, proposed)
         ],
         `${id} ${text}`);
     console.log(id);
+}
+
+// The cap gate an add passes: what the destination tier holds, what this text
+// adds to it, and what the named demotions free there — all read against the
+// tier the record is being born into, wherever that project's log sits.
+function admittingDemotions(ctx: ProjectContext, models: ProjectModel[], values: CommandInput<typeof ADD_OPTIONS>["values"],
+    entered: CappedTier | undefined, usageText: string, adding: number): Placed[]
+{
+    const config = readStoreConfig(ctx.storeDir);
+    const caps = retentionCaps(config);
+    const scale = tokenScale(config);
+    const usage = usageReader(models, scale);
+    const demotions = demotionsFor(allRecords(models), values.demote ?? [], entered, undefined, usageText, ctx.project);
+    requireRoom(usage, caps, entered, adding, demotions, scale, ctx.project);
+    requireDemotionRoom(usage, caps, entered?.target ?? ctx.project, demotions, 0, scale, ctx.project);
+    return demotions;
 }
 
 function addPayload(
@@ -298,7 +314,7 @@ function addPayload(
     id: string,
     text: string,
     exposure: Exposure,
-    scope: EntityScope,
+    scope: string,
     values: CommandInput<typeof ADD_OPTIONS>["values"],
     row: AliasDefaults | undefined
 ): Record<string, unknown>
@@ -338,54 +354,122 @@ function addOptionalFields(payload: Record<string, unknown>,
     }
 }
 
+/* ── the placement move (#181) ─────────────────────────────────────── */
+
+// One record and the log that owns it. A record scoped in from another project
+// resolves here and its writes land in its home log (#181 D3), so every
+// placement carries the owner it was found under rather than assuming the
+// project the command ran in.
+interface Placed
+{
+    entity: EntityState;
+    owner: string;
+    model: ProjectModel;
+}
+
+function allRecords(models: ProjectModel[]): Placed[]
+{
+    return models.flatMap((model) => model.entities.map((entity) => ({ entity, owner: model.slug, model })));
+}
+
+// What answers to an id here: this project's own records whatever scope they
+// now render in — the home log always answers for its own record — plus every
+// record another project's log scoped in here (#181 D5). Without the second
+// half a move would be one-way.
+function resolvableRecords(records: Placed[], here: string): Placed[]
+{
+    return records.filter((item) => item.owner === here || rendersIn(item.entity, item.owner, here));
+}
+
+// What a placement asks for, resolved against the record it names: the values
+// to write, and the capped tier the move enters.
+interface Placement
+{
+    priority?: number;
+    exposure?: Exposure;
+    target?: string;
+    why?: string;
+    entered?: CappedTier;
+}
+
 function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const entity = requirePlaceable(model, positionals[0]);
-    const priority = values.priority === undefined ? undefined : validPriority(values.priority);
-    const exposure = values.exposure === undefined ? undefined : validExposure(values.exposure);
-    const scope = values.scope === undefined ? undefined : validScope(values.scope);
-    requirePlacementChange(entity, priority, exposure, scope);
-    const why = requireDemotionWhy(entity, exposure, values.why);
+    // One fold of every registered project, read three ways: to resolve the id,
+    // to count the tier it enters, and to name the record that frees a seat.
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const records = allRecords(models);
+    const found = requirePlaceable(resolvableRecords(records, ctx.project), positionals[0]);
+    const move = requestedPlacement(ctx, found, values);
     const config = readStoreConfig(ctx.storeDir);
     const caps = retentionCaps(config);
     const scale = tokenScale(config);
-    const usage = usageReader(ctx, model, scale);
-    const entered = enteredTier(entity, exposure, scope);
-    const demotions = demotionsFor(model, values.demote ?? [], entered, entity.id, PLACE_USAGE);
-    requireRoom(usage, caps, entered, countCharacters(entity.text), demotions, scale);
-    // The room the placed record itself frees when it leaves that scope's
-    // index for full, so a swap at an exactly-full cap still passes.
-    const vacates = entered !== undefined && entity.scope === entered.scope && entity.exposure === "index"
-        ? countCharacters(entity.text) : 0;
-    requireDemotionRoom(usage, caps, entered?.scope ?? entity.scope, demotions, vacates, scale);
+    const usage = usageReader(models, scale);
+    const demotions = demotionsFor(records, values.demote ?? [], move.entered, found.entity.id, PLACE_USAGE, ctx.project);
+    requireRoom(usage, caps, move.entered, countCharacters(found.entity.text), demotions, scale, ctx.project);
+    const from = scopeTarget(found.entity, found.owner);
+    requireDemotionRoom(usage, caps, move.entered?.target ?? from, demotions, vacatedSeat(found, move.entered), scale, ctx.project);
     const proposed = values.proposed === true;
-    const events = [
-        makeEvent(ctx.project, "entity.placed", placePayload(entity.id, priority, exposure, scope, why, proposed), undefined, !proposed),
-        ...demotionEvents(ctx.project, demotions, entity.id, proposed)
-    ];
-    recordEvents(ctx, events, `${entity.id} ${entity.text}`);
+    recordEvents(ctx, [
+        makeEvent(found.owner, "entity.placed", placePayload(found, move, proposed), undefined, !proposed),
+        ...demotionEvents(demotions, found.entity.id, proposed)
+    ], `${found.entity.id} ${found.entity.text}`);
 }
 
-function placePayload(entity: string, priority: number | undefined, exposure: Exposure | undefined, scope: EntityScope | undefined, why: string | undefined, proposed: boolean): Record<string, unknown>
+function requestedPlacement(ctx: ProjectContext, found: Placed, values: CommandInput<typeof PLACE_OPTIONS>["values"]): Placement
 {
-    const payload: Record<string, unknown> = { entity };
-    if (priority !== undefined)
+    const priority = values.priority === undefined ? undefined : validPriority(values.priority);
+    const exposure = values.exposure === undefined ? undefined : validExposure(values.exposure);
+    const target = values.scope === undefined ? undefined : validScope(ctx, values.scope);
+    requirePlacementChange(found, priority, exposure, target);
+    return {
+        priority,
+        exposure,
+        target,
+        // A cross-project move is not a demotion: only exposure moving toward
+        // less-rendered demands a reason, so a move records --why when the
+        // caller offers one and nothing when it does not (#181 T2.17).
+        why: requireDemotionWhy(found.entity, exposure, values.why),
+        entered: enteredTier(found, exposure, target)
+    };
+}
+
+// The room the placed record itself frees when it leaves the tier it is
+// entering — index for full at the same target — so a swap at an exactly-full
+// cap still passes.
+function vacatedSeat(found: Placed, entered: CappedTier | undefined): number
+{
+    return entered !== undefined && scopeTarget(found.entity, found.owner) === entered.target
+        && found.entity.exposure === "index" ? countCharacters(found.entity.text) : 0;
+}
+
+// The scope as the owning log records it: the home sentinel when the record
+// renders in the project that holds it, and the absolute name otherwise. The
+// fold reads the sentinel against its own slug, so a log stays readable
+// without knowing which project it was written from.
+function writtenScope(target: string, owner: string): string
+{
+    return target === owner ? HOME_SCOPE : target;
+}
+
+function placePayload(found: Placed, move: Placement, proposed: boolean): Record<string, unknown>
+{
+    const payload: Record<string, unknown> = { entity: found.entity.id };
+    if (move.priority !== undefined)
     {
-        payload.priority = priority;
+        payload.priority = move.priority;
     }
-    if (exposure !== undefined)
+    if (move.exposure !== undefined)
     {
-        payload.exposure = exposure;
+        payload.exposure = move.exposure;
     }
-    if (scope !== undefined)
+    if (move.target !== undefined)
     {
-        payload.scope = scope;
+        payload.scope = writtenScope(move.target, found.owner);
     }
-    if (why !== undefined)
+    if (move.why !== undefined)
     {
-        payload.why = why;
+        payload.why = move.why;
     }
     if (proposed)
     {
@@ -396,9 +480,10 @@ function placePayload(entity: string, priority: number | undefined, exposure: Ex
 
 // Placement moves live, confirmed records: a proposal has nothing rendered to
 // move yet, and a withdrawn or replaced record no longer renders at all.
-function requirePlaceable(model: ProjectModel, value: string | undefined): EntityState
+function requirePlaceable(records: Placed[], value: string | undefined): Placed
 {
-    const entity = requireEntity(model, value, PLACE_USAGE);
+    const found = requirePlaced(records, value, PLACE_USAGE);
+    const entity = found.entity;
     if (entity.status === "proposed")
     {
         throw new CliError(`${entity.id} is still proposed — placement moves confirmed records; confirm it first, or state its placement at add time`);
@@ -411,18 +496,19 @@ function requirePlaceable(model: ProjectModel, value: string | undefined): Entit
     {
         throw new CliError(`${entity.id} was superseded by ${entity.supersededBy ?? "a later record"} — place the successor instead`);
     }
-    return entity;
+    return found;
 }
 
-function requirePlacementChange(entity: EntityState, priority: number | undefined, exposure: Exposure | undefined, scope: EntityScope | undefined): void
+function requirePlacementChange(found: Placed, priority: number | undefined, exposure: Exposure | undefined, target: string | undefined): void
 {
-    if (priority === undefined && exposure === undefined && scope === undefined)
+    const entity = found.entity;
+    if (priority === undefined && exposure === undefined && target === undefined)
     {
-        throw new CliError("state place changes placement — pass --priority <n>, --exposure full|index|search, or both");
+        throw new CliError("state place changes placement — pass --priority <n>, --exposure full|index|search, --scope <slug>|workspace, or several");
     }
     if ((exposure === undefined || exposure === entity.exposure)
         && (priority === undefined || priority === entity.priority)
-        && (scope === undefined || scope === entity.scope))
+        && (target === undefined || target === scopeTarget(entity, found.owner)))
     {
         throw new CliError(`${entity.id} already sits at that placement — nothing changes`);
     }
@@ -446,68 +532,70 @@ function requireDemotionWhy(entity: EntityState, exposure: Exposure | undefined,
 
 /* ── the retention caps (#197 §4, #207 D) ──────────────────────────── */
 
-// One capped tier: an exposure at a scope. Caps count per scope value
-// (#207 D4) — a project tier and the workspace tier fill and gate
-// independently — and search is unbounded by design at either scope: it
+// One capped tier: an exposure at a render target. Caps count per target
+// (#207 D4, #181 D4) — every project's tiers and the workspace tier fill and
+// gate independently — and search is unbounded by design at any target: it
 // renders nothing, so an add into it, and any move toward it, passes without
 // gating. That open floor is what keeps a store past its caps from ever
 // wedging: a chain of demotions always terminates at search.
 interface CappedTier
 {
-    scope: EntityScope;
+    target: string;
     tier: "full" | "index";
 }
 
-function tierOf(scope: EntityScope, exposure: Exposure): CappedTier | undefined
+function tierOf(target: string, exposure: Exposure): CappedTier | undefined
 {
-    return exposure === "search" ? undefined : { scope, tier: exposure };
+    return exposure === "search" ? undefined : { target, tier: exposure };
+}
+
+// How a tier reads to the caller: the project it ran in is "project", exactly
+// as it always was, and any other destination is named by its slug so a
+// refusal says where the room ran out (#181 T5.2).
+function scopeLabel(target: string, here: string): string
+{
+    return target === here ? "project" : target;
 }
 
 // Which capped tier a placement moves its record into. Direction does not
 // matter: a full → index demotion enters index exactly as a promotion does
-// and can overfill it the same way, and a scope change enters the other
-// scope's tier at the record's exposure. Any move whose destination pair is
+// and can overfill it the same way, and a scope change enters the destination
+// project's tier at the record's exposure. Any move whose destination pair is
 // the one the record already holds — or whose destination is search — enters
 // nothing.
-function enteredTier(entity: EntityState, exposure: Exposure | undefined, scope: EntityScope | undefined): CappedTier | undefined
+function enteredTier(found: Placed, exposure: Exposure | undefined, target: string | undefined): CappedTier | undefined
 {
-    const toScope = scope ?? entity.scope;
-    const toExposure = exposure ?? entity.exposure;
-    if (toExposure === "search" || (toScope === entity.scope && toExposure === entity.exposure))
+    const from = scopeTarget(found.entity, found.owner);
+    const to = target ?? from;
+    const toExposure = exposure ?? found.entity.exposure;
+    if (toExposure === "search" || (to === from && toExposure === found.entity.exposure))
     {
         return undefined;
     }
-    return { scope: toScope, tier: toExposure };
+    return { target: to, tier: toExposure };
 }
 
-// What a capped tier currently holds, in tokens. The project tiers count this
-// project's entities; the workspace tier is one rendered set across every
-// registered project (#207 D1), so its usage counts workspace-scoped entities
-// from every store — the entity's events stay in their home store, and only
-// the count travels. Characters are summed across stores and converted once,
-// so the answer never drifts by a rounding per store. Memoized per
-// invocation: the folds behind it are not free.
-type UsageReader = (scope: EntityScope, tier: "full" | "index") => number;
+// What a capped tier currently holds, in tokens. A tier belongs to the project
+// a record renders in rather than to the store that holds it (#181 D1), so
+// every tier — a project's and the workspace's alike — is counted across every
+// registered store, and only the count travels. Characters are summed across
+// stores and converted once, so the answer never drifts by a rounding per
+// store. Memoized per invocation: the folds behind it are not free.
+type UsageReader = (target: string, tier: "full" | "index") => number;
 
-function usageReader(ctx: ProjectContext, model: ProjectModel, scale: TokenScale): UsageReader
+function usageReader(models: ProjectModel[], scale: TokenScale): UsageReader
 {
     const cache = new Map<string, number>();
-    return (scope, tier) =>
+    return (target, tier) =>
     {
-        const key = `${scope} ${tier}`;
+        const key = `${target} ${tier}`;
         const cached = cache.get(key);
         if (cached !== undefined)
         {
             return cached;
         }
-        let characters = tierCharacters(model.entities, scope, tier);
-        if (scope === "workspace")
-        {
-            for (const entry of readRegistry(ctx.storeDir).filter((item) => item.slug !== ctx.project))
-            {
-                characters += tierCharacters(buildModel(ctx.storeDir, entry.slug, new Date()).entities, scope, tier);
-            }
-        }
+        const characters = models.reduce((sum, model) =>
+            sum + tierCharacters(model.entities, model.slug, target, tier), 0);
         const total = tokensOf(characters, scale.perCharacter);
         cache.set(key, total);
         return total;
@@ -518,14 +606,14 @@ function usageReader(ctx: ProjectContext, model: ProjectModel, scale: TokenScale
 // for both: what the tier holds in tokens, what this text adds, and what the
 // named demotions free.
 function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTier | undefined,
-    adding: number, demotions: EntityState[], scale: TokenScale): void
+    adding: number, demotions: Placed[], scale: TokenScale, here: string): void
 {
     if (entered === undefined)
     {
         return;
     }
     const cap = entered.tier === "full" ? caps.full : caps.index;
-    requireTokenRoom(usage, entered, cap, tokensOf(adding, scale.perCharacter), demotions, scale);
+    requireTokenRoom(usage, entered, cap, tokensOf(adding, scale.perCharacter), demotions, scale, here);
 }
 
 // One refusal hands the whole contract: the cap, what the tier holds, what
@@ -533,22 +621,22 @@ function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTie
 // is in tokens, and an unmeasured scale says so — a caller choosing what to
 // demote is owed a real number rather than a row count (#213).
 function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
-    adding: number, demotions: EntityState[], scale: TokenScale): void
+    adding: number, demotions: Placed[], scale: TokenScale, here: string): void
 {
-    const held = usage(entered.scope, entered.tier);
+    const held = usage(entered.target, entered.tier);
     if (held + adding <= cap)
     {
-        requireDemotionsNeeded(demotions, entered.scope, entered.tier);
+        requireDemotionsNeeded(demotions, entered, here);
         return;
     }
     if (demotions.length === 0)
     {
-        throw new CliError(`the ${entered.scope} ${entered.tier} tier holds ${held} of ${cap} tokens `
+        throw new CliError(`the ${scopeLabel(entered.target, here)} ${entered.tier} tier holds ${held} of ${cap} tokens `
             + `and this text adds ${adding} more${estimateNote(scale)} — name what demotes: pass `
             + `\`--demote <id>\` (that ${entered.tier} entity moves to ${DEMOTION_TARGET[entered.tier]}), or demote `
             + `first with \`self state place <id> --exposure ${DEMOTION_TARGET[entered.tier]} --why "<reason>"\``);
     }
-    const freed = tokensOf(demotions.reduce((sum, item) => sum + countCharacters(item.text), 0), scale.perCharacter);
+    const freed = tokensOf(demotions.reduce((sum, item) => sum + countCharacters(item.entity.text), 0), scale.perCharacter);
     if (held - freed + adding > cap)
     {
         throw new CliError(`still ${held - freed + adding - cap} tokens over the ${cap}-token ${entered.tier} cap `
@@ -568,19 +656,20 @@ function estimateNote(scale: TokenScale): string
 // destination lacks room, toward the drain that always fits: index → search.
 // `vacates` is the seat the placed record itself frees when it leaves that
 // scope's index for full, so a swap at an exactly-full cap still passes.
-function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, scope: EntityScope,
-    demotions: EntityState[], vacates: number, scale: TokenScale): void
+function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, target: string,
+    demotions: Placed[], vacates: number, scale: TokenScale, here: string): void
 {
-    const arriving = demotions.filter((item) => item.exposure === "full");
+    const arriving = demotions.filter((item) => item.entity.exposure === "full");
     if (arriving.length === 0)
     {
         return;
     }
-    const entering = tokensOf(arriving.reduce((sum, item) => sum + countCharacters(item.text), 0), scale.perCharacter);
-    const after = usage(scope, "index") + entering - tokensOf(vacates, scale.perCharacter);
+    const entering = tokensOf(arriving.reduce((sum, item) => sum + countCharacters(item.entity.text), 0), scale.perCharacter);
+    const after = usage(target, "index") + entering - tokensOf(vacates, scale.perCharacter);
     if (after > caps.index)
     {
-        throw new CliError(`the named demotion${arriving.length === 1 ? "" : "s"} would put the ${scope} index tier at `
+        throw new CliError(`the named demotion${arriving.length === 1 ? "" : "s"} would put the `
+            + `${scopeLabel(target, here)} index tier at `
             + `${after} of ${caps.index} tokens${estimateNote(scale)} — free index room first with `
             + '`self state place <id> --exposure search --why "<reason>"`');
     }
@@ -591,25 +680,30 @@ function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, scope: Ent
 // exposure both, because a pending placement can move either.
 interface SeatMove
 {
-    from?: { scope: EntityScope; exposure: Exposure };
-    to: { scope: EntityScope; exposure: Exposure };
+    from?: { target: string; exposure: Exposure };
+    to: { target: string; exposure: Exposure };
     characters: number;
 }
 
-function unitMoves(unit: ConfirmMember[]): SeatMove[]
+function unitMoves(unit: ConfirmMember[], home: string): SeatMove[]
 {
     return unit.flatMap((member): SeatMove[] =>
     {
         const characters = countCharacters(member.entity.text);
         const entity = member.entity;
+        const at = scopeTarget(entity, home);
         if (member.kind === "record")
         {
-            return [{ to: { scope: entity.scope, exposure: entity.exposure }, characters }];
+            return [{ to: { target: at, exposure: entity.exposure }, characters }];
         }
-        const to = { scope: entity.pending?.scope ?? entity.scope, exposure: entity.pending?.exposure ?? entity.exposure };
-        return to.scope === entity.scope && to.exposure === entity.exposure
+        const pending = entity.pending;
+        const to = {
+            target: pending?.scope === undefined ? at : scopeTarget({ scope: pending.scope }, home),
+            exposure: pending?.exposure ?? entity.exposure
+        };
+        return to.target === at && to.exposure === entity.exposure
             ? []
-            : [{ from: { scope: entity.scope, exposure: entity.exposure }, to, characters }];
+            : [{ from: { target: at, exposure: entity.exposure }, to, characters }];
     });
 }
 
@@ -619,34 +713,34 @@ function unitMoves(unit: ConfirmMember[]): SeatMove[]
 // same crediting the write path does — under the same counts the write
 // verbs gate on. A tier the unit only drains is never gated, so an over-cap
 // store keeps its way down.
-function requireUnitRoom(usage: UsageReader, caps: RetentionCaps, unit: ConfirmMember[], scale: TokenScale): void
+function requireUnitRoom(usage: UsageReader, caps: RetentionCaps, unit: ConfirmMember[], scale: TokenScale, home: string): void
 {
-    const moves = unitMoves(unit);
-    for (const scope of ["project", "workspace"] as const)
+    const moves = unitMoves(unit, home);
+    for (const target of new Set(moves.map((move) => move.to.target)))
     {
         for (const tier of ["full", "index"] as const)
         {
-            requireTierRoom(usage, caps, { scope, tier }, moves, scale);
+            requireTierRoom(usage, caps, { target, tier }, moves, scale, home);
         }
     }
 }
 
-function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier, moves: SeatMove[], scale: TokenScale): void
+function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier, moves: SeatMove[], scale: TokenScale, here: string): void
 {
     const weigh = (move: SeatMove): number => tokensOf(move.characters, scale.perCharacter);
-    const inTier = (seat: { scope: EntityScope; exposure: Exposure } | undefined): boolean =>
-        seat !== undefined && seat.scope === at.scope && seat.exposure === at.tier;
+    const inTier = (seat: { target: string; exposure: Exposure } | undefined): boolean =>
+        seat !== undefined && seat.target === at.target && seat.exposure === at.tier;
     const entering = moves.filter((move) => inTier(move.to)).reduce((sum, move) => sum + weigh(move), 0);
     if (entering === 0)
     {
         return;
     }
-    const held = usage(at.scope, at.tier);
+    const held = usage(at.target, at.tier);
     const cap = at.tier === "full" ? caps.full : caps.index;
     const leaving = moves.filter((move) => inTier(move.from)).reduce((sum, move) => sum + weigh(move), 0);
     if (held + entering - leaving > cap)
     {
-        throw new CliError(`confirming this would put the ${at.scope} ${at.tier} tier over its cap `
+        throw new CliError(`confirming this would put the ${scopeLabel(at.target, here)} ${at.tier} tier over its cap `
             + `(${held} of ${cap} tokens held)${estimateNote(scale)} — `
             + `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[at.tier]} --why "<reason>"\``);
     }
@@ -654,16 +748,17 @@ function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier
 
 // A demotion named where no cap demands one would demote a record as a side
 // effect of an unrelated command — refused toward the direct verb instead.
-function requireDemotionsNeeded(demotions: EntityState[], scope: EntityScope, tier: "full" | "index"): void
+function requireDemotionsNeeded(demotions: Placed[], entered: CappedTier, here: string): void
 {
     if (demotions.length > 0)
     {
-        throw new CliError(`the ${scope} ${tier} tier is not over its cap — nothing needs to demote; `
-            + `demote directly with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
+        throw new CliError(`the ${scopeLabel(entered.target, here)} ${entered.tier} tier is not over its cap — nothing needs to demote; `
+            + `demote directly with \`self state place <id> --exposure ${DEMOTION_TARGET[entered.tier]} --why "<reason>"\``);
     }
 }
 
-function demotionsFor(model: ProjectModel, raw: string[], entered: CappedTier | undefined, exclude: string | undefined, usage: string): EntityState[]
+function demotionsFor(records: Placed[], raw: string[], entered: CappedTier | undefined,
+    exclude: string | undefined, usage: string, here: string): Placed[]
 {
     if (raw.length === 0)
     {
@@ -673,24 +768,26 @@ function demotionsFor(model: ProjectModel, raw: string[], entered: CappedTier | 
     {
         throw new CliError("--demote frees room in the capped tier a record enters — this command enters none, so nothing needs to demote");
     }
-    const demotions = raw.map((value) => requireDemotable(model, value, entered, exclude, usage));
-    for (const [index, entity] of demotions.entries())
+    const demotions = raw.map((value) => requireDemotable(records, value, entered, exclude, usage, here));
+    for (const [index, item] of demotions.entries())
     {
-        if (demotions.findIndex((item) => item.id === entity.id) !== index)
+        if (demotions.findIndex((other) => other.entity.id === item.entity.id) !== index)
         {
-            throw new CliError(`--demote ${entity.id} is repeated — one record frees its place once`);
+            throw new CliError(`--demote ${item.entity.id} is repeated — one record frees its place once`);
         }
     }
     return demotions;
 }
 
 // A demotion frees a seat in the tier being entered, so it has to hold one:
-// same scope, same exposure, confirmed, and in this project's store — a write
-// verb records into the project it runs in, so a workspace seat held by
-// another project's record frees from that project.
-function requireDemotable(model: ProjectModel, value: string, entered: CappedTier, exclude: string | undefined, usage: string): EntityState
+// the same render target, the same exposure, confirmed — whichever project's
+// log holds it, because the tier belongs to the project the seat renders in
+// rather than to the store the record sits in (#181 D4).
+function requireDemotable(records: Placed[], value: string, entered: CappedTier,
+    exclude: string | undefined, usage: string, here: string): Placed
 {
-    const entity = requireEntity(model, value, usage);
+    const found = requirePlaced(records, value, usage);
+    const entity = found.entity;
     if (entity.id === exclude)
     {
         throw new CliError(`--demote ${entity.id} names the record being placed — another entity has to free the room`);
@@ -703,15 +800,22 @@ function requireDemotable(model: ProjectModel, value: string, entered: CappedTie
     {
         throw new CliError(`--demote ${entity.id} was already ${entity.status} — it holds no place in the ${entered.tier} tier`);
     }
-    if (entity.scope !== entered.scope)
+    requireDemotableSeat(found, entered, here);
+    return found;
+}
+
+function requireDemotableSeat(found: Placed, entered: CappedTier, here: string): void
+{
+    const at = scopeLabel(scopeTarget(found.entity, found.owner), here);
+    const into = scopeLabel(entered.target, here);
+    if (at !== into)
     {
-        throw new CliError(`--demote ${entity.id} is ${entity.scope}-scoped — the ${entered.scope} ${entered.tier} cap frees only by demoting ${entered.scope}-scoped records`);
+        throw new CliError(`--demote ${found.entity.id} is ${at}-scoped — the ${into} ${entered.tier} cap frees only by demoting ${into}-scoped records`);
     }
-    if (entity.exposure !== entered.tier)
+    if (found.entity.exposure !== entered.tier)
     {
-        throw new CliError(`--demote ${entity.id} sits at ${entity.exposure} exposure — name a record at ${entered.tier} exposure, the tier being entered`);
+        throw new CliError(`--demote ${found.entity.id} sits at ${found.entity.exposure} exposure — name a record at ${entered.tier} exposure, the tier being entered`);
     }
-    return entity;
 }
 
 // The paired demotion, appended in the same write as the add or placement it
@@ -719,12 +823,15 @@ function requireDemotable(model: ProjectModel, value: string, entered: CappedTie
 // surface applies the pair as one unit by, and the why says the same thing
 // to the person reading it. --proposed marks both halves, so neither applies
 // until a person answers.
-function demotionEvents(project: string, demotions: EntityState[], admit: string, proposed: boolean): SelfEvent[]
+// The demotion lands in the log that owns the record it demotes, which is not
+// always the log the admitted record is written to (#181 D3): a seat in the
+// destination's tier is freed by a record the destination's own log holds.
+function demotionEvents(demotions: Placed[], admit: string, proposed: boolean): SelfEvent[]
 {
-    return demotions.map((entity) => makeEvent(project, "entity.placed", {
-        entity: entity.id,
-        exposure: DEMOTION_TARGET[entity.exposure as "full" | "index"],
-        why: `demoted to admit ${admit} under the ${entity.exposure} cap`,
+    return demotions.map((item) => makeEvent(item.owner, "entity.placed", {
+        entity: item.entity.id,
+        exposure: DEMOTION_TARGET[item.entity.exposure as "full" | "index"],
+        why: `demoted to admit ${admit} under the ${item.entity.exposure} cap`,
         ...(proposed ? { proposed: true } : {})
     }, { admits: admit }, !proposed));
 }
@@ -732,12 +839,13 @@ function demotionEvents(project: string, demotions: EntityState[], admit: string
 function stateConfirm({ positionals }: CommandInput): void
 {
     const ctx = requireProject(process.cwd());
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
     const entity = requireEntity(model, positionals[0], "state confirm <id>");
     const unit = confirmableUnit(model, entity);
     const config = readStoreConfig(ctx.storeDir);
     const scale = tokenScale(config);
-    requireUnitRoom(usageReader(ctx, model, scale), retentionCaps(config), unit, scale);
+    requireUnitRoom(usageReader(models, scale), retentionCaps(config), unit, scale, ctx.project);
     recordEvents(ctx, unit.map((member) => confirmEvent(ctx.project, member)), entity.text);
 }
 
@@ -1110,8 +1218,12 @@ function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
     const scope = readScopes(process.cwd(), values)[0];
     // Current records only: done and retired outcomes left the direction the
-    // list carries — `state show` and search still answer for them.
-    const live = buildModel(scope.storeDir, scope.project, new Date()).entities.filter(isCurrent);
+    // list carries — `state show` and search still answer for them. What the
+    // list holds is what renders here (#181 D2), so a record that moved to
+    // another project has left it and one moved in has joined it.
+    const live = workspaceModels(scope.storeDir, scope.project)
+        .flatMap((model) => model.entities.filter((entity) => rendersIn(entity, model.slug, scope.project)))
+        .filter(isCurrent);
     if (live.length === 0)
     {
         console.log("no live entities");
@@ -1123,11 +1235,16 @@ function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
     }
 }
 
+// The page answers for any record this project resolves (#181 D5): its own,
+// whatever project they render in, plus the records scoped in from elsewhere.
+// A record that moved keeps its page — reading it is how a caller finds out
+// where it went.
 function stateShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
     const scope = readScopes(process.cwd(), values)[0];
-    const model = buildModel(scope.storeDir, scope.project, new Date());
-    console.log(renderEntity(requireEntity(model, positionals[0], "state show <id> [--project <slug>]")));
+    const records = allRecords(workspaceModels(scope.storeDir, scope.project));
+    console.log(renderEntity(requirePlaced(resolvableRecords(records, scope.project), positionals[0],
+        "state show <id> [--project <slug>]")));
 }
 
 function stateLine(entity: EntityState): string
@@ -1138,14 +1255,10 @@ function stateLine(entity: EntityState): string
     return `${entity.id}  ${labels}  ${place}  ${truncate(entity.text, 70)}${mark}`;
 }
 
-function renderEntity(entity: EntityState): string
+function renderEntity(found: Placed): string
 {
-    const lines = [
-        `${entity.id}  ${entity.status}${entity.source === undefined ? "" : `  (from ${entity.source})`}`,
-        `text: ${entity.text}`,
-        `labels: ${entity.labels.join(", ") || "-"}`,
-        `placement: ${entity.scope} · ${entity.exposure}${entity.priority === undefined ? "" : ` · priority ${entity.priority}`}`
-    ];
+    const entity = found.entity;
+    const lines = placementLines(found);
     optional(lines, "why", entity.why);
     optional(lines, "target", entity.target);
     entity.criteria.forEach((criterion) => lines.push(`criterion: ${criterion}`));
@@ -1164,6 +1277,26 @@ function renderEntity(entity: EntityState): string
     }
     lines.push(`recorded: ${entity.ts.slice(0, 10)}`);
     return lines.join("\n");
+}
+
+// The head of the page: what the record is, and where it stands. `stored in`
+// is named only where a record renders in one project while its events live in
+// another's log (#181 D1) — a reader deciding where to write is owed the log
+// that owns it.
+function placementLines(found: Placed): string[]
+{
+    const entity = found.entity;
+    const lines = [
+        `${entity.id}  ${entity.status}${entity.source === undefined ? "" : `  (from ${entity.source})`}`,
+        `text: ${entity.text}`,
+        `labels: ${entity.labels.join(", ") || "-"}`,
+        `placement: ${entity.scope} · ${entity.exposure}${entity.priority === undefined ? "" : ` · priority ${entity.priority}`}`
+    ];
+    if (scopeTarget(entity, found.owner) !== found.owner)
+    {
+        lines.push(`stored in: ${found.owner}`);
+    }
+    return lines;
 }
 
 function optional(lines: string[], name: string, value: string | undefined): void
@@ -1201,6 +1334,48 @@ function requireEntity(model: ProjectModel, value: string | undefined, usage: st
         throw new CliError(`unknown entity "${wanted}" — run \`self state list\` for ids`);
     }
     return matches[0];
+}
+
+// The same resolution rule as `requireEntity`, over the records of every
+// project a placement may speak about (#181 D5). Exact id first, then a unique
+// prefix; a prefix two projects both answer to says nothing about which record
+// was meant, so it is refused rather than guessed.
+function requirePlaced(records: Placed[], value: string | undefined, usage: string): Placed
+{
+    const wanted = requireText(value, usage);
+    const exact = records.filter((item) => item.entity.id === wanted);
+    const matches = exact.length > 0 ? exact : records.filter((item) => item.entity.id.startsWith(wanted));
+    if (matches.length > 1)
+    {
+        throw new CliError(`id "${wanted}" is ambiguous (${matches.length} entities match) — spell more of it`);
+    }
+    if (matches.length === 0)
+    {
+        refuseCarried(records, wanted);
+        throw new CliError(`unknown entity "${wanted}" — run \`self state list\` for ids`);
+    }
+    return matches[0];
+}
+
+// A report and an artifact are carried by a work unit, never placed on their
+// own: they move when the unit moves, so naming one here is answered with the
+// record that actually has a placement rather than with "unknown id".
+function refuseCarried(records: Placed[], wanted: string): void
+{
+    for (const model of new Set(records.map((item) => item.model)))
+    {
+        for (const work of model.works)
+        {
+            const kind = work.reports.some((report) => report.id === wanted) ? "report"
+                : work.artifacts.some((artifact) => artifact.id === wanted) ? "artifact" : null;
+            if (kind !== null)
+            {
+                const article = kind === "artifact" ? "an" : "a";
+                throw new CliError(`${wanted} is ${article} ${kind} of ${work.id} — ${article} ${kind} is not independently `
+                    + `placed; it moves with its work unit, so place ${work.id} instead`);
+            }
+        }
+    }
 }
 
 // `--supersedes <id>` is the one spelling every add verb takes, and here it is
@@ -1296,13 +1471,39 @@ export function validExposure(value: string): Exposure
     return value as Exposure;
 }
 
-function validScope(value: string): EntityScope
+// A scope names where a record renders (#181 D1): omit the flag for this
+// project, name a registered slug for another, `workspace` for all of them.
+// The `project` keyword is refused by name rather than read as the omission it
+// is equivalent to (D6) — silently accepting it would leave the retired word
+// alive in scripts and agent habits with nothing ever saying it is gone.
+function validScope(ctx: ProjectContext, raw: string): string
 {
-    if (value !== "project" && value !== "workspace")
+    const value = raw.trim();
+    if (/^project$/i.test(value))
     {
-        throw new CliError(`"${value}" is not a scope — use project (this project's context) or workspace (every project's context)`);
+        throw new CliError('--scope project was retired — omit --scope to place a record in the project you are in, '
+            + 'name another registered project with `--scope <slug>`, or `--scope workspace` for every project');
     }
-    return value;
+    if (value === "")
+    {
+        throw new CliError("--scope takes where the record renders — a registered project's slug, or workspace; it cannot be empty");
+    }
+    if (value.startsWith("workspace="))
+    {
+        throw new CliError("--scope workspace takes no value — it already means every registered project");
+    }
+    return value === "workspace" ? value : requireScopeProject(ctx, value);
+}
+
+function requireScopeProject(ctx: ProjectContext, slug: string): string
+{
+    const slugs = readRegistry(ctx.storeDir).map((entry) => entry.slug);
+    if (!slugs.includes(slug))
+    {
+        throw new CliError(`"${slug}" is not a registered project — run \`self project\` to list the slugs, `
+            + "or --scope workspace to render the record in every project");
+    }
+    return slug;
 }
 
 function validText(value: string, flag: string, what: string): string
