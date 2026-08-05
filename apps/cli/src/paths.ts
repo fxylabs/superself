@@ -11,7 +11,7 @@ export const LINKS_FILE = "links.jsonl";
 // machine's checkout of the project repository, so it must never travel in the
 // synced store. `EVIDENCE_HEAD_EXCLUDE` is the pattern `self sync` writes into
 // the store's local excludes.
-export const EVIDENCE_HEAD_FILE = ".evidence-head.json";
+const EVIDENCE_HEAD_FILE = ".evidence-head.json";
 export const EVIDENCE_HEAD_EXCLUDE = `projects/*/${EVIDENCE_HEAD_FILE}`;
 
 export interface CliContext
@@ -48,7 +48,7 @@ export function findUp(start: string, name: string): string | null
     }
 }
 
-export function resolveContext(cwd: string): CliContext | null
+function resolveContext(cwd: string): CliContext | null
 {
     const marker = findUp(cwd, MARKER_FILE);
     const workspaceDir = workspaceDirFor(marker);
@@ -73,11 +73,9 @@ export function resolveContext(cwd: string): CliContext | null
     // No marker here, so the repository answers instead: registration is one
     // act per project, not one per checkout of it.
     const match = checkoutProject(storeDir, cwd);
-    if (match === null)
-    {
-        return { workspaceDir, storeDir };
-    }
-    return { workspaceDir, storeDir, project: match.slug, projectDir: match.dir };
+    return match === null
+        ? { workspaceDir, storeDir }
+        : { workspaceDir, storeDir, project: match.slug, projectDir: match.dir };
 }
 
 // The machine's workspace is the single source. Markers written before that
@@ -153,7 +151,7 @@ function unregisteredMessage(storeDir: string, cwd: string): string
 
 export type ProjectScope = CliContext & { project: string };
 
-export interface ScopeChoice
+interface ScopeChoice
 {
     project?: string;
     workspace?: boolean;
@@ -408,7 +406,7 @@ function remedy(old: string, now: "fullTokens" | "indexTokens", config: StoreCon
         + `${Math.ceil(characters * tokenScale(config).perCharacter)} tokens)`;
 }
 
-export const DEFAULT_TOKENS_PER_CHARACTER = 0.25;
+const DEFAULT_TOKENS_PER_CHARACTER = 0.25;
 
 export interface TokenScale
 {
@@ -524,7 +522,7 @@ export function writeEvidenceHead(storeDir: string, slug: string, head: Evidence
 // linked. The identity is absent on links written before it was recorded, and
 // on a checkout that had no commit yet when it was linked — both are read as
 // "nothing was claimed" rather than as a mismatch.
-export interface LinkedCheckout
+interface LinkedCheckout
 {
     path: string;
     repository?: string;
@@ -641,6 +639,18 @@ export function pruneDeadLinks(storeDir: string): PrunedLink[]
 // never remove it, because the path it names does exist — so the extra
 // `existsSync` and identity probe on every resolution stayed forever, which is
 // the cost #128 set out to remove.
+// The stale claim goes; what was recorded about the path stays. A prune entry
+// is kept where it stood, so replacing an identity never quietly erases the
+// account of a checkout that went missing first — and the new entry is appended
+// last, so the replay ends with the path linked.
+function replaceLinkIdentity(file: string, entries: Record<string, unknown>[], entry: Record<string, unknown>,
+    here: (line: { path?: unknown }) => boolean): void
+{
+    const kept = entries.filter((item) => !here(item) || item.pruned !== undefined).concat([entry]);
+    writeFileSync(file, kept.map((item) => JSON.stringify(item) + "\n").join(""));
+    invalidateResolution();
+}
+
 export function recordLink(storeDir: string, slug: string, at: string, repository: string | null): boolean
 {
     const path = realPath(at);
@@ -658,13 +668,7 @@ export function recordLink(storeDir: string, slug: string, at: string, repositor
     const linked = (readLinks(storeDir)[slug] ?? []).some(here);
     if (stale.length > 0)
     {
-        // The stale claim goes; what was recorded about the path stays. A prune
-        // entry is kept where it stood, so replacing an identity never quietly
-        // erases the account of a checkout that went missing first — and the new
-        // entry is appended last, so the replay ends with the path linked.
-        const kept = entries.filter((item) => !here(item) || item.pruned !== undefined).concat([entry]);
-        writeFileSync(file, kept.map((item) => JSON.stringify(item) + "\n").join(""));
-        invalidateResolution();
+        replaceLinkIdentity(file, entries, entry, here);
         return true;
     }
     if (!linked)
@@ -772,7 +776,7 @@ function lastStanding(linked: LinkedCheckout[]): string | undefined
     return undefined;
 }
 
-export interface CheckoutMatch
+interface CheckoutMatch
 {
     slug: string;
     dir: string;

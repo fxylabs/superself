@@ -98,10 +98,8 @@ pnpm build
 
 - Functions stay within 20-30 lines and do one thing. A function that routes
   subcommands routes them; it does not also implement one of them inline.
-  `pnpm structure` enforces this on the diff. Its ceiling is 60 rather than 30
-  because the tree still carries functions above it; issue #227 splits those
-  and drops the ceiling to the number stated here. A function your branch adds
-  or edits is measured; one you did not touch is not.
+  `pnpm structure` enforces this on the diff at 30 lines. A function your branch
+  adds or edits is measured; one you did not touch is not.
 - Allman braces: the opening brace of every block goes on its own line.
 - Four spaces, semicolons required.
 - Reuse the helper that exists; do not re-derive it locally. Current shared

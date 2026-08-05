@@ -241,7 +241,7 @@ export const STATE_COMMAND: Command = {
 // The label an alias verb records, and the placement it defaults to — the
 // merged alias-table row, declared structurally so this module never imports
 // the table that reads it back through `aliasEntityAdd`.
-export interface AliasDefaults
+interface AliasDefaults
 {
     label: string;
     priority?: number;
@@ -312,6 +312,15 @@ function addPayload(
         exposure,
         scope
     };
+    addOptionalFields(payload, values, row);
+    return payload;
+}
+
+// Fields the record carries only when the call named them, or the alias row
+// carries a default worth writing down.
+function addOptionalFields(payload: Record<string, unknown>,
+    values: CommandInput<typeof ADD_OPTIONS>["values"], row: AliasDefaults | undefined): void
+{
     const priority = values.priority !== undefined ? validPriority(values.priority) : row?.priority;
     if (priority !== undefined)
     {
@@ -325,7 +334,6 @@ function addPayload(
     {
         payload.why = values.why;
     }
-    return payload;
 }
 
 function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>): void
@@ -866,7 +874,7 @@ function requireCoverable(model: ProjectModel, value: string | undefined): Entit
 
 // A criterion is named by its text, or by cN — its 1-based place in the
 // declared list, the spelling the milestone surface has always used.
-export function resolveCriterion(entity: EntityState, wanted: string): string
+function resolveCriterion(entity: EntityState, wanted: string): string
 {
     if (entity.criteria.includes(wanted))
     {
@@ -1024,7 +1032,7 @@ function stateDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): 
 // The criteria gate, spelled once: `state done` and the preset done claims —
 // `milestone reach`, `objective close --as reached` — refuse through the same
 // check, naming the uncovered criteria and the verb that covers one.
-export function requireCriteriaCovered(entity: EntityState): void
+function requireCriteriaCovered(entity: EntityState): void
 {
     const open = uncoveredCriteria(entity);
     if (open.length === 0)
@@ -1272,7 +1280,7 @@ export function validExposure(value: string): Exposure
     return value as Exposure;
 }
 
-export function validScope(value: string): EntityScope
+function validScope(value: string): EntityScope
 {
     if (value !== "project" && value !== "workspace")
     {

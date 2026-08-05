@@ -8,7 +8,7 @@ export interface HumanConfirmation
     challenge: string;
 }
 
-export interface HumanRefusal
+interface HumanRefusal
 {
     code: string;
     detail: string;
@@ -77,24 +77,34 @@ export function useTypedAnswer(next: () => string): () => string
 // A blocking read of fd 0. The command surface is synchronous, and the read
 // deliberately bypasses the stream machinery: the raw descriptor is the
 // terminal itself.
+// A non-blocking stdin answers EAGAIN rather than waiting, and the caller is
+// asked to try again — null says exactly that, so no read is mistaken for EOF.
+function readChunk(buffer: Buffer): number | null
+{
+    try
+    {
+        return readSync(0, buffer, 0, buffer.length, null);
+    }
+    catch (error)
+    {
+        if ((error as NodeJS.ErrnoException).code === "EAGAIN")
+        {
+            return null;
+        }
+        throw error;
+    }
+}
+
 function readLine(): string
 {
     const buffer = Buffer.alloc(256);
     let line = "";
     for (;;)
     {
-        let read: number;
-        try
+        const read = readChunk(buffer);
+        if (read === null)
         {
-            read = readSync(0, buffer, 0, buffer.length, null);
-        }
-        catch (error)
-        {
-            if ((error as NodeJS.ErrnoException).code === "EAGAIN")
-            {
-                continue;
-            }
-            throw error;
+            continue;
         }
         if (read === 0)
         {

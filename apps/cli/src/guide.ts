@@ -7,7 +7,7 @@
 // This module holds prose and imports nothing: `help.ts` renders it, and the
 // dispatcher resolves a topic only after no command claims the name.
 
-export interface Topic
+interface Topic
 {
     name: string;
     summary: string;

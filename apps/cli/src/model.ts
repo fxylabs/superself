@@ -68,7 +68,7 @@ export interface DecisionState
 // live status; `superseded` means a later convention was recorded as its
 // replacement, and `dropped` means it was withdrawn with nothing taking its
 // place — the withdraw verb this type has always had.
-export interface ConventionState
+interface ConventionState
 {
     id: string;
     ts: string;
@@ -87,7 +87,7 @@ export function currentConventions(conventions: ConventionState[]): ConventionSt
     return conventions.filter((convention) => convention.status === "current");
 }
 
-export interface ReportEntry
+interface ReportEntry
 {
     id: string;
     ts: string;
@@ -105,7 +105,7 @@ export interface ReportEntry
 // What a runner attempt left in the synced log: the state it reached, why it
 // stopped, and the hashes of what it published. The raw output that produced
 // them stays in the machine-local spool and never folds into project state.
-export interface AttemptSummary
+interface AttemptSummary
 {
     id: string;
     state: "started" | "completed" | "failed" | "blocked" | "cancelled";
@@ -230,11 +230,11 @@ export interface AttentionRow
     flags: string[];
 }
 
-export type AttentionBand = Record<AttentionGroup, AttentionRow[]>;
+type AttentionBand = Record<AttentionGroup, AttentionRow[]>;
 
 // What one unit reported from one branch, and how much of it no fold has been
 // able to call settled.
-export interface BranchWork
+interface BranchWork
 {
     work: string;
     status: WorkState["status"];
@@ -327,7 +327,7 @@ export interface ProjectModel
 // which of its records still hold — and `test/lifecycle.test.mjs` reads this
 // same list out of the built module rather than restating it, so a row can
 // never drift from the verbs the CLI actually has.
-export interface StatementType
+interface StatementType
 {
     // The record, and the namespaces its events are written under. The proof
     // checks these against the namespaces the source actually creates records
@@ -470,11 +470,10 @@ export function closedRecords(model: ProjectModel): Map<string, string>
     return closed;
 }
 
-export function buildModel(storeDir: string, slug: string, now: Date): ProjectModel
+// One pass over the log, read two ways at once. Answers the creation events
+// the entity projection needs afterwards.
+function foldLog(model: ProjectModel, entityFold: EntityFold, events: SelfEvent[]): Map<string, SelfEvent>
 {
-    const model = emptyModel(storeDir, slug);
-    const events = readEvents(storeDir, slug);
-    const entityFold = emptyEntityFold();
     // What an undo took back, read before the fold begins: a restoration is a
     // fact about the event it names, not a position in the log.
     collectAnnulled(entityFold, events);
@@ -487,6 +486,11 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
         applyEntity(entityFold, event);
         noteCreation(creations, event);
     }
+    return creations;
+}
+
+function reconcileEntityView(model: ProjectModel, entityFold: EntityFold, events: SelfEvent[], creations: Map<string, SelfEvent>): void
+{
     reconcileLifecycle(model, entityFold, events);
     // Objective supersessions settle before the entity view reads statuses;
     // deriveGoals runs the same idempotent pass again below.
@@ -500,12 +504,26 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     const nativeWorks = projectNativeRecords(model, creations);
     routeEntityWorkFacts(model, entityFold);
     replayDeferred(model, events, nativeWorks);
-    deriveSignals(model, now);
+}
+
+function deriveVerdictReads(model: ProjectModel, storeDir: string, slug: string): void
+{
     // Read once per fold, not once per row: the verdicts are a file, and a fold
     // runs on every event. Both derivations below read the same copy.
     const verdicts = readVerdicts(storeDir, slug);
     deriveAttention(model, verdicts);
     model.unshipped = unshippedBranches(model.works, verdicts);
+}
+
+export function buildModel(storeDir: string, slug: string, now: Date): ProjectModel
+{
+    const model = emptyModel(storeDir, slug);
+    const events = readEvents(storeDir, slug);
+    const entityFold = emptyEntityFold();
+    const creations = foldLog(model, entityFold, events);
+    reconcileEntityView(model, entityFold, events, creations);
+    deriveSignals(model, now);
+    deriveVerdictReads(model, storeDir, slug);
     return model;
 }
 
@@ -543,39 +561,43 @@ function emptyModel(storeDir: string, slug: string): ProjectModel
     };
 }
 
+type Reducer = (model: ProjectModel, event: SelfEvent) => void;
+
+// A receipt bound to a change set that named a work unit is still a statement
+// about that unit in an old log.
+function applyReview(model: ProjectModel, event: SelfEvent): void
+{
+    const reviewed = model.works.find((item) => item.id === event.refs?.work);
+    if (reviewed !== undefined)
+    {
+        applyWorkReview(reviewed.completion, event);
+    }
+}
+
+// Exact types first, then namespaces. An event matching neither folds to
+// nothing, which is what the retired namespaces (changeset.*, lease.*, merge.*,
+// promotion.*, spec.*, …) now do.
+const EXACT_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
+    ["review.received", applyReview],
+    ["goal.set", (model, event) => { model.goal = String(event.payload.text); }],
+    ["report.added", applyReport]
+];
+
+const NAMESPACE_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
+    ["decision.", applyDecision],
+    ["objective.", (model, event) => applyObjective(model.goals, event)],
+    ["milestone.", (model, event) => applyMilestone(model.goals, event)],
+    ["work.", applyWork],
+    ["run.", applyAttempt],
+    ["convention.", applyConvention]
+];
+
 function applyEvent(model: ProjectModel, event: SelfEvent): void
 {
-    // A receipt bound to a change set that named a work unit is still a
-    // statement about that unit in an old log; the rest of the retired
-    // namespaces (changeset.*, lease.*, merge.*, promotion.*, spec.*, …)
-    // fold to nothing below by matching no branch.
-    if (event.type === "review.received")
+    const exact = EXACT_REDUCERS.find(([type]) => type === event.type);
+    if (exact !== undefined)
     {
-        const reviewed = model.works.find((item) => item.id === event.refs?.work);
-        if (reviewed !== undefined)
-        {
-            applyWorkReview(reviewed.completion, event);
-        }
-        return;
-    }
-    if (event.type === "goal.set")
-    {
-        model.goal = String(event.payload.text);
-        return;
-    }
-    if (event.type.startsWith("decision."))
-    {
-        applyDecision(model, event);
-        return;
-    }
-    if (event.type.startsWith("objective."))
-    {
-        applyObjective(model.goals, event);
-        return;
-    }
-    if (event.type.startsWith("milestone."))
-    {
-        applyMilestone(model.goals, event);
+        exact[1](model, event);
         return;
     }
     if (PROPOSAL_EVENTS.includes(event.type))
@@ -583,25 +605,7 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
         applyProposal(model.goals, event);
         return;
     }
-    if (event.type.startsWith("work."))
-    {
-        applyWork(model, event);
-        return;
-    }
-    if (event.type === "report.added")
-    {
-        applyReport(model, event);
-        return;
-    }
-    if (event.type.startsWith("run."))
-    {
-        applyAttempt(model, event);
-        return;
-    }
-    if (event.type.startsWith("convention."))
-    {
-        applyConvention(model, event);
-    }
+    NAMESPACE_REDUCERS.find(([prefix]) => event.type.startsWith(prefix))?.[1](model, event);
 }
 
 // One correction is one event: the replacement is recorded and the conventions
@@ -832,6 +836,11 @@ function syncObjective(model: ProjectModel, entity: EntityState): void
         record.status = "superseded";
         record.supersededBy = entity.supersededBy;
     }
+    syncObjectiveExecution(record, entity);
+}
+
+function syncObjectiveExecution(record: ObjectiveState, entity: EntityState): void
+{
     if (entity.execution?.status === "done")
     {
         record.status = "reached";
@@ -1078,16 +1087,9 @@ function objectiveClosedWhy(entity: EntityState): string | undefined
     return entity.closedWhy;
 }
 
-function projectMilestone(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
+function newMilestone(entity: EntityState, objective: ObjectiveState, creation: SelfEvent | undefined): MilestoneState
 {
-    const parent = entity.links.find((link) => link.type === "member-of");
-    const objective = parent === undefined ? undefined
-        : model.goals.objectives.find((item) => item.id === parent.target);
-    if (objective === undefined)
-    {
-        return;
-    }
-    const milestone: MilestoneState = {
+    return {
         id: entity.id,
         objective: objective.id,
         outcome: entity.text,
@@ -1109,6 +1111,18 @@ function projectMilestone(model: ProjectModel, entity: EntityState, creation: Se
         evidence: [],
         criticalPath: false
     };
+}
+
+function projectMilestone(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
+{
+    const parent = entity.links.find((link) => link.type === "member-of");
+    const objective = parent === undefined ? undefined
+        : model.goals.objectives.find((item) => item.id === parent.target);
+    if (objective === undefined)
+    {
+        return;
+    }
+    const milestone = newMilestone(entity, objective, creation);
     syncCoverage(milestone, objective.revision, entity);
     if (entity.execution?.status === "done")
     {
@@ -1140,8 +1154,13 @@ function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEve
     {
         return;
     }
+    model.works.push(workFromEntity(model, entity, creation));
+}
+
+function workFromEntity(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): WorkState
+{
     const links = entity.links.filter((link) => link.type === "member-of").map((link) => link.target);
-    model.works.push({
+    return {
         id: entity.id,
         outcome: entity.text,
         ts: entity.ts,
@@ -1162,7 +1181,7 @@ function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEve
         gatedBy: [],
         attempts: [],
         completion: emptyCompletion()
-    });
+    };
 }
 
 function workStatusOf(entity: EntityState): WorkState["status"]
@@ -1244,6 +1263,21 @@ function applyExecutionToWork(work: WorkState, event: { ts: string; type: string
         return;
     }
     work.lastEventTs = event.ts;
+    applyBlockTransition(work, event);
+    if (event.type === "entity.done")
+    {
+        work.status = "done";
+    }
+    if (event.type === "entity.retired")
+    {
+        retireWorkFromExecution(work, event);
+    }
+}
+
+// Starting, unblocking and blocking, each guarded on where the unit stands: a
+// start never overrides a block, and neither transition fires twice.
+function applyBlockTransition(work: WorkState, event: { type: string; on?: string; why?: string }): void
+{
     if (event.type === "entity.started" && work.status !== "blocked")
     {
         work.status = "active";
@@ -1260,19 +1294,16 @@ function applyExecutionToWork(work: WorkState, event: { ts: string; type: string
         work.blockedOn = event.on ?? "dependency";
         work.blockedWhy = event.why;
     }
-    if (event.type === "entity.done")
-    {
-        work.status = "done";
-    }
-    if (event.type === "entity.retired")
-    {
-        work.status = "retired";
-        work.blockedOn = undefined;
-        work.blockedWhy = undefined;
-        work.retiredWhy = event.why ?? "retired";
-        work.successor = event.successor === undefined ? undefined
-            : { work: event.successor, project: event.successorProject };
-    }
+}
+
+function retireWorkFromExecution(work: WorkState, event: { why?: string; successor?: string; successorProject?: string }): void
+{
+    work.status = "retired";
+    work.blockedOn = undefined;
+    work.blockedWhy = undefined;
+    work.retiredWhy = event.why ?? "retired";
+    work.successor = event.successor === undefined ? undefined
+        : { work: event.successor, project: event.successorProject };
 }
 
 function applyMemberOf(model: ProjectModel, work: WorkState, target: string, add: boolean): void
@@ -1400,60 +1431,36 @@ function noteBranch(work: WorkState, event: SelfEvent): void
     }
 }
 
-function applyWork(model: ProjectModel, event: SelfEvent): void
+function newWork(event: SelfEvent): WorkState
 {
-    if (event.type === "work.created")
-    {
-        model.works.push({
-            id: String(event.payload.work),
-            outcome: String(event.payload.outcome),
-            ts: event.ts,
-            lastEventTs: event.ts,
-            status: "next",
-            reports: [],
-            evidence: [],
-            notes: [],
-            artifacts: [],
-            branches: branchOf(event),
-            objectives: [],
-            milestones: [],
-            gatedBy: [],
-            attempts: [],
-            completion: emptyCompletion()
-        });
-        return;
-    }
-    const work = model.works.find((item) => item.id === event.payload.work);
-    if (work === undefined)
-    {
-        return;
-    }
-    work.lastEventTs = event.ts;
-    noteBranch(work, event);
-    if (isCompletionEvent(event.type))
-    {
-        applyCompletion(work.completion, event);
-        return;
-    }
-    if (event.type === "work.linked" || event.type === "work.unlinked")
-    {
-        applyLink(work, event);
-        return;
-    }
-    // Retirement is terminal, the way a retracted decision and a dropped
-    // milestone are. `requireOpenWork` already refuses every transition on a
-    // retired unit, so nothing this CLI wrote can reach here — what can is a
-    // stale line merged from a clone that had not pulled the retirement yet.
-    // Done is deliberately not terminal: reopening a finished unit is real
-    // work, and only the withdrawal is the end of the record.
-    if (work.status === "retired" && event.type !== "work.retired")
-    {
-        return;
-    }
+    return {
+        id: String(event.payload.work),
+        outcome: String(event.payload.outcome),
+        ts: event.ts,
+        lastEventTs: event.ts,
+        status: "next",
+        reports: [],
+        evidence: [],
+        notes: [],
+        artifacts: [],
+        branches: branchOf(event),
+        objectives: [],
+        milestones: [],
+        gatedBy: [],
+        attempts: [],
+        completion: emptyCompletion()
+    };
+}
+
+// A run event says where the unit's process is, which is machine state rather
+// than a position in the lifecycle, so it never touches status. Answers
+// whether it consumed the event.
+function applyRun(work: WorkState, event: SelfEvent): boolean
+{
     if (event.type === "work.run-started")
     {
         work.process = { state: "running", at: event.ts };
-        return;
+        return true;
     }
     if (event.type === "work.run-exited")
     {
@@ -1462,8 +1469,28 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
             code: typeof event.payload.code === "number" ? event.payload.code : undefined,
             at: event.ts
         };
-        return;
+        return true;
     }
+    return false;
+}
+
+function applyRetired(work: WorkState, event: SelfEvent): void
+{
+    work.status = "retired";
+    work.blockedOn = undefined;
+    work.blockedWhy = undefined;
+    work.retiredWhy = String(event.payload.why);
+    if (typeof event.payload.successor === "string")
+    {
+        work.successor = {
+            work: event.payload.successor,
+            project: typeof event.payload.successorProject === "string" ? event.payload.successorProject : undefined
+        };
+    }
+}
+
+function applyWorkStatus(work: WorkState, event: SelfEvent): void
+{
     if (event.type === "work.started" || event.type === "work.unblocked")
     {
         work.status = "active";
@@ -1482,18 +1509,57 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     }
     if (event.type === "work.retired")
     {
-        work.status = "retired";
-        work.blockedOn = undefined;
-        work.blockedWhy = undefined;
-        work.retiredWhy = String(event.payload.why);
-        if (typeof event.payload.successor === "string")
-        {
-            work.successor = {
-                work: event.payload.successor,
-                project: typeof event.payload.successorProject === "string" ? event.payload.successorProject : undefined
-            };
-        }
+        applyRetired(work, event);
     }
+}
+
+// Completion and links are their own subjects with their own reducers, so the
+// router hands the event over rather than reading it. Answers whether it did.
+function applyDelegated(work: WorkState, event: SelfEvent): boolean
+{
+    if (isCompletionEvent(event.type))
+    {
+        applyCompletion(work.completion, event);
+        return true;
+    }
+    if (event.type === "work.linked" || event.type === "work.unlinked")
+    {
+        applyLink(work, event);
+        return true;
+    }
+    return false;
+}
+
+// Retirement is terminal, the way a retracted decision and a dropped milestone
+// are. `requireOpenWork` already refuses every transition on a retired unit, so
+// nothing this CLI wrote can reach here — what can is a stale line merged from
+// a clone that had not pulled the retirement yet. Done is deliberately not
+// terminal: reopening a finished unit is real work, and only the withdrawal is
+// the end of the record.
+function isAfterRetirement(work: WorkState, event: SelfEvent): boolean
+{
+    return work.status === "retired" && event.type !== "work.retired";
+}
+
+function applyWork(model: ProjectModel, event: SelfEvent): void
+{
+    if (event.type === "work.created")
+    {
+        model.works.push(newWork(event));
+        return;
+    }
+    const work = model.works.find((item) => item.id === event.payload.work);
+    if (work === undefined)
+    {
+        return;
+    }
+    work.lastEventTs = event.ts;
+    noteBranch(work, event);
+    if (applyDelegated(work, event) || isAfterRetirement(work, event) || applyRun(work, event))
+    {
+        return;
+    }
+    applyWorkStatus(work, event);
 }
 
 // One unit may contribute to more than one outcome, and one outcome may be
@@ -1603,9 +1669,8 @@ function stringList(value: unknown): string[]
     return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
-function deriveSignals(model: ProjectModel, now: Date): void
+function noteProposedObjectives(model: ProjectModel): void
 {
-    model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
     for (const objective of model.goals.objectives.filter((item) => item.status === "proposed"))
     {
         noteWaiting(model, {
@@ -1614,6 +1679,10 @@ function deriveSignals(model: ProjectModel, now: Date): void
             recovery: "self objective"
         });
     }
+}
+
+function expireProposedDecisions(model: ProjectModel, now: Date): void
+{
     for (const decision of model.decisions)
     {
         if (decision.status === "proposed" && ageDays(decision.ts, now) > PROPOSAL_EXPIRY_DAYS)
@@ -1621,30 +1690,42 @@ function deriveSignals(model: ProjectModel, now: Date): void
             decision.expired = true;
         }
     }
+}
+
+function deriveWorkSignals(model: ProjectModel, work: WorkState, now: Date): void
+{
+    deriveCompletion(work.completion);
+    // Derived for open units only. A closed unit was judged — done through the
+    // gate, or legacy history the fold never refuses (#205 table D) — and
+    // re-deriving what it owes would mark every evidence-free legacy done
+    // "not done yet" on a page that says it is.
+    if (work.status !== "done" && work.status !== "retired")
+    {
+        work.owes = completionRefusal(work) ?? undefined;
+    }
+    if (work.status === "blocked" && work.blockedOn === "decision")
+    {
+        noteWaiting(model, {
+            full: `${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`,
+            identity: `blocked work ${work.id}`,
+            recovery: { verb: "work-show", id: work.id }
+        });
+    }
+    if (work.status === "active" && ageDays(work.lastEventTs, now) > STALL_DAYS)
+    {
+        const days = Math.floor(ageDays(work.lastEventTs, now));
+        model.health.push(`${work.id} looks stalled — no events for ${days} days`);
+    }
+}
+
+function deriveSignals(model: ProjectModel, now: Date): void
+{
+    model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
+    noteProposedObjectives(model);
+    expireProposedDecisions(model, now);
     for (const work of model.works)
     {
-        deriveCompletion(work.completion);
-        // Derived for open units only. A closed unit was judged — done through
-        // the gate, or legacy history the fold never refuses (#205 table D) —
-        // and re-deriving what it owes would mark every evidence-free legacy
-        // done "not done yet" on a page that says it is.
-        if (work.status !== "done" && work.status !== "retired")
-        {
-            work.owes = completionRefusal(work) ?? undefined;
-        }
-        if (work.status === "blocked" && work.blockedOn === "decision")
-        {
-            noteWaiting(model, {
-                full: `${work.id} is waiting on a decision: ${work.blockedWhy ?? work.outcome}`,
-                identity: `blocked work ${work.id}`,
-                recovery: { verb: "work-show", id: work.id }
-            });
-        }
-        if (work.status === "active" && ageDays(work.lastEventTs, now) > STALL_DAYS)
-        {
-            const days = Math.floor(ageDays(work.lastEventTs, now));
-            model.health.push(`${work.id} looks stalled — no events for ${days} days`);
-        }
+        deriveWorkSignals(model, work, now);
     }
 }
 

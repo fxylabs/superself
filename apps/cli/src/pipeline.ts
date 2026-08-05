@@ -13,11 +13,6 @@ import { EventRefs, SelfEvent } from "./types.js";
 // the JSON and nothing else to parse around.
 let machineMode = false;
 
-export function setMachineMode(on: boolean): void
-{
-    machineMode = on;
-}
-
 export function makeEvent(
     project: string,
     type: string,
@@ -82,6 +77,11 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     onRecorded?.();
     foldProject(ctx.storeDir, project);
     commitAll(ctx.storeDir, `${events.map((event) => event.type).join(" ")} ${project}: ${truncate(summary, 60)}`);
+    announce(events, summary);
+}
+
+function announce(events: SelfEvent[], summary: string): void
+{
     for (const event of machineMode ? [] : events)
     {
         console.log(styled

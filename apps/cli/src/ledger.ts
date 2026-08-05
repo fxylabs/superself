@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 // process that died without reporting shows as stale on the next read, and
 // that is the whole recovery story — no heartbeats, no reconciler.
 
-export interface LedgerEntry
+interface LedgerEntry
 {
     work: string;
     project: string;
@@ -35,7 +35,7 @@ export function recordProcess(entry: LedgerEntry): void
 
 // The newest entry wins: a unit re-run after a crash gets a new pid, and the
 // stale one below it is history, not a second claim.
-export function localProcess(project: string, work: string): LedgerEntry | null
+function localProcess(project: string, work: string): LedgerEntry | null
 {
     const file = ledgerFile();
     if (!existsSync(file))
@@ -50,7 +50,7 @@ export function localProcess(project: string, work: string): LedgerEntry | null
     return entries[entries.length - 1] ?? null;
 }
 
-export function processAlive(pid: number): boolean
+function processAlive(pid: number): boolean
 {
     try
     {

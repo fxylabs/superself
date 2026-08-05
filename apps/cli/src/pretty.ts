@@ -42,7 +42,7 @@ const CONTEXT_ROWS = 8;
 
 export type RenderMode = "pretty" | "plain";
 
-export interface RenderChoice
+interface RenderChoice
 {
     pretty?: boolean;
     plain?: boolean;
@@ -309,34 +309,6 @@ declare const POINTER: unique symbol;
 declare const CHECKOUT: unique symbol;
 
 export type Pointer = string & { readonly [POINTER]: true };
-
-// The standing requirement of a verb with no scope form, kept apart from the
-// pointer so a render can put the command inside a code span and the sentence
-// outside it. A reader pastes the first and reads the second.
-export type Checkout = string & { readonly [CHECKOUT]: true };
-
-// The verbs that have no scope form, spelled out. Naming them as a union is
-// what stops the constructors below being a way to launder any other string
-// into a `Pointer`: `"self work"` is not a member, so it cannot take this road
-// around `scoped()`.
-export type UnscopedVerb = "self decide confirm" | "self work accept";
-
-// A verb with no scope form cannot be run from anywhere: it answers for the
-// checkout it runs in. Every render that points at one says so in the same
-// words, so a reader of another project's output learns where to stand instead
-// of finding out by getting the wrong answer.
-export function fromCheckout(project: string): Checkout
-{
-    return ` from a checkout of ${project}` as Checkout;
-}
-
-// The one-line form, for a render with no code span to keep the sentence out
-// of. Taking the `Checkout` rather than the project is what makes the note
-// unforgettable: there is no arity of this call that omits it.
-export function withCheckout(command: UnscopedVerb, where: Checkout): Pointer
-{
-    return `${command}${where}` as Pointer;
-}
 
 // The command's type is what makes the mint safe: `ScopableVerb` is a finite
 // list of exact commands, so appending the project always produces one the CLI
@@ -716,13 +688,13 @@ function workCounts(model: ProjectModel): string
 // render layer's one waiting-item site, and carries everything that is not a
 // live proposal — the proposals are the attention band, which is read straight
 // off the model and grouped below, so no item is written twice.
-export interface SurfaceInput
+interface SurfaceInput
 {
     model: ProjectModel;
     waiting: string[];
 }
 
-export interface StatusInput extends SurfaceInput
+interface StatusInput extends SurfaceInput
 {
     objectives: string;
     attempts: AttemptRow[];

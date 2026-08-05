@@ -267,10 +267,9 @@ function blockedLine(work: WorkState): string
     return `- **${work.id}** ${work.outcome} — waiting on ${work.blockedOn}${why}`;
 }
 
-export function renderObjectiveBody(objective: ObjectiveState): string
+function objectiveHeadLines(objective: ObjectiveState): string[]
 {
-    const lines: string[] = [`# ${objective.id} — ${objective.outcome}`, "", `- Status: ${objective.status}`,
-        `- Target state: ${objective.state} — ${objective.reason}`, `- Revision: ${objective.revision}`];
+    const lines: string[] = [];
     if (objective.horizon !== undefined || objective.target !== undefined)
     {
         lines.push(`- Timebox: ${objective.horizon ?? "unset"}${objective.target === undefined ? "" : `, target ${objective.target}`}`);
@@ -288,7 +287,14 @@ export function renderObjectiveBody(objective: ObjectiveState): string
     {
         lines.push(`- Superseded by: ${objective.supersededBy}`);
     }
-    lines.push("");
+    return lines;
+}
+
+export function renderObjectiveBody(objective: ObjectiveState): string
+{
+    const lines: string[] = [`# ${objective.id} — ${objective.outcome}`, "", `- Status: ${objective.status}`,
+        `- Target state: ${objective.state} — ${objective.reason}`, `- Revision: ${objective.revision}`,
+        ...objectiveHeadLines(objective), ""];
     bullets(lines, "Success criteria", objective.success);
     bullets(lines, "Stop criteria", objective.stop);
     bullets(lines, "Revision history", objective.history.map((entry) => `revision ${entry.revision} on ${day(entry.ts)} — ${entry.why}`));
@@ -299,12 +305,9 @@ export function renderObjectiveBody(objective: ObjectiveState): string
     return lines.join("\n").replace(/\n+$/, "\n");
 }
 
-export function renderMilestoneBody(milestone: MilestoneState, objective: ObjectiveState): string
+function milestoneHeadLines(milestone: MilestoneState): string[]
 {
-    const lines: string[] = [`# ${milestone.id} — ${milestone.outcome}`, "",
-        `- Objective: ${objective.id} ${objective.outcome}`,
-        `- State: ${milestone.state} — ${milestone.reason}`,
-        `- Revision: ${milestone.revision} (objective revision ${objective.revision})`];
+    const lines: string[] = [];
     if (milestone.target !== undefined)
     {
         lines.push(`- Target: ${milestone.target}`);
@@ -327,7 +330,16 @@ export function renderMilestoneBody(milestone: MilestoneState, objective: Object
     {
         lines.push(`- Rechecked: ${reachedLine(milestone.reaffirmed)}`);
     }
-    lines.push("");
+    return lines;
+}
+
+export function renderMilestoneBody(milestone: MilestoneState, objective: ObjectiveState): string
+{
+    const lines: string[] = [`# ${milestone.id} — ${milestone.outcome}`, "",
+        `- Objective: ${objective.id} ${objective.outcome}`,
+        `- State: ${milestone.state} — ${milestone.reason}`,
+        `- Revision: ${milestone.revision} (objective revision ${objective.revision})`,
+        ...milestoneHeadLines(milestone), ""];
     bullets(lines, "Exit criteria", exitLines(milestone));
     bullets(lines, "Coverage", milestone.coverage.map(coverageLine));
     return lines.join("\n").replace(/\n+$/, "\n");
@@ -472,9 +484,10 @@ function workUnshippedLines(work: WorkState, verdicts: Record<string, Verdict>):
     return [`- Unshipped commits by branch: ${stated.join("; ")}`];
 }
 
-export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
+// Where the unit stands: status, what it contributes to, and what stopped it.
+function workStandingLines(work: WorkState, model: ProjectModel, supersedes: string[]): string[]
 {
-    const lines: string[] = [`# ${work.id} — ${work.outcome}`, "", `- Status: ${work.status}`];
+    const lines: string[] = [`- Status: ${work.status}`];
     const contributes = contributionLines(work, model);
     if (contributes.length > 0)
     {
@@ -495,6 +508,13 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
         // the machine-local liveness judgment stays on `self status`.
         lines.push(`- Process: ${work.process.state}${work.process.code === undefined ? "" : ` (code ${work.process.code})`} at ${work.process.at}`);
     }
+    return lines;
+}
+
+// What the unit has to show for itself.
+function workEvidenceLines(work: WorkState, verdicts: Record<string, Verdict>): string[]
+{
+    const lines: string[] = [];
     if (work.branches.length > 0)
     {
         lines.push(`- Branches: ${work.branches.join(", ")}`);
@@ -519,30 +539,46 @@ export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: R
             `${a.id} (${a.state}${a.failure === undefined ? "" : `: ${a.failure}`})${a.model === undefined ? "" : ` model ${a.model}`}`);
         lines.push(`- Attempts: ${attempts.join(", ")}`);
     }
-    lines.push(...completionLines(work));
-    lines.push("");
-    const requirements = requirementLines(work);
-    if (requirements.length > 0)
+    return lines;
+}
+
+// A multi-line report gets a heading of its own; a one-liner stays a bullet.
+function workReportLines(work: WorkState): string[]
+{
+    if (work.reports.length === 0)
     {
-        lines.push("## Requirements", "", ...requirements.map((item) => `- ${item}`), "");
+        return [];
     }
-    if (work.reports.length > 0)
+    const lines: string[] = ["## Reports (latest first)", ""];
+    for (const report of [...work.reports].reverse())
     {
-        lines.push("## Reports (latest first)", "");
-        for (const report of [...work.reports].reverse())
+        const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
+        if (report.text.includes("\n"))
         {
-            const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
-            if (report.text.includes("\n"))
-            {
-                lines.push(`### ${day(report.ts)}${commits}`, "", report.text, "");
-            }
-            else
-            {
-                lines.push(`- ${day(report.ts)} — ${report.text}${commits}`);
-            }
+            lines.push(`### ${day(report.ts)}${commits}`, "", report.text, "");
         }
-        lines.push("");
+        else
+        {
+            lines.push(`- ${day(report.ts)} — ${report.text}${commits}`);
+        }
     }
+    lines.push("");
+    return lines;
+}
+
+export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
+{
+    const requirements = requirementLines(work);
+    const lines: string[] = [
+        `# ${work.id} — ${work.outcome}`,
+        "",
+        ...workStandingLines(work, model, supersedes),
+        ...workEvidenceLines(work, verdicts),
+        ...completionLines(work),
+        "",
+        ...(requirements.length === 0 ? [] : ["## Requirements", "", ...requirements.map((item) => `- ${item}`), ""]),
+        ...workReportLines(work)
+    ];
     return lines.join("\n").replace(/\n+$/, "\n");
 }
 

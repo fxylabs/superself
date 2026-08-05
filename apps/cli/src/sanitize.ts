@@ -83,17 +83,22 @@ function walk(value: unknown, at: string, declared: DeclaredSecret[]): void
     let index = 0;
     for (const [key, child] of Object.entries(value as Record<string, unknown>))
     {
-        // A key is data too — a review envelope and an attempt payload carry
-        // objects their caller built — and it is the one string a refusal
-        // cannot name, since printing it is the leak. So a key that fails is
-        // located by where it sits rather than by what it says.
-        assertValue(key, `${at} key #${index}`, declared);
-        if (forbiddenKey(key))
-        {
-            throw new CliError(`refusing to record ${at}.${key} — process handles, raw output, and credentials stay on the machine that produced them`);
-        }
+        assertKey(key, at, index, declared);
         walk(child, `${at}.${key}`, declared);
         index += 1;
+    }
+}
+
+// A key is data too — a review envelope and an attempt payload carry objects
+// their caller built — and it is the one string a refusal cannot name, since
+// printing it is the leak. So a key that fails is located by where it sits
+// rather than by what it says.
+function assertKey(key: string, at: string, index: number, declared: DeclaredSecret[]): void
+{
+    assertValue(key, `${at} key #${index}`, declared);
+    if (forbiddenKey(key))
+    {
+        throw new CliError(`refusing to record ${at}.${key} — process handles, raw output, and credentials stay on the machine that produced them`);
     }
 }
 

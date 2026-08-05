@@ -18,7 +18,7 @@ export const LINK_TYPES = ["member-of", "supersedes", "relates"] as const;
 
 export type Exposure = (typeof EXPOSURES)[number];
 export type LinkType = (typeof LINK_TYPES)[number];
-export type EntityStatus = "proposed" | "confirmed" | "superseded" | "retracted";
+type EntityStatus = "proposed" | "confirmed" | "superseded" | "retracted";
 export type EntityScope = "project" | "workspace";
 
 export interface EntityLink
@@ -32,7 +32,7 @@ export interface EntityLink
 // placement event in `refs.confirms` — the same propose/confirm grammar the
 // entity itself uses. Until then the entity keeps its current placement and
 // carries the proposal, so a render can say what waits.
-export interface PendingPlacement
+interface PendingPlacement
 {
     event: string;
     priority?: number;
@@ -65,9 +65,9 @@ function sourceOf(labels: string[]): EntitySource | undefined
 // The working state the execution events (#197 §5, #205) fold to. Facts about
 // doing, never assertions: no propose/confirm timing exists on this axis, and
 // an entity that no execution event ever touched is simply open.
-export type ExecutionStatus = "in-progress" | "blocked" | "done" | "retired";
+type ExecutionStatus = "in-progress" | "blocked" | "done" | "retired";
 
-export interface EntityExecution
+interface EntityExecution
 {
     status: ExecutionStatus;
     ts: string;
@@ -90,7 +90,7 @@ export interface EntityExecution
 // with a reason, by a recorded actor, optionally citing the work unit and the
 // commits the evidence lives in. Claims bind to the entity id — a superseding
 // revision starts uncovered by construction.
-export interface CoverageClaim
+interface CoverageClaim
 {
     criterion: string;
     ts: string;
@@ -149,7 +149,7 @@ export function isLive(entity: EntityState): boolean
 
 // The record kind an id answers as: its preset source, or the free-labeled
 // entity the raw verb records.
-export type EntityKind = EntitySource | "entity";
+type EntityKind = EntitySource | "entity";
 
 // Correcting a record reads the same on every add verb — `--supersedes <id>`
 // restates the text and carries the lineage — so the only thing left to say
@@ -253,7 +253,7 @@ interface RetractEvent
     why?: string;
 }
 
-export interface LinkEvent
+interface LinkEvent
 {
     event: string;
     ts: string;
@@ -385,19 +385,28 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
     {
         return;
     }
+    fold.entities.push(newEntity(fold, event, id));
+}
+
+// An annulled creation keeps its record and loses only what it displaced: the
+// accident an undo answers is a supersedes link that should never have been
+// attached, not the record it was attached to.
+function createdLinks(fold: EntityFold, event: SelfEvent): EntityLink[]
+{
+    const links = readLinks(event.payload.links);
+    return fold.annulled.has(event.id) ? links.filter((link) => link.type !== "supersedes") : links;
+}
+
+function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
+{
     const confirmed = event.type === "entity.confirmed";
     const labels = stringList(event.payload.labels);
-    fold.entities.push({
+    return {
         id,
         ts: event.ts,
         text: String(event.payload.text ?? ""),
         labels,
-        // An annulled creation keeps its record and loses only what it
-        // displaced: the accident an undo answers is a supersedes link that
-        // should never have been attached, not the record it was attached to.
-        links: fold.annulled.has(event.id)
-            ? readLinks(event.payload.links).filter((link) => link.type !== "supersedes")
-            : readLinks(event.payload.links),
+        links: createdLinks(fold, event),
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
         why: str(event.payload.why),
@@ -410,7 +419,7 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
         covered: [],
         native: true,
         source: sourceOf(labels)
-    });
+    };
 }
 
 // Every `goal.set` is an entity: label goal, top of context, full text. The
@@ -450,37 +459,20 @@ function applyGoal(fold: EntityFold, event: SelfEvent): void
 // legacy-derived one that exists only after the derive step composes it, and
 // the event-id guards let the reconcile pass in `model.ts` route the same
 // line twice without applying it twice.
+type Collector = (fold: EntityFold, event: SelfEvent) => void;
+
+const COLLECTORS: ReadonlyArray<readonly [(event: SelfEvent) => boolean, Collector]> = [
+    [(event) => event.type === "entity.confirmed" && event.refs?.confirms !== undefined, collectConfirm],
+    [(event) => event.type === "entity.retracted", collectRetraction],
+    [(event) => event.type === "entity.placed", collectPlacement],
+    [(event) => event.type === "entity.linked" || event.type === "entity.unlinked", collectLink],
+    [(event) => event.type === "entity.covered", collectCoverage],
+    [(event) => EXECUTION_EVENTS.includes(event.type), collectExecution]
+];
+
 export function reconcileEntity(fold: EntityFold, event: SelfEvent): void
 {
-    if (event.type === "entity.confirmed" && event.refs?.confirms !== undefined)
-    {
-        collectConfirm(fold, event);
-        return;
-    }
-    if (event.type === "entity.retracted")
-    {
-        collectRetraction(fold, event);
-        return;
-    }
-    if (event.type === "entity.placed")
-    {
-        collectPlacement(fold, event);
-        return;
-    }
-    if (event.type === "entity.linked" || event.type === "entity.unlinked")
-    {
-        collectLink(fold, event);
-        return;
-    }
-    if (event.type === "entity.covered")
-    {
-        collectCoverage(fold, event);
-        return;
-    }
-    if (EXECUTION_EVENTS.includes(event.type))
-    {
-        collectExecution(fold, event);
-    }
+    COLLECTORS.find(([matches]) => matches(event))?.[1](fold, event);
 }
 
 // Execution events collect like placements: applied over the complete entity
@@ -594,7 +586,7 @@ function collectLink(fold: EntityFold, event: SelfEvent): void
 // structurally here rather than imported from `model.ts` — a domain module
 // never imports the fold that calls it — and the fold's own record shapes
 // satisfy these by construction.
-export interface DecisionSource
+interface DecisionSource
 {
     id: string;
     ts: string;
@@ -606,7 +598,7 @@ export interface DecisionSource
     closedWhy?: string;
 }
 
-export interface ConventionSource
+interface ConventionSource
 {
     id: string;
     ts: string;
@@ -616,7 +608,7 @@ export interface ConventionSource
     closedWhy?: string;
 }
 
-export interface LegacySources
+interface LegacySources
 {
     decisions: DecisionSource[];
     conventions: ConventionSource[];

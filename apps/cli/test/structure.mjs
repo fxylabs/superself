@@ -18,10 +18,10 @@ import ts from "typescript";
 
 export const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
-// The ceiling starts above CONTRIBUTING.md's stated 20-30 so the debt recorded
-// in ARCHITECTURE.md does not turn CI red today. Issue #227 pays that debt down
-// and drops this to 30 — one line, by design.
-export const maxFunctionLines = 60;
+// CONTRIBUTING.md states 20-30 lines and this is the enforced end of it. It
+// began at 60 because the tree carried 49 functions above 30 and 5 above 60;
+// issue #227 split all of them, so the check now holds the documented number.
+export const maxFunctionLines = 30;
 
 // A subsystem may import from another only along an edge listed here. It is
 // empty on purpose: every edge ARCHITECTURE.md once sanctioned named code that
