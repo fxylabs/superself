@@ -18,6 +18,14 @@ interface HumanRefusal
 // The environment the runner stamps on every child it starts. A process
 // carrying one of these is an agent's, and the answer to anything that needs a
 // person is already known before a terminal is looked for.
+//
+// Deliberately not the same list `machine.ts` `sessionToken` reads, and the
+// difference is the point: these are set by a runner to declare "no person is
+// behind this call", while an agent harness's own session variable marks a
+// process the harness started — which is also what a person gets when they
+// type a command into that harness's shell. Reading a harness variable here
+// would call that person an agent. The two lists answer different questions
+// and must not be merged into one.
 const ATTEMPT_MARKERS = ["SUPERSELF_SESSION", "SUPERSELF_ATTEMPT_ID"];
 
 export function attemptMarker(): string | undefined

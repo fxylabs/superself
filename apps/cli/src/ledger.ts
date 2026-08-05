@@ -22,30 +22,43 @@ interface LedgerEntry
 
 function ledgerFile(): string
 {
+    return stateFile("ledger.jsonl");
+}
+
+function stateFile(name: string): string
+{
     const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
-    return join(base, "superself", "ledger.jsonl");
+    return join(base, "superself", name);
+}
+
+function appendEntry(file: string, entry: object): void
+{
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(entry) + "\n");
+}
+
+function readEntries<T>(file: string): T[]
+{
+    if (!existsSync(file))
+    {
+        return [];
+    }
+    return readFileSync(file, "utf8")
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .map((line) => JSON.parse(line) as T);
 }
 
 export function recordProcess(entry: LedgerEntry): void
 {
-    const file = ledgerFile();
-    mkdirSync(dirname(file), { recursive: true });
-    appendFileSync(file, JSON.stringify(entry) + "\n");
+    appendEntry(ledgerFile(), entry);
 }
 
 // The newest entry wins: a unit re-run after a crash gets a new pid, and the
 // stale one below it is history, not a second claim.
 function localProcess(project: string, work: string): LedgerEntry | null
 {
-    const file = ledgerFile();
-    if (!existsSync(file))
-    {
-        return null;
-    }
-    const entries = readFileSync(file, "utf8")
-        .split("\n")
-        .filter((line) => line.trim() !== "")
-        .map((line) => JSON.parse(line) as LedgerEntry)
+    const entries = readEntries<LedgerEntry>(ledgerFile())
         .filter((entry) => entry.project === project && entry.work === work);
     return entries[entries.length - 1] ?? null;
 }
@@ -86,4 +99,90 @@ export function judgeProcess(project: string, work: string, folded: { state: str
     return processAlive(local.pid)
         ? `running (pid ${local.pid})`
         : `stale (pid ${local.pid} is gone without reporting an exit)`;
+}
+
+// The same ledger, keyed by session rather than by work unit: which agent
+// session is still running on this machine (#230). It answers the one thing a
+// synced claim cannot — the claim says a session took a unit and when, and the
+// pid behind that session is machine-local by decision
+// `01kz8c83me299m37gk8rjjydw0`, so a session this machine never recorded is
+// answered "unknown" rather than guessed at from a place name that is not in
+// the event.
+interface SessionEntry
+{
+    session: string;
+    pid: number;
+    seenAt: string;
+}
+
+interface SessionLiveness
+{
+    state: "running" | "ended";
+    at: string;
+}
+
+export function recordSession(session: string, pid: number, seenAt: string): void
+{
+    appendEntry(stateFile("sessions.jsonl"), { session, pid, seenAt });
+}
+
+export function judgeSession(session: string): SessionLiveness | null
+{
+    const entries = readEntries<SessionEntry>(stateFile("sessions.jsonl")).filter((entry) => entry.session === session);
+    const latest = entries[entries.length - 1];
+    if (latest === undefined)
+    {
+        return null;
+    }
+    return { state: processAlive(latest.pid) ? "running" : "ended", at: latest.seenAt };
+}
+
+interface WorkClaim
+{
+    session?: string;
+    ts: string;
+}
+
+// What a reader is told about the session holding a unit — a sentence, like
+// `judgeProcess` above, and for the same reason: liveness is machine-local, so
+// the one module that can judge it is the one that says what the answer means.
+//
+// The sentence never names who or where. A claim carries an opaque token by
+// decision `01kz8c83me299m37gk8rjjydw0`, so what a second session learns is
+// that some session took the unit and when — never a person or a machine. It
+// is a disclosure: nothing here refuses anything, and a claim this machine
+// cannot judge says so rather than guessing.
+export function claimNote(claim: WorkClaim | undefined, mine: string | undefined, process?: { state: string; at: string }): string | null
+{
+    if (claim?.session === undefined)
+    {
+        return null;
+    }
+    if (claim.session === mine)
+    {
+        return "held by this session";
+    }
+    // A reported exit is the holder's own word that it is done, and it beats
+    // this machine's guess: the session may have ended on a machine whose
+    // ledger this one has never seen.
+    if (process?.state === "exited")
+    {
+        return `was held by another session, ended ${minute(process.at)}`;
+    }
+    const judged = judgeSession(claim.session);
+    if (judged === null)
+    {
+        return `held by another session, last recorded ${minute(claim.ts)}`;
+    }
+    return judged.state === "running"
+        ? `held by another session, running since ${minute(claim.ts)}`
+        : `was held by another session, ended ${minute(judged.at)}`;
+}
+
+// Held to the minute, in UTC as the log records it. A date alone cannot
+// separate two sessions that picked the same unit up an hour apart, which is
+// the case this whole disclosure exists for.
+function minute(ts: string): string
+{
+    return ts.slice(0, 16).replace("T", " ");
 }
