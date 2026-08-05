@@ -140,7 +140,8 @@ export const TOPICS: Topic[] = [
         body: [
             "Placement is three values on every record.",
             "",
-            "  scope       which projects render it: this one, or the whole workspace",
+            "  scope       which project renders it: this one, another registered one,",
+            "              or every one of them",
             "  priority    the order inside a tier, lowest number first",
             "  exposure    full, index or search (`self help context`)",
             "",
@@ -163,10 +164,21 @@ export const TOPICS: Topic[] = [
             "The add and the demotion then land as a pair waiting on the user, so",
             "nothing is quietly pushed out to make space.",
             "",
-            "A workspace-scoped record renders in every project's context — its record",
-            "still lives in the store of the project that wrote it. `--scope workspace`",
-            "works on the state and alias verbs, and `self convention add \"<text>\"",
-            "--workspace` is the convention spelling."
+            "Scope names where a record renders, never where it is stored. Omit the flag",
+            "for the project you are in, name another registered project's slug to move",
+            "the record there, or `--scope workspace` to render it everywhere. Its events",
+            "stay in the log that already holds them, so brief, reports, artifacts,",
+            "evidence and timestamps travel by not moving at all.",
+            "",
+            "  self state place <id> --scope <slug>     renders there, not here",
+            "  self project                             the slugs --scope takes",
+            "",
+            "A record scoped into this project resolves here — `state place`, `work",
+            "start`, `report` and `work done` all answer for it — and every write about",
+            "it lands in its home log. `--scope project` was retired: omit the flag.",
+            "",
+            "`--scope workspace` works on the state and alias verbs, and `self convention",
+            "add \"<text>\" --workspace` is the convention spelling."
         ]
     },
     {

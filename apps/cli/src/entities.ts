@@ -19,7 +19,35 @@ export const LINK_TYPES = ["member-of", "supersedes", "relates"] as const;
 export type Exposure = (typeof EXPOSURES)[number];
 export type LinkType = (typeof LINK_TYPES)[number];
 type EntityStatus = "proposed" | "confirmed" | "superseded" | "retracted";
-export type EntityScope = "project" | "workspace";
+
+// Where a record renders, never where it is stored (#181 D1). Three forms:
+// `project` — the project whose log holds it, the default and what every event
+// written before #181 carries; `workspace` — every registered project; any
+// other value — that registered project's slug. A record that names another
+// project renders there and stops rendering at home (D2), and not one event
+// moves: this is the mechanism `workspace` already used, generalized from one
+// destination to any of them.
+export type EntityScope = string;
+
+// The sentinel that means "the project this record's log belongs to". Written
+// by every add, and by a placement back home.
+export const HOME_SCOPE = "project";
+
+// The project a record renders in, named absolutely: its home slug where the
+// scope is the sentinel, and the scope itself otherwise.
+export function scopeTarget(placed: { scope: EntityScope }, home: string): string
+{
+    return placed.scope === HOME_SCOPE ? home : placed.scope;
+}
+
+// Whether a record whose log belongs to `home` renders in `viewer`'s context.
+// A workspace record renders everywhere including home; every other record
+// renders in exactly one project, which stops being home the moment it moves.
+export function rendersIn(placed: { scope: EntityScope }, home: string, viewer: string): boolean
+{
+    const target = scopeTarget(placed, home);
+    return target === "workspace" || target === viewer;
+}
 
 export interface EntityLink
 {
@@ -419,7 +447,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
         why: str(event.payload.why),
-        scope: event.payload.scope === "workspace" ? "workspace" : "project",
+        scope: readScopeValue(event.payload.scope),
         priority: readPriority(event.payload.priority),
         exposure: readExposure(event.payload.exposure),
         status: confirmed ? "confirmed" : "proposed",
@@ -572,7 +600,7 @@ function collectPlacement(fold: EntityFold, event: SelfEvent): void
         entity,
         priority: readPriority(event.payload.priority),
         exposure: readExposureOptional(event.payload.exposure),
-        scope: event.payload.scope === "project" || event.payload.scope === "workspace" ? event.payload.scope : undefined,
+        scope: readScopeOptional(event.payload.scope),
         why: str(event.payload.why),
         admits: str(event.refs?.admits),
         proposed: event.payload.proposed === true
@@ -919,17 +947,20 @@ export function orderEntities(entities: EntityState[]): EntityState[]
 // outcome left the rendered set too, so it holds no seat. Full is measured in
 // characters of entity text — the same code-point count the context budget
 // charges — and index in entities.
-function occupiesTier(entity: EntityState, scope: EntityScope, exposure: Exposure): boolean
+// A tier belongs to the project a record renders in, not to the store that
+// holds it (#181 D4), so occupancy is judged against the absolute target.
+function occupiesTier(entity: EntityState, home: string, target: string, exposure: Exposure): boolean
 {
-    return entity.status === "confirmed" && isCurrent(entity) && entity.scope === scope && entity.exposure === exposure;
+    return entity.status === "confirmed" && isCurrent(entity)
+        && scopeTarget(entity, home) === target && entity.exposure === exposure;
 }
 
 // Both capped tiers are measured the same way since #213 — the characters the
 // tier holds. The conversion into tokens happens once, where the cap is
-// compared, so a workspace tier summed across stores rounds a single time.
-export function tierCharacters(entities: EntityState[], scope: EntityScope, exposure: Exposure): number
+// compared, so a tier summed across stores rounds a single time.
+export function tierCharacters(entities: EntityState[], home: string, target: string, exposure: Exposure): number
 {
-    return entities.filter((item) => occupiesTier(item, scope, exposure))
+    return entities.filter((item) => occupiesTier(item, home, target, exposure))
         .reduce((sum, item) => sum + countCharacters(item.text), 0);
 }
 
@@ -1200,6 +1231,20 @@ function readLinks(value: unknown): EntityLink[]
 function readPriority(value: unknown): number | undefined
 {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+// A scope arrives from the log as free text since #181, so the fold reads any
+// non-empty string and lets the render decide whether a project answers to it.
+// Anything else — absent, a number a hand-append left — reads as home.
+function readScopeValue(value: unknown): EntityScope
+{
+    return readScopeOptional(value) ?? HOME_SCOPE;
+}
+
+// A placement's scope has no default: absent means "leave it where it renders".
+function readScopeOptional(value: unknown): EntityScope | undefined
+{
+    return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
 function readExposure(value: unknown): Exposure

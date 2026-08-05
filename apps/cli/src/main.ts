@@ -7,7 +7,7 @@ import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
-import { EntityState, isEntityCreation, isLive, requireSupersedeKind } from "./entities.js";
+import { EntityState, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
@@ -16,7 +16,7 @@ import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
-import { buildModel, DecisionState, ProjectModel, WorkState } from "./model.js";
+import { buildModel, DecisionState, ProjectModel, workScope, workspaceModels, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -381,6 +381,11 @@ export const COMMANDS: Command[] = [
         name: "project",
         usage: [
             {
+                syntax: "project",
+                description: ["list the registered slugs, and any scope naming a project this workspace lost"],
+                verbs: ["", "list"]
+            },
+            {
                 syntax: "project add [path] [--name s] [--desc d] [--no-connect]",
                 description: ["register a project and render its agent block"],
                 verbs: ["add"]
@@ -392,10 +397,14 @@ export const COMMANDS: Command[] = [
             }
         ],
         detail: [
-            "register a project with the workspace, or attach one registered on another",
-            "machine. Every checkout of a registered git repository — worktrees",
-            "included — resolves on its own; `link` with no slug infers it from the",
-            "repository and only saves the probe.",
+            "list the projects this workspace holds, register one with it, or attach one",
+            "registered on another machine. Every checkout of a registered git repository",
+            "— worktrees included — resolves on its own; `link` with no slug infers it",
+            "from the repository and only saves the probe.",
+            "",
+            "the bare list is the answer to \"which slugs does --scope and --project take\",",
+            "and it reads the whole workspace: it takes neither flag, and add and link are",
+            "writes that record into the workspace store they run against.",
             "",
             "  --name <slug>   register under this slug instead of the directory name",
             "  --desc <text>   one-line description shown in the workspace view",
@@ -403,9 +412,11 @@ export const COMMANDS: Command[] = [
         ],
         node: branch({
             name: "project",
-            unnamed: "refuse",
-            refusal: 'usage: self project add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]',
+            unnamed: "options",
+            refusal: 'usage: self project | add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]',
             children: [
+                leaf("", {}, 0, projectList),
+                leaf("list", {}, 0, projectList),
                 leaf("add", PROJECT_ADD_OPTIONS, 1, projectAdd),
                 leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1]))
             ]
@@ -1008,9 +1019,16 @@ function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
 }
 
 // Two ways the same project is already here: another checkout of it, or the
-// slug itself.
+// slug itself. `workspace` is neither — it is the scope value that means every
+// project (#181 T1.10), so a project answering to it would make `--scope
+// workspace` ambiguous between one project and all of them.
 function refuseDuplicateProject(storeDir: string, projectDir: string, slug: string): void
 {
+    if (slug === "workspace")
+    {
+        throw new CliError('"workspace" is reserved — `--scope workspace` means every registered project, '
+            + "so no single project may answer to it; register this one with `--name <slug>`");
+    }
     const sibling = siblingSlug(storeDir, projectDir);
     if (sibling !== null)
     {
@@ -1048,6 +1066,47 @@ function projectAdd({ values, positionals }: CommandInput<typeof PROJECT_ADD_OPT
         const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()));
         console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
     }
+}
+
+// The registered slugs, which is what every `--scope <slug>` and `--project
+// <slug>` refusal points a caller at, and the one diagnostic the registry can
+// answer on its own: a record whose scope names a project this workspace does
+// not have renders nowhere (#181 T3.10), so it is named here rather than
+// silently disappearing from every context.
+function projectList(): void
+{
+    const ctx = requireWorkspace(process.cwd());
+    const models = workspaceModels(ctx.storeDir);
+    if (models.length === 0)
+    {
+        console.log("no projects registered — run `self project add` inside a project directory");
+        return;
+    }
+    const registered = new Set(models.map((model) => model.slug));
+    for (const model of models)
+    {
+        const here = model.slug === ctx.project ? "  (this directory)" : "";
+        console.log(`${model.slug}${model.description === undefined ? "" : ` — ${model.description}`}${here}`);
+    }
+    danglingScopes(models, registered).forEach((line) => console.log(line));
+}
+
+function danglingScopes(models: ProjectModel[], registered: Set<string>): string[]
+{
+    const lines: string[] = [];
+    for (const model of models)
+    {
+        for (const entity of model.entities.filter((item) => isLive(item)))
+        {
+            const target = scopeTarget(entity, model.slug);
+            if (target !== "workspace" && !registered.has(target))
+            {
+                lines.push(`dangling scope: ${entity.id} in ${model.slug} renders in "${target}", which is not registered — `
+                    + `run \`self state place ${entity.id} --scope <slug>\` to bring it back`);
+            }
+        }
+    }
+    return lines;
 }
 
 function projectLink(wanted: string | undefined, path: string | undefined): void
@@ -1464,7 +1523,27 @@ function cmdWorkShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>
     {
         console.log(held);
     }
+    const elsewhere = scopeNote(found);
+    if (elsewhere !== null)
+    {
+        console.log(elsewhere);
+    }
     console.log(markdownHeadings(renderWorkBody(found.work, found.model, readVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
+}
+
+// Where a unit renders when that is no longer the project whose log holds it
+// (#181 D1/D2). The page is still this log's, so the line says so rather than
+// letting a reader take the absence from `self work` here for a lost record.
+function scopeNote(found: FoundWork): string | null
+{
+    const target = scopeTarget({ scope: workScope(found.model, found.work) }, found.slug);
+    if (target === found.slug)
+    {
+        return null;
+    }
+    return target === "workspace"
+        ? `${found.work.id} renders in every project; its record lives in ${found.slug}`
+        : `${found.work.id} renders in ${target}; its record lives in ${found.slug}`;
 }
 
 // The brief is the one thing a session cannot skip before starting, so the
@@ -1475,7 +1554,7 @@ function cmdWorkShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>
 function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
-    const work = requireOpenWork(ctx, positionals[0]);
+    const { work, owner } = requireOpenWork(ctx, positionals[0]);
     const mine = sessionToken();
     // Read before anything is written, and printed before it too: the fact a
     // session is deciding on is who held the unit when it walked up.
@@ -1486,11 +1565,11 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
     }
     if (claimMoves(work.claim, mine, work.process))
     {
-        recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: work.id }), `${work.id} ${work.outcome}`);
+        recordEvent(ctx, makeEvent(owner, "entity.started", { entity: work.id }), `${work.id} ${work.outcome}`);
     }
     noteSessionSeen(mine, new Date().toISOString());
-    console.log(markdownHeadings(renderWorkBody(work, buildModel(ctx.storeDir, ctx.project, new Date()),
-        readVerdicts(ctx.storeDir, ctx.project)).trimEnd()));
+    console.log(markdownHeadings(renderWorkBody(work, buildModel(ctx.storeDir, owner, new Date()),
+        readVerdicts(ctx.storeDir, owner)).trimEnd()));
 }
 
 // What a reader is told about who holds a unit, or nothing when no session
@@ -1666,7 +1745,7 @@ function successorRef(ctx: ProjectContext, source: string, successor: string | u
 function cmdWorkProcess({ values, positionals }: CommandInput<typeof PROCESS_OPTIONS>, started: boolean): void
 {
     const ctx = requireProject(process.cwd());
-    const work = requireOpenWork(ctx, positionals[0]);
+    const { work, owner } = requireOpenWork(ctx, positionals[0]);
     if (started)
     {
         const pid = Number(values.pid);
@@ -1674,8 +1753,8 @@ function cmdWorkProcess({ values, positionals }: CommandInput<typeof PROCESS_OPT
         {
             throw new CliError("work started records the process running this unit — pass its id: work started <work-id> --pid <N>");
         }
-        recordProcess({ work: work.id, project: ctx.project, pid, startedAt: new Date().toISOString() });
-        recordEvent(ctx, makeEvent(ctx.project, "work.run-started", { work: work.id }), `${work.id} ${work.outcome}`);
+        recordProcess({ work: work.id, project: owner, pid, startedAt: new Date().toISOString() });
+        recordEvent(ctx, makeEvent(owner, "work.run-started", { work: work.id }), `${work.id} ${work.outcome}`);
         return;
     }
     const payload: Record<string, unknown> = { work: work.id };
@@ -1688,13 +1767,13 @@ function cmdWorkProcess({ values, positionals }: CommandInput<typeof PROCESS_OPT
         }
         payload.code = code;
     }
-    recordEvent(ctx, makeEvent(ctx.project, "work.run-exited", payload), `${work.id} ${work.outcome}`);
+    recordEvent(ctx, makeEvent(owner, "work.run-exited", payload), `${work.id} ${work.outcome}`);
 }
 
 function transitionWork(type: string, { values, positionals }: CommandInput<typeof TRANSITION_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
-    const work = requireOpenWork(ctx, positionals[0]);
+    const { work, owner } = requireOpenWork(ctx, positionals[0]);
     const payload: Record<string, unknown> = { entity: work.id };
     if (type === "entity.blocked")
     {
@@ -1710,7 +1789,7 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
             payload.why = values.why;
         }
     }
-    recordEvent(ctx, makeEvent(ctx.project, type, payload), `${work.id} ${work.outcome}`);
+    recordEvent(ctx, makeEvent(owner, type, payload), `${work.id} ${work.outcome}`);
 }
 
 // The claim that the outcome was reached, admitted by the completion gate
@@ -1722,7 +1801,7 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
 function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
-    const work = requireOpenWork(ctx, positionals[0]);
+    const { work, owner } = requireOpenWork(ctx, positionals[0]);
     const report = values.report === undefined ? undefined
         : requireText(values.report, 'work done <work-id> --report "<what verifiably happened>"');
     const refusal = completionRefusal(work, report);
@@ -1737,8 +1816,8 @@ function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>)
     }
     announceOtherHolder(work);
     const events = report === undefined ? []
-        : [makeEvent(ctx.project, "report.added", { text: report }, { work: work.id })];
-    events.push(makeEvent(ctx.project, "entity.done", payload));
+        : [makeEvent(owner, "report.added", { text: report }, { work: work.id })];
+    events.push(makeEvent(owner, "entity.done", payload));
     recordEvents(ctx, events, `${work.id} ${work.outcome}`);
 }
 
@@ -1767,7 +1846,7 @@ function attachEvidence(ctx: ProjectContext, values: CommandInput<typeof REPORT_
 function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
-    const work = requireOpenWork(ctx, positionals[0]);
+    const { work, owner } = requireOpenWork(ctx, positionals[0]);
     const text = values.file === undefined
         ? requireText(positionals[1], 'report <work-id> "<summary>" — every report attaches to a work unit')
         : readReportFile(values.file);
@@ -1775,14 +1854,14 @@ function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>)
     const refs: EventRefs = { work: work.id };
     const payload: Record<string, unknown> = { text };
     attachEvidence(ctx, values, refs, payload);
-    const staged = stageArtifacts(ctx.storeDir, ctx.project, values.artifact);
+    const staged = stageArtifacts(ctx.storeDir, owner, values.artifact);
     if (staged.artifacts.length > 0)
     {
         payload.artifacts = staged.artifacts;
         refs.artifacts = staged.artifacts.map((meta) => meta.id);
     }
     commitStaged(staged, (recorded) =>
-        recordEvent(ctx, makeEvent(ctx.project, "report.added", payload, refs), `${work.id} ${text}`, recorded));
+        recordEvent(ctx, makeEvent(owner, "report.added", payload, refs), `${work.id} ${text}`, recorded));
 }
 
 // A decision may look back at finished work, so this accepts any unit the
@@ -1806,15 +1885,21 @@ function requireKnownWorks(ctx: ProjectContext, ids: string[]): string[]
     return [...new Set(ids)];
 }
 
-function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
+// One unit and the log that owns it. A unit scoped in from another project
+// resolves here and every write about it lands in its home log (#181 D3), so
+// the owner travels with the unit rather than being assumed to be the project
+// the command ran in.
+interface OpenWork
+{
+    work: WorkState;
+    owner: string;
+}
+
+function requireOpenWork(ctx: ProjectContext, id: string | undefined): OpenWork
 {
     const wanted = requireText(id, "… <work-id> — run `self work` to list ids");
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const work = model.works.find((item) => item.id === wanted);
-    if (work === undefined)
-    {
-        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
-    }
+    const found = requireRenderedWork(ctx, wanted);
+    const work = found.work;
     if (work.status === "done")
     {
         throw new CliError(`${wanted} is already done`);
@@ -1823,7 +1908,25 @@ function requireOpenWork(ctx: ProjectContext, id: string | undefined): WorkState
     {
         throw new CliError(`${wanted} is retired — ${work.retiredWhy ?? "its outcome was given up"}; see \`self work show ${wanted}\``);
     }
-    return work;
+    return found;
+}
+
+// Every unit this project answers for (#181 D3/D5): its own, whatever project
+// they now render in — the home log always answers for its own record — plus
+// the units another project's log scoped in here. A unit that renders in
+// neither is unknown here, exactly as an id from an unrelated project is.
+function requireRenderedWork(ctx: ProjectContext, wanted: string): OpenWork
+{
+    for (const model of workspaceModels(ctx.storeDir, ctx.project))
+    {
+        const work = model.works.find((item) => item.id === wanted);
+        const mine = model.slug === ctx.project;
+        if (work !== undefined && (mine || rendersIn({ scope: workScope(model, work) }, model.slug, ctx.project)))
+        {
+            return { work, owner: model.slug };
+        }
+    }
+    throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
 }
 
 function readReportFile(path: string): string

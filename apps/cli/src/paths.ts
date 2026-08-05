@@ -211,7 +211,7 @@ export function requireRegistered(storeDir: string, slug: string): string
     {
         throw new CliError(slugs.length === 0
             ? `unknown project "${slug}" — this workspace has no registered projects`
-            : `unknown project "${slug}" — registered: ${slugs.join(", ")}`);
+            : `unknown project "${slug}" — run \`self project\` to list the registered slugs: ${slugs.join(", ")}`);
     }
     return slug;
 }

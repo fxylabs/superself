@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { scopeTarget } from "./entities.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { buildModel, closedRecords, ProjectModel } from "./model.js";
 import { CliContext, projectStateDir, readRegistry } from "./paths.js";
@@ -37,7 +38,9 @@ function searchLog(storeDir: string, slug: string, needle: string, type: string)
     // Folded once per project, not once per hit: search is the one surface that
     // still answers for records the current renders drop, so a match has to say
     // which of those it is.
-    const closed = closedStatuses(storeDir, slug);
+    const model = folded(storeDir, slug);
+    const closed = model === null ? new Map<string, string>() : closedRecords(model);
+    const elsewhere = renderedElsewhere(model, slug);
     let hits = 0;
     for (const event of readEvents(storeDir, slug))
     {
@@ -47,8 +50,10 @@ function searchLog(storeDir: string, slug: string, needle: string, type: string)
         }
         if (JSON.stringify(event).toLowerCase().includes(needle))
         {
-            const status = closed.get(recordOf(event));
-            const mark = status === undefined ? "" : ` [${status}]`;
+            const record = recordOf(event);
+            const status = closed.get(record);
+            const mark = `${status === undefined ? "" : ` [${status}]`}`
+                + `${elsewhere.has(record) ? ` [renders in ${elsewhere.get(record)}]` : ""}`;
             console.log(styled
                 ? `${dim(`${slug}  ${event.ts.slice(0, 10)}  ${event.type}${mark}`)}  ${highlight(eventSummary(event), needle)}  ${dim(`[${event.id}]`)}`
                 : `${slug}  ${event.ts.slice(0, 10)}  ${event.type}${mark}  [${event.id}]  ${eventSummary(event)}`);
@@ -86,13 +91,22 @@ function recordOf(event: SelfEvent): string
     return named === undefined ? event.id : String(named);
 }
 
-// Every statement-type record that has left the current state, by the id a
-// search hit resolves to. Read from the one registry in `model.ts`, so a type
-// added there is marked here without this file changing.
-function closedStatuses(storeDir: string, slug: string): Map<string, string>
+// Search is the surface that still answers for records the current renders
+// drop, and a record moved to another project is one of those from here
+// (#181 D2): it is found in the log that holds it, and the hit names where it
+// renders now instead of reading as a record with no home.
+function renderedElsewhere(model: ProjectModel | null, slug: string): Map<string, string>
 {
-    const model = folded(storeDir, slug);
-    return model === null ? new Map() : closedRecords(model);
+    const moved = new Map<string, string>();
+    for (const entity of model?.entities ?? [])
+    {
+        const target = scopeTarget(entity, slug);
+        if (target !== slug)
+        {
+            moved.set(entity.id, target === "workspace" ? "every project" : target);
+        }
+    }
+    return moved;
 }
 
 // Search is the command every omission line points at for recovery, so it
