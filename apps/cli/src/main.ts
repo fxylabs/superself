@@ -55,7 +55,7 @@ import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
-import { printContext, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
+import { printContext, printHistory, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
 import { CliError, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
@@ -266,7 +266,17 @@ const WORKSPACE_RENDER_OPTIONS = { ...WORKSPACE_SCOPE_OPTIONS, ...RENDER_OPTIONS
 
 const LOG_OPTIONS = { lines: { type: "string", short: "n" }, ...WORKSPACE_SCOPE_OPTIONS } as const;
 
-const SEARCH_OPTIONS = { type: { type: "string" }, project: { type: "string" } } as const;
+const SEARCH_OPTIONS = {
+    type: { type: "string" },
+    project: { type: "string" },
+    exposure: { type: "string" },
+    all: { type: "boolean" }
+} as const;
+
+// A `show` that also prints one record's own history (#212 R3). History is
+// per-entity and explicit — there is no global history search — so it is read
+// on the verb that already names the record.
+const HISTORY_OPTIONS = { ...SCOPE_OPTIONS, history: { type: "boolean" }, page: { type: "string" } } as const;
 
 // The shared execution grammar (#207 B14): a work verb records the same
 // `entity.*` fact the raw state verbs record, whichever kind of unit it moves.
@@ -293,7 +303,7 @@ const DONE_OPTIONS = { why: { type: "string" }, report: { type: "string" } } as 
 const WORK_CHILDREN: CommandLeaf[] = [
     leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
     leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd),
-    leaf("show", SCOPE_OPTIONS, 1, cmdWorkShow),
+    leaf("show", HISTORY_OPTIONS, 1, cmdWorkShow),
     leaf("start", TRANSITION_OPTIONS, 1, cmdWorkStart),
     ...WORK_TRANSITIONS.map(([verb, type, requires]) =>
         leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input), { requires })),
@@ -554,8 +564,12 @@ export const COMMANDS: Command[] = [
                 verbs: ["add"]
             },
             {
-                syntax: "work show <id> [--project <slug>]",
-                description: ["print full work detail: brief, reports, evidence", "(resolves the owning project from any directory)"],
+                syntax: "work show <id> [--history [--page n]] [--project <slug>]",
+                description: [
+                    "print full work detail: brief, reports, evidence",
+                    "(resolves the owning project from any directory)",
+                    "--history prints this unit's own events instead, oldest first"
+                ],
                 verbs: ["show"]
             },
             {
@@ -619,7 +633,14 @@ export const COMMANDS: Command[] = [
             "satisfies. Declared criteria additionally gate it. Done is allowed",
             "while blocked: completion is a judgment on the outcome, not the block.",
             "",
+            "history is per unit and explicit: `work show <id> --history` prints the",
+            "events of that unit alone, oldest first, ten to a page. A retired or",
+            "superseded unit answers there too — nothing is made unreachable, and a",
+            "superseded unit names its successor rather than folding it in.",
+            "",
             "  --project <slug>      list or show against this project, from any directory",
+            "  --history             print this unit's own events instead of its brief",
+            "  --page <n>            which page of that history, ten events to a page",
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
             "  --why <text>          detail recorded with the block, a revision, or the done,",
             "                        and why a superseded or retired unit gave up its outcome",
@@ -821,12 +842,28 @@ export const COMMANDS: Command[] = [
     },
     {
         name: "search",
-        usage: [{ syntax: "search [query] [--type t] [--project p]", description: ["grep state (query optional with --type or --project)"], verbs: [""] }],
+        usage: [{
+            syntax: "search [query] [--type <kind>] [--exposure <tier>|--all] [--project p]",
+            description: ["find live records context does not show (query optional with a narrowing flag)"],
+            verbs: [""]
+        }],
         detail: [
-            "search events across every registered project.",
-            "the query may be omitted when --type or --project narrows the pull.",
+            "search answers over live records, not the log. Its default is every live",
+            "record the current context render does not show: the search tier, plus the",
+            "index and full records the context budget cut. A superseded, retired,",
+            "retracted or done record is not in the answer, and no flag reaches one.",
             "",
-            "  --type <type>       only events of this type, such as decision.confirmed",
+            "each hit is one readable row — the project, the record kind, the id, and",
+            "the record's text cut to one line. `self state show <id>` prints the whole",
+            "record, and `self state show <id> --history` its own events.",
+            "",
+            "every registered project answers, the current one's rows first. the query",
+            "may be omitted when --type, --exposure, --all or --project narrows the pull.",
+            "",
+            "  --type <kind>       only records of this kind: goal, decision, convention,",
+            "                      objective, milestone, work, or entity",
+            "  --exposure <tier>   only records placed at full, index, or search",
+            "  --all               every live record, whether context renders it or not",
             "  --project <slug>    only this project"
         ],
         node: leaf("", SEARCH_OPTIONS, 1, cmdSearch)
@@ -1506,15 +1543,43 @@ function cmdWorkList({ values }: CommandInput<typeof SCOPED_RENDER_OPTIONS>): vo
     printWorkList(readScopes(process.cwd(), values)[0], resolveRender(values));
 }
 
-function cmdWorkShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
+function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTIONS>): void
 {
-    const wanted = requireText(positionals[0], "work show <work-id> [--project <slug>]");
+    const wanted = requireText(positionals[0], "work show <work-id> [--history [--page n]] [--project <slug>]");
     const ctx = requireWorkspace(process.cwd());
     const found = findWorkAcross(ctx, wanted, values.project);
     if (found === null)
     {
-        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+        // Search is the surface that finds a record now (#212), so the refusal
+        // names it rather than a listing that shows open units alone.
+        throw new CliError(`unknown work id "${wanted}" — run \`self search "<text>"\` to find one, or \`self work\` to list open ids`);
     }
+    if (values.history === true)
+    {
+        printWorkHistory(ctx, found, values.project, values.page);
+        return;
+    }
+    printWorkPage(ctx, found);
+}
+
+// One unit's own events, paged (#212 R3). The unit was already resolved, so
+// history says nothing about which project to stand in that `show` has not
+// already answered.
+function printWorkHistory(ctx: CliContext, found: FoundWork, project: string | undefined, page: string | undefined): void
+{
+    printHistory({
+        id: found.work.id,
+        storeDir: ctx.storeDir,
+        owner: found.slug,
+        project: project ?? found.slug,
+        command: "work",
+        model: found.model,
+        successor: found.work.successor?.work
+    }, page);
+}
+
+function printWorkPage(ctx: CliContext, found: FoundWork): void
+{
     // Printed here rather than inside `renderWorkBody`, which also writes the
     // synced `work/<id>.md`: liveness is this machine's answer, and a synced
     // file carrying it would tell another clone what only this one can judge.
@@ -2049,12 +2114,13 @@ function cmdLog({ values }: CommandInput<typeof LOG_OPTIONS>): void
 
 function cmdSearch({ values, positionals }: CommandInput<typeof SEARCH_OPTIONS>): void
 {
-    // Context recovery pointers pull whole categories, so a filter alone is a
-    // complete request: `--type` or `--project` may stand in for the query.
-    const query = positionals[0] ?? (values.type === undefined && values.project === undefined
-        ? requireText(undefined, "search <query>, search --type <type>, or search --project <slug>")
-        : "");
-    runSearch(requireWorkspace(process.cwd()), query, values.type, values.project);
+    // Context recovery pointers pull whole categories, so a narrowing flag
+    // alone is a complete request and stands in for the query.
+    const narrowed = values.type !== undefined || values.project !== undefined
+        || values.exposure !== undefined || values.all === true;
+    const query = positionals[0] ?? (narrowed ? ""
+        : requireText(undefined, "search <query>, or search with --type <kind>, --exposure <tier>, --all, or --project <slug>"));
+    runSearch(requireWorkspace(process.cwd()), query, values);
 }
 
 function cmdConnect(global: boolean): void

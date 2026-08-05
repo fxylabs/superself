@@ -36,6 +36,26 @@ test("E1: every captured read surface answers byte-identically for a pre-cutover
     }
 });
 
+// `self search` left the byte-identity set above with #212, which changed on
+// purpose what it answers — live records rather than log lines — so a capture
+// of its pre-cutover output is a claim the product no longer makes. This reads
+// the same pristine store under the new contract instead. It runs before the
+// refold below, so what it reads is the capture rather than a re-derivation.
+test("E1: a pre-cutover store answers search over its live records, not its log", () =>
+{
+    const decisions = must(e1, ws, ["search", "ship", "--type", "decision", "--all"]).out;
+    assert.match(decisions, /ship daily/);
+    assert.doesNotMatch(decisions, /ship weekly/, "a superseded decision answered a live-record search");
+    for (const line of decisions.split("\n").filter((row) => row.trim() !== ""))
+    {
+        assert.doesNotMatch(line, /"type":|"payload":|"origin":/, `a raw event object reached the answer: ${line}`);
+        assert.match(line, /^demo {2}decision {2}\S+ {2}/, `a hit did not read as a row: ${line}`);
+    }
+    const entities = must(e1, ws, ["search", "raw", "--type", "entity", "--all"]).out;
+    assert.match(entities, /raw standing note/);
+    assert.match(entities, /\(proposed\)/, "a proposed raw entity lost its marker");
+});
+
 test("E1: a refold leaves the pre-cutover canonical files byte-identical", () =>
 {
     const dir = join(store, "projects", "demo");
@@ -84,7 +104,10 @@ test("E2: lifecycle verbs target legacy-derived records and record entity events
     assert.match(dropped.out, /entity\.retracted recorded/);
     assert.ok(!must(mixedBox, mixedDemo, ["context"]).out.includes("legacy standing rule"),
         "a legacy convention dropped through an entity event still renders");
-    assert.match(must(mixedBox, mixedDemo, ["search", "legacy standing rule", "--type", "convention"]).out, /\[dropped\]/);
+    // Search answers over live records (#212), so the dropped rule left that
+    // answer; its settled status is read where the record is named.
+    assert.equal(must(mixedBox, mixedDemo, ["search", "legacy standing rule"]).out.trim(), "no matches");
+    assert.match(must(mixedBox, mixedDemo, ["state", "show", "01hz00000000000000000000e2", "--history"]).out, /dropped/);
 });
 
 test("E3: two folds of a mixed store render identically", () =>

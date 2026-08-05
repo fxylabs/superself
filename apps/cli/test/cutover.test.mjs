@@ -72,10 +72,14 @@ test("B4: decline and retract record entity.retracted, and the declined proposal
     const declined = idIn(must(box, demo, ["decide", "maybe queue", "--proposed"]).out);
     must(box, demo, ["decide", "decline", declined, "--why", "not now"]);
     assert.equal(eventFor(declined, "entity.retracted").payload.why, "not now");
-    assert.match(must(box, demo, ["search", "maybe queue", "--type", "entity"]).out, /\[declined\]/);
+    // Search answers over live records now (#212), so the marker a withdrawn
+    // record keeps is read where the record is named rather than in a pull.
+    assert.match(must(box, demo, ["state", "show", declined, "--history"]).out, /declined/);
+    assert.equal(must(box, demo, ["search", "maybe queue"]).out.trim(), "no matches");
     const retracted = idIn(must(box, demo, ["decide", "temp rule"]).out);
     await approved(["decide", "retract", retracted, "--why", "walked back"], retracted);
-    assert.match(must(box, demo, ["search", "temp rule", "--type", "entity"]).out, /\[retracted\]/);
+    assert.match(must(box, demo, ["state", "show", retracted, "--history"]).out, /retracted/);
+    assert.equal(must(box, demo, ["search", "temp rule"]).out.trim(), "no matches");
 });
 
 test("B5: convention add records entity.confirmed at p30 full, with scope and supersedes carried", async () =>

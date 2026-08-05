@@ -120,7 +120,13 @@ tokens, and omissions name the command that recovers the omitted state.
 
 `self status` is the shorter attention and health projection. `self work show
 <id>` is the pull path for one unit's complete recovery line. `self search`
-finds older or cross-project state, `self log` prints recent events, and
+answers over live records rather than the log: its default is every live record
+the current context render does not show, returned as readable rows, and a
+superseded, retired, retracted or done record is not in that answer.
+`--exposure <tier>` reads one placement tier and `--all` reads every live
+record. History is per record and explicit — `self state show <id> --history`
+and `self work show <id> --history` page over one record's own events, and
+there is no global history search. `self log` prints recent events, and
 `self fold` re-derives canonical files and views from the event log.
 
 ## Canonical and derived records

@@ -437,7 +437,11 @@ test("T3.7: self work show in the source resolves and states the record now rend
 
 test("T3.8: self search from the source finds R, with its current scope named", () =>
 {
-    const out = must(t3.box, t3.alpha, ["search", "t3 the moved note", "--type", "entity"]).out;
+    // `--all` because search answers over live records now (#212) and its
+    // default leaves out what a context render shows: this record renders in
+    // beta's context, and what this cell is about is that the row still names
+    // where it went.
+    const out = must(t3.box, t3.alpha, ["search", "t3 the moved note", "--type", "entity", "--all"]).out;
     assert.ok(out.includes("t3 the moved note"));
     assert.match(out, /\[renders in beta\]/);
 });
