@@ -39,7 +39,12 @@ export function attemptMarker(): string | undefined
 // The challenge is the short id of the exact commit being approved, typed
 // back — so the human states what they are approving, not just that they
 // approve.
-export function confirmHuman(subject: string, challenge: string): HumanConfirmation | HumanRefusal
+// `ask` is the sentence that asks for the challenge, supplied by a caller that
+// wants the id in it emphasised. This module styles nothing itself — it sits
+// below the terminal styling and importing a painter here would point the
+// dependency upward — so a caller that wants weight hands the sentence over
+// already painted (#264).
+export function confirmHuman(subject: string, challenge: string, ask?: string): HumanConfirmation | HumanRefusal
 {
     if (!process.stdin.isTTY || !process.stdout.isTTY)
     {
@@ -50,7 +55,7 @@ export function confirmHuman(subject: string, challenge: string): HumanConfirmat
             next: "a maintainer runs this command again in their own terminal"
         };
     }
-    process.stdout.write(`${subject}\ntype ${challenge} to confirm exactly what you are approving: `);
+    process.stdout.write(`${subject}\n${ask ?? `type ${challenge} to confirm exactly what you are approving`}: `);
     if (typed() !== challenge)
     {
         return {

@@ -7,6 +7,10 @@
 // Three colours and no more: green for what is moving, yellow for what waits,
 // red for what failed, with ids dimmed. A fourth colour would have to carry a
 // fourth meaning, and none of these surfaces has one.
+//
+// Weight is the fourth signal and it means one thing: a line meant to be typed.
+// Column headers aside, bold is reserved for the runnable command a row ends
+// in, which is why the same row's id is dimmed beside it (#264).
 
 import {
     AttentionGroup,
@@ -393,6 +397,49 @@ function listSection(title: string, items: string[], recover: Pointer, paint: Pa
     ];
 }
 
+/* ── waiting on you ────────────────────────────────────────────────── */
+
+// One thing waiting on a person: what it is, and the command that acts on it.
+// The two are kept apart because they are truncated by different rules — the
+// text may lose its tail to the terminal width, the command may not.
+export interface WaitingRow
+{
+    text: string;
+    action?: string;
+}
+
+// A marker rather than colour alone. `NO_COLOR` turns every paint in this file
+// into the identity function while the render still draws, and yellow was the
+// only thing separating an approval row from the lines around it (#264).
+const WAITING_MARK = "▸";
+
+function firstLine(text: string): string
+{
+    return text.split("\n", 1)[0];
+}
+
+// The band a person acts on, built the opposite way round from every other
+// list here: the row states what waits and the command gets its own line at
+// full length. A command that lost its tail to the terminal width cannot be
+// pasted, which is the whole of what this section is for.
+function waitingSection(rows: WaitingRow[], recover: Pointer): string[]
+{
+    if (rows.length === 0)
+    {
+        return [heading("WAITING ON YOU", "0"), dim("  none")];
+    }
+    const lines = [heading("WAITING ON YOU", String(rows.length))];
+    for (const row of rows.slice(0, CONTEXT_ROWS))
+    {
+        lines.push(`  ${yellow(WAITING_MARK)} ${yellow(fitDisplay(oneLine(firstLine(row.text)), columns() - 4))}`);
+        if (row.action !== undefined)
+        {
+            lines.push("      " + bold(row.action));
+        }
+    }
+    return [...lines, ...moreLine(rows.length - CONTEXT_ROWS, recover)];
+}
+
 /* ── work ──────────────────────────────────────────────────────────── */
 
 const WORK_COLUMNS: Column[] = [
@@ -511,6 +558,10 @@ function attentionColumns(group: AttentionGroup): Column[]
 // The id travels on the row's own second line as the command that acts on it:
 // a truncated id cannot be pasted, and the full one would take a third of the
 // table for a value nobody reads character by character.
+//
+// The command is emphasised rather than dimmed. Dimming is what this file does
+// to ids and provenance — text the eye is meant to skip — and the one line here
+// that exists to be typed is the opposite of that (#264).
 function attentionRow(row: AttentionRow): Row
 {
     return {
@@ -518,7 +569,7 @@ function attentionRow(row: AttentionRow): Row
             { text: row.text },
             { text: attentionEffect(row), paint: row.group === "inEffect" ? green : yellow }
         ],
-        notes: [{ text: `self decide confirm ${row.decision}`, paint: dim }]
+        notes: [{ text: `self decide confirm ${row.decision}`, paint: bold }]
     };
 }
 
@@ -709,7 +760,7 @@ function workCounts(model: ProjectModel): string
 interface SurfaceInput
 {
     model: ProjectModel;
-    waiting: string[];
+    waiting: WaitingRow[];
 }
 
 interface StatusInput extends SurfaceInput
@@ -729,18 +780,15 @@ export function renderStatus(input: StatusInput): string[]
         lines.push(heading("OBJECTIVES", input.objectives));
     }
     lines.push(heading("DECISIONS WAITING", attentionCounts(model)));
+    // Ahead of the roll-ups: what waits on the reader is the only part of this
+    // page they can act on without running another command (#264).
+    lines.push("", ...waitingSection(input.waiting, scoped("self context", project)));
     lines.push("", ...unshippedSection(model));
-    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
     lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     const tallies = tallyAttempts(input.attempts);
     lines.push("", heading("ATTEMPTS ON THIS MACHINE", String(input.attempts.length)));
     lines.push(...(tallies.length === 0 ? [dim("  none")] : tableLines(ATTEMPT_COLUMNS, tallies.map(attemptRow), columns())));
     return lines;
-}
-
-function firstLine(text: string): string
-{
-    return text.split("\n", 1)[0];
 }
 
 /* ── context ───────────────────────────────────────────────────────── */
@@ -761,14 +809,18 @@ export function renderContext(input: SurfaceInput): string[]
         lines.push(dim(fitDisplay(oneLine(model.description), columns())));
     }
     lines.push(`Goal: ${fitDisplay(oneLine(model.goal ?? "(not set)") + otherGoals(model), columns() - 6)}`, "");
+    // The two approval bands lead the page and stand next to each other: a
+    // reader asking what is on them should not have to scroll past the work
+    // roll-up to find out, or read half the answer here and half further down
+    // (#264). Proposals stay in the band below rather than being listed twice.
+    lines.push(...waitingSection(input.waiting, scoped("self context", project)));
+    lines.push("", ...attentionSections(model));
     const open = model.works
         .filter((work) => work.status !== "done" && work.status !== "retired")
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));
-    lines.push(...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)),
+    lines.push("", ...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)),
         scoped("self work", project)));
     lines.push("", ...unshippedSection(model));
-    lines.push("", ...attentionSections(model));
-    lines.push("", ...listSection("WAITING ON YOU", input.waiting.map(firstLine), scoped("self context", project), yellow));
     lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)));
     lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
     lines.push("", ...listSection("CONVENTIONS", currentConventions(model.conventions).map((item) => item.text),
