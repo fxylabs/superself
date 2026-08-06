@@ -12,25 +12,37 @@ and the completion gate; supervised execution through WorkSpec contracts and
 cap-gated preset verbs are stated targets —
 [docs/roadmap.md](docs/roadmap.md) draws that boundary.
 
+> [!IMPORTANT]
+> Superself is an early alpha. The local `self` CLI and the foundations
+> described under [What works today?](#what-works-today) work now. The
+> complete Company State Runtime loop is the direction of the project, not a
+> capability this release claims to have finished. Expect breaking changes
+> while the event schema and verbs settle.
+
+## What is Superself?
+
 Superself is building the open-source Company State Runtime: durable state
 beyond any one context window today, and governed execution beyond any one
 person's attention span as the target. People set direction, make
 consequential decisions, and remain accountable. Agents carry most planning,
 routine execution, recovery, verification, and reporting.
 
-> [!IMPORTANT]
-> Superself is an early alpha. The local `self` CLI and the foundations
-> described under [Where the project is today](#where-the-project-is-today)
-> work now. The complete Company State Runtime loop is the direction of the
-> project, not a capability this release claims to have finished. Expect
-> breaking changes while the event schema and verbs settle.
+It exists to keep one kind of context in sync between humans and agents, from
+a single project up to a whole company: why each decision was made and
+whether it still holds, why each piece of work exists, what it contributes
+to, how far it is, and what blocks it. It is deliberately model-neutral and
+session-neutral — any agent, any tool, any session reads and writes the same
+state — because agent-native companies will not be built on one vendor's
+memory.
 
-## Why this exists
+What ships today is the `self` CLI: a local-first vertical slice that
+requires no Superself account and keeps the primary workspace on your
+machine. Git versions your code; Superself versions the project itself —
+goals, decisions, work units, reports, and evidence — as typed events in an
+append-only log, with the context an agent needs derived from that log on
+demand.
 
-Adding more agents does not by itself create a company that can operate at
-greater scale. Two ceilings appear first.
-
-### 1. The continuity ceiling
+## Why do my agents start every session from zero?
 
 Long-running projects outlive every chat, context window, model, and human
 memory. Goals, decisions, rejected directions, progress, and evidence become
@@ -40,295 +52,71 @@ the project, misses constraints, or repeats a decision that was already made.
 Hand-maintained instruction files and handoff notes help briefly, then grow
 stale or too large to use. A project needs canonical state that survives its
 sessions, plus a way to compile only the relevant part of that state for the
-next action.
+next action. This is the continuity ceiling, and it is the first ceiling
+Superself targets.
 
-### 2. The supervision ceiling
+## Why doesn't adding more agents scale the work?
 
 Agent execution does not scale when a person must decompose every request,
 choose every next task, watch every process, approve every step, recover every
 failure, and verify every completion. The human becomes the scheduler,
-message bus, and retry loop for the system.
+message bus, and retry loop for the system. This is the supervision ceiling.
 
 The goal is not to remove human control. It is to spend human attention where
 judgment and accountability matter, while the system handles routine planning,
 execution, coordination, recovery, verification, and reporting inside explicit
 boundaries.
 
-These ceilings reinforce each other: execution cannot be delegated safely
+The two ceilings reinforce each other: execution cannot be delegated safely
 without durable context, and durable context has limited value if a person
 still has to drive every action.
 
-## What works today
+## Do I need Superself, or is CLAUDE.md enough?
 
-The command-level foundation below is the detailed inventory; [Where the
-project is today](#where-the-project-is-today) summarizes the same foundation
-as operating outcomes and separates it from what is not complete.
+Instruction files like `CLAUDE.md` and `AGENTS.md` are the right place for
+stable operating rules, and Superself writes into them rather than replacing
+them: `self connect` renders a managed block that teaches any terminal agent
+the protocol and the project's current conventions.
 
-- `self init` turns a directory into a workspace with its own state store and
-  git history, and records it as the one workspace this machine uses —
-  `self workspace` shows or moves that pointer;
-- `self project add` registers a project through a local marker file that never
-  enters the code repository; projects live wherever they already are, inside
-  or outside the workspace directory, because the pointer decides the store;
-- registration is one act per project, not one per working tree: every checkout
-  of a registered git repository, including a worktree cut for a new branch,
-  resolves from the repository itself, so there is no marker to restore and
-  nothing to link before the first command works;
-- every asserted record folds into one entity — text, free labels, typed
-  links, reserved metadata (`target`, `criteria`), and placement — recorded
-  through one shared `entity.*` event grammar in a per-project JSONL log;
-- the preset verbs — `goal add`, `objective add`, `milestone add`,
-  `convention add`, `decide`, `work add` — are sugar over that entity: each
-  resolves its label and default placement through a user-editable alias
-  table (`self alias`), `self state` is the raw verb for free-labeled
-  records, and `self alias add <verb>` makes a custom verb of any label;
-- placement is scope × priority × exposure: a workspace-scoped entity renders
-  in every project's context, priority orders the render, and exposure picks
-  full text, one line, or a search pointer — `self state place` moves any of
-  the three, demotions record why, and an agent demoting out of full passes
-  `--proposed` so the move waits for a person to confirm;
-- retention caps bound the always-rendered set in context tokens (defaults:
-  1,000 for full text and 12,000 for the index, per scope) — `state add`,
-  `state place`, and the alias verbs refuse past a cap until `--demote` names
-  what frees the room, and `--proposed` lands the pair for a person to confirm;
-  `self tokens` records what a character costs, replacing the shipped estimate;
-  the preset verbs are not cap-gated yet;
-- the outcome layer above work — `objective add/revise/close`, `milestone
-  add/revise/met/reach/recheck`, `work link/unlink`, and `work
-  propose/accept/decline` — connects the goal to verified progress: a milestone
-  is reached only when every exit criterion is covered by evidence, a revision
-  marks what it already settled as stale until someone re-judges it, and
-  `self timezone` fixes the zone every target date falls due in;
-- the process ledger — `work started <id> --pid N` and `work exited <id>
-  [--code N]` — maps a work unit to the agent process running it: liveness is
-  judged at read time from the pid on the recording machine, a process that
-  died without reporting shows as stale on the next read, and the pid itself
-  never enters the synced log; merge control is deliberately not here — a
-  branch reaches main through a GitHub pull request, owned by PR review and CI;
-- every event immediately refolds canonical markdown (project state plus one
-  file per open work unit) and lands as exactly one commit in the workspace
-  repository, so state has log, blame, and revert;
-- `self context` prints the derived context an agent needs at session start;
-  `self status`, `self work`, and `self log` read state; `self search` answers
-  over the live records context does not render, across the whole workspace with
-  current-project results ranked first; `self setup` shows
-  the project, workspace, store, and machine pointer the current directory
-  resolves to;
-- canonical files are generated output — hand edits are detected as drift and
-  overwritten with a warning; reports attach to work units and auto-reference
-  the project's HEAD commit as evidence;
-- `self project add` renders an agent-onboarding block into `AGENTS.md` and
-  `CLAUDE.md` — the instruction files agent tools already read — so any
-  terminal agent learns the protocol and current conventions; the block
-  refreshes on every fold, `self connect` re-renders it, and `--no-connect`
-  skips it;
-- `self init` offers to write a short block into this machine's own agent
-  instruction files (`self connect --global` does it later), so agents notice
-  self in projects that are not registered yet and ask you once — they are
-  told never to register a project on their own;
-- `self remote add` connects the workspace store to a git remote, `self sync`
-  pulls, refolds, and pushes it, and `self clone` brings a store onto a new
-  machine — `self clone` also points the new machine at what it cloned,
-  concurrent appends from different machines merge cleanly, and
-  `self project link` reconnects each project to the cloned store, once per
-  repository rather than once per checkout of it;
-- `self view` opens a live, read-only HTML dashboard — a workspace overview,
-  one project in detail, any work unit's full report history, and a full page
-  of decisions, events, and artifacts each — rendered at fold time as
-  self-contained files that auto-refresh in the browser, so an open tab tracks
-  state with no server; `self init` asks for the language the views render in
-  (`self lang` changes it later) and `self theme` picks the accent, while the
-  recorded state keeps whatever language your workspace conventions choose.
+What an instruction file cannot hold is the state that changes with every
+session: which decisions are current and why, which work is open and who
+holds it, what evidence closed a unit, what was tried and rejected. A
+hand-edited file holding that goes stale the day after it is written, and it
+has no history, no evidence, and no way to bound what the next session reads.
+Superself keeps that moving state in an append-only event log, derives
+`self context` from it on demand, and leaves the instruction file to do what
+it is good at.
 
-## The core operating loop
+## How is this different from an issue tracker like Linear or Jira?
 
-Superself is designed to turn one human direction into a durable, inspectable
-execution loop:
+An issue tracker coordinates people: tickets, statuses, and comments, read
+and updated in a web app. Superself records the state an agent needs to
+act: decisions with their rationale and lineage, conventions that govern how
+work is done, goals and objectives, milestones with exit criteria, and work
+units whose "done" is refused until the claim carries evidence — a commit,
+an artifact, or a report of what verifiably happened.
 
-```text
-human intent
-    ↓
-durable directive, goal, and constraints
-    ↓
-scoped context and executable work
-    ↓
-policy, priority, dependency, capacity, and approval gates
-    ↓
-agent and MCP capability execution
-    ↓
-recovery, verification, and evidence
-    ↓
-canonical project state and an exception-focused report
-    ↓
-only consequential judgment returns to the human
-```
+It is also placed differently: local-first, git-backed, and CLI-shaped, so
+the same tool the agent already runs in is the read and write surface, and
+context is compiled for the next action instead of browsed. Superself does
+not replace code review or CI — a branch reaches `main` through a pull
+request, and merge control deliberately stays with PR review and CI.
 
-Transcript text is not canonical state, an agent saying “done” is not proof,
-and autonomy is not permission to act without boundaries.
+## Do I need a vector database or a memory service?
 
-## From real problems to core capabilities
+No. Keeping a company's working context has been attempted with wikis,
+Notion, Obsidian, and a wave of agent-memory products, and the recurring
+failure is not retrieval power — it is that the record of intent decays and
+nothing enforces its truthfulness. That does not take complex technology to
+fix. It takes durable, asserted records with rules on the write path.
 
-| Operating problem | Core capability | Why it matters |
-| --- | --- | --- |
-| A session ends and the next agent starts from zero | Append-only project and work events, derived state, and session context | Work can continue across sessions, models, and tools |
-| State grows until useful context is buried | Scope-specific, bounded context with retrieval pointers | Mature projects can resume without injecting their full history |
-| Decisions and rejected directions are repeated | A decision ledger with rationale, confirmation, revision, and history | The organization accumulates judgment instead of re-deriving it |
-| A handoff loses the outcome, current truth, or next action | Durable work units with reports, artifacts, and evidence | Another agent can take over without a private transcript |
-| Activity is disconnected from company goals | Goal, objective, milestone, work, and evidence links | Progress is judged by outcomes rather than motion |
-| A person must translate every direction into tasks | Versioned directives compiled into an execution structure | People state the outcome; the system can compile the execution structure |
-| A person must choose and launch every next action | Dependency-, priority-, budget-, and capacity-aware scheduling | Ready work can advance without another foreground conversation |
-| Agent processes fail, disappear, or leave partial output | The pid process ledger with read-time liveness, plus recoverable execution | Execution can be supervised without a person watching the terminal |
-| Every action is either blocked or over-permissioned | Capability scopes, versioned risk policy, and explicit human gates | Routine work proceeds while consequential actions still require judgment |
-| Completion reports cannot be trusted | Hashes, declared checks, and one completion gate | “Done” means the promised output exists and has evidence |
-| Parallel agents collide on shared resources | Dependency edges in the work graph | Work stays parallel except where correctness requires serialization |
-| The human cannot tell what is actually running | Per-unit process state, live activity, and health signals | Attention goes to exceptions, not continuous supervision |
-| Every company capability is hard-coded into the core | A trusted extension and MCP capability boundary | Companies can compose their own tools without weakening the operating loop |
+Superself's state is plain text: typed events in an append-only JSONL log
+inside a git repository your machine owns, folded into markdown any tool can
+read. It is grep-able, diff-able, blame-able, and portable; `self search`
+answers from the live records with no index server, and nothing about it is
+locked to a model, a vendor, or this decade.
 
-The table includes both shipped foundations and direction still being built.
-The distinction is explicit below.
-
-Read [Company State and context](docs/concepts/company-state-and-context.md)
-for the exact relationship between append-only event history, folded current
-state, generated views, agent context, recovery, and machine-local runtime
-data.
-
-## Human accountability
-
-Superself's autonomy model is an allocation of responsibility.
-
-Humans own:
-
-- goals, priorities, values, and organizational constraints;
-- irreversible, external, high-risk, or ambiguous decisions;
-- approval boundaries and the policies agents operate within;
-- accountability for what the company ultimately does.
-
-The engine should own:
-
-- translating approved intent into bounded work;
-- routine scheduling, execution, coordination, retry, and recovery;
-- checking declared outputs, tests, evidence, and completion conditions;
-- maintaining canonical state and reporting material changes;
-- escalating when policy says human judgment is required.
-
-## Where the project is today
-
-Superself currently ships an early local-first vertical slice as the `self`
-CLI. It requires no Superself account and keeps the primary workspace on your
-machine.
-
-### Working foundations
-
-- **Durable state.** Goals, decisions, conventions, objectives, milestones,
-  and work fold into one placed entity record; reports and artifacts attach to
-  it — all as typed events in an append-only log. Every event immediately
-  refolds canonical views and lands as one commit in the workspace's own git
-  history.
-- **Cross-session pickup.** `self context`, `self work show`, and `self search`
-  give agents a generated view of current state and a pull path into full
-  history. Managed blocks in `AGENTS.md` and `CLAUDE.md` teach terminal agents
-  to load and maintain that state.
-- **Outcome links.** Work can contribute to objectives and milestones and
-  attach reports and immutable artifacts; done is a judgment whose claim must
-  carry evidence — a report with a commit or an artifact, or a done-time
-  report of what verifiably happened — and declared criteria gate it until
-  each is covered.
-- **The process ledger.** A work unit maps to the agent process running it —
-  pid, started-at, running, stale, or exited, judged at read time by the OS on
-  the recording machine. Merge control is deliberately left to GitHub PR
-  review and CI.
-- **Inspectable views and sync.** `self view` renders read-only workspace,
-  project, work, decision, event, and artifact pages. Explicit git-backed sync
-  can carry the state store between machines.
-
-### Not complete yet
-
-- Project context is not yet reliably bounded and selected by workspace,
-  project, work, attempt, domain, risk, and directive scope.
-- Natural-language intent does not yet compile through one stable public
-  contract into objectives, work graphs, policies, and attempts.
-- Nothing schedules work across projects; dispatch is a person or a session
-  starting agents, and the full loop across priorities, dependencies, budgets,
-  capacity, failures, and completion is unproven.
-- The extension and MCP capability registry is still a design direction, not a
-  general shipped plugin runtime.
-- The viewer is read-only today. It is not yet the conversational surface for
-  directing, approving, interrupting, and observing company execution.
-- The complete path — one human outcome, autonomous planning and execution,
-  recovery from failure, evidence-backed completion, and escalation only for
-  consequential judgment — has not yet been proven as one stable product loop.
-
-The command surface is broader than the finished product loop because the
-project is building and dogfooding its reliability primitives from the bottom
-up.
-
-## Roadmap
-
-The roadmap is organized by operating outcome, not by release date. It states
-direction rather than a compatibility or delivery promise. The detailed
-current constraints, near-horizon capabilities, exit evidence, and issue
-mapping live in the [living roadmap](docs/roadmap.md).
-
-### Phase 1 — Durable project state
-
-Make goals, decisions, work, reports, artifacts, history, and evidence survive
-any session or tool. Keep state local-first, inspectable, and reconstructible.
-
-**Status:** the first usable CLI foundation is shipped and actively dogfooded.
-
-### Phase 2 — Bounded context at every scope
-
-Compile stable workspace, project, work, and attempt contexts. Select governing
-decisions, conventions, dependencies, and risk rules for the current action;
-keep long reports and history behind explicit recovery pointers.
-
-**Exit outcome:** a fresh agent can resume a mature project without a manual
-rebrief, an oversized context dump, or a contradiction of governing state.
-
-### Phase 3 — Governed autonomous execution
-
-Compile bounded intent into executable work, schedule ready work across
-projects and available resources, supervise attempts, recover failures, verify
-outputs, derive routine authorization from versioned policy, and complete work
-whose evidence and authority gates are satisfied. Escalate only when policy
-requires human judgment.
-
-**Exit outcome:** one bounded human direction reaches evidence-backed
-completion without continuous human scheduling or terminal supervision.
-
-### Phase 4 — Composable company capabilities
-
-Let trusted local or remote extensions contribute namespaced operations through
-one permissioned capability contract, including MCP adapters. Preserve process
-isolation, audit, compatibility, revocation, and approval boundaries.
-
-**Exit outcome:** a company can add CRM, research, publishing, operations, or
-other domain capabilities without hard-coding them into Superself or creating a
-path around its trust model.
-
-### Phase 5 — The Company State operating surface
-
-Turn the viewer into the primary conversational surface for directives,
-questions, approvals, interruption, reprioritization, live activity, and
-reports. A persistent orchestrator uses the same canonical state and governed
-runtime underneath it.
-
-**Exit outcome:** a person can direct and understand a continuously operating
-agent organization from one surface while remaining responsible for the
-decisions that matter.
-
-## Why an open core
-
-The state, policy, evidence, and execution boundary is where a company decides
-what agents may know and do. That layer must be inspectable, portable, and able
-to run locally without metering the number of agents, attempts, or connected
-capabilities.
-
-An open core also gives capability builders one stable operating contract
-instead of requiring every tool to invent its own memory, approval, recovery,
-and evidence system.
-
-## Quick start
+## How do I start?
 
 Requires Node.js 22.12 or newer.
 
@@ -352,26 +140,12 @@ self work add "The payment flow passes its end-to-end proof"
 self context
 ```
 
-`self context` is what an agent reads at session start. `self work show <id>`
-recovers the complete state of one unit and `--history` pages over its own
-events; `self search <query>` pulls the live records context left out, across
-every registered project.
-
 Follow the [getting started guide](docs/guides/getting-started.md) for the full
 setup path, including the separate state repository, managed agent blocks,
-private Git synchronization, and restoration on another machine.
-Read [Company State and context](docs/concepts/company-state-and-context.md) to
-understand how event history, folded state, generated views, agent context, and
-machine-local runtime data fit together.
-Use the [CLI and record reference](docs/reference/cli.md) when you need the
-current command families, record shapes, or the implementation-owned help
-boundary.
-If you are customizing the rendered viewer, use the
-[viewer theming guide](docs/viewer-theming.md) for the supported token and
-theme boundary.
-Follow the [long-running project guide](docs/guides/running-a-long-term-project.md)
-to carry a real outcome across sessions and agents through milestones,
-reports, and evidence-backed completion.
+private Git synchronization, and restoration on another machine. Follow the
+[long-running project guide](docs/guides/running-a-long-term-project.md) to
+carry a real outcome across sessions and agents through milestones, reports,
+and evidence-backed completion.
 
 Run `self --help` for the full command surface. The main families are:
 
@@ -382,7 +156,249 @@ Run `self --help` for the full command surface. The main families are:
 - context and inspection: `context`, `status`, `search`, `view`;
 - workspace ownership: `project`, `workspace`, `remote`, `sync`, `clone`.
 
-## Develop and verify a checkout
+## What does an agent get at session start?
+
+`self context` prints the derived context an agent needs: the goal, active
+decisions and conventions, open work, and recent reports — generated from
+state, never hand-maintained. `self work show <id>` recovers the complete
+state of one unit and `--history` pages over its own events; `self search
+<query>` pulls the live records context left out, across every registered
+project. Managed blocks in `AGENTS.md` and `CLAUDE.md` teach terminal agents
+to load and maintain that state, and the block refreshes on every fold.
+
+Read [Company State and context](docs/concepts/company-state-and-context.md)
+for the exact relationship between append-only event history, folded current
+state, generated views, agent context, recovery, and machine-local runtime
+data.
+
+## Why was this decided — and does it still hold?
+
+The most expensive sentence in a long project is "wait, why did we do it
+that way?" — asked again by every new session, model, and teammate, and
+answered from fading memory. Superself makes a decision a first-class record:
+`self decide` carries the decision and its `--why`, `--proposed` marks what
+no person has confirmed yet, and a correction restates the record with its
+lineage instead of editing history. The next agent reads which decisions are
+current and why they were made — and stops re-litigating the ones that
+already closed.
+
+## What is this work contributing to, and what is it blocked on?
+
+A task list answers "what is there to do." It does not answer what a unit of
+work contributes to, how far it actually is, or why it is stuck — the
+questions a person or agent picking it up needs first. In Superself a work
+unit links to the objective or milestone it serves, its reports attach the
+commit they describe as evidence, `self work block` records what it waits on
+— a decision, a dependency, or something external — and the process ledger
+shows whether an agent process is still running it or died without
+reporting. Pickup starts from the unit's own record, not from a previous
+session's transcript.
+
+## How does "done" stay honest?
+
+Transcript text is not canonical state, an agent saying "done" is not proof,
+and autonomy is not permission to act without boundaries.
+
+`self work done` refuses a bare claim: the outcome closes only when a report
+carries a commit or an artifact, or the done itself states what verifiably
+happened. Declared criteria gate the claim until each is covered by evidence.
+Reports attach the project's HEAD commit automatically, attached artifacts
+are digest-checked against what was ingested, and a work unit's outcome is
+immutable once recorded — a correction restates it with its lineage rather
+than editing history.
+
+## How does a company-level goal show its progress?
+
+Progress is judged by outcomes, not motion. A goal breaks into time-boxed
+objectives; objectives carry milestones whose exit criteria must each be
+covered by evidence before the milestone counts as reached; work units link
+to what they serve, so within each project the chain from a goal down to
+the commit that moved it is readable in both directions. A workspace-scoped
+record renders in every project's context, which is how direction set once
+reaches every project and agent that must follow it.
+
+## How does context stay small as the project grows?
+
+State accumulates for the life of a company; a context window does not. Every
+record therefore carries a placement — scope, priority, and exposure — that
+decides whether it renders as full text, one index line, or only a search
+pointer, and retention caps bound the always-rendered set in context tokens.
+Growth demotes detail toward `self search` instead of burying the context an
+agent reads, demotions record why, and an agent proposing one waits for a
+person to confirm. A mature project is built to resume without an oversized
+dump of its own history — making that selection reliable at every scope is
+the roadmap's Phase 2 exit. (The raw state verbs enforce the caps today; the
+preset verbs are not cap-gated yet.)
+
+## Does it force a methodology?
+
+No. Underneath every verb is one record kind — an entity with text, free
+labels, typed links, and a placement — and the preset verbs (`goal add`,
+`decide`, `work add`, and the rest) are rows in a user-editable alias table.
+`self alias add <verb>` makes a first-class verb of any label your company
+actually uses; `self state` records anything the presets do not name. Your
+vocabulary, cadence, and process stay yours — Superself versions the state,
+not the methodology.
+
+## What works today?
+
+- **Durable state.** Goals, decisions, conventions, objectives, milestones,
+  and work fold into one placed entity record, as typed events in an
+  append-only log; every event refolds canonical views and lands as one
+  commit in the workspace's own git history.
+- **Cross-session pickup.** `self context`, `self work show`, and
+  `self search` give agents a generated view of current state and a pull
+  path into full history; managed blocks in `AGENTS.md` and `CLAUDE.md`
+  teach terminal agents to load and maintain it.
+- **Outcome links and evidence.** Work contributes to objectives and
+  milestones; done is a judgment whose claim must carry evidence, and
+  declared criteria gate it until each is covered.
+- **The process ledger.** A work unit maps to the agent process running it,
+  with liveness judged at read time; merge control deliberately stays with
+  GitHub PR review and CI.
+- **Inspectable views and sync.** `self view` renders read-only HTML pages
+  of the workspace, each project, work, decisions, events, and artifacts;
+  explicit git-backed sync carries the store between machines.
+
+The [command-level inventory](docs/reference/working-foundations.md) states
+each of these as verifiable claims against the current CLI.
+
+## What is not finished yet?
+
+- Project context is not yet reliably bounded and selected by workspace,
+  project, work, attempt, domain, risk, and directive scope.
+- Natural-language intent does not yet compile through one stable public
+  contract into objectives, work graphs, policies, and attempts.
+- Nothing schedules work across projects; dispatch is a person or a session
+  starting agents, and the full loop across priorities, dependencies, budgets,
+  capacity, failures, and completion is unproven.
+- The extension and MCP capability registry is still a design direction, not a
+  general shipped plugin runtime.
+- The viewer is read-only today. It is not yet the conversational surface for
+  directing, approving, interrupting, and observing company execution.
+- The complete path — one human outcome, autonomous planning and execution,
+  recovery from failure, evidence-backed completion, and escalation only for
+  consequential judgment — has not yet been proven as one stable product loop.
+
+The command surface is broader than the finished product loop because the
+project is building and dogfooding its reliability primitives from the bottom
+up.
+
+## What loop is this building toward?
+
+Superself is designed to turn one human direction into a durable, inspectable
+execution loop:
+
+```text
+human intent
+    ↓
+durable directive, goal, and constraints
+    ↓
+scoped context and executable work
+    ↓
+policy, priority, dependency, capacity, and approval gates
+    ↓
+agent and MCP capability execution
+    ↓
+recovery, verification, and evidence
+    ↓
+canonical project state and an exception-focused report
+    ↓
+only consequential judgment returns to the human
+```
+
+The roadmap below is organized by operating outcome, not by release date. It
+states direction rather than a compatibility or delivery promise. The detailed
+current constraints, near-horizon capabilities, exit evidence, and issue
+mapping live in the [living roadmap](docs/roadmap.md).
+
+- **Phase 1 — Durable project state.** Make goals, decisions, work, reports,
+  artifacts, history, and evidence survive any session or tool. Keep state
+  local-first, inspectable, and reconstructible. *Status: the first usable CLI
+  foundation is shipped and actively dogfooded.*
+- **Phase 2 — Bounded context at every scope.** Compile stable workspace,
+  project, work, and attempt contexts; select governing decisions,
+  conventions, dependencies, and risk rules for the current action. *Exit: a
+  fresh agent resumes a mature project without a manual rebrief, an oversized
+  context dump, or a contradiction of governing state.*
+- **Phase 3 — Governed autonomous execution.** Compile bounded intent into
+  executable work, schedule it across projects, supervise attempts, recover
+  failures, verify outputs, and complete work whose evidence and authority
+  gates are satisfied. *Exit: one bounded human direction reaches
+  evidence-backed completion without continuous human scheduling or terminal
+  supervision.*
+- **Phase 4 — Composable company capabilities.** Let trusted extensions
+  contribute namespaced operations through one permissioned capability
+  contract, including MCP adapters. *Exit: a company adds domain capabilities
+  without hard-coding them into Superself or bypassing its trust model.*
+- **Phase 5 — The Company State operating surface.** Turn the viewer into the
+  primary conversational surface for directives, approvals, interruption, and
+  live activity. *Exit: a person directs and understands a continuously
+  operating agent organization from one surface while remaining responsible
+  for the decisions that matter.*
+
+## Who owns what — the person or the engine?
+
+Superself's autonomy model is an allocation of responsibility.
+
+Humans own:
+
+- goals, priorities, values, and organizational constraints;
+- irreversible, external, high-risk, or ambiguous decisions;
+- approval boundaries and the policies agents operate within;
+- accountability for what the company ultimately does.
+
+The engine should own:
+
+- translating approved intent into bounded work;
+- routine scheduling, execution, coordination, retry, and recovery;
+- checking declared outputs, tests, evidence, and completion conditions;
+- maintaining canonical state and reporting material changes;
+- escalating when policy says human judgment is required.
+
+## Why an open core?
+
+The state, policy, evidence, and execution boundary is where a company decides
+what agents may know and do. That layer must be inspectable, portable, and able
+to run locally without metering the number of agents, attempts, or connected
+capabilities.
+
+An open core also gives capability builders one stable operating contract
+instead of requiring every tool to invent its own memory, approval, recovery,
+and evidence system.
+
+## FAQ
+
+**Where does my data live?**
+On your machine. The workspace store is its own git repository, separate from
+your code, and nothing leaves it until you connect a remote of your choosing
+with `self remote add` and push with `self sync`. There is no account.
+
+**Which agents does it work with?**
+Any terminal agent that reads `AGENTS.md` or `CLAUDE.md` — the managed block
+teaches it the protocol — and anything that can run a CLI can read and write
+state directly.
+
+**What happens when two sessions write at once?**
+Every event is one line in an append-only JSONL log, so concurrent appends —
+including from different machines — merge cleanly. A work unit another
+session holds is disclosed with who took it and when, never locked.
+
+**Is a chat transcript state?**
+No. Only asserted records enter the log. Transcript text is not canonical
+state, and an agent saying "done" is not proof — the completion gate demands
+evidence.
+
+**Does Superself decide what merges to `main`?**
+No. A branch reaches `main` through a GitHub pull request; merge control is
+deliberately owned by PR review and CI. Superself owns context and the work
+graph, not the merge gate.
+
+**What does it cost?**
+The core is Apache-2.0 and runs entirely locally, with no metering of agents,
+attempts, or connected capabilities.
+
+## How do I develop and verify a checkout?
 
 The repository pins Node 22.20 for contributors using nvm and uses pnpm 10.
 
@@ -394,9 +410,16 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm structure
 ```
 
-## Repository layout
+Use the [CLI and record reference](docs/reference/cli.md) when you need the
+current command families, record shapes, or the implementation-owned help
+boundary. If you are customizing the rendered viewer, use the
+[viewer theming guide](docs/viewer-theming.md) for the supported token and
+theme boundary.
+
+## Where does each file go?
 
 ```text
 apps/
@@ -419,7 +442,7 @@ CONTRIBUTING.md           process and code conventions
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing code and
 [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
-## Community and contributions
+## How do I contribute?
 
 - Use the structured GitHub issue forms for reproducible bugs, concrete feature
   proposals, and maintenance work.
