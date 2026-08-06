@@ -8,7 +8,7 @@ import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
-import { EntityState, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
+import { EntityState, Exposure, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
@@ -51,9 +51,9 @@ import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { printSetup } from "./setup.js";
-import { STATE_COMMAND } from "./state.js";
+import { admittingDemotions, CapGateValues, confirmEntityUnit, demotionEvents, Placed, STATE_COMMAND, tierOf } from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
-import { dim, errRed, markdownHeadings, styled } from "./style.js";
+import { countCharacters, dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
 import { printContext, printHistory, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
@@ -216,7 +216,8 @@ const DECIDE_OPTIONS = {
     supersedes: { type: "string", multiple: true },
     work: { type: "string" },
     blocks: { type: "string", multiple: true },
-    after: { type: "string" }
+    after: { type: "string" },
+    demote: { type: "string", multiple: true }
 } as const;
 
 const WITHDRAW_OPTIONS = { why: { type: "string" } } as const;
@@ -250,7 +251,8 @@ const REPORT_OPTIONS = {
 const CONVENTION_OPTIONS = {
     supersedes: { type: "string", multiple: true },
     why: { type: "string" },
-    workspace: { type: "boolean" }
+    workspace: { type: "boolean" },
+    demote: { type: "string", multiple: true }
 } as const;
 
 // The same shape, for the same reason: `goal add` refuses the withdrawal's
@@ -258,7 +260,8 @@ const CONVENTION_OPTIONS = {
 // silently dropping a flag the caller meant.
 const GOAL_OPTIONS = {
     supersedes: { type: "string", multiple: true },
-    why: { type: "string" }
+    why: { type: "string" },
+    demote: { type: "string", multiple: true }
 } as const;
 
 const SCOPED_RENDER_OPTIONS = { ...SCOPE_OPTIONS, ...RENDER_OPTIONS } as const;
@@ -491,6 +494,8 @@ export const COMMANDS: Command[] = [
             "",
             "  --supersedes <id>     the goal this one replaces, repeatable",
             "  --why <text>          why a withdrawn goal no longer holds; every withdrawal carries one",
+            "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
+            "                        moving one tier down (full → index, index → search); repeatable",
             "",
             "a project holds as many goals as it means to: recording one displaces",
             "nothing. Replacing a goal is stated with --supersedes, never implied by",
@@ -542,6 +547,8 @@ export const COMMANDS: Command[] = [
             "  --work <work-id>      attach the decision to a work unit",
             "  --blocks <work-id>    the work confirming it would unblock, repeatable",
             "  --after <event-id>    the event it cannot be decided before",
+            "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
+            "                        moving one tier down (full → index, index → search); repeatable",
             "",
             "--blocks is what ranks a proposal: `self context` and `self status` say",
             "whether confirming it unblocks work, cannot be decided yet, or only",
@@ -760,6 +767,8 @@ export const COMMANDS: Command[] = [
             "  --why <text>          why a dropped rule no longer holds; every withdrawal carries one",
             "  --workspace           record at workspace scope: the rule renders in every",
             "                        project's context; its record stays in this project's store",
+            "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
+            "                        moving one tier down (full → index, index → search); repeatable",
             "",
             "correcting a rule is one event, not a drop and a re-add: the replacement",
             "carries the lineage, so the pair can never both read as current."
@@ -1279,31 +1288,50 @@ function presetPayload(row: ReturnType<typeof presetRow>, id: string, text: stri
     return payload;
 }
 
-function presetEntityEvent(
-    ctx: ProjectContext,
-    model: ProjectModel,
-    verb: string,
-    text: string,
-    extra: Record<string, unknown>,
-    refs: EventRefs | undefined,
-    proposed: boolean
-): void
+// A demotion frees room for a record being added, and a withdrawal adds
+// none — the flag is refused by name rather than dropped, on the verbs whose
+// option table is shared with their add.
+function refuseWithdrawalDemote(verb: string, demote: string[] | undefined): void
 {
+    if (demote !== undefined)
+    {
+        throw new CliError(`${verb} takes no --demote — a demotion frees room for a record being added, and a withdrawal adds none`);
+    }
+}
+
+// The same cap gate `state add` passes (#240 R1): the tier a preset record
+// enters is judged by the one shared check, so a preset add refuses exactly
+// where the raw verb would — `--demote` and the supersession credit included.
+function presetDemotions(ctx: ProjectContext, models: ProjectModel[], verb: string, exposure: Exposure,
+    payload: Record<string, unknown>, values: CapGateValues, text: string): Placed[]
+{
+    const target = payload.scope === "workspace" ? "workspace" : ctx.project;
+    const usage = verb === "decide" ? 'decide "<text>"' : `${verb} add "<text>"`;
+    return admittingDemotions(ctx, models, values, tierOf(target, exposure),
+        usage, countCharacters(text), supersedeTargets(payload));
+}
+
+function presetEntityEvent(ctx: ProjectContext, models: ProjectModel[], verb: string, text: string,
+    extra: Record<string, unknown>, refs: EventRefs | undefined, values: CapGateValues): void
+{
+    const proposed = values.proposed === true;
     const event = makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed", {}, refs, !proposed);
-    const payload = presetPayload(presetRow(ctx.storeDir, verb), event.id, text, extra);
+    const row = presetRow(ctx.storeDir, verb);
+    const payload = presetPayload(row, event.id, text, extra);
     event.payload = payload;
+    const demotions = presetDemotions(ctx, models, verb, row.exposure, payload, values, text);
     // Every preset kind corrects a record the same way, so they all reach the
     // gate through this one line rather than each add verb deciding. A
     // proposal displaces nothing until it is confirmed, and passes through.
     const displaced = proposed ? [] : supersedeTargets(payload);
-    recordRetirement(ctx, retirementIntent(model, "supersede", displaced), model,
+    recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced), models[0],
         (confirmation) =>
         {
             if (confirmation !== undefined)
             {
                 event.payload = { ...payload, confirmation };
             }
-            return [event];
+            return [event, ...demotionEvents(demotions, event.id, proposed)];
         },
         text);
 }
@@ -1316,7 +1344,8 @@ function goalAdd({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): vo
         throw new CliError("goal add takes no --why — the goal is its own statement; --why records why a goal was withdrawn");
     }
     const ctx = requireProject(process.cwd());
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
     const extra: Record<string, unknown> = {};
     // What a new goal replaces is named, never inferred from what happens to
     // be standing. A project may aim at several outcomes at once, so stating
@@ -1329,7 +1358,7 @@ function goalAdd({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): vo
             return { type: "supersedes", target: requireGoal(model, prefix).id };
         });
     }
-    presetEntityEvent(ctx, model, "goal", text, extra, undefined, false);
+    presetEntityEvent(ctx, models, "goal", text, extra, undefined, { demote: values.demote });
 }
 
 function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): void
@@ -1338,6 +1367,7 @@ function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>)
     {
         throw new CliError('goal retract takes no --supersedes — to replace a goal, run `goal add "<text>" --supersedes <id>`');
     }
+    refuseWithdrawalDemote("goal retract", values.demote);
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const goal = requireGoal(model, requireText(positionals[0], 'goal retract <id> --why "<why it no longer holds>"'));
@@ -1379,7 +1409,8 @@ function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>)
 {
     const ctx = requireProject(process.cwd());
     const text = requireText(positionals[0], 'decide "<decision>" [--why w] [--proposed]');
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
     const extra: Record<string, unknown> = {};
     if (values.why !== undefined)
     {
@@ -1395,7 +1426,8 @@ function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>)
     }
     // The work link is stated, never inferred from what happens to be open:
     // most decisions belong to the project, not to a unit of work.
-    presetEntityEvent(ctx, model, "decide", text, extra, decisionRefs(ctx, values), values.proposed === true);
+    presetEntityEvent(ctx, models, "decide", text, extra, decisionRefs(ctx, values),
+        { proposed: values.proposed, demote: values.demote });
 }
 
 // Exact id first, then a unique prefix, over the folded records — legacy
@@ -1428,7 +1460,10 @@ function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
     {
         throw new CliError(`${decision.id} is not a proposed decision`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: decision.id }, { confirms: decision.id }, true), decision.text);
+    // The shared confirm path (#240 R3): the same room gate `state confirm`
+    // runs, paired demotions included — a proposal past a cap is refused
+    // here, never at propose time.
+    confirmEntityUnit(ctx, decision.id);
 }
 
 // Withdrawal without a successor: `retract` takes back a confirmed decision,
@@ -2062,7 +2097,8 @@ function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_O
         throw new CliError("convention add takes no --why — the rule is its own statement; --why records why a rule was withdrawn");
     }
     const ctx = requireProject(process.cwd());
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
     const extra: Record<string, unknown> = {};
     // A correction is one event: the replacement carries the lineage, so
     // the rule it replaces never has to be dropped and re-added — which is
@@ -2079,7 +2115,7 @@ function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_O
         // every project's context while its record stays in this store.
         extra.scope = "workspace";
     }
-    presetEntityEvent(ctx, model, "convention", text, extra, undefined, false);
+    presetEntityEvent(ctx, models, "convention", text, extra, undefined, { demote: values.demote });
 }
 
 function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
@@ -2095,6 +2131,7 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     {
         throw new CliError("convention drop takes no --workspace — a rule is dropped wherever it renders; --workspace states a new rule's scope");
     }
+    refuseWithdrawalDemote("convention drop", values.demote);
     const ctx = requireProject(process.cwd());
     const usage = 'convention drop <event-id> --why "<why the rule no longer holds>"';
     const model = buildModel(ctx.storeDir, ctx.project, new Date());

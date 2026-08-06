@@ -21,6 +21,7 @@ import {
     isLive,
     LINK_TYPES,
     LinkType,
+    occupiesTier,
     orderEntities,
     pendingSummary,
     rendersIn,
@@ -315,10 +316,11 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     const models = workspaceModels(ctx.storeDir, ctx.project);
     const exposure = values.exposure !== undefined ? validExposure(values.exposure) : row?.exposure ?? "index";
     const target = values.scope === undefined ? ctx.project : validScope(ctx, values.scope);
-    const demotions = admittingDemotions(ctx, models, values, tierOf(target, exposure), usageText, countCharacters(text));
     const id = entityId();
     const proposed = values.proposed === true;
     const payload = { ...addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row), ...reserved };
+    const demotions = admittingDemotions(ctx, models, values, tierOf(target, exposure),
+        usageText, countCharacters(text), supersedeTargets(payload));
     // A proposal displaces nothing: its supersedes links wait for the confirm
     // that makes them real, so the gate belongs there rather than here.
     const displaced = proposed ? [] : supersedeTargets(payload);
@@ -332,20 +334,47 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     console.log(id);
 }
 
+// What the cap gate reads off a verb's arguments: the demotions it names, and
+// whether the record is proposed rather than held.
+export interface CapGateValues
+{
+    demote?: string[];
+    proposed?: boolean;
+}
+
 // The cap gate an add passes: what the destination tier holds, what this text
-// adds to it, and what the named demotions free there — all read against the
-// tier the record is being born into, wherever that project's log sits.
-function admittingDemotions(ctx: ProjectContext, models: ProjectModel[], values: CommandInput<typeof ADD_OPTIONS>["values"],
-    entered: CappedTier | undefined, usageText: string, adding: number): Placed[]
+// adds to it, what the named demotions free there, and what the write itself
+// vacates — all read against the tier the record is being born into, wherever
+// that project's log sits. One implementation, called by `state add`, the
+// alias adds and every preset add alike (#240 R1).
+export function admittingDemotions(ctx: ProjectContext, models: ProjectModel[], values: CapGateValues,
+    entered: CappedTier | undefined, usageText: string, adding: number, displaced: string[]): Placed[]
 {
     const config = readStoreConfig(ctx.storeDir);
     const caps = retentionCaps(config);
     const scale = tokenScale(config);
     const usage = usageReader(models, scale);
-    const demotions = demotionsFor(allRecords(models), values.demote ?? [], entered, undefined, usageText, ctx.project);
-    requireRoom(usage, caps, entered, adding, demotions, scale, ctx.project);
+    const records = allRecords(models);
+    const demotions = demotionsFor(records, values.demote ?? [], entered, undefined, usageText, ctx.project);
+    const vacates = vacatedTokens(records, displaced, entered, scale);
+    requireRoom(usage, caps, entered, adding, demotions, scale, ctx.project, vacates, values.proposed === true);
     requireDemotionRoom(usage, caps, entered?.target ?? ctx.project, demotions, 0, scale, ctx.project);
     return demotions;
+}
+
+// The room the write itself frees in the tier it enters: a predecessor named
+// by --supersedes leaves that tier in the same append, so the cap judges the
+// net effect rather than refusing an exact swap (#240 T5.1). A predecessor
+// holding a seat in another tier or scope frees nothing here (T5.3).
+function vacatedTokens(records: Placed[], displaced: string[], entered: CappedTier | undefined, scale: TokenScale): number
+{
+    if (entered === undefined || displaced.length === 0)
+    {
+        return 0;
+    }
+    const leaving = records.filter((item) => displaced.includes(item.entity.id)
+        && occupiesTier(item.entity, item.owner, entered.target, entered.tier));
+    return tokensOf(leaving.reduce((sum, item) => sum + countCharacters(item.entity.text), 0), scale.perCharacter);
 }
 
 function addPayload(
@@ -399,7 +428,7 @@ function addOptionalFields(payload: Record<string, unknown>,
 // resolves here and its writes land in its home log (#181 D3), so every
 // placement carries the owner it was found under rather than assuming the
 // project the command ran in.
-interface Placed
+export interface Placed
 {
     entity: EntityState;
     owner: string;
@@ -445,7 +474,7 @@ function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>)
     const scale = tokenScale(config);
     const usage = usageReader(models, scale);
     const demotions = demotionsFor(records, values.demote ?? [], move.entered, found.entity.id, PLACE_USAGE, ctx.project);
-    requireRoom(usage, caps, move.entered, countCharacters(found.entity.text), demotions, scale, ctx.project);
+    requireRoom(usage, caps, move.entered, countCharacters(found.entity.text), demotions, scale, ctx.project, 0, false);
     const from = scopeTarget(found.entity, found.owner);
     requireDemotionRoom(usage, caps, move.entered?.target ?? from, demotions, vacatedSeat(found, move.entered), scale, ctx.project);
     const proposed = values.proposed === true;
@@ -583,7 +612,7 @@ interface CappedTier
     tier: "full" | "index";
 }
 
-function tierOf(target: string, exposure: Exposure): CappedTier | undefined
+export function tierOf(target: string, exposure: Exposure): CappedTier | undefined
 {
     return exposure === "search" ? undefined : { target, tier: exposure };
 }
@@ -643,16 +672,17 @@ function usageReader(models: ProjectModel[], scale: TokenScale): UsageReader
 
 // Both capped tiers are measured the same way now (#213), so one check answers
 // for both: what the tier holds in tokens, what this text adds, and what the
-// named demotions free.
+// named demotions free. `vacates` is what the write itself frees there, and
+// `proposed` marks a record that holds no seat until a person confirms it.
 function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTier | undefined,
-    adding: number, demotions: Placed[], scale: TokenScale, here: string): void
+    adding: number, demotions: Placed[], scale: TokenScale, here: string, vacates: number, proposed: boolean): void
 {
     if (entered === undefined)
     {
         return;
     }
     const cap = entered.tier === "full" ? caps.full : caps.index;
-    requireTokenRoom(usage, entered, cap, tokensOf(adding, scale.perCharacter), demotions, scale, here);
+    requireTokenRoom(usage, entered, cap, tokensOf(adding, scale.perCharacter), demotions, scale, here, vacates, proposed);
 }
 
 // One refusal hands the whole contract: the cap, what the tier holds, what
@@ -660,12 +690,19 @@ function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTie
 // is in tokens, and an unmeasured scale says so — a caller choosing what to
 // demote is owed a real number rather than a row count (#213).
 function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
-    adding: number, demotions: Placed[], scale: TokenScale, here: string): void
+    adding: number, demotions: Placed[], scale: TokenScale, here: string, vacates: number, proposed: boolean): void
 {
-    const held = usage(entered.target, entered.tier);
+    // Held once the write's own supersession displacement lands (#240 T5.1).
+    const held = usage(entered.target, entered.tier) - vacates;
     if (held + adding <= cap)
     {
         requireDemotionsNeeded(demotions, entered, here);
+        return;
+    }
+    // Propose passes, confirm gates (#240 R3): a proposal takes its seat only
+    // at the confirm, where requireUnitRoom judges the room.
+    if (proposed)
+    {
         return;
     }
     if (demotions.length === 0)
@@ -865,7 +902,7 @@ function requireDemotableSeat(found: Placed, entered: CappedTier, here: string):
 // The demotion lands in the log that owns the record it demotes, which is not
 // always the log the admitted record is written to (#181 D3): a seat in the
 // destination's tier is freed by a record the destination's own log holds.
-function demotionEvents(demotions: Placed[], admit: string, proposed: boolean): SelfEvent[]
+export function demotionEvents(demotions: Placed[], admit: string, proposed: boolean): SelfEvent[]
 {
     return demotions.map((item) => makeEvent(item.owner, "entity.placed", {
         entity: item.entity.id,
@@ -930,6 +967,11 @@ function confirmableUnit(model: ProjectModel, entity: EntityState): ConfirmMembe
     {
         throw new CliError(`${entity.id} is a ${entity.source} record — run \`self ${entity.source === "decision" ? "decide" : entity.source} confirm ${entity.id}\``);
     }
+    return pairedUnit(model, entity, own);
+}
+
+function pairedUnit(model: ProjectModel, entity: EntityState, own: ConfirmMember): ConfirmMember[]
+{
     const admitted = own.kind === "placement" && entity.pending?.admits !== undefined
         ? waitingMember(model.entities.find((item) => item.id === entity.pending?.admits))
         : null;
@@ -945,6 +987,27 @@ function confirmableUnit(model: ProjectModel, entity: EntityState): ConfirmMembe
     }
     members.set(entity.id, own);
     return [...members.values()];
+}
+
+// The confirm a preset verb applies (#240 R3): the same unit collection and
+// the same room judgment `state confirm` runs, reached from the verb that
+// owns the record's vocabulary — so a proposed decision or objective is gated
+// at confirm exactly as a raw entity is, paired demotions included.
+export function confirmEntityUnit(ctx: ProjectContext, id: string): void
+{
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
+    const entity = model.entities.find((item) => item.id === id);
+    const own = waitingMember(entity);
+    if (entity === undefined || own === null)
+    {
+        throw new CliError(`${id} has nothing waiting to confirm`);
+    }
+    const unit = pairedUnit(model, entity, own);
+    const config = readStoreConfig(ctx.storeDir);
+    const scale = tokenScale(config);
+    requireUnitRoom(usageReader(models, scale), retentionCaps(config), unit, scale, ctx.project);
+    recordEvents(ctx, unit.map((member) => confirmEvent(ctx.project, member)), entity.text);
 }
 
 function confirmEvent(project: string, member: ConfirmMember): SelfEvent
