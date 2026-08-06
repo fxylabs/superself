@@ -9,7 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityScope, EntityState, HOME_SCOPE, isLive, reconcileEntity } from "./entities.js";
+import { applyEntity, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isLive, reconcileEntity } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -119,6 +119,14 @@ interface AttemptSummary
     artifacts: { name: string; sha256: string; bytes: number }[];
 }
 
+// One cross-project contribution (#244): the objective's id and the slug of
+// the registered project whose log owns it, as the link event stated them.
+export interface ForeignObjectiveLink
+{
+    id: string;
+    project: string;
+}
+
 export interface WorkState
 {
     id: string;
@@ -166,6 +174,12 @@ export interface WorkState
     // satisfied by evidence, not by a unit reaching done.
     objectives: string[];
     milestones: string[];
+    // The objectives other registered projects own that this unit contributes
+    // to (#244), each qualified by the owning slug the link event carried.
+    // Kept apart from `objectives` on purpose: those ids resolve in this
+    // fold's own goal tree, and a foreign id mixed in would either be dropped
+    // or resolved against the wrong project.
+    foreignObjectives: ForeignObjectiveLink[];
     // The live proposals that name this unit in `decide --blocks`, inverted
     // from the decisions. This is what lets a unit that was never started say
     // what stands in front of it — `work block --on decision` needs the unit to
@@ -539,6 +553,14 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
 export function workScope(model: ProjectModel, work: WorkState): EntityScope
 {
     return model.entities.find((item) => item.id === work.id)?.scope ?? HOME_SCOPE;
+}
+
+// The cross-project half of a unit's toward line (#244), stated from this
+// log alone: every render — including the fold's canonical pages, which must
+// never read another project's log — can name the owning slug from it.
+export function foreignToward(work: WorkState): string[]
+{
+    return work.foreignObjectives.map((link) => `${link.id} (${link.project})`);
 }
 
 // Every registered project's fold, the named one first. A record renders where
@@ -1207,9 +1229,24 @@ function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEve
     model.works.push(workFromEntity(model, entity, creation));
 }
 
+// The member-of edges, split by where they resolve (#244): an unqualified id
+// resolves against this fold's own goal tree, as it always did; a qualified
+// one names another project's objective and is carried as stated, because
+// this fold can never look it up.
+function memberLinks(model: ProjectModel, entity: EntityState): Pick<WorkState, "objectives" | "milestones" | "foreignObjectives">
+{
+    const members = entity.links.filter((link) => link.type === "member-of");
+    const local = members.filter((link) => link.project === undefined).map((link) => link.target);
+    return {
+        objectives: local.filter((id) => model.goals.objectives.some((item) => item.id === id)),
+        milestones: local.filter((id) => findMilestone(model.goals, id) !== null),
+        foreignObjectives: members.filter((link) => link.project !== undefined)
+            .map((link) => ({ id: link.target, project: link.project as string }))
+    };
+}
+
 function workFromEntity(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): WorkState
 {
-    const links = entity.links.filter((link) => link.type === "member-of").map((link) => link.target);
     return {
         id: entity.id,
         outcome: entity.text,
@@ -1227,8 +1264,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         notes: [],
         artifacts: [],
         branches: creation?.refs?.branch === undefined ? [] : [String(creation.refs.branch)],
-        objectives: links.filter((id) => model.goals.objectives.some((item) => item.id === id)),
-        milestones: links.filter((id) => findMilestone(model.goals, id) !== null),
+        ...memberLinks(model, entity),
         gatedBy: [],
         attempts: [],
         completion: emptyCompletion()
@@ -1299,10 +1335,12 @@ function routeEntityWorkFacts(model: ProjectModel, fold: EntityFold): void
         left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
     for (const event of links)
     {
-        const work = works.get(event.entity);
-        if (!entityIds.has(event.entity) && work !== undefined && event.link.type === "member-of")
+        // The same annul skip the entity fold applies (#244 D5): an undone
+        // link leaves the legacy-routed units too.
+        const work = fold.annulled.has(event.event) ? undefined : works.get(event.entity);
+        if (work !== undefined && !entityIds.has(event.entity) && event.link.type === "member-of")
         {
-            applyMemberOf(model, work, event.link.target, event.add);
+            applyMemberOf(model, work, event.link, event.add);
         }
     }
 }
@@ -1364,8 +1402,18 @@ function retireWorkFromExecution(work: WorkState, event: { why?: string; success
         : { work: event.successor, project: event.successorProject };
 }
 
-function applyMemberOf(model: ProjectModel, work: WorkState, target: string, add: boolean): void
+function applyMemberOf(model: ProjectModel, work: WorkState, link: EntityLink, add: boolean): void
 {
+    // A qualified link names another project's objective (#244), which this
+    // fold's goal tree can never resolve — it is carried, not looked up.
+    if (link.project !== undefined)
+    {
+        work.foreignObjectives = add
+            ? dedupeForeign([...work.foreignObjectives, { id: link.target, project: link.project }])
+            : work.foreignObjectives.filter((item) => item.id !== link.target);
+        return;
+    }
+    const target = link.target;
     const field = model.goals.objectives.some((item) => item.id === target) ? "objectives"
         : findMilestone(model.goals, target) !== null ? "milestones" : null;
     if (field === null)
@@ -1375,6 +1423,24 @@ function applyMemberOf(model: ProjectModel, work: WorkState, target: string, add
     work[field] = add
         ? [...new Set([...work[field], target])]
         : work[field].filter((item) => item !== target);
+}
+
+// The edge's identity is the target id, as it is for a local link: adding it
+// twice keeps one, and removing it removes it whatever slug it was recorded
+// under.
+function dedupeForeign(links: ForeignObjectiveLink[]): ForeignObjectiveLink[]
+{
+    const seen = new Set<string>();
+    const kept: ForeignObjectiveLink[] = [];
+    for (const link of links)
+    {
+        if (!seen.has(link.id))
+        {
+            seen.add(link.id);
+            kept.push(link);
+        }
+    }
+    return kept;
 }
 
 // Reports, process transitions and completion history keep their own event
@@ -1504,6 +1570,7 @@ function newWork(event: SelfEvent): WorkState
         branches: branchOf(event),
         objectives: [],
         milestones: [],
+        foreignObjectives: [],
         gatedBy: [],
         attempts: [],
         completion: emptyCompletion()

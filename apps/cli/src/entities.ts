@@ -53,6 +53,12 @@ export interface EntityLink
 {
     type: LinkType;
     target: string;
+    // The registered project that owns the target, written only when it is
+    // another project (#244): a link inside one project stays byte-identical
+    // to what it always was, and the fold that owns the target never has to be
+    // read to know where the edge points. The edge's identity stays
+    // (type, target) — the project is provenance, not a second key.
+    project?: string;
 }
 
 // A placement proposal waiting on a person (#197 §5, ruling 4): recorded by
@@ -754,7 +760,10 @@ function applyLinks(entities: EntityState[], fold: EntityFold): void
     const byId = new Map(entities.map((item) => [item.id, item]));
     for (const item of ordered(fold.links))
     {
-        const target = byId.get(item.entity);
+        // An undo names the link event it takes back (#244 D5), the same way
+        // it names a withdrawal: skipping it here is what removes the edge
+        // from every surface at once.
+        const target = fold.annulled.has(item.event) ? undefined : byId.get(item.entity);
         if (target === undefined)
         {
             continue;
@@ -1244,8 +1253,9 @@ function readLinks(value: unknown): EntityLink[]
     {
         const type = (item as { type?: unknown })?.type;
         const target = (item as { target?: unknown })?.target;
+        const project = (item as { project?: unknown })?.project;
         return (LINK_TYPES as readonly string[]).includes(String(type)) && typeof target === "string" && target !== ""
-            ? [{ type: type as LinkType, target }]
+            ? [{ type: type as LinkType, target, ...(typeof project === "string" && project !== "" ? { project } : {}) }]
             : [];
     });
 }

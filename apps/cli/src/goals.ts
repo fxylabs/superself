@@ -5,7 +5,7 @@ import { validDate } from "./dates.js";
 import { requireSupersedeKind } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { milestoneId, objectiveId, workId } from "./ids.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
 import {
     allMilestones,
     findMilestone,
@@ -18,8 +18,10 @@ import {
 import {
     ProjectContext,
     ProjectScope,
+    readRegistry,
     readScopes,
     requireProject,
+    requireRegistered,
     SCOPE_OPTIONS,
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
@@ -155,6 +157,9 @@ export const OBJECTIVE_COMMAND: Command = {
         "directory belongs to. add, confirm, revise and close write, so they take no",
         "scope flag at all and record into the project they run in.",
         "",
+        "an objective answers with linked work from every registered project: a unit",
+        "another project linked to it lists with that project's slug beside it.",
+        "",
         "  --project <slug>      read this registered project instead of this directory's",
         "  --workspace           list every registered project's objectives (list only)",
         "  --horizon <span>      week, month, quarter, or year",
@@ -193,22 +198,66 @@ export const OBJECTIVE_COMMAND: Command = {
 function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>): void
 {
     const scopes = readScopes(process.cwd(), values);
+    // One fold per registered project, however many scopes are listed: the
+    // linked work an objective answers with can live in any other log (#244).
+    const models = workspaceModels(scopes[0].storeDir, scopes[0].project);
     if (values.workspace !== true)
     {
-        printObjectives(scopeModel(scopes[0]));
+        printObjectives(models[0], contributorsTo(scopes[0].project, models));
         return;
     }
     scopes.forEach((scope, index) =>
     {
         console.log(`${index === 0 ? "" : "\n"}${styled ? dim(scope.project) : scope.project}`);
-        printObjectives(scopeModel(scope));
+        const model = models.find((item) => item.slug === scope.project) as ProjectModel;
+        printObjectives(model, contributorsTo(scope.project, models));
     });
 }
 
 function objectiveShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
 {
-    const objective = requireObjective(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
-    console.log(markdownHeadings(renderObjectiveBody(objective).trimEnd()));
+    const scope = readScopes(process.cwd(), values)[0];
+    const models = workspaceModels(scope.storeDir, scope.project);
+    const objective = requireObjective(models[0], positionals[0]);
+    const linked = [
+        ...openLocalWork(models[0], objective),
+        ...contributorsTo(scope.project, models).get(objective.id) ?? []
+    ];
+    console.log(markdownHeadings(renderObjectiveBody(objective, linked).trimEnd()));
+}
+
+// The read-time merge (#244): every other project's units that state a
+// contribution to an objective this project owns, labeled with their slug.
+// Done and retired units drop out — the same open-work rule the local list
+// applies (D3) — and nothing is copied: each unit stays the fold of its own
+// log, read here because the owning objective answers for it.
+function contributorsTo(owner: string, models: ProjectModel[]): Map<string, string[]>
+{
+    const map = new Map<string, string[]>();
+    for (const model of models.filter((item) => item.slug !== owner))
+    {
+        for (const work of model.works.filter(isOpenWork))
+        {
+            for (const link of work.foreignObjectives.filter((item) => item.project === owner))
+            {
+                map.set(link.id, [...map.get(link.id) ?? [], `${work.id} (${model.slug})`]);
+            }
+        }
+    }
+    return map;
+}
+
+function isOpenWork(work: WorkState): boolean
+{
+    return work.status !== "done" && work.status !== "retired";
+}
+
+// The objective's own open units. `objective.works` also carries the units
+// its milestones hold, so this is the one membership every count and listing
+// under the objective reads.
+function openLocalWork(model: ProjectModel, objective: ObjectiveState): string[]
+{
+    return objective.works.filter((id) => model.works.some((work) => work.id === id && isOpenWork(work)));
 }
 
 // The project a write records into, and its state, resolved together: a write
@@ -725,7 +774,11 @@ function requireCovered(milestone: MilestoneState): void
 // dispatcher's declaration. They parse through the one gate like every other
 // verb: the required-option refusal lives there, so a verb that stated its
 // contract in its own parser could not be covered by it (#106, closing #111).
-const LINK_OPTIONS = { objective: { type: "string" }, milestone: { type: "string" } } as const;
+const LINK_OPTIONS = {
+    objective: { type: "string" },
+    "objective-project": { type: "string" },
+    milestone: { type: "string" }
+} as const;
 
 const LINK_TARGET: Requirement = { flags: ["objective", "milestone"], value: "<id>", hint: "what the unit contributes to" };
 
@@ -780,19 +833,38 @@ function cmdWorkLink({ values, positionals }: CommandInput<typeof LINK_OPTIONS>,
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireWork(model, positionals[0]);
-    const targets: string[] = [];
+    const links = linkEdges(ctx, model, values, link ? "work link" : "work unlink");
+    const type = link ? "entity.linked" : "entity.unlinked";
+    recordEvents(ctx, links.map((edge) =>
+        makeEvent(ctx.project, type, { entity: work.id, link: edge }, undefined, true)),
+        `${work.id} ${work.outcome}`);
+}
+
+// The edges one call states, resolved before anything is written. An objective
+// resolves across the workspace (#244); a milestone resolves in the current
+// project only, so a foreign milestone id is refused as unknown here. Only a
+// foreign objective's edge carries the owning slug — a local link stays
+// byte-identical to what it always was.
+function linkEdges(ctx: ProjectContext, model: ProjectModel,
+    values: CommandInput<typeof LINK_OPTIONS>["values"], verb: string): Record<string, unknown>[]
+{
+    if (values.objective === undefined && values["objective-project"] !== undefined)
+    {
+        throw new CliError(`${verb} --objective-project needs --objective <id> to resolve`);
+    }
+    const edges: Record<string, unknown>[] = [];
     if (values.objective !== undefined)
     {
-        targets.push(requireObjective(model, values.objective).id);
+        const found = findObjectiveAcross(ctx, model, values.objective, values["objective-project"]);
+        edges.push(found.slug === ctx.project
+            ? { type: "member-of", target: found.objective.id }
+            : { type: "member-of", target: found.objective.id, project: found.slug });
     }
     if (values.milestone !== undefined)
     {
-        targets.push(requireMilestone(model, values.milestone).milestone.id);
+        edges.push({ type: "member-of", target: requireMilestone(model, values.milestone).milestone.id });
     }
-    const type = link ? "entity.linked" : "entity.unlinked";
-    recordEvents(ctx, targets.map((target) =>
-        makeEvent(ctx.project, type, { entity: work.id, link: { type: "member-of", target } }, undefined, true)),
-        `${work.id} ${work.outcome}`);
+    return edges;
 }
 
 /* ── goal-gap proposals ────────────────────────────────────────────── */
@@ -918,7 +990,7 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
 
 /* ── console output ────────────────────────────────────────────────── */
 
-function printObjectives(model: ProjectModel): void
+function printObjectives(model: ProjectModel, contributors: Map<string, string[]>): void
 {
     const objectives = openObjectives(model.goals);
     if (objectives.length === 0)
@@ -929,7 +1001,9 @@ function printObjectives(model: ProjectModel): void
     for (const objective of objectives)
     {
         const target = objective.target === undefined ? "" : ` · ${objective.horizon ?? "target"} ${objective.target}`;
-        console.log(`${objective.id}  ${stateMark(objective.state)}  ${objective.outcome}${styled ? dim(target) : target}`);
+        const linked = openLocalWork(model, objective).length + (contributors.get(objective.id) ?? []).length;
+        const flags = ` [${linked === 0 ? "no work linked" : `${linked} work unit(s)`}]`;
+        console.log(`${objective.id}  ${stateMark(objective.state)}  ${objective.outcome}${styled ? dim(target) : target}${flags}`);
         for (const milestone of objective.milestones)
         {
             console.log(`  ${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome} — ${milestone.reason}`);
@@ -975,6 +1049,68 @@ function requireObjective(model: ProjectModel, id: string | undefined): Objectiv
         throw new CliError(`unknown objective "${wanted}" — run \`self objective\` to list ids`);
     }
     return objective;
+}
+
+// An objective and the registered project whose log owns it.
+interface FoundObjective
+{
+    slug: string;
+    objective: ObjectiveState;
+}
+
+// The `findWorkAcross` precedent (#181, #244): a bare id resolves in the
+// current project first and wins there outright; an id held only by other
+// projects resolves alone or is refused by naming every holder; the flag
+// resolves in the named project without the search.
+function findObjectiveAcross(ctx: ProjectContext, model: ProjectModel, id: string | undefined, project: string | undefined): FoundObjective
+{
+    const wanted = requireText(id, "… --objective <id> — run `self objective` to list ids");
+    if (project !== undefined)
+    {
+        return objectiveIn(ctx, model, wanted, requireRegistered(ctx.storeDir, project));
+    }
+    const others = readRegistry(ctx.storeDir).map((entry) => entry.slug).filter((slug) => slug !== ctx.project);
+    const matches: FoundObjective[] = [];
+    for (const slug of [ctx.project, ...others])
+    {
+        const source = slug === ctx.project ? model : buildModel(ctx.storeDir, slug, new Date());
+        const objective = source.goals.objectives.find((item) => item.id === wanted);
+        if (objective !== undefined)
+        {
+            matches.push({ slug, objective });
+        }
+    }
+    return settleObjectiveMatches(ctx, wanted, matches);
+}
+
+function settleObjectiveMatches(ctx: ProjectContext, wanted: string, matches: FoundObjective[]): FoundObjective
+{
+    if (matches.length > 0 && matches[0].slug === ctx.project)
+    {
+        return matches[0];
+    }
+    if (matches.length > 1)
+    {
+        throw new CliError(`objective "${wanted}" exists in more than one project (${matches.map((m) => m.slug).join(", ")}) — pass --objective-project <slug>`);
+    }
+    if (matches.length === 0)
+    {
+        throw new CliError(`unknown objective "${wanted}" — no registered project has it; run \`self objective --workspace\` to list ids`);
+    }
+    return matches[0];
+}
+
+// The flag resolves in the named project alone, and naming the current one
+// records the local shape — the mirror of `--successor-project`.
+function objectiveIn(ctx: ProjectContext, model: ProjectModel, wanted: string, slug: string): FoundObjective
+{
+    const source = slug === ctx.project ? model : buildModel(ctx.storeDir, slug, new Date());
+    const objective = source.goals.objectives.find((item) => item.id === wanted);
+    if (objective === undefined)
+    {
+        throw new CliError(`no objective "${wanted}" in ${slug} — run \`self objective --project ${slug}\` to list ids`);
+    }
+    return { slug, objective };
 }
 
 function requireMilestone(model: ProjectModel, id: string | undefined): { objective: ObjectiveState; milestone: MilestoneState }

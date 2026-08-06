@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { currentConventions, DecisionState, otherGoals, ProjectModel, WorkState } from "./model.js";
+import { currentConventions, DecisionState, foreignToward, otherGoals, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
 import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
@@ -532,8 +532,9 @@ function workRow(model: ProjectModel, work: WorkState, verdicts: Record<string, 
 {
     const latest = work.reports[work.reports.length - 1];
     const toward = contributionsOf(model.goals, work);
+    const towardIds = [...toward.map((item) => item.id), ...foreignToward(work)];
     const sub = [
-        toward.length === 0 ? "" : `toward ${toward.map((item) => item.id).join(" · ")}`,
+        towardIds.length === 0 ? "" : `toward ${towardIds.join(" · ")}`,
         latest === undefined ? "" : `latest: ${firstLine(latest.text)}`,
         work.evidence.length === 0 ? "" : `evidence ${work.evidence.map((c) => `${c} ${verdicts[c] ?? "unchecked"}`).join(" · ")}`
     ].filter((part) => part !== "").join(" · ");
@@ -705,6 +706,7 @@ function workChips(work: WorkState, toward: Contributions): string
         `<span class="wd-chip">created ${day(work.ts)}</span>`,
         work.next === undefined ? "" : `<span class="wd-chip">next: ${esc(work.next)}</span>`,
         ...toward.map((item) => `<span class="wd-chip">toward ${esc(item.id)}${item.criticalPath ? " · critical path" : ""}</span>`),
+        ...foreignToward(work).map((item) => `<span class="wd-chip">toward ${esc(item)}</span>`),
         ...work.branches.map((b) => `<span class="wd-chip">branch ${esc(b)}</span>`)
     ].filter((chip) => chip !== "").join("");
 }

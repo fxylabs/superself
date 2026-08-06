@@ -10,13 +10,15 @@ import {
     branchTotals,
     buildModel,
     closedRecords,
+    ForeignObjectiveLink,
+    foreignToward,
     otherGoals,
     ProjectModel,
     WaitingItem,
     workScope,
     WorkState
 } from "./model.js";
-import { contributionsOf, openObjectives, openProposals } from "./objectives.js";
+import { contributionsOf, ObjectiveState, openObjectives, openProposals } from "./objectives.js";
 import { CliContext, ProjectScope, readRegistry, readStoreConfig, readVerdicts, tokenScale, TokenScale } from "./paths.js";
 import {
     AttemptRow,
@@ -127,21 +129,12 @@ export function printContext(ctx: CliContext, render: RenderMode): void
         console.log(renderContext({ model, waiting: unrankedWaitingLines(model) }).join("\n"));
         return;
     }
-    writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))), foreignEntities(ctx)));
-}
-
-// A record renders in the project its scope names while its events stay in the
-// store that already holds them (#197 §3, #207 D1, #181 D1) — so the collect
-// step reads every other registered project's fold and carries in the current
-// records that name this project, plus the workspace-scoped ones, which name
-// every project.
-function foreignEntities(ctx: CliContext): EntityState[]
-{
-    const here = ctx.project;
-    return foreignModels(ctx.storeDir, here)
-        .flatMap((model) => model.entities.filter((entity) =>
-            here !== undefined && rendersIn(entity, model.slug, here)
-            && entity.status === "confirmed" && isCurrent(entity)));
+    // One fold per foreign project, read twice: for the records scoped in
+    // here (#181 D2), and for what the linked foreign objectives can be said
+    // to hold — status and target — at read time (#244).
+    const all = [model, ...foreignModels(ctx.storeDir, ctx.project)];
+    writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))),
+        scopedIn(all, ctx.project), all));
 }
 
 // The placement projection (#197 §6, #202): collect the live entities, order
@@ -162,15 +155,16 @@ interface ContextSection
     omission: (count: number) => string;
 }
 
-function renderProjectContext(model: ProjectModel, limit: number, foreign: EntityState[] = []): string
+function renderProjectContext(model: ProjectModel, limit: number, foreign: EntityState[] = [], all: ProjectModel[] = []): string
 {
-    const { head, sections } = projectContextSections(model, foreign);
+    const { head, sections } = projectContextSections(model, foreign, all);
     return assembleContext(head, sections, fitKeeps(head, sections, limit));
 }
 
-function projectContextSections(model: ProjectModel, foreign: EntityState[]): { head: string[]; sections: ContextSection[] }
+function projectContextSections(model: ProjectModel, foreign: EntityState[], all: ProjectModel[] = []): { head: string[]; sections: ContextSection[] }
 {
     const project = shellArgument(model.slug);
+    const linked = collectForeignObjectives(all);
     // Collect is scope-aware (#197 §6): this project's current records plus
     // every other store's workspace-scoped ones, in one priority ordering —
     // workspace and project entities interleave rather than sectioning. Work
@@ -186,10 +180,51 @@ function projectContextSections(model: ProjectModel, foreign: EntityState[]): { 
         sections: [
             descriptionSection(model, project),
             fullSection(placed, project),
-            ...liveSections(model, project),
+            ...liveSections(model, project, linked),
             indexSection(placed, project)
         ]
     };
+}
+
+/* ── what a context can say about another project's objective (#244) ─ */
+
+// The owning slug is stated by this project's own log; everything else — the
+// objective's outcome, target and status — is the owner's to say, read here
+// from folds already in hand. Every registered fold is keyed, the viewer's
+// own included, so a slug the map does not know is a project the workspace no
+// longer registers (D4).
+interface ForeignObjectiveView
+{
+    slugs: Set<string>;
+    states: Map<string, ObjectiveState>;
+}
+
+function collectForeignObjectives(all: ProjectModel[]): ForeignObjectiveView
+{
+    const states = new Map<string, ObjectiveState>();
+    for (const model of all)
+    {
+        for (const objective of model.goals.objectives)
+        {
+            states.set(`${model.slug}/${objective.id}`, objective);
+        }
+    }
+    return { slugs: new Set(all.map((model) => model.slug)), states };
+}
+
+// The contributing project cannot see the objective through its own
+// `self objective`, so disclosure rides the toward note it already reads: the
+// slug always, and the status whenever the owner moved it off active —
+// dropped, superseded, reached (D1, D2, D6) — or stopped being registered at
+// all (D4). A live link to a live objective stays a bare `id (slug)`.
+function foreignTowardLabel(link: ForeignObjectiveLink, view: ForeignObjectiveView): string
+{
+    if (!view.slugs.has(link.project))
+    {
+        return `${link.id} (${link.project}, not registered)`;
+    }
+    const status = view.states.get(`${link.project}/${link.id}`)?.status ?? "unknown";
+    return status === "active" ? `${link.id} (${link.project})` : `${link.id} (${link.project}, ${status})`;
 }
 
 function descriptionSection(model: ProjectModel, project: string): ContextSection
@@ -265,12 +300,12 @@ function indexSection(placed: EntityState[], project: string): ContextSection
 // what waits on a person, anchored between the full block and the index lines
 // — even when the full block is empty. Engine-owned: nothing here is asserted
 // or placed, so its internal order is fixed.
-function liveSections(model: ProjectModel, project: string): ContextSection[]
+function liveSections(model: ProjectModel, project: string, linked: ForeignObjectiveView): ContextSection[]
 {
     return [
         {
             header: "## Work in progress",
-            rows: [...inProgressLines(model), ...otherOpenRows(model, project)],
+            rows: [...inProgressLines(model, linked), ...otherOpenRows(model, project)],
             omission: (count) => `- … ${plural(count, "work item")} omitted; run \`${scoped("self work", project)}\``
         },
         {
@@ -280,7 +315,7 @@ function liveSections(model: ProjectModel, project: string): ContextSection[]
         },
         {
             header: "## Deadlines",
-            rows: deadlineRows(model),
+            rows: deadlineRows(model, linked),
             omission: (count) => `- … ${plural(count, "deadline")} omitted; run \`${scoped("self state", project)}\``
         },
         {
@@ -331,21 +366,48 @@ function entityWaitingRows(model: ProjectModel): string[]
 }
 
 // Deadlines derive from the reserved `target` metadata over the live set,
-// soonest first. The date renders as recorded — judging it against today is
-// the health signals' job, so this projection is stable for a given log.
-function deadlineRows(model: ProjectModel): string[]
+// soonest first, and the linked foreign objectives' targets merge in on the
+// same ordering (#244 C4). The date renders as recorded — judging it against
+// today is the health signals' job, so this projection is stable for a given
+// set of logs.
+function deadlineRows(model: ProjectModel, linked: ForeignObjectiveView): string[]
 {
-    return model.entities
+    const local = model.entities
         .filter((item) => item.status === "confirmed" && isCurrent(item) && item.target !== undefined
             && rendersIn(item, model.slug, model.slug))
-        .sort((left, right) => (left.target ?? "").localeCompare(right.target ?? "") || left.id.localeCompare(right.id))
-        .map((item) => `- ${item.target}: ${entityLabel(item)}${oneLine(item.text)}`);
+        .map((item) => ({ target: item.target ?? "", id: item.id, row: `- ${item.target}: ${entityLabel(item)}${oneLine(item.text)}` }));
+    return [...local, ...foreignDeadlineRows(model, linked)]
+        .sort((left, right) => left.target.localeCompare(right.target) || left.id.localeCompare(right.id))
+        .map((item) => item.row);
+}
+
+// One row per linked foreign objective, however many rendered units
+// contribute to it, and only while the owner still holds it active with a
+// target: a dropped, superseded or reached objective leaves the deadlines the
+// moment nothing is working toward it (#244 C4, D1). A closed unit's link
+// stops carrying the row for the same reason its contribution leaves the
+// owner's counts.
+function foreignDeadlineRows(model: ProjectModel, linked: ForeignObjectiveView): { target: string; id: string; row: string }[]
+{
+    const rows = new Map<string, { target: string; id: string; row: string }>();
+    for (const work of model.works.filter((item) => item.status !== "done" && item.status !== "retired"))
+    {
+        for (const link of work.foreignObjectives.filter((item) => item.project !== model.slug))
+        {
+            const objective = linked.states.get(`${link.project}/${link.id}`);
+            if (objective?.status === "active" && objective.target !== undefined && !rows.has(link.id))
+            {
+                rows.set(link.id, { target: objective.target, id: link.id, row: `- ${objective.target}: [objective] ${oneLine(objective.outcome)} (${link.project})` });
+            }
+        }
+    }
+    return [...rows.values()];
 }
 
 // Full rows for the work actually moving, and nothing else (#205 table C): a
 // unit blocked on a dependency or an external wait left this block for the
 // open-work count, and a unit blocked on a decision renders under "waiting".
-function inProgressLines(model: ProjectModel): string[]
+function inProgressLines(model: ProjectModel, linked: ForeignObjectiveView): string[]
 {
     const project = shellArgument(model.slug);
     return model.works.filter((w) => w.status === "active").map((work) =>
@@ -353,7 +415,12 @@ function inProgressLines(model: ProjectModel): string[]
         const latest = [...work.reports].sort(compareDated).at(-1);
         const report = latest === undefined ? "" : reportExcerpt(latest.text, work.id, project);
         const next = work.next === undefined ? "" : ` (next: ${work.next})`;
-        const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
+        // Local contributions stay unannotated, as they always were; only the
+        // foreign ones carry the owning slug and its disclosures (#244 C3).
+        const toward = [
+            ...contributionsOf(model.goals, work).map((item) => item.id),
+            ...work.foreignObjectives.map((link) => foreignTowardLabel(link, linked))
+        ].join(", ");
         return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${heldNote(work)}${report}${next}`;
     });
 }
@@ -437,7 +504,7 @@ export function contextRendered(storeDir: string, models: ProjectModel[]): Set<s
     const shown = new Set<string>();
     for (const model of models)
     {
-        const { head, sections } = projectContextSections(contextView(storeDir, models, model), scopedIn(models, model.slug));
+        const { head, sections } = projectContextSections(contextView(storeDir, models, model), scopedIn(models, model.slug), models);
         const keeps = fitKeeps(head, sections, limit);
         sections.forEach((section, index) =>
             (section.ids ?? []).slice(0, keeps[index]).forEach((id) => shown.add(id)));
@@ -460,8 +527,8 @@ function contextView(storeDir: string, models: ProjectModel[], model: ProjectMod
     };
 }
 
-// Every other project's records that render here (#181 D2) — the collect
-// `foreignEntities` does for the printed render, over folds already in hand.
+// Every other project's records that render here (#181 D2), over folds
+// already in hand — the printed render and the search membership both read it.
 function scopedIn(models: ProjectModel[], viewer: string): EntityState[]
 {
     return models.filter((model) => model.slug !== viewer)
@@ -787,7 +854,8 @@ export function printWorkList(ctx: ProjectScope, render: RenderMode): void
     }
     for (const work of open)
     {
-        console.log(plainWorkLine(work, contributionsOf(model.goals, work).map((item) => item.id).join(", "), project));
+        const toward = [...contributionsOf(model.goals, work).map((item) => item.id), ...foreignToward(work)];
+        console.log(plainWorkLine(work, toward.join(", "), project));
     }
     const done = model.works.filter((w) => w.status === "done").length;
     if (done > 0)
