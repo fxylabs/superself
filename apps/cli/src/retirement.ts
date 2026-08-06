@@ -11,6 +11,7 @@ import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { ProjectModel } from "./model.js";
 import { CliContext } from "./paths.js";
 import { recordEvents } from "./pipeline.js";
+import { bold, dim, red } from "./style.js";
 import { CliError, SelfEvent } from "./types.js";
 
 // What the three transitions are called where a person reads them. The verb
@@ -80,13 +81,15 @@ const TEXT_LINE_LIMIT = 20;
 // process can set, so the payload carries what was actually typed.
 function requireHumanRetirement(intent: RetirementIntent, model: ProjectModel): HumanConfirmation
 {
-    const disclosure = renderDisclosure(intent, model);
     const challenge = intent.targets.map((target) => target.id).join(" ");
     if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
     {
-        throw new CliError(refusal(intent, disclosure));
+        throw new CliError(refusal(intent, renderDisclosure(intent, model, PLAIN_EMPHASIS)));
     }
-    const confirmed = confirmHuman(`${headline(intent)}\n\n${disclosure}`, challenge);
+    const confirmed = confirmHuman(
+        `${red(bold(headline(intent)))}\n\n${renderDisclosure(intent, model, PROMPT_EMPHASIS)}`,
+        challenge,
+        `type ${bold(challenge)} to confirm exactly what you are approving`);
     if ("code" in confirmed)
     {
         throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
@@ -151,23 +154,40 @@ function describe(intent: RetirementIntent): string
     return intent.targets.length === 1 ? `a confirmed ${noun}` : `${intent.targets.length} confirmed ${noun}s`;
 }
 
-// One target, as a person reads it: what it says, when it was confirmed, how
-// long ago, and what still points at it.
-function renderTarget(target: EntityState, model: ProjectModel): string[]
+// How a disclosure is weighted where it is read. The prompt is the only styled
+// one: a refusal is read by a process, and an escape sequence in text something
+// parses is noise it never asked for. Painting is a no-op off a terminal
+// anyway, so `PROMPT_EMPHASIS` is safe wherever the prompt itself is reachable.
+interface Emphasis
 {
-    const lines = [`  ${target.id}  ${target.labels[0] ?? "record"}  confirmed ${target.ts}  (${age(target.ts)})`];
+    // What the record is, which is what a person scanning for the wrong target
+    // reads first.
+    head: (text: string) => string;
+    // What points at it, which matters only once the target is the right one.
+    aside: (text: string) => string;
+}
+
+const PLAIN_EMPHASIS: Emphasis = { head: (text) => text, aside: (text) => text };
+const PROMPT_EMPHASIS: Emphasis = { head: bold, aside: dim };
+
+// One target, as a person reads it: what it says, when it was confirmed, how
+// long ago, and what still points at it. The record's own words are never
+// painted — they are the thing being judged.
+function renderTarget(target: EntityState, model: ProjectModel, emphasis: Emphasis): string[]
+{
+    const lines = [emphasis.head(`  ${target.id}  ${target.labels[0] ?? "record"}  confirmed ${target.ts}  (${age(target.ts)})`)];
     lines.push(...quoted(target.text));
     if (target.why !== undefined)
     {
         lines.push(...quoted(target.why, "why: "));
     }
-    lines.push(`  referenced by: ${references(target.id, model)}`);
+    lines.push(emphasis.aside(`  referenced by: ${references(target.id, model)}`));
     return lines;
 }
 
-function renderDisclosure(intent: RetirementIntent, model: ProjectModel): string
+function renderDisclosure(intent: RetirementIntent, model: ProjectModel, emphasis: Emphasis): string
 {
-    return intent.targets.flatMap((target) => renderTarget(target, model)).join("\n");
+    return intent.targets.flatMap((target) => renderTarget(target, model, emphasis)).join("\n");
 }
 
 // Everything that still names this record. Read off the same folded model the

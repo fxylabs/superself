@@ -222,6 +222,15 @@ export interface WaitingItem
     full: string;
     identity: string;
     recovery: ScopableVerb | RecoveryTarget;
+    // The command that rules on this item, where ruling on it is a command of
+    // its own rather than a page to go read. A row that has none is answered
+    // by its recovery pointer instead, so every row a person sees carries
+    // something to run (#264).
+    action?: string;
+    // The same sentence with the command clause left off, for the render that
+    // prints the command on a line of its own. Set only where `full` ends by
+    // naming the command; elsewhere the two are the same text.
+    lead?: string;
 }
 
 // What confirming a proposal would do, which is the only ranking a reader can
