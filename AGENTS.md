@@ -32,7 +32,7 @@
 - Production build: `pnpm build`.
 - Test tier: `pnpm test` — unit plus CLI integration tests, also run by PR CI.
 
-<!-- superself:begin v0.5.1 -->
+<!-- superself:begin v0.6.0 -->
 ## Project state (superself)
 
 Project state — goals, decisions, work units, reports — is version-controlled
