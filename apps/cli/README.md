@@ -1,11 +1,15 @@
 # Superself
 
-**Your agents forget. Your projects shouldn't.**
+**The open Company State Runtime.**
 
-Superself is version control for your project's state. Git versions your
-code; Superself versions the project itself — goals, decisions, work units,
-and outputs — so you pick up where you left off across sessions, models, and
-tools instead of re-explaining your project every session.
+Models have context. Agents have runtimes. Companies need state.
+
+Superself is version control for your project's state — the runtime's shipped
+foundation. Git versions your code; Superself versions the project itself —
+goals, decisions, work units, and evidence — so work picks up where it left
+off across sessions, models, and tools instead of being re-explained every
+session. The full picture, what works today, and the roadmap boundary live in
+the [repository README](https://github.com/fxylabs/superself#readme).
 
 Installing this package gives you the `self` CLI.
 
@@ -14,6 +18,9 @@ npm install -g superself
 ```
 
 Requires Node 22.12+ and git.
+
+> Superself is an early alpha. Expect breaking changes while the event schema
+> and verbs settle.
 
 ## Quickstart
 
