@@ -149,7 +149,7 @@ export function demoWorkspace(box)
     mkdirSync(demo, { recursive: true });
     must(box, ws, ["init"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
-    must(box, demo, ["project", "add", "--name", "demo", "--desc", "fast tier project"]);
+    must(box, demo, ["project", "init", "--name", "demo", "--desc", "fast tier project"]);
     return { ws, demo };
 }
 

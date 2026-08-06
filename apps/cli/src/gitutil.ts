@@ -228,7 +228,7 @@ export function repositoryIdentity(dir: string): string | null
 const worktrees = new Map<string, string[]>();
 
 // The top level of every working tree of this repository, in a single probe.
-// Two checkouts of one repository are the case `self project add` must not
+// Two checkouts of one repository are the case `self project init` must not
 // treat as a new project, and the case scope resolution answers from: this
 // list says which of the paths the store knows are checkouts of the
 // repository the command is standing in.

@@ -36,7 +36,7 @@ function projectLines(marker: string | null, cwd: string, workspaceDir: string |
     const storeDir = workspaceDir === null ? null : join(workspaceDir, STORE_DIR);
     if (storeDir === null || !isStore(storeDir))
     {
-        return [row("project", "(none) — this directory is not registered; run `self project add`")];
+        return [row("project", "(none) — this directory is not registered; run `self project init`")];
     }
     const match = checkoutProject(storeDir, cwd);
     if (match !== null)
@@ -48,7 +48,7 @@ function projectLines(marker: string | null, cwd: string, workspaceDir: string |
     {
         return [row("project", `(none here) — this repository's "${elsewhere.slug}" is at ${elsewhere.dir}`)];
     }
-    return [row("project", "(none) — this directory is not registered; run `self project add`")];
+    return [row("project", "(none) — this directory is not registered; run `self project init`")];
 }
 
 function workspaceLines(workspaceDir: string | null): string[]
