@@ -40,7 +40,7 @@ function register(box, ws, slug, extra = [])
     const dir = join(ws, slug);
     mkdirSync(dir, { recursive: true });
     git(box, dir, ["init", "-q", "-b", "main"]);
-    must(box, dir, ["project", "add", "--name", slug, "--no-connect", ...extra]);
+    must(box, dir, ["project", "init", "--name", slug, "--no-connect", ...extra]);
     return dir;
 }
 

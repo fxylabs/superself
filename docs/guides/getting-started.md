@@ -107,11 +107,11 @@ Move to the root of the project you want Superself to manage:
 
 ```bash
 cd ~/path/to/my-project
-self project add
+self project init
 self setup
 ```
 
-By default, `self project add`:
+By default, `self project init`:
 
 1. registers the project in the selected workspace;
 2. creates the machine-local link between its slug and this checkout;
@@ -119,10 +119,12 @@ By default, `self project add`:
 4. renders managed Superself blocks into `AGENTS.md` and `CLAUDE.md`.
 
 The command prints the derived project slug and the instruction files it
-changed. Use `--name` when the directory name is not the identity you want:
+changed. `self project init` takes no path — it registers the directory it runs
+in — so use `--name` when that directory's name is not the identity you want:
 
 ```bash
-self project add --name checkout-service --desc "Customer checkout service"
+cd ~/path/to/checkout
+self project init --name checkout-service --desc "Customer checkout service"
 ```
 
 ### Commit the shared agent instructions
@@ -150,6 +152,7 @@ Create a long-term direction, one governing decision, and one outcome that must
 be reached:
 
 ```bash
+cd ~/path/to/my-project
 self goal add "Ship the first trustworthy release"
 self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
@@ -278,7 +281,7 @@ Use:
 self project link <project-slug>
 ```
 
-`self project add` correctly refuses to register a duplicate when it can
+`self project init` correctly refuses to register a duplicate when it can
 identify a sibling checkout.
 
 ### The project instruction blocks were skipped or changed

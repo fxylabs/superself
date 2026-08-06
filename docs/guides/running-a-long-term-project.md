@@ -39,7 +39,7 @@ Run `self setup` from the real git checkout to see how it resolves. If the
 project is not registered yet, register it:
 
 ```bash
-self project add
+self project init
 ```
 
 By default, registration also renders the managed Superself block into

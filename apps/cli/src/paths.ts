@@ -119,15 +119,15 @@ export function requireProject(cwd: string): ProjectContext
 // Reached only when neither a marker nor the repository answers. Inside a
 // checkout that does hold a registered project, the directory is simply the
 // wrong one — say where the project sits rather than sending the agent to
-// `self project add`, the one command that must not run there.
+// `self project init`, the one command that must not run there.
 function unregisteredMessage(storeDir: string, cwd: string): string
 {
     const elsewhere = checkoutMatches(storeDir, cwd)[0];
     if (elsewhere !== undefined)
     {
-        return `this repository's registered project "${elsewhere.slug}" is at ${elsewhere.dir} — run self from there (\`self project add\` here would register a duplicate)`;
+        return `this repository's registered project "${elsewhere.slug}" is at ${elsewhere.dir} — run self from there (\`self project init\` here would register a duplicate)`;
     }
-    return "not inside a registered project — run `self project add` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine";
+    return "not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine";
 }
 
 /* ── read scope ────────────────────────────────────────────────────── */
@@ -225,7 +225,7 @@ function requireProjects(storeDir: string): RegistryEntry[]
     const entries = readRegistry(storeDir);
     if (entries.length === 0)
     {
-        throw new CliError("this workspace has no registered projects — run `self project add` inside a project directory to register one");
+        throw new CliError("this workspace has no registered projects — run `self project init` inside a project directory to register one");
     }
     return entries;
 }
@@ -890,7 +890,7 @@ export function checkoutProject(storeDir: string, dir: string): CheckoutMatch | 
 }
 
 // The slug of a project already registered at this same directory in another
-// checkout of this repository — the case `self project add` must refuse,
+// checkout of this repository — the case `self project init` must refuse,
 // because the project is registered already and a second entry would split its
 // state in two.
 //

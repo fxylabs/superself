@@ -32,7 +32,7 @@ function trio()
         const dir = join(ws, slug);
         mkdirSync(dir, { recursive: true });
         git(box, dir, ["init", "-q", "-b", "main"]);
-        must(box, dir, ["project", "add", "--name", slug, "--no-connect"]);
+        must(box, dir, ["project", "init", "--name", slug, "--no-connect"]);
         dirs[slug] = dir;
     }
     return { box, ws, ...dirs };
@@ -158,12 +158,12 @@ test("T1.9: an empty --scope is refused as empty, never read as the omission", (
     assert.match(refused.out, /it cannot be empty/);
 });
 
-test("T1.10: self project add refuses the slug workspace as reserved", () =>
+test("T1.10: self project init refuses the slug workspace as reserved", () =>
 {
     const dir = join(t1.ws, "reserved");
     mkdirSync(dir, { recursive: true });
     git(t1.box, dir, ["init", "-q", "-b", "main"]);
-    const refused = selfIn(t1.box, dir, ["project", "add", "--name", "workspace", "--no-connect"]);
+    const refused = selfIn(t1.box, dir, ["project", "init", "--name", "workspace", "--no-connect"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /"workspace" is reserved/);
 });
@@ -501,7 +501,7 @@ test("self project refuses a subcommand it does not have, with the usage it does
     const t = trio();
     const refused = selfIn(t.box, t.alpha, ["project", "remove", "beta"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /usage: self project \| add \[path\]/);
+    assert.match(refused.out, /usage: self project \| init \[--name <slug>\]/);
     assert.match(refused.out, /link \[slug\] \[path\]/);
 });
 

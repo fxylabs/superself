@@ -345,7 +345,7 @@ The read-only principle stands: no viewer ever writes state.
 
 ## First vertical slice (decided 2026-07-25)
 
-Scope: `self init`, `self project add`, the event verbs (`goal add`, `decide`,
+Scope: `self init`, `self project init`, the event verbs (`goal add`, `decide`,
 `work add/start/block/unblock/done`, `report`, `convention add`), immediate
 fold, `self context`, the read commands (`status`, `work`, `log`), and
 `self search`. Deferred to the next slice: commit-trailer harvesting,

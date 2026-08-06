@@ -108,10 +108,10 @@ function renderMachineBlock(): string
         "  CLAUDE.md: run `self context` at session start and follow that block.",
         "  `self setup` tells you which project, if any, a directory resolves to.",
         "- In an unregistered project, ask the user once whether to register it with",
-        "  `self project add`. Never register a project on your own.",
+        "  `self project init`. Never register a project on your own.",
         "- Every checkout of a registered git repository — worktrees included —",
         "  resolves on its own: work there as usual, and never run",
-        "  `self project add` to attach one.",
+        "  `self project init` to attach one.",
         MACHINE_END
     ].join("\n");
 }

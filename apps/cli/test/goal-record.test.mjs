@@ -20,7 +20,7 @@ function project(name)
     const dir = join(ws, name);
     mkdirSync(dir, { recursive: true });
     git(box, dir, ["init", "-q", "-b", "main"]);
-    must(box, dir, ["project", "add", "--name", name, "--desc", `${name} project`]);
+    must(box, dir, ["project", "init", "--name", name, "--desc", `${name} project`]);
     return dir;
 }
 
