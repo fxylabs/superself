@@ -16,6 +16,7 @@ import {
     BranchUnshipped,
     branchTotals,
     currentConventions,
+    foreignToward,
     otherGoals,
     ProjectModel,
     RecoveryTarget,
@@ -446,7 +447,7 @@ function workNotes(model: ProjectModel, work: WorkState): Cell[]
     {
         notes.push({ text: held, paint: yellow });
     }
-    const toward = contributionsOf(model.goals, work).map((item) => item.id).join(", ");
+    const toward = [...contributionsOf(model.goals, work).map((item) => item.id), ...foreignToward(work)].join(", ");
     if (toward !== "")
     {
         notes.push({ text: `toward ${toward}`, paint: dim });

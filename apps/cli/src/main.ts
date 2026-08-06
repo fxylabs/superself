@@ -613,8 +613,11 @@ export const COMMANDS: Command[] = [
                 verbs: ["done"]
             },
             {
-                syntax: "work link|unlink <id> --objective o | --milestone m",
-                description: ["state, or withdraw, what a work unit contributes to"],
+                syntax: "work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m",
+                description: [
+                    "state, or withdraw, what a work unit contributes to",
+                    "(an objective resolves here first, then across every registered project)"
+                ],
                 verbs: ["link", "unlink"]
             },
             { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r', verbs: ["propose"] },
@@ -671,8 +674,12 @@ export const COMMANDS: Command[] = [
             "  --report <text>       what verifiably happened, recorded as a report with the done",
             "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
             "  --successor-project <slug>  the successor's project when its id is ambiguous",
-            "  --objective <id>      the objective a linked unit contributes to",
-            "  --milestone <id>      the milestone a linked or proposed unit contributes to",
+            "  --objective <id>      the objective a linked unit contributes to, resolved in",
+            "                        this project first and then across every registered one",
+            "  --objective-project <slug>  the objective's project when its id is ambiguous,",
+            "                        or to name where it resolves outright",
+            "  --milestone <id>      the milestone a linked or proposed unit contributes to,",
+            "                        resolved in the current project only",
             "  --value <text>        why the proposed work matters",
             "  --success <text>      what done looks like for the proposal",
             "  --stop <text>         the condition that ends the proposal early",
@@ -698,9 +705,9 @@ export const COMMANDS: Command[] = [
             }
         ],
         detail: [
-            "take back one retirement, supersession or withdrawal. Nothing else is",
-            "undone: the id names the destructive event, and any other kind of event",
-            "is refused rather than guessed at.",
+            "take back one retirement, supersession, withdrawal or link. Nothing else",
+            "is undone: the id names the event to take back, and any other kind of",
+            "event is refused rather than guessed at.",
             "",
             "The record comes back and the log keeps both halves — what happened and",
             "what took it back. A supersession's successor stays; it simply stops",
@@ -2217,7 +2224,10 @@ function userMessage(error: unknown, argv: string[]): string | null
 // event, and the refusal is where that impression gets corrected.
 const UNDOABLE: Record<string, string> = {
     "entity.retracted": "withdrawal",
-    "entity.retired": "retirement"
+    "entity.retired": "retirement",
+    // A link is a statement too (#244 D5): taking the event back removes the
+    // contribution edge from every surface that read it, in every project.
+    "entity.linked": "link"
 };
 
 // Reversing one destructive event. The event is named rather than the record,
@@ -2239,7 +2249,11 @@ function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | 
     const text = model.entities.find((item) => item.id === restored)?.text ?? restored;
     recordEvent(ctx, makeEvent(ctx.project, "entity.restored",
         { entity: restored, why: required(why) }, { annuls: event.id }, true), text);
-    console.log(`${restored} is standing again — its ${undone} was taken back`);
+    // Undoing a link never removed the record itself, so "standing again"
+    // would claim a restoration that did not happen.
+    console.log(undone === "link"
+        ? `${restored} no longer carries the link — the linked event was taken back`
+        : `${restored} is standing again — its ${undone} was taken back`);
 }
 
 // Which act this event was, or a refusal naming the ones that can be taken
@@ -2256,7 +2270,7 @@ function undoableKind(event: SelfEvent): string
     {
         return "supersession";
     }
-    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, or a record's supersession of another, and nothing else`);
+    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, or a record's supersession of another, and nothing else`);
 }
 
 // What comes back. A withdrawal and a retirement name their target; a
