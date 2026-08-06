@@ -31,6 +31,7 @@ import {
     scoped,
     shellArgument,
     pointerTo,
+    WaitingRow,
     workspacePointer
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
@@ -126,7 +127,7 @@ export function printContext(ctx: CliContext, render: RenderMode): void
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
     if (render === "pretty")
     {
-        console.log(renderContext({ model, waiting: unrankedWaitingLines(model) }).join("\n"));
+        console.log(renderContext({ model, waiting: unrankedWaitingRows(model) }).join("\n"));
         return;
     }
     // One fold per foreign project, read twice: for the records scoped in
@@ -310,7 +311,7 @@ function liveSections(model: ProjectModel, project: string, linked: ForeignObjec
         },
         {
             header: "## Waiting on you",
-            rows: [...waitingItems(model).map((item) => `- ${item.full}`), ...entityWaitingRows(model)],
+            rows: [...waitingItems(model), ...entityWaitingItems(model)].map((item) => `- ${item.full}`),
             omission: (count) => `- … ${plural(count, "waiting item")} omitted; run \`${scoped("self status", project)}\``
         },
         {
@@ -348,21 +349,43 @@ function otherOpenRows(model: ProjectModel, project: string): string[]
 // so the paired proposed-add and proposed-demotion an agent recorded past a
 // cap are both actionable from this render alone — the demotion's why names
 // the record it admits.
-function entityWaitingRows(model: ProjectModel): string[]
+//
+// Waiting items rather than lines, because both renders read them now. They
+// used to be built as finished text here and appended to the piped block
+// alone, which left `self state confirm` — a command only a person can run —
+// off the only render a person reads (#264).
+function entityWaitingItems(model: ProjectModel): WaitingItem[]
 {
-    const rows: string[] = [];
-    for (const entity of model.entities)
+    return model.entities.flatMap((entity) => entityWaitingItem(entity) ?? []);
+}
+
+function entityWaitingItem(entity: EntityState): WaitingItem | undefined
+{
+    const action = `self state confirm ${entity.id}`;
+    if (entity.status === "proposed" && entity.source === undefined)
     {
-        if (entity.status === "proposed" && entity.source === undefined)
-        {
-            rows.push(`- proposed entity ${entity.id}: ${oneLine(entity.text)} (confirm with \`self state confirm ${entity.id}\`)`);
-        }
-        else if (entity.status === "confirmed" && entity.pending !== undefined)
-        {
-            rows.push(`- proposed placement of ${entity.id}: ${pendingSummary(entity.pending)} (confirm with \`self state confirm ${entity.id}\`)`);
-        }
+        return confirmable(`proposed entity ${entity.id}: ${oneLine(entity.text)}`, entity.id, action);
     }
-    return rows;
+    if (entity.status === "confirmed" && entity.pending !== undefined)
+    {
+        return confirmable(`proposed placement of ${entity.id}: ${pendingSummary(entity.pending)}`, entity.id, action);
+    }
+    return undefined;
+}
+
+// One sentence, said twice over: the piped render ends it by naming the
+// command, and the terminal render prints that command on a line of its own.
+// Composed here from the same two parts so the two can never disagree about
+// which command rules on the row.
+function confirmable(lead: string, id: string, action: string): WaitingItem
+{
+    return {
+        full: `${lead} (confirm with \`${action}\`)`,
+        lead,
+        identity: lead.split(":")[0],
+        recovery: { verb: "search", id },
+        action
+    };
 }
 
 // Deadlines derive from the reserved `target` metadata over the live set,
@@ -540,9 +563,20 @@ function scopedIn(models: ProjectModel[], viewer: string): EntityState[]
 // minus the live proposals. Those are the attention band, which that render
 // groups into its own tables — listing them here as well would print every
 // proposal twice.
-function unrankedWaitingLines(model: ProjectModel): string[]
+//
+// Each row carries the command that acts on it. An item that named no command
+// of its own falls back to its recovery pointer, so no row reaches a person
+// with nothing to run.
+function unrankedWaitingRows(model: ProjectModel): WaitingRow[]
 {
-    return [...model.waiting, ...workProposalItems(model)].map((item) => item.full);
+    const project = shellArgument(model.slug);
+    return [...model.waiting, ...workProposalItems(model), ...entityWaitingItems(model)]
+        .map((item) => ({ text: item.lead ?? item.full, action: item.action ?? recoveryCommand(item.recovery, project) }));
+}
+
+function recoveryCommand(recovery: WaitingItem["recovery"], project: string): string
+{
+    return typeof recovery === "string" ? scoped(recovery, project) : pointerTo(recovery, project);
 }
 
 function waitingItems(model: ProjectModel): WaitingItem[]
@@ -642,6 +676,7 @@ function workProposalItems(model: ProjectModel): WaitingItem[]
 {
     const project = shellArgument(model.slug);
     return openProposals(model.goals).map((proposal): WaitingItem => ({
+        action: `self work accept ${proposal.id.slice(0, 8)}`,
         full: [
             `work proposal ${proposal.id.slice(0, 8)}: ${proposal.outcome}`,
             `  toward ${proposal.milestone ?? proposal.objective} · value: ${proposal.value}`,
@@ -747,7 +782,7 @@ export function printStatus(ctx: CliContext, render: RenderMode): void
     {
         console.log(renderStatus({
             model,
-            waiting: unrankedWaitingLines(model),
+            waiting: unrankedWaitingRows(model),
             objectives: objectiveCountLine(model),
             attempts: openProcesses(ctx.project, model)
         }).join("\n"));
