@@ -84,7 +84,7 @@ function shellWords(text)
 }
 
 // Every directory an example enters exists as a git repository before the
-// run, so `cd` steers and `self project add` finds a repository to register.
+// run, so `cd` steers and `self project init` finds a repository to register.
 function enteredDir(box, dir)
 {
     mkdirSync(dir, { recursive: true });

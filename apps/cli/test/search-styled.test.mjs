@@ -24,7 +24,7 @@ const project = join(ws, "styled");
 mkdirSync(project, { recursive: true });
 must(box, ws, ["init"]);
 git(box, project, ["init", "-q", "-b", "main"]);
-must(box, project, ["project", "add", "--name", "styled", "--no-connect"]);
+must(box, project, ["project", "init", "--name", "styled", "--no-connect"]);
 must(box, project, ["state", "add", "T4-4 the highlighted phrase", "--exposure", "search"]);
 
 test("T4.4: the matched substring is highlighted when the answer is styled", async () =>

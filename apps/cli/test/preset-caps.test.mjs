@@ -180,11 +180,11 @@ const { ws: t3Ws, demo: t3Demo } = demoWorkspace(t3Box);
 const t3Other = join(t3Ws, "other");
 mkdirSync(t3Other, { recursive: true });
 git(t3Box, t3Other, ["init", "-q", "-b", "main"]);
-must(t3Box, t3Ws, ["project", "add", t3Other, "--name", "other", "--no-connect"]);
+must(t3Box, t3Other, ["project", "init", "--name", "other", "--no-connect"]);
 const t3Gamma = join(t3Ws, "gamma");
 mkdirSync(t3Gamma, { recursive: true });
 git(t3Box, t3Gamma, ["init", "-q", "-b", "main"]);
-must(t3Box, t3Ws, ["project", "add", t3Gamma, "--name", "gamma", "--no-connect"]);
+must(t3Box, t3Gamma, ["project", "init", "--name", "gamma", "--no-connect"]);
 const t3Self = (args) => selfIn(t3Box, t3Demo, args);
 let t3ProjectSeat;
 

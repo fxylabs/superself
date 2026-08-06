@@ -696,7 +696,7 @@ function renderWorkspaceContext(models: ProjectModel[], limit: number): string
 {
     if (models.length === 0)
     {
-        return "no projects registered — run `self project add` inside a project directory";
+        return "no projects registered — run `self project init` inside a project directory";
     }
     const full = models.map(workspaceContextLine).join("\n");
     if (countCharacters(full) <= limit)
@@ -814,7 +814,7 @@ function printWorkspaceOverview(ctx: CliContext, render: RenderMode): void
     const registry = readRegistry(ctx.storeDir);
     if (registry.length === 0)
     {
-        console.log("no projects registered — run `self project add` inside a project directory");
+        console.log("no projects registered — run `self project init` inside a project directory");
         return;
     }
     const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));

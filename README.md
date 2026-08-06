@@ -133,7 +133,7 @@ cd ~/self-workspace
 self init
 
 cd ~/path/to/my-project
-self project add
+self project init
 self goal add "Ship the first trustworthy release"
 self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
