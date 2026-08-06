@@ -8,8 +8,7 @@ without a private handoff.
 The workflow in this guide is available in the current alpha CLI. It uses
 durable project state, not the future end-to-end autonomous execution loop.
 
-> [!NOTE]
-> This guide assumes Superself is installed and its workspace has been
+> **Note** — This guide assumes Superself is installed and its workspace has been
 > initialized. See [Getting started with Superself](getting-started.md) if this
 > is your first project.
 

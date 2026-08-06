@@ -14,8 +14,7 @@ By the end, you will have:
 - a verified `self context` another agent can read; and
 - optionally, a private Git remote for explicit state synchronization.
 
-> [!NOTE]
-> This guide describes the shipped local alpha. Registering work does not
+> **Note** — This guide describes the shipped local alpha. Registering work does not
 > automatically plan or run an agent — a person or a session starts agents,
 > and the process ledger records what is running.
 
@@ -222,8 +221,7 @@ the remote repository. `self sync` explicitly:
 Superself does not push after every event. Sync is an explicit operation, and
 it synchronizes Company State — not the code in your project repositories.
 
-> [!WARNING]
-> Goals, decisions, reports, and copied artifacts may contain private company
+> **Warning** — Goals, decisions, reports, and copied artifacts may contain private company
 > information. Use a private remote, review who can access it, and do not assume
 > that the access policy for a source-code repository is automatically right
 > for the Company State store.
