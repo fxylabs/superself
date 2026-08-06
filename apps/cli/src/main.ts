@@ -38,6 +38,7 @@ import {
     requireProject,
     requireRegistered,
     requireWorkspace,
+    resolveProjectPath,
     SCOPE_OPTIONS,
     siblingSlug,
     tokenScale,
@@ -208,7 +209,7 @@ function printUsage(usage: string): void
 
 const INIT_OPTIONS = { lang: { type: "string" }, agents: { type: "boolean" } } as const;
 
-const PROJECT_ADD_OPTIONS = { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } } as const;
+const PROJECT_INIT_OPTIONS = { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } } as const;
 
 const DECIDE_OPTIONS = {
     proposed: { type: "boolean" },
@@ -400,9 +401,9 @@ export const COMMANDS: Command[] = [
                 verbs: ["", "list"]
             },
             {
-                syntax: "project add [path] [--name s] [--desc d] [--no-connect]",
-                description: ["register a project and render its agent block"],
-                verbs: ["add"]
+                syntax: "project init [--name s] [--desc d] [--no-connect]",
+                description: ["register the directory this runs in, and render its agent block"],
+                verbs: ["init"]
             },
             {
                 syntax: "project link [slug] [path]",
@@ -423,9 +424,14 @@ export const COMMANDS: Command[] = [
             "only saves the probe.",
             "",
             "the bare list is the answer to \"which slugs does --scope and --project take\",",
-            "and it reads the whole workspace: it takes neither flag, while add and link",
+            "and it reads the whole workspace: it takes neither flag, while init and link",
             "are writes that record into the workspace store they run against and from is",
             "a write that records into the project it runs in.",
+            "",
+            "`init` takes no path: it registers the directory it runs in, so a project is",
+            "named by --name rather than by an argument that reads like a name and is",
+            "read as a path. Attaching another checkout of a project already registered",
+            "is `link`, the one registration verb whose job involves a path.",
             "",
             "`from` records one relation — this project came from that one — as a record",
             "carrying the parent's slug, its reason and its time. It runs in the child,",
@@ -443,12 +449,11 @@ export const COMMANDS: Command[] = [
         node: branch({
             name: "project",
             unnamed: "options",
-            refusal: 'usage: self project | add [path] [--name <slug>] [--desc "<description>"] | link [slug] [path]'
-                + ' | from <parent-slug> --why "<reason>"',
+            refusal: projectRefusal,
             children: [
                 leaf("", {}, 0, projectList),
                 leaf("list", {}, 0, projectList),
-                leaf("add", PROJECT_ADD_OPTIONS, 1, projectAdd),
+                leaf("init", PROJECT_INIT_OPTIONS, 1, projectInit),
                 leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1])),
                 PROJECT_FROM_LEAF
             ]
@@ -1077,10 +1082,16 @@ function writeConfig(ctx: CliContext, patch: StoreConfig, message: string): void
     commitAll(ctx.storeDir, message);
 }
 
-// Two ways the same project is already here: another checkout of it, or the
-// slug itself. `workspace` is neither — it is the scope value that means every
-// project (#181 T1.10), so a project answering to it would make `--scope
-// workspace` ambiguous between one project and all of them.
+// Four ways the same project is already here: the marker this directory
+// already carries, another checkout of it, the slug itself, or a registry row
+// whose registration never finished. `workspace` is none of them — it is the
+// scope value that means every registered project (#181 T1.10), so a project
+// answering to it would make `--scope workspace` ambiguous between one project
+// and all of them.
+//
+// Every branch runs before the first byte is written (#251): registering wrote
+// the registry row first and validated afterwards, so a refusal that arrived
+// late left a project half in the workspace and not in it.
 function refuseDuplicateProject(storeDir: string, projectDir: string, slug: string): void
 {
     if (slug === "workspace")
@@ -1088,27 +1099,94 @@ function refuseDuplicateProject(storeDir: string, projectDir: string, slug: stri
         throw new CliError('"workspace" is reserved — `--scope workspace` means every registered project, '
             + "so no single project may answer to it; register this one with `--name <slug>`");
     }
+    refuseRegisteredHere(projectDir);
     const sibling = siblingSlug(storeDir, projectDir);
     if (sibling !== null)
     {
         throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling}\` instead of registering a duplicate`);
     }
-    if (readRegistry(storeDir).some((entry) => entry.slug === slug))
+    refuseTakenSlug(storeDir, projectDir, slug);
+}
+
+// The marker names the project this directory already is, so registering it a
+// second time is answered with that name rather than with whatever slug the
+// call asked for.
+function refuseRegisteredHere(projectDir: string): void
+{
+    const marker = join(projectDir, MARKER_FILE);
+    if (!existsSync(marker))
     {
-        throw new CliError(`project "${slug}" is already registered`);
+        return;
+    }
+    const slug = JSON.parse(readFileSync(marker, "utf8")).project;
+    throw new CliError(`"${projectDir}" is already registered as project "${slug}" — run \`self context\` to read its state`);
+}
+
+// A slug is taken whether or not the registration that took it finished. The
+// holder is named where a directory is known, and where none is — a registry
+// row whose marker was never written — completing it is the link, so both
+// remedies are handed over in the one pass.
+function refuseTakenSlug(storeDir: string, projectDir: string, slug: string): void
+{
+    if (!readRegistry(storeDir).some((entry) => entry.slug === slug))
+    {
+        return;
+    }
+    const held = resolveProjectPath(storeDir, slug, projectDir);
+    throw new CliError(`project "${slug}" is already registered${held === null
+        ? " in this workspace, with no directory linked on this machine" : ` at ${held}`}`
+        + ` — run \`self project link ${slug}\` here if this directory is that project,`
+        + " or `self project init --name <slug>` to register it under another slug");
+}
+
+// `add` took a path positional that reads like a name: `self project add
+// hyunam` inside `hyunam` meant the subfolder, not the name (#251). A verb
+// removed over that mistake owes the caller both verbs that replaced it,
+// which is why the removal is answered here rather than by the usage line.
+function projectRefusal(verb: string | undefined): string
+{
+    if (verb === "add")
+    {
+        return "`self project add` is gone — run `self project init` inside the directory to register it, "
+            + "or `self project link <slug>` if it is a checkout of a project registered already";
+    }
+    return 'usage: self project | init [--name <slug>] [--desc "<description>"] | link [slug] [path]'
+        + ' | from <parent-slug> --why "<reason>"';
+}
+
+// The leaf accepts one positional so a path can be refused by name here. The
+// arity gate would answer a stray argument with the syntax alone, and the
+// mistake this verb exists to end is precisely a caller who believes it takes
+// one (#251 T1.8).
+function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_OPTIONS>): void
+{
+    if (positionals[0] !== undefined)
+    {
+        throw new CliError(`\`self project init\` takes no path — it registers the directory it runs in, so run it inside `
+            + `"${positionals[0]}" to register that one, and name it with \`--name <slug>\``);
+    }
+    const ctx = requireWorkspace(process.cwd());
+    const projectDir = resolve(process.cwd());
+    const slug = values.name ?? basename(projectDir);
+    refuseDuplicateProject(ctx.storeDir, projectDir, slug);
+    registerProject(ctx, projectDir, slug, values.desc);
+    console.log(`project "${slug}" registered`);
+    if (values["no-connect"] !== true)
+    {
+        const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()));
+        console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
     }
 }
 
-function projectAdd({ values, positionals }: CommandInput<typeof PROJECT_ADD_OPTIONS>): void
+// Every write a registration makes, reached only once every refusal above has
+// passed. Nothing here can be undone by a later validation, so no validation
+// may stand later than this call.
+function registerProject(ctx: CliContext, projectDir: string, slug: string, description: string | undefined): void
 {
-    const ctx = requireWorkspace(process.cwd());
-    const projectDir = resolve(positionals[0] ?? process.cwd());
-    const slug = values.name ?? basename(projectDir);
-    refuseDuplicateProject(ctx.storeDir, projectDir, slug);
     const entry: Record<string, unknown> = { slug, added: new Date().toISOString() };
-    if (values.desc !== undefined)
+    if (description !== undefined)
     {
-        entry.description = values.desc;
+        entry.description = description;
     }
     appendFileSync(join(ctx.storeDir, "registry.jsonl"), JSON.stringify(entry) + "\n");
     // The registry this process already read no longer says what the file says.
@@ -1118,13 +1196,7 @@ function projectAdd({ values, positionals }: CommandInput<typeof PROJECT_ADD_OPT
     linkProject(ctx, slug, projectDir);
     ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
     foldProject(ctx.storeDir, slug);
-    commitAll(ctx.storeDir, `project add ${slug}`);
-    console.log(`project "${slug}" registered`);
-    if (values["no-connect"] !== true)
-    {
-        const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()));
-        console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
-    }
+    commitAll(ctx.storeDir, `project init ${slug}`);
 }
 
 // The registered slugs, which is what every `--scope <slug>` and `--project
@@ -1142,7 +1214,7 @@ function projectList(): void
     const { models, unreadable } = readableModels(ctx.storeDir);
     if (models.length === 0 && unreadable.length === 0)
     {
-        console.log("no projects registered — run `self project add` inside a project directory");
+        console.log("no projects registered — run `self project init` inside a project directory");
         return;
     }
     const registered = new Set(readRegistry(ctx.storeDir).map((entry) => entry.slug));
@@ -1190,7 +1262,7 @@ function projectLink(wanted: string | undefined, path: string | undefined): void
     const slug = wanted ?? inferredSlug(ctx.storeDir, projectDir);
     if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
-        throw new CliError(`project "${slug}" is not registered — run \`self project add\` instead`);
+        throw new CliError(`project "${slug}" is not registered — run \`self project init\` inside its directory instead`);
     }
     linkProject(ctx, slug, projectDir);
     foldProject(ctx.storeDir, slug);

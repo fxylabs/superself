@@ -8,7 +8,7 @@ disagree, the implementation-owned `--help` output wins.
 - `self init` turns a directory into a workspace with its own state store and
   git history, and records it as the one workspace this machine uses —
   `self workspace` shows or moves that pointer;
-- `self project add` registers a project through a local marker file that never
+- `self project init` registers a project through a local marker file that never
   enters the code repository; projects live wherever they already are, inside
   or outside the workspace directory, because the pointer decides the store;
 - registration is one act per project, not one per working tree: every checkout
@@ -58,7 +58,7 @@ disagree, the implementation-owned `--help` output wins.
 - canonical files are generated output — hand edits are detected as drift and
   overwritten with a warning; reports attach to work units and auto-reference
   the project's HEAD commit as evidence;
-- `self project add` renders an agent-onboarding block into `AGENTS.md` and
+- `self project init` renders an agent-onboarding block into `AGENTS.md` and
   `CLAUDE.md` — the instruction files agent tools already read — so any
   terminal agent learns the protocol and current conventions; the block
   refreshes on every fold, `self connect` re-renders it, and `--no-connect`

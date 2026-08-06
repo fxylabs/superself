@@ -14,7 +14,7 @@ const { ws, demo } = demoWorkspace(box);
 const other = join(ws, "other");
 mkdirSync(other, { recursive: true });
 git(box, other, ["init", "-q", "-b", "main"]);
-must(box, ws, ["project", "add", other, "--name", "other", "--no-connect"]);
+must(box, other, ["project", "init", "--name", "other", "--no-connect"]);
 
 const self = (args) => selfIn(box, demo, args);
 

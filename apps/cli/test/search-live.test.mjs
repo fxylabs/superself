@@ -31,7 +31,7 @@ function workspace(slugs)
         const dir = join(ws, slug);
         mkdirSync(dir, { recursive: true });
         git(box, dir, ["init", "-q", "-b", "main"]);
-        must(box, dir, ["project", "add", "--name", slug, "--no-connect"]);
+        must(box, dir, ["project", "init", "--name", slug, "--no-connect"]);
         dirs[slug] = dir;
     }
     return { box, ws, ...dirs };
