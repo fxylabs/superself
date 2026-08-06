@@ -1281,6 +1281,11 @@ function projectLink(wanted: string | undefined, path: string | undefined): void
         throw new CliError(`project "${slug}" is not registered — run \`self project init\` inside its directory instead`);
     }
     linkProject(ctx, slug, projectDir);
+    // A registry row can stand with no state directory behind it — the shape a
+    // crashed registration leaves — and this verb is the completion path the
+    // init refusal names (#251 T1.7). The fold writes into that directory, so
+    // it is guaranteed here exactly as registerProject guarantees it (#257).
+    ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
     foldProject(ctx.storeDir, slug);
     console.log(`project "${slug}" linked to ${projectDir}`);
 }
