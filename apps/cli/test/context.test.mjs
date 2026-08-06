@@ -116,9 +116,11 @@ test("a fresh store renders no empty section headers, and live state renders wit
 
 test("budget exhaustion mid-block leaves pointer rows that name the recovery command", () =>
 {
-    // Preset conventions are not cap-gated, so the full tier can exceed the
-    // whole budget: three rules of 5,000 characters, against 3,000 tokens
-    // which the shipped estimate buys 12,000 characters of.
+    // Preset conventions gate on the retention caps (#240), so a user-raised
+    // full cap is what lets the tier exceed the whole render budget: three
+    // rules of 5,000 characters, against 3,000 tokens which the shipped
+    // estimate buys 12,000 characters of.
+    setCaps(freshBox, { fullTokens: 100_000, tokensPerCharacter: 0.25 });
     for (const name of ["one", "two", "three"])
     {
         must(freshBox, freshDemo, ["convention", "add", `rule ${name} ${"x".repeat(5_000)}`]);
@@ -131,18 +133,22 @@ test("budget exhaustion mid-block leaves pointer rows that name the recovery com
     assert.match(out, /- … 1 work item omitted; run `self work --project 'demo'`/);
 });
 
-// A machine whose legacy records stand past a cap, as the real store's
-// decisions do: rendering never refuses, the entity verbs are what the cap
-// gates, and repeatable --demote is how a deep overrun names enough.
+// A machine whose records stand past a cap, as a store whose caps were later
+// tightened does: rendering never refuses, the entity verbs are what the cap
+// gates, and repeatable --demote is how a deep overrun names enough. The
+// over-cap state is built by lowering the cap after the records landed —
+// preset adds gate on the caps too (#240), so writing past one is no longer a
+// way to get here.
 const legacyBox = machine();
 const legacyDemo = demoWorkspace(legacyBox).demo;
 const legacySelf = (args) => selfIn(legacyBox, legacyDemo, args);
 
-test("a legacy store over a cap renders in full while state add stays gated", () =>
+test("a store over a cap renders in full while state add stays gated", () =>
 {
-    setCaps(legacyBox, { indexTokens: 20 });
+    setCaps(legacyBox, {});
     const first = must(legacyBox, legacyDemo, ["decide", "legacy ruling one"]).out.match(/\[([^\]]+)\]/)[1];
     const second = must(legacyBox, legacyDemo, ["decide", "legacy ruling two"]).out.match(/\[([^\]]+)\]/)[1];
+    setCaps(legacyBox, { indexTokens: 20 });
     const out = must(legacyBox, legacyDemo, ["context"]).out;
     assert.ok(out.includes("- [decision] legacy ruling one"));
     assert.ok(out.includes("- [decision] legacy ruling two"));

@@ -983,7 +983,7 @@ export function orderEntities(entities: EntityState[]): EntityState[]
 // charges — and index in entities.
 // A tier belongs to the project a record renders in, not to the store that
 // holds it (#181 D4), so occupancy is judged against the absolute target.
-function occupiesTier(entity: EntityState, home: string, target: string, exposure: Exposure): boolean
+export function occupiesTier(entity: EntityState, home: string, target: string, exposure: Exposure): boolean
 {
     return entity.status === "confirmed" && isCurrent(entity)
         && scopeTarget(entity, home) === target && entity.exposure === exposure;
