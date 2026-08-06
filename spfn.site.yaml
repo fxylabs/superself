@@ -8,3 +8,32 @@ social:
   github: https://github.com/fxylabs/superself
   npm: https://www.npmjs.com/package/superself
 footerNote: © 2026 FXY Inc. · Apache-2.0
+nav:
+  - label: Docs
+    path: /docs/guides/getting-started
+  - label: Roadmap
+    path: /docs/roadmap
+# Repo docs are the site's docs: one source, read on the site instead of on
+# GitHub. README files collapse onto their directory route.
+mounts:
+  - source: docs/guides
+    route: /docs/guides
+    title: Guides
+  - source: docs/concepts
+    route: /docs/concepts
+    title: Concepts
+  - source: docs/reference
+    route: /docs/reference
+    title: Reference
+  - source: docs/examples
+    route: /docs/examples
+    title: Examples
+  - source: docs/roadmap.md
+    route: /docs/roadmap
+    title: Roadmap
+  - source: CONTRIBUTING.md
+    route: /docs/contributing
+    title: Contributing
+  - source: ARCHITECTURE.md
+    route: /docs/architecture
+    title: Architecture
