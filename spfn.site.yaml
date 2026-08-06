@@ -1,0 +1,10 @@
+name: Superself
+description: The open Company State Runtime — what your company intends, has decided, is doing, and can prove, readable by any agent, any session, any tool.
+root: site
+url: https://superself.spfn.page
+repo: https://github.com/fxylabs/superself
+locale: en
+social:
+  github: https://github.com/fxylabs/superself
+  npm: https://www.npmjs.com/package/superself
+footerNote: © 2026 FXY Inc. · Apache-2.0

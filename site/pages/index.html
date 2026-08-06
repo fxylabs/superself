@@ -1,0 +1,566 @@
+<!doctype html>
+<!--
+  Superself landing — one structure, three themes.
+
+  Served verbatim by @spfn/pages (an .html file under pages/ is an escape hatch:
+  no layout, no sanitize, no site chrome), so this document owns its own head,
+  nav, footer, responsive behaviour and theme switch.
+
+  Two rules this page is built on, both recorded decisions:
+  - the landing is raw HTML, because markdown here is sanitized and would drop
+    every hero, grid and button;
+  - one value per section, proved by one static terminal of REAL CLI output.
+
+  Every terminal line below was captured from a real run of the shipped CLI in
+  a sandboxed workspace. Ids and event ids are the ids that run produced. Long
+  lines are wrapped to fit the column and omissions are marked with an ellipsis;
+  no wording is invented. Changing a terminal means re-running the command and
+  pasting what it prints.
+-->
+<html lang="en" class="t-a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superself — the open Company State Runtime</title>
+<meta name="description" content="Models have context. Agents have runtimes. Companies need state. Superself keeps what your company intends, has decided, is doing, and can prove — readable by any agent, any session, any tool.">
+<meta name="theme-color" content="#101014">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Superself">
+<meta property="og:title" content="Superself — the open Company State Runtime">
+<meta property="og:description" content="Models have context. Agents have runtimes. Companies need state. An open-source, local-first CLI that keeps your project's state where every agent and session can read it.">
+<meta property="og:url" content="https://superself.spfn.page/">
+<meta property="og:image" content="https://superself.spfn.page/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+/* Pick the theme before first paint: ?theme=a|b|c wins, then the stored choice. */
+(function ()
+{
+    var themes = ['a', 'b', 'c'];
+    var query = new URLSearchParams(location.search).get('theme');
+    var stored = null;
+    try { stored = localStorage.getItem('sf-theme'); } catch (error) { }
+    var key = themes.indexOf(query) >= 0 ? query : (themes.indexOf(stored) >= 0 ? stored : 'a');
+    document.documentElement.className = 't-' + key;
+})();
+</script>
+<style>
+/* =====================================================================
+   Superself landing — one structure, three themes.
+   Markup and copy are shared; a theme (.t-a / .t-b / .t-c) sets tokens only.
+   Terminal embeds keep product-dark surfaces in every theme; only their
+   accent follows the page theme.
+   ===================================================================== */
+
+/* ---------- theme A · product-native dark (viewer violet) ---------- */
+.t-a {
+  --bg: #101014; --bg-alt: #131319; --surface: #14141a; --surface-2: #17171f;
+  --border: #232330; --rule: #202029;
+  --text: #f2f2f7; --body: #d6d6de; --muted: #8f8fa3; --faint: #6e6e80;
+  --accent: #a78bfa; --accent-soft: #a78bfa1a; --accent-line: #a78bfa4d;
+  --btn-bg: #a78bfa; --btn-fg: #101014;
+  --h1-size: 44px; --h1-ls: -.02em; --h1-weight: 650; --h1-hl: var(--text);
+  --display: var(--sans);
+}
+
+/* ---------- theme B · terminal warm (viewer orange) ---------- */
+.t-b {
+  --bg: #0c0c10; --bg-alt: #101014; --surface: #101014; --surface-2: #17171d;
+  --border: #2a2a32; --rule: #26262e;
+  --text: #fff6ec; --body: #cfc8bd; --muted: #a39c92; --faint: #7d776e;
+  --accent: #ff6b35; --accent-soft: #ff6b351a; --accent-line: #ff6b354d;
+  --btn-bg: #ff6b35; --btn-fg: #0c0c10;
+  --h1-size: 36px; --h1-ls: 0; --h1-weight: 700; --h1-hl: var(--accent);
+  --display: var(--mono);
+}
+
+/* ---------- theme C · editorial light ---------- */
+.t-c {
+  --bg: #fafafa; --bg-alt: #fafafa; --surface: #ffffff; --surface-2: #f0f0f2;
+  --border: #e4e4e8; --rule: #ececf0;
+  --text: #19171d; --body: #3a3a42; --muted: #6e6e78; --faint: #9a9aa4;
+  --accent: #7c5ce0; --accent-soft: #7c5ce014; --accent-line: #7c5ce04d;
+  --btn-bg: #19171d; --btn-fg: #fafafa;
+  --h1-size: 52px; --h1-ls: -.03em; --h1-weight: 650; --h1-hl: var(--accent);
+  --display: var(--sans);
+}
+
+:root {
+  --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px;
+  --page: 1120px;
+  --gutter: 40px;
+  color-scheme: dark;
+}
+.t-c { color-scheme: light; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--body);
+  font: 14px/1.72 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- nav ---------- */
+.lp-nav {
+  display: flex; align-items: center; gap: 20px;
+  padding: 18px max(var(--gutter), calc((100% - var(--page)) / 2));
+  background: var(--bg-alt); border-bottom: 1px solid var(--border);
+}
+.lp-word { display: flex; align-items: center; gap: 8px; font: 700 14px var(--mono); color: var(--accent); }
+.lp-word i { width: 13px; height: 13px; border-radius: 3.5px; background: var(--accent); display: inline-block; }
+.lp-nav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+.lp-nav a:hover { color: var(--text); }
+.lp-nav .lp-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* theme switch — the A/B/C comparison the design round asked to keep on the page */
+.lp-themes { display: flex; gap: 4px; align-items: center; }
+.lp-themes .lbl { font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+.lp-theme {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
+}
+.lp-theme[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.lp-star {
+  font: 11.5px var(--mono); color: var(--text); text-decoration: none;
+  border: 1px solid var(--border); background: var(--surface-2); border-radius: 6px; padding: 6px 12px;
+}
+
+/* ---------- hero ---------- */
+.lp-hero { max-width: 760px; margin: 0 auto; padding: 96px var(--gutter) 56px; text-align: center; }
+.lp-badge {
+  display: inline-block; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 4px; padding: 3px 10px; margin-bottom: 18px;
+}
+.lp-h1 {
+  margin: 0 0 16px; font-family: var(--display);
+  font-size: var(--h1-size); letter-spacing: var(--h1-ls); font-weight: var(--h1-weight);
+  line-height: 1.16; color: var(--text);
+}
+.lp-h1 .hl { color: var(--h1-hl); }
+.lp-sub { margin: 0 auto 34px; max-width: 560px; color: var(--muted); font-size: 15.5px; }
+.lp-install {
+  display: flex; align-items: center; gap: 8px; max-width: 460px; margin: 0 auto 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 15px;
+  font: 13.5px var(--mono); color: var(--body); text-align: left;
+}
+.lp-install .ps { color: var(--faint); }
+.lp-install b { color: var(--accent); font-weight: 400; }
+.lp-install .copy {
+  margin-left: auto; cursor: pointer; background: none; border: 0; padding: 0;
+  color: var(--faint); font: 10px var(--mono); letter-spacing: .1em;
+}
+.lp-install .copy:hover { color: var(--accent); }
+.lp-ctas { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.lp-btn { border-radius: 7px; padding: 11px 20px; font-size: 13.5px; font-weight: 600; text-decoration: none; }
+.lp-btn.pri { background: var(--btn-bg); color: var(--btn-fg); }
+.lp-btn.sec { border: 1px solid var(--border); color: var(--body); background: var(--surface-2); }
+
+/* =====================================================================
+   Terminal — one per section, one value each.
+
+   Static on purpose. An animated tour reads as motion, not as evidence: a
+   visitor cannot stop on the line that matters. Every line is real output
+   captured from the CLI, so the page doubles as an API check.
+   ===================================================================== */
+.tty { background: #0e0e13; border: 1px solid #2a2a32; border-radius: 12px; overflow: hidden; box-shadow: 0 14px 36px rgba(10, 10, 16, .3); }
+.tty-bar { display: flex; align-items: center; gap: 7px; padding: 11px 15px; background: #17171d; border-bottom: 1px solid #23232b; }
+.tty-bar i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.tty-bar i:nth-child(1) { background: #ff5f57; }
+.tty-bar i:nth-child(2) { background: #febc2e; }
+.tty-bar i:nth-child(3) { background: #28c840; }
+.tty-bar span { margin-left: 8px; font: 10.5px var(--mono); color: #6e6e80; }
+.tty-body { padding: 18px 20px 20px; font: 11px/1.85 var(--mono); overflow-x: auto; }
+.tl { margin: 0; color: #cfc8bd; white-space: pre; }
+.tl .ps { color: var(--accent); }
+.tl .cmd { color: #f2f2f7; }
+.tl.ok { color: #34d399; }
+.tl.err { color: #f0a44b; }
+.tl.out { color: #9a93a8; }
+.tl.dim { color: #6e6e80; }
+.tl.hd { color: #f2f2f7; }
+.tl.gap { margin-top: 14px; }
+
+/* ---------- hero terminal: the one command that shows the whole point ---------- */
+.lp-hero-tty { max-width: 960px; margin: 0 auto; padding: 0 var(--gutter) 14px; text-align: left; }
+.lp-hero-cap { max-width: 960px; margin: 0 auto; padding: 0 var(--gutter) 100px; font-size: 12.5px; color: var(--muted); text-align: center; }
+
+/* ---------- section header (bands with no terminal) ---------- */
+.lp-head { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter) 30px; }
+.lp-kicker { display: block; margin-bottom: 12px; font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.lp-head h2 { margin: 0 0 12px; font-size: 25px; letter-spacing: -.015em; color: var(--text); font-weight: 650; }
+.lp-head p { margin: 0; max-width: 640px; font-size: 14px; color: var(--muted); }
+
+/* ---------- the two ceilings ---------- */
+.lp-ceilings { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter) 100px; }
+.lp-ceiling { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 28px 30px; }
+.lp-ceiling .no { font: 700 12px var(--mono); letter-spacing: .1em; color: var(--accent); }
+.lp-ceiling h3 { margin: 8px 0; font-size: 16px; color: var(--text); font-weight: 650; }
+.lp-ceiling p { margin: 0; font-size: 13.5px; color: var(--muted); }
+.lp-ceilings-note {
+  grid-column: 1 / -1; margin: 0; padding: 20px 24px;
+  border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  font-size: 13.5px; color: var(--body);
+}
+
+/* ---------- value section: prose on the left, its proof on the right ---------- */
+.lp-sec { display: grid; grid-template-columns: .75fr 1.25fr; gap: 40px; align-items: start; max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter) 84px; }
+.lp-sec-text h2 { margin: 0 0 12px; font-size: 22px; letter-spacing: -.015em; color: var(--text); font-weight: 650; }
+.lp-sec-text p { margin: 0; font-size: 13.5px; color: var(--muted); }
+.lp-sec-text p + p { margin-top: 12px; }
+.lp-sec-text code { font: 11.5px var(--mono); color: var(--accent); }
+.lp-sec-text .lp-kicker { margin-bottom: 10px; }
+
+/* ---------- what works today / what does not ---------- */
+.lp-works { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter) 24px; align-items: start; }
+.lp-works ul { margin: 0; padding: 0; list-style: none; }
+.lp-works li { position: relative; padding: 9px 0 9px 22px; font-size: 13.5px; color: var(--body); border-bottom: 1px solid var(--rule); }
+.lp-works li:last-child { border-bottom: none; }
+.lp-works h3 { margin: 0 0 6px; font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.lp-works code { font: 11.5px var(--mono); color: var(--accent); }
+.lp-col { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 24px 26px; }
+.lp-col.soon li { color: var(--muted); }
+.lp-works li::before { position: absolute; left: 0; top: 9px; font: 11px var(--mono); }
+.lp-col.now li::before { content: "\2713"; color: #34d399; }
+.lp-col.soon li::before { content: "\00b7"; color: var(--faint); }
+.lp-alpha { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter) 100px; }
+.lp-alpha p {
+  margin: 0; padding: 20px 24px; border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  font-size: 13.5px; color: var(--body);
+}
+
+/* ---------- closing band ---------- */
+.lp-band {
+  max-width: 1040px; margin: 0 auto 88px; padding: 44px 48px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; align-items: center; gap: 24px; justify-content: space-between; flex-wrap: wrap;
+}
+.lp-band h2 { margin: 0; font-size: 22px; letter-spacing: -.015em; color: var(--text); font-weight: 650; }
+.lp-band .lp-ctas { justify-content: flex-end; }
+
+/* ---------- footer ---------- */
+.lp-foot {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 40px max(var(--gutter), calc((100% - var(--page)) / 2)) 44px;
+  border-top: 1px solid var(--border); font: 11px var(--mono); color: var(--faint);
+}
+.lp-foot a { color: var(--muted); text-decoration: none; }
+.lp-foot a:hover { color: var(--text); }
+.lp-foot .right { margin-left: auto; }
+
+/* ---------- narrow screens: one column, terminals scroll rather than clip ---------- */
+@media (max-width: 900px) {
+  :root { --gutter: 22px; }
+  .lp-sec, .lp-ceilings, .lp-works { grid-template-columns: 1fr; gap: 24px; }
+  .lp-hero { padding-top: 64px; }
+  .lp-nav { gap: 14px; flex-wrap: wrap; }
+  .lp-nav .lp-right { gap: 8px; }
+  .lp-band { padding: 32px 26px; }
+  .lp-band .lp-ctas { justify-content: flex-start; }
+  .tty-body { font-size: 10.5px; }
+}
+@media (max-width: 560px) {
+  .lp-nav a { display: none; }
+  .lp-themes .lbl { display: none; }
+  .lp-foot .right { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<main class="lp">
+  <nav class="lp-nav" aria-label="Primary">
+    <span class="lp-word"><i></i>superself</span>
+    <a href="https://github.com/fxylabs/superself/tree/main/docs">Docs</a>
+    <a href="https://github.com/fxylabs/superself/blob/main/docs/roadmap.md">Roadmap</a>
+    <span class="lp-right">
+      <span class="lp-themes" role="group" aria-label="Page theme">
+        <span class="lbl">Theme</span>
+        <button class="lp-theme" type="button" data-theme="a" aria-pressed="true" title="Product-native dark">A</button>
+        <button class="lp-theme" type="button" data-theme="b" aria-pressed="false" title="Terminal warm">B</button>
+        <button class="lp-theme" type="button" data-theme="c" aria-pressed="false" title="Editorial light">C</button>
+      </span>
+      <a class="lp-star" href="https://github.com/fxylabs/superself">★ Star on GitHub</a>
+    </span>
+  </nav>
+
+  <header class="lp-hero">
+    <span class="lp-badge">Early alpha · Apache-2.0 · local-first</span>
+    <h1 class="lp-h1">The open<br><span class="hl">Company State Runtime.</span></h1>
+    <p class="lp-sub">Models have context. Agents have runtimes. Companies need state. Superself keeps what your company intends, has decided, is doing, and can prove — readable by any agent, any session, any tool.</p>
+    <div class="lp-install"><span class="ps">$</span>&nbsp;<b>npm install -g superself</b><button class="copy" type="button" id="copy-install">COPY</button></div>
+    <div class="lp-ctas">
+      <a class="lp-btn pri" href="https://github.com/fxylabs/superself">Star on GitHub</a>
+      <a class="lp-btn sec" href="https://github.com/fxylabs/superself/tree/main/docs">Read the docs</a>
+    </div>
+  </header>
+
+  <div class="lp-hero-tty">
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~/payments — self</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">~/payments $</span> <span class="cmd">self context</span></p>
+        <p class="tl hd gap"># payments</p>
+        <p class="tl out gap">Card payments for merchants</p>
+        <p class="tl out gap">- [goal] Payments a merchant can trust with real money</p>
+        <p class="tl out">- [objective] Card payments go live for the first ten merchants (target 2026-09-30)</p>
+        <p class="tl hd gap">## Work in progress</p>
+        <p class="tl out gap">- w-gzzab The payment flow passes its end-to-end proof  [held by this session]</p>
+        <p class="tl out">- 2 more open work items; run `self work --project 'payments'`</p>
+        <p class="tl hd gap">## Deadlines</p>
+        <p class="tl out gap">- 2026-09-30: [objective] Card payments go live for the first ten merchants</p>
+        <p class="tl hd gap">## Index</p>
+        <p class="tl out gap">- [decision] Store card data with the PSP, never in our database — PCI scope is the largest cost driver</p>
+        <p class="tl out">- [decision] Retries are idempotent by request key — A double charge is worse than a failed charge</p>
+      </div>
+    </div>
+  </div>
+  <p class="lp-hero-cap">One command. A session that has never seen this project now knows what it is for, what is open, and what was already decided.</p>
+
+  <div class="lp-head">
+    <span class="lp-kicker">The problem</span>
+    <h2>Two ceilings every agent team hits</h2>
+    <p>One limits what a session can carry. The other limits how much you can hand off.</p>
+  </div>
+
+  <section class="lp-ceilings">
+    <article class="lp-ceiling">
+      <span class="no">01</span>
+      <h3>The continuity ceiling</h3>
+      <p>Long-running projects outlive every chat, context window, model, and human memory. Each new agent spends time reconstructing the project, misses a constraint, or repeats a decision that was already made.</p>
+    </article>
+    <article class="lp-ceiling">
+      <span class="no">02</span>
+      <h3>The supervision ceiling</h3>
+      <p>Execution stops scaling when one person must decompose every request, watch every process, approve every step, and verify every completion. The human becomes the scheduler, message bus, and retry loop.</p>
+    </article>
+    <p class="lp-ceilings-note">The two reinforce each other. Execution cannot be delegated safely without durable context, and durable context has limited value if a person still has to drive every action.</p>
+  </section>
+
+  <section class="lp-sec">
+    <div class="lp-sec-text">
+      <span class="lp-kicker">The work graph</span>
+      <h2>Every unit knows its own state</h2>
+      <p>Work is not a list of tickets to read. Each unit carries a required outcome, who holds it right now, and — when it is stuck — what it is stuck on and why.</p>
+      <p>A second session picks up the same graph without asking anyone what to do next.</p>
+    </div>
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~/payments — self</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">~/payments $</span> <span class="cmd">self work</span></p>
+        <p class="tl out gap">w-gzzab  active  The payment flow passes its end-to-end proof  [held by this session]</p>
+        <p class="tl out">w-qmyk4  next  Refunds reconcile against the PSP ledger daily</p>
+        <p class="tl out">w-wrn22  blocked (on dependency)  Webhook replay cannot double-credit an account</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lp-sec">
+    <div class="lp-sec-text">
+      <span class="lp-kicker">The evidence gate</span>
+      <h2>"Done" is refused without proof</h2>
+      <p>An agent reporting success is not the same as work being finished. Superself refuses the claim until it carries a commit, an artifact, or a statement of what verifiably happened.</p>
+      <p>This is the rule the engine enforces on the write path, and it is why a closed unit still means something months later.</p>
+    </div>
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~/payments — self</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">~/payments $</span> <span class="cmd">self work done w-gzzab</span></p>
+        <p class="tl err">error: w-gzzab has no evidence for done — attach a report first (`self report</p>
+        <p class="tl err">w-gzzab "&lt;summary&gt;" --evidence &lt;commit&gt;` or `--artifact &lt;path&gt;`), or state what</p>
+        <p class="tl err">verifiably happened with `self work done w-gzzab --report "&lt;what happened&gt;"`</p>
+        <p class="tl gap"><span class="ps">~/payments $</span> <span class="cmd">self report w-gzzab "End-to-end proof green on CI" --evidence e59c52a</span></p>
+        <p class="tl ok">report.added recorded [01kzbh2zb286ndckqkapnph26y]</p>
+        <p class="tl gap"><span class="ps">~/payments $</span> <span class="cmd">self work done w-gzzab</span></p>
+        <p class="tl ok">entity.done recorded [01kzbh30m9jc30p9qw4rczr5yb]</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lp-sec">
+    <div class="lp-sec-text">
+      <span class="lp-kicker">Not an issue tracker</span>
+      <h2>A decision is a person's call</h2>
+      <p>Records are immutable once confirmed. Correcting one does not edit it — a new record supersedes it and carries the lineage, so the reason a direction changed survives.</p>
+      <p>And an agent cannot quietly retire a confirmed decision. The verb refuses, prints the record it would have replaced, and hands the command back to a person.</p>
+    </div>
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~/payments — agent session</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">~/payments $</span> <span class="cmd">self decide "… by merchant order id" --supersedes 01kzbh2p2a…</span></p>
+        <p class="tl err">error: this retires a confirmed decision, and nothing was recorded — retiring a</p>
+        <p class="tl err">record is a person's call, and this process has no terminal to make it at</p>
+        <p class="tl out gap">  01kzbh2p2ahe7jyk6qjrvhzqnp  decision  confirmed 2026-08-06T12:34:25.994Z  (just now)</p>
+        <p class="tl hd">  Retries are idempotent by request key</p>
+        <p class="tl out">  why: A double charge is worse than a failed charge</p>
+        <p class="tl out">  referenced by: nothing</p>
+        <p class="tl dim gap">  a person runs this in their own terminal:</p>
+        <p class="tl dim">    self decide "Retries are idempotent by merchant order id"</p>
+        <p class="tl dim">      --supersedes 01kzbh2p2ahe7jyk6qjrvhzqnp</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lp-sec">
+    <div class="lp-sec-text">
+      <span class="lp-kicker">Not a memory service</span>
+      <h2>No vector database, no index server</h2>
+      <p>State is plain text: typed events in an append-only JSONL log inside a git repository your machine owns. Grep-able, diff-able, blame-able, portable.</p>
+      <p>Search answers from the live records themselves, and every registered project answers at once — the current one's rows first.</p>
+    </div>
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~/payments — self</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">~/payments $</span> <span class="cmd">self search "reconcil" --all</span></p>
+        <p class="tl out gap">payments      work      w-qmyk4      (open) [work] Refunds reconcile against the</p>
+        <p class="tl out">                                     PSP ledger daily</p>
+        <p class="tl out">merchant-app  decision  01kzbh2xxp…  [decision] The dashboard reads payments state,</p>
+        <p class="tl out">                                     never writes it — One writer keeps reconciliation ho…</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lp-sec">
+    <div class="lp-sec-text">
+      <span class="lp-kicker">Not a replacement for CLAUDE.md</span>
+      <h2>It writes into the file you already have</h2>
+      <p>Instruction files are the right place for stable operating rules. <code>self connect</code> renders a managed block into them that teaches any terminal agent the protocol and this project's current conventions.</p>
+      <p>What an instruction file cannot hold is the state that changes every session. That part stays in the log, and <code>self context</code> derives it on demand.</p>
+    </div>
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~/payments — self</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">~/payments $</span> <span class="cmd">self connect</span></p>
+        <p class="tl ok">managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent tool</p>
+        <p class="tl ok">loads it</p>
+        <p class="tl dim gap">CLAUDE.md</p>
+        <p class="tl out">&lt;!-- superself:begin v0.5.1 --&gt;</p>
+        <p class="tl hd">## Project state (superself)</p>
+        <p class="tl out gap">- Session start: run `self context` and treat its output as current truth.</p>
+        <p class="tl dim">  …</p>
+        <p class="tl out">- Done is a judgment, and the claim must carry evidence: `self work done &lt;id&gt;`</p>
+        <p class="tl out">  closes the unit only when a report carries a commit or an artifact, or the</p>
+        <p class="tl out">  done itself states one …</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lp-sec">
+    <div class="lp-sec-text">
+      <span class="lp-kicker">Start</span>
+      <h2>One workspace, every project in it</h2>
+      <p>The workspace is a git repository your machine owns, kept outside the code it describes. Register each project from its own directory; state never lands in the product repo.</p>
+      <p>Requires Node.js 22.12 or newer.</p>
+    </div>
+    <div class="tty">
+      <div class="tty-bar"><i></i><i></i><i></i><span>~ — self</span></div>
+      <div class="tty-body">
+        <p class="tl"><span class="ps">$</span> <span class="cmd">npm install -g superself</span></p>
+        <p class="tl gap"><span class="ps">~/self-workspace $</span> <span class="cmd">self init</span></p>
+        <p class="tl ok">workspace initialized at ~/self-workspace/.superself (views in "en")</p>
+        <p class="tl gap"><span class="ps">~/payments $</span> <span class="cmd">self project init</span></p>
+        <p class="tl ok">project "payments" registered</p>
+        <p class="tl ok">managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent tool</p>
+        <p class="tl ok">loads it</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="lp-head">
+    <span class="lp-kicker">Honest status</span>
+    <h2>What works today</h2>
+    <p>Every terminal above is real output from the shipped CLI. The complete runtime loop is the direction of the project, not a capability this release claims to have finished.</p>
+  </div>
+
+  <section class="lp-works">
+    <div class="lp-col now">
+      <h3>Shipped</h3>
+      <ul>
+        <li>A local-first CLI — no account, and the workspace stays on your machine</li>
+        <li>Typed events in an append-only log, folded into markdown any tool reads</li>
+        <li><code>self context</code> compiled for the next action instead of browsed</li>
+        <li>Done refused until the claim carries a commit, an artifact, or a report</li>
+        <li>Irreversible record verbs handed back to a person, never minted by an agent</li>
+        <li>A managed agent block in CLAUDE.md, and git-backed workspace sync</li>
+      </ul>
+    </div>
+    <div class="lp-col soon">
+      <h3>Stated targets</h3>
+      <ul>
+        <li>Supervised execution through WorkSpec contracts</li>
+        <li>Cap-gated preset verbs</li>
+        <li>Anything hosted — the cloud is not being sold yet</li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="lp-alpha">
+    <p><b>Superself is an early alpha.</b> Expect breaking changes while the event schema and verbs settle. The roadmap draws the boundary between what the engine enforces today and what is still a target.</p>
+  </div>
+
+  <section class="lp-band">
+    <h2>Your agents forget. Your projects shouldn't.</h2>
+    <div class="lp-ctas">
+      <a class="lp-btn pri" href="https://github.com/fxylabs/superself">Star on GitHub</a>
+      <a class="lp-btn sec" href="https://github.com/fxylabs/superself#how-do-i-start">Get started</a>
+    </div>
+  </section>
+
+  <footer class="lp-foot">
+    <span>Apache-2.0 · built in the open</span>
+    <a href="https://github.com/fxylabs/superself">github.com/fxylabs/superself</a>
+    <span class="right">© 2026 FXY Inc.</span>
+  </footer>
+</main>
+<script>
+/* Theme switch and install copy — the only two behaviours on the page. */
+(function ()
+{
+    var buttons = document.querySelectorAll('.lp-theme');
+
+    /* The head script already picked the theme; mark which button owns it. */
+    function mark(key)
+    {
+        buttons.forEach(function (button)
+        {
+            button.setAttribute('aria-pressed', String(button.dataset.theme === key));
+        });
+    }
+
+    function apply(key)
+    {
+        document.documentElement.className = 't-' + key;
+        mark(key);
+        try { localStorage.setItem('sf-theme', key); } catch (error) { }
+
+        /* A chosen theme becomes shareable; an untouched page keeps a clean URL. */
+        var url = new URL(location.href);
+        url.searchParams.set('theme', key);
+        history.replaceState(null, '', url);
+    }
+
+    buttons.forEach(function (button)
+    {
+        button.addEventListener('click', function () { apply(button.dataset.theme); });
+    });
+    mark(document.documentElement.className.replace('t-', '') || 'a');
+
+    var copy = document.getElementById('copy-install');
+    copy.addEventListener('click', function ()
+    {
+        navigator.clipboard.writeText('npm install -g superself').then(function ()
+        {
+            copy.textContent = 'COPIED';
+            setTimeout(function () { copy.textContent = 'COPY'; }, 1600);
+        }, function () { });
+    });
+})();
+</script>
+</body>
+</html>
