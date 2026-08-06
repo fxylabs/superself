@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
-import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
 import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
@@ -290,11 +290,16 @@ function objectiveHeadLines(objective: ObjectiveState): string[]
     return lines;
 }
 
-export function renderObjectiveBody(objective: ObjectiveState): string
+// `linked` is the read-time merge of the objective's open units across every
+// registered project (#244), passed only by the console show: the canonical
+// page a fold writes must depend on this project's log alone, so the fold
+// passes nothing and the line stays off that page.
+export function renderObjectiveBody(objective: ObjectiveState, linked: string[] = []): string
 {
     const lines: string[] = [`# ${objective.id} — ${objective.outcome}`, "", `- Status: ${objective.status}`,
         `- Target state: ${objective.state} — ${objective.reason}`, `- Revision: ${objective.revision}`,
-        ...objectiveHeadLines(objective), ""];
+        ...objectiveHeadLines(objective),
+        ...(linked.length === 0 ? [] : [`- Work: ${linked.join(", ")}`]), ""];
     bullets(lines, "Success criteria", objective.success);
     bullets(lines, "Stop criteria", objective.stop);
     bullets(lines, "Revision history", objective.history.map((entry) => `revision ${entry.revision} on ${day(entry.ts)} — ${entry.why}`));
@@ -418,8 +423,14 @@ function requirementLines(work: WorkState): string[]
 
 function contributionLines(work: WorkState, model: ProjectModel): string[]
 {
-    return contributionsOf(model.goals, work).map((item) =>
-        `${item.id} ${item.outcome} (${item.state}${item.criticalPath ? ", critical path" : ""})`);
+    // A foreign contribution names its objective and owning slug only: the
+    // outcome and state live in the owner's fold, which this render — also
+    // written to canonical pages — must never read (#244 C7).
+    return [
+        ...contributionsOf(model.goals, work).map((item) =>
+            `${item.id} ${item.outcome} (${item.state}${item.criticalPath ? ", critical path" : ""})`),
+        ...foreignToward(work)
+    ];
 }
 
 function bullets(lines: string[], title: string, items: string[]): void
