@@ -187,7 +187,9 @@ test("F1 and F2: the budget is stated in tokens and never refuses a render", () 
     assert.ok(Array.from(under).length <= 12_000, `context ran past the budget: ${Array.from(under).length}`);
     // A ratio that costs twice as much buys half the characters, and the
     // render still answers — it cuts rows and points at the recovery command.
-    writeConfig({ tokensPerCharacter: 0.5, tokensMeasured: true });
+    // The full cap is raised out of the way: preset adds gate on it (#240),
+    // and this case is about the render budget, not the write gate.
+    writeConfig({ tokensPerCharacter: 0.5, tokensMeasured: true, fullTokens: 100_000 });
     for (const name of ["one", "two", "three"])
     {
         must(box, demo, ["convention", "add", `rule ${name} ${"x".repeat(3_000)}`]);

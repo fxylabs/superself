@@ -2,10 +2,10 @@ import { presetRow } from "./aliases.js";
 import { required, Requirement } from "./args.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
-import { requireSupersedeKind } from "./entities.js";
+import { Exposure, requireSupersedeKind } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { milestoneId, objectiveId, workId } from "./ids.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
 import {
     allMilestones,
     findMilestone,
@@ -25,8 +25,8 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
-import { recordCoverage } from "./state.js";
-import { dim, errYellow, markdownHeadings, styled } from "./style.js";
+import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, tierOf } from "./state.js";
+import { countCharacters, dim, errYellow, markdownHeadings, styled } from "./style.js";
 import { CliError } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
@@ -73,7 +73,8 @@ const OBJECTIVE_ADD_OPTIONS = {
     stop: { type: "string", multiple: true },
     priority: { type: "string" },
     proposed: { type: "boolean" },
-    supersedes: { type: "string", multiple: true }
+    supersedes: { type: "string", multiple: true },
+    demote: { type: "string", multiple: true }
 } as const;
 
 const OBJECTIVE_REVISE_OPTIONS = {
@@ -93,7 +94,8 @@ const MILESTONE_ADD_OPTIONS = {
     target: { type: "string" },
     exit: { type: "string", multiple: true },
     after: { type: "string", multiple: true },
-    supersedes: { type: "string" }
+    supersedes: { type: "string" },
+    demote: { type: "string", multiple: true }
 } as const;
 
 const MILESTONE_REVISE_OPTIONS = {
@@ -165,7 +167,9 @@ export const OBJECTIVE_COMMAND: Command = {
         "  --proposed            record as a proposal the user has not confirmed",
         "  --supersedes <id>     retire an earlier objective",
         "  --as <state>          how `close` ends it: reached or dropped",
-        "  --why <text>          the reason for a revision or a decline, and for a close that drops"
+        "  --why <text>          the reason for a revision or a decline, and for a close that drops",
+        "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
+        "                        moving one tier down (full → index, index → search); repeatable"
     ],
     guard: rejectManualProgress,
     // An unknown verb is answered before the id is resolved: telling someone
@@ -224,6 +228,16 @@ function scopeModel(scope: ProjectScope): ProjectModel
     return buildModel(scope.storeDir, scope.project, new Date());
 }
 
+// The same cap gate `state add` passes (#240 R1): the tier this record
+// enters is judged by the one shared check, `--demote` and the supersession
+// credit included. An objective or milestone is born at project scope.
+function presetGate(ctx: ProjectContext, models: ProjectModel[], usage: string, exposure: Exposure,
+    values: { demote?: string[]; proposed?: boolean }, outcome: string, payload: Record<string, unknown>): Placed[]
+{
+    return admittingDemotions(ctx, models, values, tierOf(ctx.project, exposure),
+        usage, countCharacters(outcome), supersedeTargets(payload));
+}
+
 // The horizon enum was removed as structure and kept as optional metadata
 // (#197 §7, #207 B7): whatever span the caller states is recorded.
 function objectiveAddPayload(id: string, outcome: string, row: ReturnType<typeof presetRow>, model: ProjectModel,
@@ -252,7 +266,9 @@ function objectiveAddPayload(id: string, outcome: string, row: ReturnType<typeof
 
 function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>): void
 {
-    const { ctx, model } = writeTarget();
+    const ctx = requireProject(process.cwd());
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
     const outcome = requireText(positionals[0], 'objective add "<desired outcome>"');
     const id = objectiveId();
     const row = presetRow(ctx.storeDir, "objective");
@@ -260,9 +276,11 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
     // The horizon enum was removed as structure and kept as optional metadata
     // (#197 §7, #207 B7): whatever span the caller states is recorded.
     const payload = objectiveAddPayload(id, outcome, row, model, values);
+    const demotions = presetGate(ctx, models, 'objective add "<outcome>"', row.exposure, values, outcome, payload);
     recordRetirement(ctx, retirementIntent(model, "supersede", proposed ? [] : supersedeTargets(payload)), model,
         (confirmation) => [makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed)],
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed),
+        ...demotionEvents(demotions, id, proposed)],
         `${id} ${outcome}`);
     console.log(id);
 }
@@ -275,7 +293,10 @@ function confirmObjective({ positionals }: CommandInput): void
     {
         throw new CliError(`${objective.id} is already ${objective.status}`);
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.confirmed", { entity: objective.id }, { confirms: objective.id }, true), objective.outcome);
+    // The shared confirm path (#240 R3): the same room gate `state confirm`
+    // runs, paired demotions included — a proposal past a cap is refused
+    // here, never at propose time.
+    confirmEntityUnit(ctx, objective.id);
 }
 
 // The other answer to a proposal. Confirming says the objective is the
@@ -466,7 +487,9 @@ export const MILESTONE_COMMAND: Command = {
         "  --criterion <c>       the criterion `met` or `recheck` speaks about",
         "  --work <id>           the work unit whose evidence covers it",
         "  --evidence <hash>     a commit recorded with the coverage",
-        "  --why <text>          how the evidence covers it, what was re-judged, or why it was dropped"
+        "  --why <text>          how the evidence covers it, what was re-judged, or why it was dropped",
+        "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
+        "                        moving one tier down (full → index, index → search); repeatable"
     ],
     guard: rejectManualProgress,
     node: branch({
@@ -541,7 +564,9 @@ function milestoneAddPayload(id: string, outcome: string, row: ReturnType<typeof
 
 function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD_OPTIONS>): void
 {
-    const { ctx, model } = writeTarget();
+    const ctx = requireProject(process.cwd());
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const model = models[0];
     const outcome = requireText(positionals[0], 'milestone add "<outcome>" --objective <id> --exit "<criterion>"');
     const objective = requireObjective(model, required(values.objective));
     const id = milestoneId();
@@ -553,9 +578,11 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         links.push({ type: "supersedes", target: requireSibling(objective, values.supersedes) });
     }
     const payload = milestoneAddPayload(id, outcome, row, links, objective, values);
+    const demotions = presetGate(ctx, models, 'milestone add "<outcome>"', row.exposure, values, outcome, payload);
     recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload)), model,
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
+        ...demotionEvents(demotions, id, false)],
         `${id} ${outcome}`);
     console.log(id);
 }
