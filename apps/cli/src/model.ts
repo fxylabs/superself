@@ -2021,11 +2021,31 @@ function stated(works: WorkState[]): WorkState[]
     return works.filter((work) => work.status !== "done" && work.status !== "retired");
 }
 
+// A verdict that cannot locate the commit cannot say whether it shipped.
+// `unknown` is the fold admitting it can tell neither a merge from a discard;
+// `unverifiable` is the object being gone from the database. Neither is a
+// weaker `provisional` — `provisional` asserts the work has not landed, and
+// these assert nothing at all — so neither carries a branch here.
+//
+// `landed` one section up counts them as not-landed, and that is right there
+// for a reason that reverses here. It gates a decision on completed work, so
+// the expensive mistake is a false yes: calling a rule live on evidence nobody
+// can reach retires a decision the person never made. This section makes the
+// opposite claim, that work has NOT shipped, so the expensive mistake is the
+// false yes in the other direction — and it is the one squash and rebase merges
+// produce every time, since both rewrite the hash and delete the branch.
+//
+// `stated` above already refuses to make a claim that no action can clear, in
+// the words "an omission under a stated scope is honest, a frozen claim is
+// not". This is the same frozen claim on a unit that happens to still be open:
+// by that comment's own account unsettled evidence never settles after a squash
+// merge, so nothing a reader does will ever retire the line.
+const CANNOT_LOCATE: ReadonlySet<Verdict> = new Set<Verdict>(["unknown", "unverifiable"]);
+
 // What has not shipped, per branch. A branch carries a unit when some commit
-// the unit reported from it is not settled — the same conservatism `landed`
-// applies one section up: provisional, unknown, abandoned and unverifiable all
-// read as not shipped, and only settled means reachable from the default
-// branch. A branch with nothing unsettled gets no line at all.
+// the unit reported from it is positively not settled: `provisional`,
+// `abandoned`, or not yet judged — an unjudged hash must not drop out before
+// the first fold reaches it. A branch with nothing unsettled gets no line.
 export function unshippedBranches(works: WorkState[], verdicts: Record<string, Verdict>): BranchUnshipped[]
 {
     const branches = new Map<string, BranchUnshipped>();
@@ -2033,7 +2053,8 @@ export function unshippedBranches(works: WorkState[], verdicts: Record<string, V
     {
         for (const [key, hashes] of evidenceByBranch(work))
         {
-            const unsettled = [...hashes].filter((hash) => verdicts[hash] !== "settled").length;
+            const unsettled = [...hashes]
+                .filter((hash) => verdicts[hash] !== "settled" && !CANNOT_LOCATE.has(verdicts[hash])).length;
             if (unsettled === 0)
             {
                 continue;
