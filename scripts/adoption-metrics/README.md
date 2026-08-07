@@ -21,6 +21,8 @@ node scripts/adoption-metrics/snapshot.mjs --view     # show the record only
 | npm window | the `start`/`end` the same call returns | which seven days those counts cover |
 | LLM-referral pageviews (7d) | PostHog query API, project 513406 | key from the macOS keychain (`service=posthog account=personal-api-key`, query:read scope); the project receives several products' events, so the query filters `$host='superselfs.com'` — the app host is excluded, this measures the site |
 | Search Console impressions, clicks, sitemap last read | Search Console API, domain property `sc-domain:superselfs.com` | service-account JSON from the keychain (`service=gsc account=service-account`) |
+| Referral classes (7d site pageviews) | same PostHog query surface | classified by referring domain: llm / search / devto / reddit / github / direct / other |
+| Piece channel counters | `channels.json` → dev.to public articles API (reactions, comments; matched by canonical URL) and reddit thread JSON (score of the first comment linking our domain) | reddit returns 403 to unauthenticated JSON from this network, so that counter reads null until an authenticated path is added; PostHog's reddit referral class carries the signal meanwhile |
 
 Without a keychain entry the field it feeds degrades to null — nothing fails.
 Any fetched field can also be overridden by hand:
