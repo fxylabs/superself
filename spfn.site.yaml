@@ -8,6 +8,13 @@ social:
   github: https://github.com/fxylabs/superself
   npm: https://www.npmjs.com/package/superself
 footerNote: © 2026 FXY Inc. · Apache-2.0
+# Opt-in visitor analytics: the layouts inject the PostHog loader into every
+# mounted page. The key is the public client-token class that ships in every
+# page by design; the raw landing (site/pages/index.html) inlines the same
+# loader because raw HTML pages are served verbatim, outside the layouts.
+analytics:
+  posthog:
+    key: phc_sg3X7M6CtErmTgKkAk5ajcJbJyCCZsFkmVhikdjr4SLt
 nav:
   - label: Docs
     path: /docs/guides/getting-started
