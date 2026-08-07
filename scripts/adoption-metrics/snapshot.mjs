@@ -113,7 +113,7 @@ async function fetchNpm(names)
 const POSTHOG_PROJECT = 513406;
 const LLM_DOMAINS = "'chatgpt.com','chat.openai.com','perplexity.ai','www.perplexity.ai','claude.ai','gemini.google.com','copilot.microsoft.com'";
 
-async function fetchPosthogLlmReferrals()
+async function posthogQuery(query)
 {
     let key;
     try
@@ -125,15 +125,86 @@ async function fetchPosthogLlmReferrals()
     {
         return null;
     }
-    const query = `select count() from events where event='$pageview' and properties.$host='superselfs.com' and properties.$referring_domain in (${LLM_DOMAINS}) and timestamp > now() - interval 7 day`;
     const res = await fetch(`https://us.posthog.com/api/projects/${POSTHOG_PROJECT}/query/`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
     }).catch(() => null);
     if (!res || !res.ok) return null;
-    const data = await res.json();
-    return data.results?.[0]?.[0] ?? null;
+    return (await res.json()).results ?? null;
+}
+
+async function fetchPosthogLlmReferrals()
+{
+    const results = await posthogQuery(`select count() from events where event='$pageview' and properties.$host='superselfs.com' and properties.$referring_domain in (${LLM_DOMAINS}) and timestamp > now() - interval 7 day`);
+    return results?.[0]?.[0] ?? null;
+}
+
+// Where the last seven days of site pageviews came from, classified by
+// referring domain. '$direct' is PostHog's own marker for no referrer.
+async function fetchReferralClasses()
+{
+    const results = await posthogQuery(`select multiIf(
+        properties.$referring_domain in (${LLM_DOMAINS}), 'llm',
+        properties.$referring_domain in ('www.google.com','google.com','www.bing.com','bing.com','duckduckgo.com','search.brave.com'), 'search',
+        properties.$referring_domain = 'dev.to', 'devto',
+        properties.$referring_domain in ('www.reddit.com','reddit.com','old.reddit.com','out.reddit.com'), 'reddit',
+        properties.$referring_domain in ('github.com','www.github.com'), 'github',
+        properties.$referring_domain = '$direct', 'direct',
+        'other') as cls, count()
+        from events where event='$pageview' and properties.$host='superselfs.com' and timestamp > now() - interval 7 day group by cls`);
+    if (results === null) return null;
+    const referrals = { llm: 0, search: 0, devto: 0, reddit: 0, github: 0, direct: 0, other: 0 };
+    for (const [cls, n] of results) referrals[cls] = n;
+    return referrals;
+}
+
+// Channel counters for published pieces, listed in channels.json. dev.to
+// articles map back to pieces through their canonical URL; a reddit thread is
+// read unauthenticated and the counted comment is the first one linking our
+// domain, so no per-comment permalink bookkeeping. Failures degrade to null.
+const CHANNELS = join(HERE, 'channels.json');
+const SITE_DOMAIN = 'superselfs.com';
+
+function commentTexts(node, out)
+{
+    for (const child of node?.data?.children ?? [])
+    {
+        if (child.kind === 't1')
+        {
+            out.push({ body: child.data.body ?? '', score: child.data.score ?? null });
+            commentTexts(child.data.replies, out);
+        }
+    }
+    return out;
+}
+
+async function fetchChannels()
+{
+    if (!existsSync(CHANNELS)) return null;
+    const config = JSON.parse(readFileSync(CHANNELS, 'utf8'));
+
+    const devto = {};
+    const articles = await getJson(`https://dev.to/api/articles?username=${config.devtoUsername}`).catch(() => null);
+    for (const piece of config.pieces)
+    {
+        const article = articles?.find((a) => a.canonical_url?.endsWith(`/${piece.slug}`));
+        devto[piece.slug] = article
+            ? { reactions: article.public_reactions_count, comments: article.comments_count }
+            : null;
+    }
+
+    const reddit = {};
+    for (const piece of config.pieces)
+    {
+        for (const url of piece.reddit ?? [])
+        {
+            const thread = await getJson(`${url.replace(/\/$/, '')}.json`).catch(() => null);
+            const ours = thread ? commentTexts(thread[1], []).find((c) => c.body.includes(SITE_DOMAIN)) : null;
+            reddit[url] = ours?.score ?? null;
+        }
+    }
+    return { devto, reddit };
 }
 
 // Search Console: the shared service account authenticates via a self-signed
@@ -270,6 +341,27 @@ function printView(rows)
     line('GSC impressions', curr.manual.gscImpressions, prev?.manual.gscImpressions);
     line('GSC clicks', curr.manual.gscClicks, prev?.manual.gscClicks);
     line('sitemap last read', curr.sitemapLastRead ?? '—');
+    if (curr.referrals)
+    {
+        console.log('');
+        for (const [cls, n] of Object.entries(curr.referrals))
+        {
+            line(`referrals ${cls} (7d)`, n, prev?.referrals?.[cls]);
+        }
+    }
+    if (curr.channels)
+    {
+        console.log('');
+        for (const [slug, c] of Object.entries(curr.channels.devto))
+        {
+            line(`devto ${slug} reactions`, c?.reactions ?? null, prev?.channels?.devto?.[slug]?.reactions);
+            line(`devto ${slug} comments`, c?.comments ?? null, prev?.channels?.devto?.[slug]?.comments);
+        }
+        for (const [url, score] of Object.entries(curr.channels.reddit))
+        {
+            line(`reddit ${url.split('/comments/')[1]?.split('/')[0] ?? url} score`, score, prev?.channels?.reddit?.[url]);
+        }
+    }
     console.log('');
 }
 
@@ -310,6 +402,8 @@ const row = {
     npmWindow: npm.window,
     manual,
     sitemapLastRead,
+    referrals: await fetchReferralClasses(),
+    channels: await fetchChannels(),
 };
 
 if (has('--dry'))
