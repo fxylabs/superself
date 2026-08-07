@@ -10,7 +10,7 @@
 - A change that adds a flat top-level subsystem, a second path around a single
   gate, or a sibling event namespace is sent back regardless of how it tests.
 
-<!-- superself:begin v0.5.1 -->
+<!-- superself:begin v0.6.0 -->
 ## Project state (superself)
 
 Project state — goals, decisions, work units, reports — is version-controlled
