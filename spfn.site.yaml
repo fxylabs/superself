@@ -35,6 +35,9 @@ mounts:
   - source: docs/examples
     route: /docs/examples
     title: Examples
+  - source: docs/updates
+    route: /updates
+    title: Updates
   - source: docs/roadmap.md
     route: /docs/roadmap
     title: Roadmap
