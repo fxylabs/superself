@@ -113,6 +113,15 @@ async function fetchNpm(names)
 // --posthog flag still overrides.
 const POSTHOG_PROJECT = 513406;
 const LLM_DOMAINS = "'chatgpt.com','chat.openai.com','perplexity.ai','www.perplexity.ai','claude.ai','gemini.google.com','copilot.microsoft.com'";
+// The two social channels the site actually receives traffic from. They read as
+// one 'other' bucket without their own classes, which hides the only channel
+// still delivering anyone in a week where the rest are at zero.
+const X_DOMAINS = "'t.co','twitter.com','www.twitter.com','x.com','www.x.com'";
+const THREADS_DOMAINS = "'l.threads.com','www.threads.com','threads.com','www.threads.net','threads.net'";
+// The audience the global adoption objective is measured against is everyone
+// outside the home market; KR traffic arrives through a Korean-language funnel
+// and would otherwise read as progress on a goal it does not serve.
+const HOME_COUNTRY = 'KR';
 
 async function posthogQuery(query)
 {
@@ -151,13 +160,32 @@ async function fetchReferralClasses()
         properties.$referring_domain = 'dev.to', 'devto',
         properties.$referring_domain in ('www.reddit.com','reddit.com','old.reddit.com','out.reddit.com'), 'reddit',
         properties.$referring_domain in ('github.com','www.github.com'), 'github',
+        properties.$referring_domain in (${X_DOMAINS}), 'x',
+        properties.$referring_domain in (${THREADS_DOMAINS}), 'threads',
         properties.$referring_domain = '$direct', 'direct',
         'other') as cls, count()
         from events where event='$pageview' and properties.$host='superselfs.com' and timestamp > now() - interval 7 day group by cls`);
     if (results === null) return null;
-    const referrals = { llm: 0, search: 0, devto: 0, reddit: 0, github: 0, direct: 0, other: 0 };
+    const referrals = { llm: 0, search: 0, devto: 0, reddit: 0, github: 0, x: 0, threads: 0, direct: 0, other: 0 };
     for (const [cls, n] of results) referrals[cls] = n;
     return referrals;
+}
+
+// Where the last seven days of site pageviews came from geographically, as the
+// two counts the adoption objective is read against: everyone outside the home
+// market, and the home market itself.
+async function fetchReach()
+{
+    const results = await posthogQuery(`select multiIf(
+        properties.$geoip_country_code = '${HOME_COUNTRY}', 'home',
+        properties.$geoip_country_code = '', 'unknown',
+        isNull(properties.$geoip_country_code), 'unknown',
+        'global') as region, count()
+        from events where event='$pageview' and properties.$host='superselfs.com' and timestamp > now() - interval 7 day group by region`);
+    if (results === null) return null;
+    const reach = { global: 0, home: 0, unknown: 0 };
+    for (const [region, n] of results) reach[region] = n;
+    return reach;
 }
 
 // Channel counters for published pieces, listed in channels.json. dev.to
@@ -376,6 +404,13 @@ function printView(rows)
     line('GSC impressions', curr.manual.gscImpressions, prev?.manual.gscImpressions);
     line('GSC clicks', curr.manual.gscClicks, prev?.manual.gscClicks);
     line('sitemap last read', curr.sitemapLastRead ?? '—');
+    if (curr.reach)
+    {
+        console.log('');
+        line('pageviews global (7d)', curr.reach.global, prev?.reach?.global);
+        line(`pageviews ${HOME_COUNTRY.toLowerCase()} (7d)`, curr.reach.home, prev?.reach?.home);
+        line('pageviews unknown (7d)', curr.reach.unknown, prev?.reach?.unknown);
+    }
     if (curr.referrals)
     {
         console.log('');
@@ -439,6 +474,7 @@ const row = {
     manual,
     sitemapLastRead,
     referrals: await fetchReferralClasses(),
+    reach: await fetchReach(),
     channels: await fetchChannels(),
 };
 
