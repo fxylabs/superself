@@ -7,8 +7,9 @@
 //   node scripts/adoption-metrics/snapshot.mjs --dry      fetch and show, no append
 //   node scripts/adoption-metrics/snapshot.mjs --view     show the record only
 //
-// PostHog and Search Console need credentials from the macOS keychain; without
-// an entry the field degrades to null. Any fetched field can be entered by hand:
+// PostHog, Search Console and dev.to views need credentials from the macOS
+// keychain; without an entry the field degrades to null. Any fetched field can
+// be entered by hand:
 //
 //   --posthog <n>            LLM-referral pageviews, last 7 days
 //   --gsc-impressions <n>    Search Console impressions
@@ -166,6 +167,36 @@ async function fetchReferralClasses()
 const CHANNELS = join(HERE, 'channels.json');
 const SITE_DOMAIN = 'superselfs.com';
 
+// dev.to's public listing carries reactions and comments but no view count, so
+// views need the author's own key from the macOS keychain. Without it the
+// public listing still answers for reactions and comments and views alone
+// degrades to null.
+function devtoKey()
+{
+    try
+    {
+        return execFileSync('security', ['find-generic-password', '-s', 'devto', '-a', 'api-key', '-w'],
+            { encoding: 'utf8' }).trim();
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+async function devtoArticles(username)
+{
+    const key = devtoKey();
+    if (key)
+    {
+        const res = await fetch('https://dev.to/api/articles/me/published', {
+            headers: { 'api-key': key, 'User-Agent': 'superself-adoption-metrics' },
+        }).catch(() => null);
+        if (res?.ok) return res.json();
+    }
+    return getJson(`https://dev.to/api/articles?username=${username}`).catch(() => null);
+}
+
 function commentTexts(node, out)
 {
     for (const child of node?.data?.children ?? [])
@@ -185,12 +216,16 @@ async function fetchChannels()
     const config = JSON.parse(readFileSync(CHANNELS, 'utf8'));
 
     const devto = {};
-    const articles = await getJson(`https://dev.to/api/articles?username=${config.devtoUsername}`).catch(() => null);
+    const articles = await devtoArticles(config.devtoUsername);
     for (const piece of config.pieces)
     {
         const article = articles?.find((a) => a.canonical_url?.endsWith(`/${piece.slug}`));
         devto[piece.slug] = article
-            ? { reactions: article.public_reactions_count, comments: article.comments_count }
+            ? {
+                reactions: article.public_reactions_count,
+                comments: article.comments_count,
+                views: article.page_views_count ?? null,
+            }
             : null;
     }
 
@@ -354,6 +389,7 @@ function printView(rows)
         console.log('');
         for (const [slug, c] of Object.entries(curr.channels.devto))
         {
+            line(`devto ${slug} views`, c?.views ?? null, prev?.channels?.devto?.[slug]?.views);
             line(`devto ${slug} reactions`, c?.reactions ?? null, prev?.channels?.devto?.[slug]?.reactions);
             line(`devto ${slug} comments`, c?.comments ?? null, prev?.channels?.devto?.[slug]?.comments);
         }
