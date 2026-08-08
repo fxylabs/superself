@@ -18,8 +18,6 @@ const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const TIER1 = [
     "README.md",
     "apps/cli/README.md",
-    "AGENTS.md",
-    "CLAUDE.md",
     "ARCHITECTURE.md",
     "CONTRIBUTING.md",
     "docs/concepts/company-state-and-context.md",
@@ -272,7 +270,12 @@ test("event names the documents mention are the vocabulary the CLI writes", asyn
     }
 });
 
-/* ── proof 4: the checked-in managed blocks carry the shipped template ── */
+/* ── proof 4: the block connect writes has one shape, in both files ── */
+
+// This repository stops tracking AGENTS.md and CLAUDE.md, because the block
+// carries the project's conventions and this repository is public. The subject
+// is therefore what `connect` writes into a scratch project, not what is
+// checked in here.
 
 // The marker carries the version that rendered it (#221), so a block is found
 // by its prefix — a pinned literal would only match one release.
@@ -287,21 +290,15 @@ function managedBlock(name, content)
     return content.slice(from, to + BLOCK_END.length);
 }
 
-test("the checked-in managed blocks equal the template applied to this repo's state", () =>
+test("connect writes one managed block, of a fixed shape, to both instruction files", () =>
 {
     const box = machine();
     const { demo } = demoWorkspace(box);
-    const rendered = managedBlock("scratch AGENTS.md", readFileSync(join(demo, "AGENTS.md"), "utf8"));
-    const template = rendered.slice(0, rendered.length - BLOCK_END.length);
-    const blocks = ["AGENTS.md", "CLAUDE.md"].map((name) => ({ name, block: managedBlock(name, tier1(name)) }));
+    const blocks = ["AGENTS.md", "CLAUDE.md"]
+        .map((name) => ({ name, block: managedBlock(name, readFileSync(join(demo, name), "utf8")) }));
     assert.equal(blocks[0].block, blocks[1].block,
         "AGENTS.md and CLAUDE.md carry different managed blocks — the fold writes one block to both");
-    for (const { name, block } of blocks)
-    {
-        assert.ok(block.startsWith(template),
-            `${name}'s managed block drifted from the connect.ts template — regenerate it with \`self connect\``);
-        const rest = block.slice(template.length);
-        assert.ok(rest === BLOCK_END || (rest.startsWith("\n### Conventions") && rest.endsWith(BLOCK_END)),
-            `${name}'s managed block holds more than the template and a conventions section`);
-    }
+    const sections = [...blocks[0].block.matchAll(/^#{2,3} .+$/gm)].map((m) => m[0]);
+    assert.deepEqual(sections, ["## Project state (superself)"],
+        "the managed block of a project with no conventions holds a section beyond project state");
 });
