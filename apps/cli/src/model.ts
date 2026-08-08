@@ -25,8 +25,8 @@ import {
     MilestoneState,
     ObjectiveState
 } from "./objectives.js";
-import { readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
-import { ArtifactMeta, SelfEvent } from "./types.js";
+import { activeProjects, readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
+import { ArtifactMeta, RegistryEntry, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
@@ -572,12 +572,15 @@ export function foreignToward(work: WorkState): string[]
     return work.foreignObjectives.map((link) => `${link.id} (${link.project})`);
 }
 
-// Every registered project's fold, the named one first. A record renders where
-// its scope points rather than where its log sits (#181 D1), so answering for
-// one project — what it renders, what its tiers hold — reads every store.
+// Every active project's fold, the named one first. A record renders where its
+// scope points rather than where its log sits (#181 D1), so answering for one
+// project — what it renders, what its tiers hold — reads every store. An
+// archived project is not among them (#283): it is out of every workspace-wide
+// answer until it is restored, and `--project <slug>` is how its own state is
+// still read.
 export function workspaceModels(storeDir: string, first?: string): ProjectModel[]
 {
-    const slugs = readRegistry(storeDir).map((entry) => entry.slug);
+    const slugs = activeProjects(storeDir).map((entry) => entry.slug);
     const rest = slugs.filter((slug) => slug !== first);
     const now = new Date();
     return (first === undefined ? rest : [first, ...rest]).map((slug) => buildModel(storeDir, slug, now));
@@ -589,12 +592,17 @@ export function workspaceModels(storeDir: string, first?: string): ProjectModel[
 // from which — so one store nothing can read must not take the answer for
 // every other project down with it. Every other surface still folds through
 // `workspaceModels`, where an unreadable store is a failure worth stopping on.
-export function readableModels(storeDir: string): { models: ProjectModel[]; unreadable: string[] }
+//
+// The active projects by default, and the entries a caller hands over when it
+// means another set: `self project --archived` lists the projects that are set
+// aside, which is the one listing they belong in (#283).
+export function readableModels(storeDir: string, entries: RegistryEntry[] = activeProjects(storeDir)):
+    { models: ProjectModel[]; unreadable: string[] }
 {
     const now = new Date();
     const models: ProjectModel[] = [];
     const unreadable: string[] = [];
-    for (const entry of readRegistry(storeDir))
+    for (const entry of entries)
     {
         try
         {

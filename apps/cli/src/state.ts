@@ -40,6 +40,7 @@ import {
     readRegistry,
     readScopes,
     readStoreConfig,
+    refuseArchived,
     requireProject,
     retentionCaps,
     RetentionCaps,
@@ -1628,6 +1629,10 @@ function requireScopeProject(ctx: ProjectContext, slug: string): string
         throw new CliError(`"${slug}" is not a registered project — run \`self project\` to list the slugs, `
             + "or --scope workspace to render the record in every project");
     }
+    // A placement names where a record renders, and an archived project renders
+    // nowhere (#283): placing a record there would file it out of sight rather
+    // than move it.
+    refuseArchived(ctx.storeDir, slug, "a record placed there would render nowhere");
     return slug;
 }
 

@@ -148,6 +148,10 @@ function unregisteredMessage(storeDir: string, cwd: string): string
 // Writes have no scope flag at all. A write records into the project it runs
 // in, so `--project` on one is an option that command never declared, and the
 // argument gate names it rather than dropping it.
+//
+// An archived project (#283) is registered and readable but out of every
+// workspace-wide answer: `--workspace` resolves the active projects, and
+// `--project <slug>` still resolves an archived one, with one line saying so.
 
 export type ProjectScope = CliContext & { project: string };
 
@@ -199,6 +203,15 @@ function namedScope(cwd: string, slug: string): ProjectScope
 {
     const ctx = requireWorkspace(cwd);
     const project = requireRegistered(ctx.storeDir, slug);
+    // An archived project reads exactly as it always did (#283): naming it is
+    // how its state stays reachable while it is out of every aggregate. The
+    // note goes to the person on stderr, so a piped read still gets the bytes
+    // an agent has always read.
+    const note = archivedNote(ctx.storeDir, project);
+    if (note !== null)
+    {
+        console.error(note);
+    }
     return ctx.project === project
         ? ctx as ProjectScope
         : { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project };
@@ -222,10 +235,13 @@ export function requireRegistered(storeDir: string, slug: string): string
 // that nothing is registered.
 function requireProjects(storeDir: string): RegistryEntry[]
 {
-    const entries = readRegistry(storeDir);
+    const entries = activeProjects(storeDir);
     if (entries.length === 0)
     {
-        throw new CliError("this workspace has no registered projects — run `self project init` inside a project directory to register one");
+        throw new CliError(readRegistry(storeDir).length === 0
+            ? "this workspace has no registered projects — run `self project init` inside a project directory to register one"
+            : "every registered project is archived — run `self project --archived` to list them, "
+                + "or `self project restore <slug>` to bring one back");
     }
     return entries;
 }
@@ -238,6 +254,156 @@ function requireOneScope(choice: ScopeChoice): void
     {
         throw new CliError(`--workspace reads every registered project and --project reads "${choice.project}" — pass one of them, not both`);
     }
+}
+
+/* ── archived projects ─────────────────────────────────────────────── */
+
+// A project set aside (#283). Archiving is not retirement: no record changes,
+// open work stays exactly as it stands, and `self project restore` brings the
+// whole project back in the state it was left. What the state does is take the
+// project out of every answer about the workspace, so a slug nobody is working
+// on stops spending a reader's attention.
+//
+// It is read here, beside the store's other per-project state, because two
+// families answer for the workspace — the scope resolver above, and the model
+// enumeration in `model.ts` — and both have to exclude the same slugs. A second
+// reader of the same events is what would let one of them keep a project the
+// other dropped.
+interface ProjectArchive
+{
+    // The `project.archived` event this state came from: the id `self undo`
+    // names to take the record back, and what a listing points at.
+    event: string;
+    ts: string;
+    why: string;
+}
+
+const archives = new Map<string, ProjectArchive | null>();
+
+export function projectArchive(storeDir: string, slug: string): ProjectArchive | undefined
+{
+    const key = JSON.stringify([storeDir, slug]);
+    if (!archives.has(key))
+    {
+        archives.set(key, foldArchive(archiveEvents(storeDir, slug)));
+    }
+    return archives.get(key) ?? undefined;
+}
+
+// A log this machine cannot parse says nothing about whether the project was
+// set aside, and answering "archived" for it would drop the project out of the
+// listing that exists to name a store nobody can read (#75 T4.5). Unreadable
+// reads as active, and the surface that folds the log reports the damage.
+function archiveEvents(storeDir: string, slug: string): any[]
+{
+    try
+    {
+        return readJsonl(join(projectStateDir(storeDir, slug), "log.jsonl"));
+    }
+    catch
+    {
+        return [];
+    }
+}
+
+// Ordered by timestamp with the event id breaking the tie, never by log order:
+// a union-merged log carries the lines in neither, and two clones of one store
+// must fold to one answer. The last transition standing is the state, and an
+// archive an undo took back — the restoration names it in `refs.annuls` — is
+// skipped, so the project reads as one that was never archived.
+function foldArchive(events: any[]): ProjectArchive | null
+{
+    const annulled = annulledIds(events);
+    let state: ProjectArchive | null = null;
+    for (const event of archiveTransitions(events))
+    {
+        if (event.type === "project.restored")
+        {
+            state = null;
+        }
+        else if (!annulled.has(String(event.id)))
+        {
+            state = { event: String(event.id), ts: String(event.ts), why: String(event.payload?.why ?? "") };
+        }
+    }
+    return state;
+}
+
+function archiveTransitions(events: any[]): any[]
+{
+    return events
+        .filter((event) => event?.type === "project.archived" || event?.type === "project.restored")
+        .sort((left, right) => String(left.ts).localeCompare(String(right.ts))
+            || String(left.id).localeCompare(String(right.id)));
+}
+
+function annulledIds(events: any[]): Set<string>
+{
+    const ids = new Set<string>();
+    for (const event of events)
+    {
+        const annuls = event?.refs?.annuls;
+        if (typeof annuls === "string" && annuls !== "")
+        {
+            ids.add(annuls);
+        }
+    }
+    return ids;
+}
+
+// The registered projects a workspace answer speaks for. Every aggregate reads
+// this rather than the registry: an archived project that stayed in one of them
+// would still be spending the attention archiving it was meant to give back.
+export function activeProjects(storeDir: string): RegistryEntry[]
+{
+    return readRegistry(storeDir).filter((entry) => projectArchive(storeDir, entry.slug) === undefined);
+}
+
+interface ArchivedProject
+{
+    entry: RegistryEntry;
+    archive: ProjectArchive;
+}
+
+export function archivedProjects(storeDir: string): ArchivedProject[]
+{
+    return readRegistry(storeDir).flatMap((entry) =>
+    {
+        const archive = projectArchive(storeDir, entry.slug);
+        return archive === undefined ? [] : [{ entry, archive }];
+    });
+}
+
+// A slug an archived project answers to, refused with what the caller was
+// trying to do with it. Every surface that will not take an archived project —
+// a write, a placement scope, a successor — refuses in these words, so the way
+// back is named the same wherever a caller meets it.
+export function refuseArchived(storeDir: string, slug: string, act: string): void
+{
+    if (projectArchive(storeDir, slug) !== undefined)
+    {
+        throw new CliError(`project "${slug}" is archived, so ${act} — `
+            + `run \`self project restore ${slug}\` to bring it back`);
+    }
+}
+
+// Said once per process, by whichever surface first resolves the project: a
+// read of an archived project answers exactly as it always did, and the note is
+// the one line that says why the slug is missing from everything else. `null`
+// once it has been said, so `--project <slug>` and the render behind it never
+// print it twice.
+const noted = new Set<string>();
+
+export function archivedNote(storeDir: string, slug: string): string | null
+{
+    const archive = projectArchive(storeDir, slug);
+    if (archive === undefined || noted.has(slug))
+    {
+        return null;
+    }
+    noted.add(slug);
+    return `project "${slug}" is archived (${archive.ts.slice(0, 10)}: ${archive.why}) — `
+        + `run \`self project restore ${slug}\` to bring it back`;
 }
 
 export function projectStateDir(storeDir: string, slug: string): string
@@ -286,6 +452,10 @@ export function invalidateResolution(): void
     registries.clear();
     matched.clear();
     resolvedPaths.clear();
+    // The archive state is folded from a project's own log, which an append
+    // just changed: `project archive` and `project restore` both write through
+    // the same pipeline, so a read after either must start from the file.
+    archives.clear();
 }
 
 export function readRegistry(storeDir: string): RegistryEntry[]

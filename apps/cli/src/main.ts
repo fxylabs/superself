@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ALIAS_COMMAND, presetRow, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
+import { printArchivedProjects, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF, undoArchive } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
@@ -35,6 +36,7 @@ import {
     readStoreConfig,
     readVerdicts,
     recordLink,
+    refuseArchived,
     requireProject,
     requireRegistered,
     requireWorkspace,
@@ -210,6 +212,12 @@ function printUsage(usage: string): void
 const INIT_OPTIONS = { lang: { type: "string" }, agents: { type: "boolean" } } as const;
 
 const PROJECT_INIT_OPTIONS = { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } } as const;
+
+// The bare listing answers for the projects this workspace is working on; the
+// flag asks for the ones it set aside (#283). Two lists rather than one marked
+// list: the reason a project was archived is worth a column of its own, and the
+// default listing exists to be short.
+const PROJECT_LIST_OPTIONS = { archived: { type: "boolean" } } as const;
 
 const DECIDE_OPTIONS = {
     proposed: { type: "boolean" },
@@ -396,10 +404,11 @@ export const COMMANDS: Command[] = [
         name: "project",
         usage: [
             {
-                syntax: "project",
+                syntax: "project [--archived]",
                 description: [
                     "list the registered slugs, which project each came from,",
-                    "and any scope naming a project this workspace lost"
+                    "and any scope naming a project this workspace lost",
+                    "(--archived lists the projects that are set aside instead)"
                 ],
                 verbs: ["", "list"]
             },
@@ -417,6 +426,16 @@ export const COMMANDS: Command[] = [
                 syntax: 'project from <parent-slug> --why "<reason>" [--supersedes <id>]',
                 description: ["record that this project came from another registered one"],
                 verbs: ["from"]
+            },
+            {
+                syntax: 'project archive <slug> --why "<reason>"',
+                description: ["set a project aside, with its open work as it stands"],
+                verbs: ["archive"]
+            },
+            {
+                syntax: "project restore <slug>",
+                description: ["bring an archived project back, in the state it was left"],
+                verbs: ["restore"]
             }
         ],
         detail: [
@@ -442,10 +461,19 @@ export const COMMANDS: Command[] = [
             "and every child on the parent's. A project comes from one place, so a second",
             "`from` is refused and a correction restates it with --supersedes.",
             "",
+            "`archive` sets a project aside: it leaves this listing, `self context` and",
+            "every --workspace aggregate, and stays readable through --archived and an",
+            "explicit --project <slug>. It is not retirement — open work neither blocks",
+            "it nor is retired by it, and `restore` brings the project and every unit",
+            "back in the state it was left. Nothing is recorded into an archived project",
+            "until it is restored. `self undo <event-id>` is the other verb: it takes",
+            "back an archive that should never have been written.",
+            "",
+            "  --archived          list the projects that are set aside, with their reasons",
             "  --name <slug>       register under this slug instead of the directory name",
             "  --desc <text>       one-line description shown in the workspace view",
             "  --no-connect        skip writing the managed block into AGENTS.md and CLAUDE.md",
-            "  --why <text>        why this project came from that one, kept with the relation",
+            "  --why <text>        why this project came from that one, or why it is set aside",
             "  --supersedes <id>   the derivation record this one corrects",
             "  --demote <id>       past the index cap: the index record that frees its place"
         ],
@@ -454,11 +482,13 @@ export const COMMANDS: Command[] = [
             unnamed: "options",
             refusal: projectRefusal,
             children: [
-                leaf("", {}, 0, projectList),
-                leaf("list", {}, 0, projectList),
+                leaf("", PROJECT_LIST_OPTIONS, 0, projectList),
+                leaf("list", PROJECT_LIST_OPTIONS, 0, projectList),
                 leaf("init", PROJECT_INIT_OPTIONS, 1, projectInit),
                 leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1])),
-                PROJECT_FROM_LEAF
+                PROJECT_FROM_LEAF,
+                PROJECT_ARCHIVE_LEAF,
+                PROJECT_RESTORE_LEAF
             ]
         })
     },
@@ -717,9 +747,13 @@ export const COMMANDS: Command[] = [
             }
         ],
         detail: [
-            "take back one retirement, supersession, withdrawal or link. Nothing else",
-            "is undone: the id names the event to take back, and any other kind of",
-            "event is refused rather than guessed at.",
+            "take back one retirement, supersession, withdrawal, link or project archive.",
+            "Nothing else is undone: the id names the event to take back, and any other",
+            "kind of event is refused rather than guessed at.",
+            "",
+            "Undoing an archive is not `self project restore`. Restore ends an archive",
+            "that was right and keeps its record; this takes back one that should never",
+            "have been written, and leaves no archive record standing.",
             "",
             "The record comes back and the log keeps both halves — what happened and",
             "what took it back. A supersession's successor stays; it simply stops",
@@ -1115,7 +1149,7 @@ function refuseDuplicateProject(storeDir: string, projectDir: string, slug: stri
         throw new CliError('"workspace" is reserved — `--scope workspace` means every registered project, '
             + "so no single project may answer to it; register this one with `--name <slug>`");
     }
-    refuseRegisteredHere(projectDir);
+    refuseRegisteredHere(storeDir, projectDir);
     const sibling = siblingSlug(storeDir, projectDir);
     if (sibling !== null)
     {
@@ -1126,8 +1160,10 @@ function refuseDuplicateProject(storeDir: string, projectDir: string, slug: stri
 
 // The marker names the project this directory already is, so registering it a
 // second time is answered with that name rather than with whatever slug the
-// call asked for.
-function refuseRegisteredHere(projectDir: string): void
+// call asked for. An archived project is answered with `restore` instead
+// (#283): bringing one back is a state change on the project that is here, and
+// a second registration would split its state in two.
+function refuseRegisteredHere(storeDir: string, projectDir: string): void
 {
     const marker = join(projectDir, MARKER_FILE);
     if (!existsSync(marker))
@@ -1135,6 +1171,7 @@ function refuseRegisteredHere(projectDir: string): void
         return;
     }
     const slug = JSON.parse(readFileSync(marker, "utf8")).project;
+    refuseArchived(storeDir, slug, "registering it again would split its state in two");
     throw new CliError(`"${projectDir}" is already registered as project "${slug}" — run \`self context\` to read its state`);
 }
 
@@ -1224,13 +1261,22 @@ function registerProject(ctx: CliContext, projectDir: string, slug: string, desc
 // row, the children under the parent's. A project whose state cannot be read
 // is named and skipped rather than thrown (T4.5) — this verb answers about the
 // workspace as a whole, and one broken store must not take the rest with it.
-function projectList(): void
+// An archived project is out of this listing and in `--archived` instead
+// (#283): the bare list answers "what is this workspace working on".
+function projectList({ values }: CommandInput<typeof PROJECT_LIST_OPTIONS>): void
 {
     const ctx = requireWorkspace(process.cwd());
+    if (values.archived === true)
+    {
+        printArchivedProjects(ctx.storeDir);
+        return;
+    }
     const { models, unreadable } = readableModels(ctx.storeDir);
     if (models.length === 0 && unreadable.length === 0)
     {
-        console.log("no projects registered — run `self project init` inside a project directory");
+        console.log(readRegistry(ctx.storeDir).length === 0
+            ? "no projects registered — run `self project init` inside a project directory"
+            : "every registered project is archived — run `self project --archived` to list them");
         return;
     }
     const registered = new Set(readRegistry(ctx.storeDir).map((entry) => entry.slug));
@@ -1943,8 +1989,16 @@ function successorRef(ctx: ProjectContext, source: string, successor: string | u
     {
         throw new CliError(`unknown successor "${successor}" — the unit that carries the outcome must exist before ${source} is retired`);
     }
-    // Identity, not spelling: the same id may exist in another project, so
-    // self-succession is judged only after the reference has resolved.
+    requireSuccessorStanding(ctx, source, found);
+    return { successor: found.work.id, successorProject: found.slug };
+}
+
+// What the resolved successor has to be: another unit, still standing, in a
+// project still being worked on. Identity, not spelling — the same id may exist
+// in another project, so self-succession is judged only after the reference has
+// resolved.
+function requireSuccessorStanding(ctx: ProjectContext, source: string, found: FoundWork): void
+{
     if (found.slug === ctx.project && found.work.id === source)
     {
         throw new CliError(`${source} cannot succeed itself — name the unit that carries the outcome now`);
@@ -1953,7 +2007,10 @@ function successorRef(ctx: ProjectContext, source: string, successor: string | u
     {
         throw new CliError(`successor ${found.work.id} is itself retired — the outcome cannot move to a unit that gave it up`);
     }
-    return { successor: found.work.id, successorProject: found.slug };
+    // An archived project receives nothing (#283): the outcome would move into
+    // a project that is out of every listing, where nothing reports on it again
+    // until someone restores it.
+    refuseArchived(ctx.storeDir, found.slug, "it cannot receive a successor");
 }
 
 // The process ledger's two verbs. The synced event carries the transition and
@@ -2341,7 +2398,11 @@ const UNDOABLE: Record<string, string> = {
     "entity.retired": "retirement",
     // A link is a statement too (#244 D5): taking the event back removes the
     // contribution edge from every surface that read it, in every project.
-    "entity.linked": "link"
+    "entity.linked": "link",
+    // An archive that should never have been written (#283). Distinct from
+    // `project restore`, which ends an archive that was right: this one leaves
+    // no archive record standing at all.
+    "project.archived": "archive"
 };
 
 // Reversing one destructive event. The event is named rather than the record,
@@ -2353,12 +2414,17 @@ function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | 
 {
     const usage = 'undo <event-id> --why "<why the retirement was wrong>"';
     const event = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, usage));
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const undone = undoableKind(event);
     if (readEvents(ctx.storeDir, ctx.project).some((item: SelfEvent) => item.refs?.annuls === event.id))
     {
         throw new CliError(`${event.id} was already undone — the record it took back is standing`);
     }
+    if (event.type === "project.archived")
+    {
+        undoArchive(ctx, event, required(why));
+        return;
+    }
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const restored = restoredBy(event);
     const text = model.entities.find((item) => item.id === restored)?.text ?? restored;
     recordEvent(ctx, makeEvent(ctx.project, "entity.restored",
@@ -2384,7 +2450,8 @@ function undoableKind(event: SelfEvent): string
     {
         return "supersession";
     }
-    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, or a record's supersession of another, and nothing else`);
+    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, an archive, `
+        + "or a record's supersession of another, and nothing else");
 }
 
 // What comes back. A withdrawal and a retirement name their target; a
