@@ -8,6 +8,14 @@ artifacts/
 *.log
 .DS_Store
 
+# agent instruction files — the self CLI rewrites their managed block from the
+# project's own conventions, which are internal operating rules (content and
+# channel strategy, local scheduler jobs) and do not belong in a public repo.
+# Contributor-facing guidance lives in README.md, CONTRIBUTING.md and
+# ARCHITECTURE.md, which stay tracked.
+/AGENTS.md
+/CLAUDE.md
+
 # local planning records — project state lives in the self store, not here;
 # tracked docs (strategy, maintainers, viewer-theming) are unaffected
 /docs/0*-*.md
