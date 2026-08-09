@@ -31,7 +31,7 @@ it. The layers, lowest first:
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
-| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, the `--archived` listing, and the undo of an archive record |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, and the `--archived` listing |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
@@ -117,10 +117,13 @@ is why it is its own and not an extension of `entity.*`. `derivation.ts`
 records the one *relation* between projects as an entity, correctly: that is a
 record a person asserts. Archiving is not — it is a transition of the project
 itself, with no text, no placement and no lifecycle of its own, so it is a
-declared non-statement namespace like the process transitions below. The take-
-back is `self undo`, whose restoration names the archive event in
-`refs.annuls`; `project restore` is the other transition, and it withdraws
-nothing.
+declared non-statement namespace like the process transitions below. Being a
+transition and not a statement is also why `self undo` does not reach it:
+`undo` resolves its project from the working directory, while both verbs here
+name a slug so a workspace is tidied from anywhere — including when the
+project's checkout is on another machine, which is the ordinary case for a
+project being set aside. `project restore` is the only way out of the archive,
+and the optional `--why` on it is what a withdrawal would have said.
 
 The process transitions are `work.run-started` and `work.run-exited`. They
 carry the work id and, on exit, the code — never the pid: a pid is

@@ -21,7 +21,7 @@ prints them during the same run.
 | Family | Current entry points |
 | --- | --- |
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
-| Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug>`, `remote add <url>`, `sync`, `clone <url> [dir]` |
+| Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
@@ -55,13 +55,15 @@ command says how many open units went with the project, and nothing is recorded
 into the project again until it comes back.
 
 `self project restore <slug>` brings it back, with every work unit in the state
-it was left. While a project is archived it stays readable — `self project
---archived` lists it with its reason, and `--project <slug>` reads it as any
-other project, with one line saying it is set aside.
+it was left. It takes an optional `--why` for the archive that should never
+have been written. While a project is archived it stays readable — `self
+project --archived` lists it with its reason, and `--project <slug>` reads it
+as any other project, with one line saying it is set aside.
 
-`self undo <event-id>` is a different act on the same record: restore ends an
-archive that was right and keeps it as history, while undo takes back one that
-should never have been written.
+`self undo` does not take an archive back. Both verbs above name a slug and run
+from anywhere in the workspace, while `undo` reads its project from the working
+directory — and a project that is set aside frequently has no checkout on this
+machine at all.
 
 ### The entity grammar
 

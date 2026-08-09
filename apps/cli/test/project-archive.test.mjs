@@ -9,12 +9,14 @@
 //   B  an archived project leaves the default listing, `self context` and every
 //      workspace aggregate, and stays readable through `--archived` and an
 //      explicit `--project <slug>`
-//   C  `restore` ends an archive that was right; `self undo` takes back one that
-//      should never have been written, and the two are different acts
+//   C  `restore` is the only way out of an archive, and its optional `--why` is
+//      how one that should never have been written is stated; `self undo` does
+//      not reach an archive, because both verbs here run from anywhere in the
+//      workspace and `undo` needs the project's own checkout
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
@@ -138,7 +140,7 @@ test("5: archiving a slug this workspace does not have is refused as unknown", (
 
 /* ── the way back ──────────────────────────────────────────────────── */
 
-test("6: restoring brings the project back, with every work unit in the state it was left", () =>
+test("6: restoring with no reason brings the project back, with every work unit in the state it was left", () =>
 {
     const { box, ws, alpha } = two();
     const units = mixedWork(box, alpha);
@@ -180,14 +182,14 @@ test("8: the default listing drops the archived slug and leaves the active ones 
 test("9: --archived lists the archived slug with its reason and the day it was set aside", () =>
 {
     const { box, ws } = two();
-    const archived = idIn(archive(box, ws, "alpha", "picked back up next quarter").out);
+    archive(box, ws, "alpha", "picked back up next quarter");
     const listed = must(box, ws, ["project", "--archived"]).out;
     assert.match(listed, /^alpha —/m);
     assert.match(listed, /picked back up next quarter/);
     assert.match(listed, new RegExp(new Date().toISOString().slice(0, 10)));
-    // Both ways back are on the row, the undo with the id it needs.
+    // The one way back is on the row, and it is one that runs from here.
     assert.match(listed, /self project restore alpha/);
-    assert.match(listed, new RegExp(`self undo ${archived}`));
+    assert.doesNotMatch(listed, /self undo/, `the listing still points at undo:\n${listed}`);
     assert.doesNotMatch(listed, /^beta/m);
 });
 
@@ -277,22 +279,56 @@ test("15: an archived project cannot receive a retired outcome's successor", () 
     assert.equal(statusOf(box, ws, successor), "next");
 });
 
-/* ── undo is not restore ───────────────────────────────────────────── */
+/* ── restore is the only way back ──────────────────────────────────── */
 
-test("16: undo takes the archive record back, which restore does not do", () =>
+test("16: undo refuses an archive event and names restore instead", () =>
 {
     const { box, ws, alpha } = two();
     const archived = idIn(archive(box, ws).out);
-    const taken = must(box, alpha, ["undo", archived, "--why", "the wrong project was named"]);
-    assert.match(taken.out, /archive record was taken back/);
+    const refused = selfIn(box, alpha, ["undo", archived, "--why", "the wrong project was named"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /an archive is ended by/);
+    assert.match(refused.out, /self project restore alpha/);
+    // Refused means refused: the archive is untouched and nothing was appended.
+    assert.match(must(box, ws, ["project", "--archived"]).out, /^alpha —/m);
+    assert.doesNotMatch(must(box, ws, ["project"]).out, /^alpha/m);
+    assert.equal(events(ws, "alpha").filter((event) => event.type === "project.restored").length, 0);
+});
+
+test("17: restoring with a reason carries it on the restoration event", () =>
+{
+    const { box, ws } = two();
+    archive(box, ws);
+    must(box, ws, ["project", "restore", "alpha", "--why", "the wrong project was named"]);
     assert.match(must(box, ws, ["project"]).out, /^alpha/m);
     assert.match(must(box, ws, ["project", "--archived"]).out, /no archived projects/);
-    // The distinction the table draws: an undo names the event it reverses, and
-    // a restore names nothing — the archive it ends still stands as history.
-    const undone = events(ws, "alpha").find((event) => event.refs?.annuls === archived);
-    assert.equal(undone.type, "project.restored");
+    const restored = events(ws, "alpha").filter((event) => event.type === "project.restored");
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0].payload.why, "the wrong project was named");
+    assert.match(must(box, ws, ["log", "--project", "alpha"]).out, /the wrong project was named/);
+    // A restore with no reason is a different record, and says nothing.
     archive(box, ws, "alpha", "set aside on purpose this time");
     must(box, ws, ["project", "restore", "alpha"]);
-    const restored = events(ws, "alpha").filter((event) => event.type === "project.restored");
-    assert.equal(restored[restored.length - 1].refs?.annuls, undefined);
+    const plain = events(ws, "alpha").filter((event) => event.type === "project.restored").at(-1);
+    assert.equal(plain.payload.why, undefined);
+    // A blank reason is that same record, not a third one claiming nothing.
+    archive(box, ws, "alpha", "set aside a third time");
+    must(box, ws, ["project", "restore", "alpha", "--why", "   "]);
+    const blank = events(ws, "alpha").filter((event) => event.type === "project.restored").at(-1);
+    assert.equal(blank.payload.why, undefined);
+});
+
+test("18: archive, restore and the listing all answer without the project's checkout", () =>
+{
+    const { box, ws, alpha } = two();
+    must(box, alpha, ["work", "add", "the outcome left behind on the other machine"]);
+    // The store knows the project; this machine no longer holds its checkout,
+    // which is the ordinary case for a project being set aside.
+    rmSync(alpha, { recursive: true, force: true });
+    archive(box, ws, "alpha", "its checkout lives on another machine");
+    assert.match(must(box, ws, ["project", "--archived"]).out, /^alpha —/m);
+    assert.doesNotMatch(must(box, ws, ["project"]).out, /^alpha/m);
+    const back = must(box, ws, ["project", "restore", "alpha", "--why", "it was never meant to be archived"]);
+    assert.match(back.out, /project "alpha" is back/);
+    assert.match(must(box, ws, ["project"]).out, /^alpha/m);
 });

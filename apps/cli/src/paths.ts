@@ -271,9 +271,6 @@ function requireOneScope(choice: ScopeChoice): void
 // other dropped.
 interface ProjectArchive
 {
-    // The `project.archived` event this state came from: the id `self undo`
-    // names to take the record back, and what a listing points at.
-    event: string;
     ts: string;
     why: string;
 }
@@ -308,23 +305,17 @@ function archiveEvents(storeDir: string, slug: string): any[]
 
 // Ordered by timestamp with the event id breaking the tie, never by log order:
 // a union-merged log carries the lines in neither, and two clones of one store
-// must fold to one answer. The last transition standing is the state, and an
-// archive an undo took back — the restoration names it in `refs.annuls` — is
-// skipped, so the project reads as one that was never archived.
+// must fold to one answer. The last transition standing is the state — there is
+// no third one, because `restore` is the only way out of an archive and `undo`
+// takes no archive back.
 function foldArchive(events: any[]): ProjectArchive | null
 {
-    const annulled = annulledIds(events);
     let state: ProjectArchive | null = null;
     for (const event of archiveTransitions(events))
     {
-        if (event.type === "project.restored")
-        {
-            state = null;
-        }
-        else if (!annulled.has(String(event.id)))
-        {
-            state = { event: String(event.id), ts: String(event.ts), why: String(event.payload?.why ?? "") };
-        }
+        state = event.type === "project.restored"
+            ? null
+            : { ts: String(event.ts), why: String(event.payload?.why ?? "") };
     }
     return state;
 }
@@ -335,20 +326,6 @@ function archiveTransitions(events: any[]): any[]
         .filter((event) => event?.type === "project.archived" || event?.type === "project.restored")
         .sort((left, right) => String(left.ts).localeCompare(String(right.ts))
             || String(left.id).localeCompare(String(right.id)));
-}
-
-function annulledIds(events: any[]): Set<string>
-{
-    const ids = new Set<string>();
-    for (const event of events)
-    {
-        const annuls = event?.refs?.annuls;
-        if (typeof annuls === "string" && annuls !== "")
-        {
-            ids.add(annuls);
-        }
-    }
-    return ids;
 }
 
 // The registered projects a workspace answer speaks for. Every aggregate reads

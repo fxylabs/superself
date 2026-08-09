@@ -4,9 +4,14 @@
 // up or moved, and the record closes. A project nobody is working on this
 // quarter has not ended: it is set aside with its open work exactly as it
 // stands, and it comes back whole. So this is a round trip between two states,
-// which is why the way back is a verb of its own rather than `undo`. `undo`
-// stays what it is — the correction for a record that should never have been
-// written — and both apply here, meaning different things.
+// which is why the way back is a verb of its own rather than `undo`.
+//
+// `undo` is not a second way back, because it cannot be one: it resolves the
+// project from the directory it runs in, and `archive` names a slug precisely
+// so a workspace is tidied from anywhere — the checkout of a project being set
+// aside is frequently on another machine, where no directory would answer. What
+// `undo` would have carried, saying an archive should never have been written,
+// is the optional reason on `restore`, which works everywhere `archive` does.
 //
 // Because it is not an ending, open work neither blocks the archive nor is
 // retired by it. The command says how many units went with the project, and
@@ -23,12 +28,17 @@ import { CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { buildModel } from "./model.js";
 import { archivedProjects, CliContext, projectArchive, requireRegistered, requireWorkspace } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
-import { CliError, SelfEvent } from "./types.js";
+import { CliError } from "./types.js";
 
 const ARCHIVE_USAGE = 'project archive <slug> --why "<why it is being set aside>"';
-const RESTORE_USAGE = "project restore <slug>";
+const RESTORE_USAGE = 'project restore <slug> [--why "<reason>"]';
 
 const ARCHIVE_OPTIONS = { why: { type: "string" } } as const;
+
+// Optional, and the whole of what `undo` would have said: a restore that
+// carries a reason is the archive being called a mistake, and one that carries
+// none is the project simply being picked back up.
+const RESTORE_OPTIONS = { why: { type: "string" } } as const;
 
 // A project is set aside for a reason, and the reason is the whole record: a
 // slug missing from every listing with nothing saying why is what archiving
@@ -39,7 +49,7 @@ const ARCHIVE_WHY: Requirement = { flags: ["why"], hint: "why the project is bei
 export const PROJECT_ARCHIVE_LEAF: CommandLeaf =
     leaf("archive", ARCHIVE_OPTIONS, 1, archiveProject, { requires: [ARCHIVE_WHY] });
 
-export const PROJECT_RESTORE_LEAF: CommandLeaf = leaf("restore", {}, 1, restoreProject);
+export const PROJECT_RESTORE_LEAF: CommandLeaf = leaf("restore", RESTORE_OPTIONS, 1, restoreProject);
 
 // A write, and it names the project rather than running in it: a workspace is
 // tidied from wherever the person is standing, and the project being set aside
@@ -58,7 +68,7 @@ function archiveProject({ values, positionals }: CommandInput<typeof ARCHIVE_OPT
         + `run \`self project restore ${slug}\` to bring it back`);
 }
 
-function restoreProject({ positionals }: CommandInput<Record<string, never>>): void
+function restoreProject({ values, positionals }: CommandInput<typeof RESTORE_OPTIONS>): void
 {
     const ctx = requireWorkspace(process.cwd());
     const slug = requireRegistered(ctx.storeDir, requireText(positionals[0], RESTORE_USAGE));
@@ -67,20 +77,20 @@ function restoreProject({ positionals }: CommandInput<Record<string, never>>): v
         throw new CliError(`project "${slug}" is not archived, so there is nothing to restore — `
             + `run \`self project --archived\` to list the projects that are`);
     }
-    recordEvent(scopedTo(ctx, slug), makeEvent(slug, "project.restored", { project: slug }, undefined, true),
-        `restored ${slug}`);
+    recordEvent(scopedTo(ctx, slug), makeEvent(slug, "project.restored", restorePayload(slug, values.why),
+        undefined, true), `restored ${slug}`);
     console.log(`project "${slug}" is back — ${openLine(openUnits(ctx, slug))} came back with it, as it was left`);
 }
 
-// Undo is not restore (#283). Restore ends an archive that was right; this
-// takes back one that should never have been written, and the archive record
-// stops standing at all. Both leave the project active, which is exactly why
-// the log has to say which of the two happened.
-export function undoArchive(ctx: CliContext, event: SelfEvent, why: string): void
+// The reason is left off the payload when it was left off the call, rather than
+// written as an empty string: a restoration that says nothing about the archive
+// is not the same record as one that calls it a mistake, and a reader of the
+// log has to be able to tell them apart. `--why ""` is the first of those, not
+// a third — a blank reason states nothing, and recording it would put a record
+// in the log that reads as a mistake claim with no claim in it.
+function restorePayload(slug: string, why: string | undefined): Record<string, unknown>
 {
-    recordEvent(ctx, makeEvent(event.project, "project.restored", { project: event.project, why },
-        { annuls: event.id }, true), `withdrew the archive of ${event.project}`);
-    console.log(`project "${event.project}" is standing again — its archive record was taken back`);
+    return why === undefined || why.trim() === "" ? { project: slug } : { project: slug, why };
 }
 
 // The one listing an archived project appears in, with the reason and the day
@@ -97,11 +107,11 @@ export function printArchivedProjects(storeDir: string): void
     for (const row of rows)
     {
         console.log(`${row.entry.slug} — archived ${row.archive.ts.slice(0, 10)}: ${row.archive.why}`);
-        // Both ways back, under the row that needs them: the archive is ended by
-        // `restore`, and taken back by `undo` — which needs the event id this
-        // listing is the only place to read it from.
+        // The one way back, under the row that needs it, and runnable from
+        // where the listing was read — which is the whole reason there is only
+        // one. A reason on it says the archive should never have been written.
         console.log(`    self project restore ${row.entry.slug}`
-            + `, or self undo ${row.archive.event} --why w if it should never have been archived`);
+            + ` [--why "<why it should never have been archived>"]`);
     }
 }
 

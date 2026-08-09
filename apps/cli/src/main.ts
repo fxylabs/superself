@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ALIAS_COMMAND, presetRow, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
-import { printArchivedProjects, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF, undoArchive } from "./archive.js";
+import { printArchivedProjects, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
@@ -433,7 +433,7 @@ export const COMMANDS: Command[] = [
                 verbs: ["archive"]
             },
             {
-                syntax: "project restore <slug>",
+                syntax: 'project restore <slug> [--why "<reason>"]',
                 description: ["bring an archived project back, in the state it was left"],
                 verbs: ["restore"]
             }
@@ -466,14 +466,20 @@ export const COMMANDS: Command[] = [
             "explicit --project <slug>. It is not retirement — open work neither blocks",
             "it nor is retired by it, and `restore` brings the project and every unit",
             "back in the state it was left. Nothing is recorded into an archived project",
-            "until it is restored. `self undo <event-id>` is the other verb: it takes",
-            "back an archive that should never have been written.",
+            "until it is restored.",
+            "",
+            "`restore` is the only way back, and it takes --why for the archive that",
+            "should never have been written. `self undo` is not a second one: it reads",
+            "the project from the directory it runs in, and both verbs here name a slug",
+            "so a workspace is tidied from anywhere — including when the project's",
+            "checkout is on another machine.",
             "",
             "  --archived          list the projects that are set aside, with their reasons",
             "  --name <slug>       register under this slug instead of the directory name",
             "  --desc <text>       one-line description shown in the workspace view",
             "  --no-connect        skip writing the managed block into AGENTS.md and CLAUDE.md",
-            "  --why <text>        why this project came from that one, or why it is set aside",
+            "  --why <text>        why this project came from that one, why it is set aside,",
+            "                      or why an archive should never have been written",
             "  --supersedes <id>   the derivation record this one corrects",
             "  --demote <id>       past the index cap: the index record that frees its place"
         ],
@@ -747,13 +753,14 @@ export const COMMANDS: Command[] = [
             }
         ],
         detail: [
-            "take back one retirement, supersession, withdrawal, link or project archive.",
-            "Nothing else is undone: the id names the event to take back, and any other",
-            "kind of event is refused rather than guessed at.",
+            "take back one retirement, supersession, withdrawal or link. Nothing else",
+            "is undone: the id names the event to take back, and any other kind of",
+            "event is refused rather than guessed at.",
             "",
-            "Undoing an archive is not `self project restore`. Restore ends an archive",
-            "that was right and keeps its record; this takes back one that should never",
-            "have been written, and leaves no archive record standing.",
+            "A project archive is not among them. It is ended by `self project restore",
+            "<slug>`, which runs from anywhere the archive did — this verb would need",
+            "the project's checkout, and a project that is set aside frequently has",
+            "none on this machine.",
             "",
             "The record comes back and the log keeps both halves — what happened and",
             "what took it back. A supersession's successor stays; it simply stops",
@@ -2398,11 +2405,7 @@ const UNDOABLE: Record<string, string> = {
     "entity.retired": "retirement",
     // A link is a statement too (#244 D5): taking the event back removes the
     // contribution edge from every surface that read it, in every project.
-    "entity.linked": "link",
-    // An archive that should never have been written (#283). Distinct from
-    // `project restore`, which ends an archive that was right: this one leaves
-    // no archive record standing at all.
-    "project.archived": "archive"
+    "entity.linked": "link"
 };
 
 // Reversing one destructive event. The event is named rather than the record,
@@ -2418,11 +2421,6 @@ function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | 
     if (readEvents(ctx.storeDir, ctx.project).some((item: SelfEvent) => item.refs?.annuls === event.id))
     {
         throw new CliError(`${event.id} was already undone — the record it took back is standing`);
-    }
-    if (event.type === "project.archived")
-    {
-        undoArchive(ctx, event, required(why));
-        return;
     }
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const restored = restoredBy(event);
@@ -2450,8 +2448,24 @@ function undoableKind(event: SelfEvent): string
     {
         return "supersession";
     }
-    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, an archive, `
+    refuseArchiveUndo(event);
+    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, `
         + "or a record's supersession of another, and nothing else");
+}
+
+// An archive is ended by `project restore` and by nothing else (#283). This
+// refusal exists because reaching it at all means someone looked for `undo`
+// here, and the generic answer above would send them away without the verb
+// that does the job. `restore` also runs from anywhere, which is why it is the
+// only way back: `undo` resolves its project from the working directory, and
+// an archived project's checkout is frequently on another machine.
+function refuseArchiveUndo(event: SelfEvent): void
+{
+    if (event.type === "project.archived")
+    {
+        throw new CliError(`${event.id} archived project "${event.project}" — an archive is ended by `
+            + `\`self project restore ${event.project}\`, which takes --why if it should never have been archived`);
+    }
 }
 
 // What comes back. A withdrawal and a retirement name their target; a

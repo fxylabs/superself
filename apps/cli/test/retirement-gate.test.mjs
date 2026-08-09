@@ -93,7 +93,7 @@ test("undo refuses an event that destroyed nothing, and names what it takes back
     const plain = idIn(must(box, demo, ["decide", "undo: a decision that replaced nothing"]).out);
     const refused = selfIn(box, demo, ["undo", plain, "--why", "nothing to take back"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /undo takes back a retirement, a withdrawal, a link, an archive, or a record's supersession/);
+    assert.match(refused.out, /undo takes back a retirement, a withdrawal, a link, or a record's supersession/);
 });
 
 test("undo without --why is refused", () =>

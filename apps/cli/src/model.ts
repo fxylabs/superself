@@ -26,7 +26,7 @@ import {
     ObjectiveState
 } from "./objectives.js";
 import { activeProjects, readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
-import { ArtifactMeta, RegistryEntry, SelfEvent } from "./types.js";
+import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
@@ -593,16 +593,15 @@ export function workspaceModels(storeDir: string, first?: string): ProjectModel[
 // every other project down with it. Every other surface still folds through
 // `workspaceModels`, where an unreadable store is a failure worth stopping on.
 //
-// The active projects by default, and the entries a caller hands over when it
-// means another set: `self project --archived` lists the projects that are set
-// aside, which is the one listing they belong in (#283).
-export function readableModels(storeDir: string, entries: RegistryEntry[] = activeProjects(storeDir)):
-    { models: ProjectModel[]; unreadable: string[] }
+// The active projects, and only those: `self project --archived` is the one
+// listing an archived project belongs in, and it prints from the archive state
+// rather than from a fold (#283).
+export function readableModels(storeDir: string): { models: ProjectModel[]; unreadable: string[] }
 {
     const now = new Date();
     const models: ProjectModel[] = [];
     const unreadable: string[] = [];
-    for (const entry of entries)
+    for (const entry of activeProjects(storeDir))
     {
         try
         {
