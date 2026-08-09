@@ -9,6 +9,10 @@
 // one migrated verb; stage 2 moved every write verb whose answer is a receipt;
 // stage 3 moved the standalone listings, and with them the one rule the move
 // was for — a listing states its size, in the same words on every surface.
+// Stage 4 moved the pages, and with them the last thing a handler still
+// decided for itself: a block that reads two ways carries both renders as
+// thunks and this module calls exactly one, so no command surface resolves the
+// render mode any more.
 // The shapes a command answers with are declared in `types.ts`, which imports
 // nothing, so a leaf can name what its handler returns without the CLI surface
 // having to reach up into this layer for the declaration.
@@ -62,11 +66,31 @@ function printBlock(block: OutputBlock, mode: RenderMode): void
     }
     if (block.kind === "listing")
     {
-        block.rows.forEach((row) => console.log(row));
-        printSize(block, mode);
+        printListing(block, mode);
         return;
     }
-    block.lines.forEach((line) => console.log(line));
+    printLines(mode === "pretty" && block.pretty !== undefined ? block.pretty() : block.plain());
+}
+
+// Exactly one of a block's two renders runs. A handler no longer asks which
+// run it is in — it hands over both ways of saying the same thing and this
+// picks, from the one mode the whole answer was resolved with. Calling both
+// would compose a render nobody reads, and the terminal one measures the
+// terminal: on a piped run there is nothing there to measure.
+function printListing(block: ListingBlock, mode: RenderMode): void
+{
+    if (mode === "pretty" && block.pretty !== undefined)
+    {
+        printLines(block.pretty());
+        return;
+    }
+    printLines(block.rows);
+    printSize(block, mode);
+}
+
+function printLines(lines: string[]): void
+{
+    lines.forEach((line) => console.log(line));
 }
 
 // How much there is, under the rows that are some of it. A person at a terminal

@@ -25,12 +25,17 @@ cpSync(join(fixtures, "pre-cutover-store"), store, { recursive: true });
 must(e1, ws, ["workspace", ws]);
 
 // The listings among the captures gained exactly one line with the render
-// gate's stage 3 (#294): the size a piped listing states, which is that stage's
-// one deliberate output change. The captured bytes are still the assertion for
-// everything above it — they have to be there, in that order — and the added
-// line is asserted as the only thing that follows them.
-const SIZED_READS = new Set(["work-list", "objective-list", "milestone-list", "log"]);
-const SIZE_LINE = /^\d+ (open work units?|open objectives?|milestones?|events?)\n$/;
+// gate's stage 3 (#294) and stage 4 (#296): the size a piped listing states,
+// which is each stage's one deliberate output change. `state list` is stage
+// 4's — the listing stage 3's surface table left out. The captured bytes are
+// still the assertion for everything above it — they have to be there, in that
+// order — and the added line is asserted as the only thing that follows them.
+//
+// Every other capture here is a document, and stage 4 moved all of them behind
+// the gate: `context`, `status`, and the five `show` pages are asserted byte
+// for byte against a binary that predates the move.
+const SIZED_READS = new Set(["work-list", "objective-list", "milestone-list", "state-list", "log"]);
+const SIZE_LINE = /^\d+ (open work units?|open objectives?|milestones?|live entit(y|ies)|events?)\n$/;
 
 test("E1: every captured read surface answers byte-identically for a pre-cutover store", () =>
 {

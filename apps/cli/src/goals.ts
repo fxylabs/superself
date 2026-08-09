@@ -221,7 +221,7 @@ function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>)
     });
 }
 
-function objectiveShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
+function objectiveShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
     const scope = readScopes(process.cwd(), values)[0];
     const models = workspaceModels(scope.storeDir, scope.project);
@@ -230,7 +230,10 @@ function objectiveShow({ values, positionals }: CommandInput<typeof SCOPE_OPTION
         ...openLocalWork(models[0], objective),
         ...contributorsTo(scope.project, models).get(objective.id) ?? []
     ];
-    console.log(markdownHeadings(renderObjectiveBody(objective, linked).trimEnd()));
+    return [{
+        kind: "document",
+        plain: () => markdownHeadings(renderObjectiveBody(objective, linked).trimEnd()).split("\n")
+    }];
 }
 
 // The read-time merge (#244): every other project's units that state a
@@ -574,10 +577,13 @@ function milestoneList({ values }: CommandInput<typeof SCOPE_OPTIONS>): CommandO
     return [milestoneListing(scopeModel(readScopes(process.cwd(), values)[0]))];
 }
 
-function milestoneShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
+function milestoneShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
     const found = requireMilestone(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
-    console.log(markdownHeadings(renderMilestoneBody(found.milestone, found.objective).trimEnd()));
+    return [{
+        kind: "document",
+        plain: () => markdownHeadings(renderMilestoneBody(found.milestone, found.objective).trimEnd()).split("\n")
+    }];
 }
 
 // What a milestone write speaks about: the project it runs in, that project's
