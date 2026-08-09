@@ -1,6 +1,7 @@
 // The structure rules ARCHITECTURE.md and CONTRIBUTING.md state in prose, run
-// as a check (#90). Three sections: import direction across the whole tree,
-// function length on the diff, and dead-export count against the base commit.
+// as a check (#90). Four sections: import direction across the whole tree,
+// function length on the diff, print sites against the render gate, and
+// dead-export count against the base commit.
 //
 // This file is not a test — `node --test test/*.test.mjs` does not pick it up.
 // It is the library `structure.test.mjs` asserts against, and a command:
@@ -27,6 +28,29 @@ export const maxFunctionLines = 30;
 // empty on purpose: every edge ARCHITECTURE.md once sanctioned named code that
 // decision 01kz2nczhtde554qx5tqpqzrt3 deleted on 2026-08-03.
 export const sanctionedEdges = [];
+
+// The render gate: the one module that may put a command's answer on stdout.
+export const renderGate = "src/output.ts";
+
+// The modules that still print for themselves, one per line because this list
+// is a ratchet — a stage of the render-gate migration takes a module off it,
+// and taking one off is a single deleted line. Nothing is ever added back.
+// `console.error` is not this rule's subject: a refusal goes to stderr, and
+// where it is written from is a separate question from where an answer is.
+export const printingModules = [
+    "src/aliases.ts",
+    "src/archive.ts",
+    "src/artifact.ts",
+    "src/goals.ts",
+    "src/human.ts",
+    "src/main.ts",
+    "src/search.ts",
+    "src/setup.ts",
+    "src/state.ts",
+    "src/sync.ts",
+    "src/view.ts",
+    "src/views.ts"
+];
 
 // dist/ still carries directories from that deleted code and would read as
 // three subsystems. It is build output, not a source of truth.
@@ -320,6 +344,40 @@ function touches(touched, span)
     return touched.some((line) => line >= span.line && line <= span.endLine);
 }
 
+// Where a command's answer reaches stdout. A handler returns what it has to
+// say and `output.ts` prints it, so a call to `console.log` or
+// `process.stdout.write` anywhere else is a second print path — which is what
+// made "what does a piped run print" a question with as many answers as there
+// were call sites.
+const printCalls = new Set(["console.log", "process.stdout.write"]);
+
+export function printSiteViolations(tree)
+{
+    const allowed = new Set([renderGate, ...printingModules]);
+    return sourcesOf(tree).filter((path) => !allowed.has(path)).flatMap((path) =>
+        printSites(parseSource(tree, path)).map((site) => ({
+            file: path,
+            line: site.line,
+            rule: "print-site",
+            detail: `${site.call} outside the render gate — return the output and let ${renderGate} print it`
+        })));
+}
+
+function printSites(source)
+{
+    const sites = [];
+    const visit = (node) =>
+    {
+        if (ts.isCallExpression(node) && printCalls.has(node.expression.getText()))
+        {
+            sites.push({ call: node.expression.getText(), line: lineOf(source, node.getStart()) });
+        }
+        ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(source, visit);
+    return sites;
+}
+
 // An export is alive when another file imports it by name, when a file
 // namespace-imports or dynamically imports its module, or when it is
 // re-exported. A test is an importer, so test/ reads count.
@@ -436,7 +494,11 @@ export function runStructure(options = {})
     return {
         base,
         limit,
-        violations: [...importDirectionViolations(head), ...functionLengthViolations(head, changed, limit)],
+        violations: [
+            ...importDirectionViolations(head),
+            ...functionLengthViolations(head, changed, limit),
+            ...printSiteViolations(head)
+        ],
         dead,
         deadBefore,
         deadGrowth: dead.length - deadBefore

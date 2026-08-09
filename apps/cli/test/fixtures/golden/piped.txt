@@ -1,0 +1,118 @@
+$ self init   (in workspace, exit 0)
+workspace initialized at <root>/ws/.superself (views in "en")
+
+$ self project init --name demo --desc the render gate scenario --no-connect   (in project, exit 0)
+project "demo" registered
+
+$ self work add stage 1 lands the render gate and its pilot   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+<w-id>
+
+$ self decide the render gate is the one path to stdout --why one print path   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+
+$ self state add a note the search surface can find --exposure search   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+<e-id>
+
+$ self work start <w-id>   (in project, exit 0)
+entity.started recorded [<event-id>]
+# <w-id> — stage 1 lands the render gate and its pilot
+
+- Status: next
+- Not done yet: <w-id> has no evidence for done — attach a report first (`self report <w-id> "<summary>" --evidence <commit>` or `--artifact <path>`), or state what verifiably happened with `self work done <w-id> --report "<what happened>"`
+
+$ self report <w-id> the fixture was generated   (in project, exit 0)
+report.added recorded [<event-id>]
+
+$ self lang   (in project, exit 0)
+en
+
+$ self context   (in project, exit 0)
+# demo
+
+the render gate scenario
+
+## Work in progress
+
+- <w-id> stage 1 lands the render gate and its pilot — latest report: the fixture was generated (full: `self work show <w-id> --project 'demo'`)
+
+## Index
+
+- [decision] the render gate is the one path to stdout — one print path
+- 1 entity at search exposure; run `self state --project 'demo'`
+
+$ self status   (in project, exit 0)
+demo — goal: (not set)
+work: 1 active, 0 blocked, 0 next, 0 done
+objectives: 0 open, 0 of 0 milestones reached, 0 of 0 exit criteria covered
+waiting on you: 0
+unshipped: nothing waiting to ship
+health: ok
+
+$ self work   (in project, exit 0)
+<w-id>  active  stage 1 lands the render gate and its pilot  — 1 report(s), see `self work show <w-id> --project 'demo'`
+
+$ self work show <w-id>   (in project, exit 0)
+# <w-id> — stage 1 lands the render gate and its pilot
+
+- Status: active
+- Not done yet: <w-id>'s reports carry no commit or artifact evidence, and a bare summary never satisfies done — state what verifiably happened with `self work done <w-id> --report "<what happened>"`, or attach evidence with `self report <w-id> "<summary>" --evidence <commit>`
+
+## Reports (latest first)
+
+- <date> — the fixture was generated
+
+$ self state   (in project, exit 0)
+<event-id>  decision  index p40  the render gate is the one path to stdout
+<e-id>  -  search  a note the search surface can find
+<w-id>  work  search  stage 1 lands the render gate and its pilot
+
+$ self search render gate   (in project, exit 0)
+demo  work  <w-id>  (in progress) [work] stage 1 lands the render gate and its pilot
+
+$ self project   (in project, exit 0)
+demo — the render gate scenario  (this directory)
+
+$ self artifact   (in project, exit 1)
+error: usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]
+
+$ self objective   (in project, exit 0)
+no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`
+
+$ self convention   (in project, exit 1)
+error: usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w
+
+$ self log   (in project, exit 0)
+<ts>  entity.confirmed  [<event-id>]  stage 1 lands the render gate and its pilot
+<ts>  entity.confirmed  [<event-id>]  the render gate is the one path to stdout
+<ts>  entity.confirmed  [<event-id>]  a note the search surface can find
+<ts>  entity.started  [<event-id>]  
+<ts>  report.added  [<event-id>]  the fixture was generated
+
+$ self status   (in workspace, exit 0)
+demo — (no goal) (1 active, 0 blocked, 0 next, 0 done)
+
+$ self status   (in outside, exit 0)
+demo — (no goal) (1 active, 0 blocked, 0 next, 0 done)
+
+$ self lang   (in outside, exit 0)
+en
+
+$ self lang --plain   (in project, exit 1)
+error: unknown option '--plain' — run `self lang --help` for the syntax
+
+$ self nope   (in project, exit 1)
+error: unknown command 'nope' — run `self --help` for the syntax
+
+$ self lang --help   (in project, exit 0)
+usage: self lang [<code>]
+
+with no code, print the current language; with a BCP 47 code, set it and
+re-render every project view.
+
+$ self lang ko   (in project, exit 0)
+views now render in "ko"
+
+$ self lang   (in project, exit 0)
+ko

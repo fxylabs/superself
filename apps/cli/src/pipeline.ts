@@ -4,6 +4,7 @@ import { foldProject } from "./fold.js";
 import { commitAll, currentBranch } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { sessionToken } from "./machine.js";
+import { notice } from "./output.js";
 import { CliContext, ensureDir, invalidateResolution, projectStateDir, refuseArchived } from "./paths.js";
 import { assertSanitized } from "./sanitize.js";
 import { bold, dim, green, styled } from "./style.js";
@@ -125,11 +126,15 @@ function appendGrouped(ctx: CliContext, events: SelfEvent[]): string[]
     return projects;
 }
 
+// Whether an append says anything is decided here, where what the run is for
+// is known; the line itself is printed by the render gate's notice, which
+// decides nothing. Moving the decision into the gate would put "is this a
+// machine surface" in a module that cannot see the caller.
 function announce(events: SelfEvent[], summary: string): void
 {
     for (const event of machineMode ? [] : events)
     {
-        console.log(styled
+        notice(styled
             ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`
             : `${event.type} recorded [${event.id}]`);
     }
