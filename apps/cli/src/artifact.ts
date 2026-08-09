@@ -6,7 +6,7 @@ import { readEvents } from "./logfile.js";
 import { digestFile } from "./repo.js";
 import { activeProjects, CliContext, readRegistry, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
-import { ArtifactMeta, CliError } from "./types.js";
+import { ArtifactMeta, CliError, CommandOutput } from "./types.js";
 
 interface ArtifactRecord extends ArtifactMeta
 {
@@ -405,7 +405,7 @@ function requireArtifact(storeDir: string, slugs: string[], wanted: string): Art
     return stored[0];
 }
 
-function openArtifact(ctx: CliContext, id: string | undefined, project: string | undefined): void
+function openArtifact(ctx: CliContext, id: string | undefined, project: string | undefined): CommandOutput
 {
     const wanted = id?.trim();
     if (wanted === undefined || wanted === "")
@@ -421,10 +421,10 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
     {
         throw new CliError(`artifact file ${record.path} is missing from this store — run \`self sync\` to fetch it`);
     }
-    if (!launchFile(ctx, file))
-    {
-        console.log(`${file} — ${record.name} (${record.id}) resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed`);
-        return;
-    }
-    console.log(`opened ${record.name} (${record.id})`);
+    return [{
+        kind: "receipt",
+        text: launchFile(ctx, file)
+            ? `opened ${record.name} (${record.id})`
+            : `${file} — ${record.name} (${record.id}) resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed`
+    }];
 }

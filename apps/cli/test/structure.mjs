@@ -47,8 +47,6 @@ export const printingModules = [
     "src/search.ts",
     "src/setup.ts",
     "src/state.ts",
-    "src/sync.ts",
-    "src/view.ts",
     "src/views.ts"
 ];
 

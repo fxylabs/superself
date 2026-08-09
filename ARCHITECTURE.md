@@ -21,13 +21,13 @@ it. The layers, lowest first:
 
 | Layer | Modules | Owns |
 | --- | --- | --- |
-| Types | `types.ts` | the event and context shapes; imports nothing local |
-| CLI surface | `args.ts`, `contract.ts`, `help.ts`, `guide.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, explains itself, and confirms a human; `human.ts` and `guide.ts` import nothing local, `contract.ts` imports only `args.ts` and `types.ts` at runtime — it names the render gate's `CommandOutput` in a type-only import, which erases at build, so a leaf can declare what its handler answers with while the runtime dependency still points one way — and `help.ts` renders the contract rather than keeping a list of its own. `guide.ts` holds the concept pages `self help <topic>` prints — prose the contract cannot state, which is why it is data rather than a render |
+| Types | `types.ts` | the event and context shapes, and the blocks a command answers with — `CommandOutput` and the `Pointer` brand a receipt's next command carries; imports nothing local |
+| CLI surface | `args.ts`, `contract.ts`, `help.ts`, `guide.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, explains itself, and confirms a human; `human.ts` and `guide.ts` import nothing local, `contract.ts` imports only `args.ts` and `types.ts` — a leaf declares what its handler answers with by naming a shape from the bottom layer, so nothing here reaches up into the render gate — and `help.ts` renders the contract rather than keeping a list of its own. `guide.ts` holds the concept pages `self help <topic>` prints — prose the contract cannot state, which is why it is data rather than a render |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`) |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
-| Render | `view.ts`, `views.ts`, `pretty.ts`, `output.ts`, `reachability.ts` | HTML and terminal rendering of a folded model; `output.ts` is the render gate — the shapes a command answers with, the one function that puts them on stdout, and the `notice` a lower layer's message is printed through |
+| Render | `view.ts`, `views.ts`, `pretty.ts`, `output.ts`, `reachability.ts` | HTML and terminal rendering of a folded model; `output.ts` is the render gate — the one function that puts a command's blocks on stdout, and the `notice` a lower layer's message is printed through; the block shapes themselves are declared in `types.ts` |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
@@ -290,12 +290,12 @@ Standing rules, not per-issue reminders:
 - A recovery pointer a render prints is a type, not a string. Every rendered
   surface that says "run this for the rest" names the project it is about, or
   a reader pastes it somewhere else and is answered about their own checkout.
-  `pretty.ts` `Pointer` is branded and minted only by `scoped()`, `fromCheckout()`
-  and `withCheckout()`, so a bare literal handed to a section builder fails
-  typecheck; the verbs with no scope form are the `UnscopedVerb` union, and the
-  constructors that take one also take the `Checkout` sentence that says where
-  to stand, so the note cannot be left off. A pointer written into prose is
-  still a string — review holds those.
+  `Pointer` is branded in `types.ts`, where the block shapes that carry one are
+  declared, and minted only by `pretty.ts` — `scoped()`, `pointerTo()` and
+  `workspacePointer()` — so a bare literal handed to a section builder or to a
+  receipt's `next` fails typecheck. Moving the declaration down a layer gave no
+  module a constructor: what makes a mint safe is the finite command list it
+  takes. A pointer written into prose is still a string — review holds those.
 - Piped output is a contract. `self context`, `self work` and `self status`
   render for a person only when stdout is a terminal; a pipe, a redirect,
   `--plain`, `TERM=dumb`, and a terminal too narrow for a table all get the

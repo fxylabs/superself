@@ -31,7 +31,7 @@ import { claimNote } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
 import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, oneLine, padDisplay, plural, red, termColumns, yellow } from "./style.js";
-import { CliError } from "./types.js";
+import { CliError, Pointer } from "./types.js";
 
 // A terminal narrower than this cannot hold four ruled columns and still show
 // an outcome, so it is answered with the plain render instead of a table whose
@@ -301,21 +301,17 @@ export function shellArgument(value: string): string
 // `/^self work show \S+$/` did not, so those left `scoped()` branded and
 // unscoped (#165 review round 7). The type is the only authority now.
 
-// A recovery pointer a section prints, rather than any string that happens to
-// look like one. The brand is what a section builder asks for, so a bare
-// `"self work"` handed to `listSection` is a type error at the call site
-// instead of a defect a proof has to go looking for afterwards. Concatenation
-// is refused for the same reason: `"self integration plan" + fromCheckout(p)`
-// is a `string`, so the form that reached a render unscoped cannot compile.
+// The brand itself is declared in `types.ts`, beside the block shapes that
+// name it, and re-exported here: this module is where a pointer is minted, so
+// this is the import every reader already reaches for.
 //
-// This is not the whole rule. A pointer interpolated into a sentence — the
-// `· ${scoped(…)}` notes a row carries — is prose, and prose is a `string`
-// wherever it is built; review still owns those. What the
-// brand removes is every site that passes a pointer as a pointer.
-declare const POINTER: unique symbol;
+// The brand is not the whole rule. A pointer interpolated into a sentence —
+// the `· ${scoped(…)}` notes a row carries — is prose, and prose is a `string`
+// wherever it is built; review still owns those. What the brand removes is
+// every site that passes a pointer as a pointer.
 declare const CHECKOUT: unique symbol;
 
-export type Pointer = string & { readonly [POINTER]: true };
+export type { Pointer };
 
 // The command's type is what makes the mint safe: `ScopableVerb` is a finite
 // list of exact commands, so appending the project always produces one the CLI

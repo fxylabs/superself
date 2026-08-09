@@ -8,7 +8,7 @@ import { eventSummary, readEvents } from "./logfile.js";
 import { currentConventions, DecisionState, foreignToward, otherGoals, ProjectModel, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
-import { ArtifactMeta, CliError, SelfEvent } from "./types.js";
+import { ArtifactMeta, CliError, CommandOutput, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";
 const THEME_FILE = "theme.css";
@@ -258,14 +258,14 @@ export function viewFile(storeDir: string, slug: string | undefined): string
     return file;
 }
 
-export function openFile(ctx: CliContext, file: string): void
+export function openFile(ctx: CliContext, file: string): CommandOutput
 {
-    if (!launchFile(ctx, file))
-    {
-        console.log(`${file} — nobody is at a terminal in this run, so the GUI launch was suppressed; open that path yourself`);
-        return;
-    }
-    console.log(`opened ${file} — the page reloads itself when state changes and you are not interacting`);
+    return [{
+        kind: "receipt",
+        text: launchFile(ctx, file)
+            ? `opened ${file} — the page reloads itself when state changes and you are not interacting`
+            : `${file} — nobody is at a terminal in this run, so the GUI launch was suppressed; open that path yourself`
+    }];
 }
 
 // Every launch of the OS default app puts a window on somebody's desktop, and

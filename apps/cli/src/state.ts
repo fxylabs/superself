@@ -48,10 +48,11 @@ import {
     tokenScale,
     TokenScale
 } from "./paths.js";
+import { notice } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { countCharacters, tokensOf } from "./style.js";
-import { CliError, EventRefs, SelfEvent } from "./types.js";
+import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 import { printHistory } from "./views.js";
 
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
@@ -274,17 +275,17 @@ interface AliasDefaults
     exposure: Exposure;
 }
 
-function stateAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS>): void
+function stateAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS>): CommandOutput
 {
-    entityAdd(values, positionals, undefined);
+    return entityAdd(values, positionals, undefined);
 }
 
 // The add path a table-resolved verb runs (#207 A2): the row supplies the
 // label and the default placement, explicit flags beat it (A8), and
 // everything else — caps, links, criteria, proposals — is the raw verb's.
-export function aliasEntityAdd(row: AliasDefaults, { values, positionals }: CommandInput<typeof ADD_OPTIONS>): void
+export function aliasEntityAdd(row: AliasDefaults, { values, positionals }: CommandInput<typeof ADD_OPTIONS>): CommandOutput
 {
-    entityAdd(values, positionals, row);
+    return entityAdd(values, positionals, row);
 }
 
 // What a verb that composes its own record still hands the raw add path: the
@@ -303,13 +304,13 @@ interface ComposedValues
 // caps, the supersession and the retirement gate stay where they already are.
 // A second add path would be a second answer to what a tier holds.
 export function composedEntityAdd(row: AliasDefaults, reserved: Record<string, unknown>,
-    values: ComposedValues, text: string): void
+    values: ComposedValues, text: string): CommandOutput
 {
-    entityAdd(values, [text], row, reserved);
+    return entityAdd(values, [text], row, reserved);
 }
 
 function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positionals: string[],
-    row: AliasDefaults | undefined, reserved: Record<string, unknown> = {}): void
+    row: AliasDefaults | undefined, reserved: Record<string, unknown> = {}): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const usageText = row === undefined ? ADD_USAGE : `${row.label} add "<text>"`;
@@ -332,7 +333,7 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
             ...demotionEvents(demotions, id, proposed)
         ],
         `${id} ${text}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 // What the cap gate reads off a verb's arguments: the demotions it names, and
@@ -1203,7 +1204,9 @@ function stateStart({ positionals }: CommandInput): void
     const held = claimNote(entity.claim, mine);
     if (held !== null)
     {
-        console.log(held);
+        // A disclosure, not this verb's answer: it is read before the write and
+        // it prints where it stood, through the gate's notice.
+        notice(held);
     }
     if (claimMoves(entity.claim, mine))
     {

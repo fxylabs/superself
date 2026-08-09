@@ -14,7 +14,7 @@ import { Exposure, EXPOSURES } from "./entities.js";
 import { AliasRow, readStoreConfig, requireWorkspace, StoreConfig } from "./paths.js";
 import { aliasEntityAdd, ALIAS_ADD_OPTIONS, validExposure, validPriority } from "./state.js";
 import { commitAll } from "./gitutil.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput } from "./types.js";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -193,7 +193,7 @@ function aliasList(): void
     }
 }
 
-function aliasEdit({ values, positionals }: CommandInput<typeof ALIAS_ROW_OPTIONS>, mode: "add" | "set"): void
+function aliasEdit({ values, positionals }: CommandInput<typeof ALIAS_ROW_OPTIONS>, mode: "add" | "set"): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     const verb = validVerb(positionals[0], mode);
@@ -214,7 +214,10 @@ function aliasEdit({ values, positionals }: CommandInput<typeof ALIAS_ROW_OPTION
         row.priority = priority;
     }
     writeAliases(ctx.storeDir, { ...config.aliases, [verb]: row }, `alias ${mode} ${verb}`);
-    console.log(`${verb} now records label "${row.label}" at ${row.exposure}${row.priority === undefined ? "" : ` p${row.priority}`}`);
+    return [{
+        kind: "receipt",
+        text: `${verb} now records label "${row.label}" at ${row.exposure}${row.priority === undefined ? "" : ` p${row.priority}`}`
+    }];
 }
 
 // What `alias add` and `alias set` each demand of the verb: add wants a free
@@ -238,7 +241,7 @@ function requireEditable(config: StoreConfig, verb: string, mode: "add" | "set")
     }
 }
 
-function aliasDrop({ positionals }: CommandInput): void
+function aliasDrop({ positionals }: CommandInput): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     const verb = validVerb(positionals[0], "drop");
@@ -252,9 +255,12 @@ function aliasDrop({ positionals }: CommandInput): void
     const { [verb]: dropped, ...rest } = config.aliases;
     void dropped;
     writeAliases(ctx.storeDir, rest, `alias drop ${verb}`);
-    console.log(BUILTIN_ROWS[verb] !== undefined
-        ? `${verb} restored to its shipped default`
-        : `${verb} dropped — the verb refuses again`);
+    return [{
+        kind: "receipt",
+        text: BUILTIN_ROWS[verb] !== undefined
+            ? `${verb} restored to its shipped default`
+            : `${verb} dropped — the verb refuses again`
+    }];
 }
 
 // The same user-set-policy write the caps use: config.json, committed, never

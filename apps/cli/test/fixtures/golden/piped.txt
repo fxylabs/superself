@@ -1,6 +1,9 @@
 $ self init   (in workspace, exit 0)
 workspace initialized at <root>/ws/.superself (views in "en")
 
+$ self init   (in workspace, exit 0)
+workspace already initialized at <root>/ws/.superself
+
 $ self project init --name demo --desc the render gate scenario --no-connect   (in project, exit 0)
 project "demo" registered
 
@@ -116,3 +119,157 @@ views now render in "ko"
 
 $ self lang   (in project, exit 0)
 ko
+
+$ self workspace   (in workspace, exit 0)
+<root>/ws
+
+$ self workspace <root>/ws   (in workspace, exit 0)
+this machine now uses the workspace at <root>/ws
+
+$ self timezone   (in project, exit 0)
+UTC
+
+$ self timezone Asia/Seoul   (in project, exit 0)
+target dates are now judged in "Asia/Seoul"
+
+$ self timezone   (in project, exit 0)
+Asia/Seoul
+
+$ self theme   (in project, exit 0)
+violet
+
+$ self theme cyan   (in project, exit 0)
+views now render with the "cyan" accent
+
+$ self tokens   (in project, exit 0)
+0.25 tokens per character — the shipped estimate
+
+$ self tokens 100 400   (in project, exit 0)
+0.25 tokens per character — measured from 100 tokens of 400 characters
+
+$ self tokens   (in project, exit 0)
+0.25 tokens per character — measured
+
+$ self project init --name second --desc the relinked checkout --no-connect   (in second, exit 0)
+project "second" registered
+
+$ self project link second   (in second, exit 0)
+replacing the repository previously linked at <root>/ws/second
+project "second" linked to <root>/ws/second
+
+$ self project link demo   (in project, exit 0)
+project "demo" linked to <root>/ws/demo
+
+$ self connect   (in project, exit 0)
+managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent tool loads it
+
+$ self connect --global   (in project, exit 0)
+no agent instruction files found on this machine — paste this into yours:
+
+<!-- superself:machine:begin v0.6.0 -->
+## Project state (superself)
+
+The `self` CLI version-controls project state — goals, decisions, work
+units, reports — outside the code repository.
+
+- A registered project carries its own superself block in AGENTS.md or
+  CLAUDE.md: run `self context` at session start and follow that block.
+  `self setup` tells you which project, if any, a directory resolves to.
+- In an unregistered project, ask the user once whether to register it with
+  `self project init`. Never register a project on your own.
+- Every checkout of a registered git repository — worktrees included —
+  resolves on its own: work there as usual, and never run
+  `self project init` to attach one.
+<!-- superself:machine:end -->
+
+$ self fold   (in project, exit 0)
+refolded demo
+
+$ self objective add the CLI answers through one gate   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+<o-id>
+
+$ self milestone add the write verbs answer with receipts --objective <o-id> --exit no write verb prints for itself   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+<m-id>
+
+$ self work propose the listings move behind the gate --milestone <m-id> --value one answer to what a piped run prints --success every listing returns rows --stop the gate grows a second print path --risk a line moves against the announce lines --capacity one stage --evidence-plan the golden fixture --confidence medium --expires <date>   (in project, exit 0)
+entity.proposed recorded [<event-id>]
+<w-id>
+
+$ self work accept <w-id>   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+entity.linked recorded [<event-id>]
+<w-id>
+
+$ self work link <w-id> --milestone <m-id>   (in project, exit 0)
+entity.linked recorded [<event-id>]
+
+$ self undo <event-id> --why the checkpoint was the wrong one   (in project, exit 0)
+entity.restored recorded [<event-id>]
+<w-id> no longer carries the link — the linked event was taken back
+
+$ self alias add note --label note --exposure search   (in project, exit 0)
+note now records label "note" at search
+
+$ self alias set note --priority 2   (in project, exit 0)
+note now records label "note" at search p2
+
+$ self alias   (in project, exit 0)
+convention   convention   full p30   (built-in)
+decide       decision     index p40  (built-in)
+goal         goal         full p0    (built-in)
+idea         idea         search     (built-in)
+milestone    milestone    index p20  (built-in)
+note         note         search p2  (custom)
+objective    objective    full p10   (built-in)
+roadmap      roadmap      index      (built-in)
+work         work         search     (built-in)
+
+$ self alias drop note   (in project, exit 0)
+note dropped — the verb refuses again
+
+$ self report <w-id> the fixture carries an artifact --artifact evidence.md   (in project, exit 0)
+report.added recorded [<event-id>]
+
+$ self artifact list   (in project, exit 0)
+<a-id>  <date>  demo  <w-id>  evidence.md
+
+$ self artifact open <a-id>   (in project, exit 0)
+<root>/ws/.superself/artifacts/demo/<a-id>-evidence.md — evidence.md (<a-id>) resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed
+
+$ self view   (in project, exit 0)
+<root>/ws/.superself/view/workspace.html — nobody is at a terminal in this run, so the GUI launch was suppressed; open that path yourself
+
+$ self view demo   (in project, exit 0)
+<root>/ws/.superself/view/demo.html — nobody is at a terminal in this run, so the GUI launch was suppressed; open that path yourself
+
+$ self work done <w-id> --report the sweep covers every receipt this stage moves   (in project, exit 0)
+report.added recorded [<event-id>]
+entity.done recorded [<event-id>]
+
+$ self work add a unit recorded from nowhere   (in outside, exit 1)
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+
+$ self objective add an outcome recorded from nowhere   (in outside, exit 1)
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+
+$ self connect   (in outside, exit 1)
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+
+$ self fold   (in outside, exit 1)
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+
+$ self remote add <root>/remote.git   (in project, exit 0)
+workspace store now syncs with <root>/remote.git — run `self sync` to push
+
+$ self sync   (in project, exit 0)
+synced with <root>/remote.git
+
+$ self clone <root>/remote.git <root>/clone   (in outside, exit 0)
+workspace cloned into <root>/clone
+registered projects: demo, second
+run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout
+
+$ self workspace <root>/ws   (in workspace, exit 0)
+this machine now uses the workspace at <root>/ws

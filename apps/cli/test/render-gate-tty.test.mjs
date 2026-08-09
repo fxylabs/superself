@@ -1,5 +1,5 @@
 // The terminal half of the render-gate case table (w-5emx6 stage 1): cells 2,
-// 5 and 8. `style.ts` answers "is this run styled" once, when it is first
+// 5 and 8, plus stage 2's cell 2. `style.ts` answers "is this run styled" once, when it is first
 // imported, from stdout — so a test that wants the styled answer has to say so
 // before the built modules load, and run the command in this process rather
 // than in a child whose stdout is a pipe.
@@ -59,6 +59,21 @@ test("cell 8: at a styled terminal, an event verb prints today's ✓ line", asyn
     const id = answer.printed.match(/\[([0-9abcdefghjkmnpqrstvwxyz]{26})\]/)[1];
     assert.equal(answer.printed,
         `${green("✓")} ${bold("entity.proposed")}  ${dim(text)}  ${dim(`[${id}]`)}\n`);
+});
+
+// The bare id a work unit is created under is a receipt, and a receipt is the
+// same bytes at a terminal as in a pipe. What the terminal changes is the
+// announce line above it, which `pipeline.ts` still composes — so this cell is
+// the two of them together, in the order they have always been printed in.
+test("stage 2 cell 2: at a terminal, `self work add` styles the announce line and leaves the id alone", async () =>
+{
+    const outcome = "the receipts answer through the gate";
+    const answer = await approvedIn(box, demo, ["work", "add", outcome], "");
+    assert.equal(answer.code, 0, answer.out);
+    const [announced, id] = answer.printed.split("\n");
+    const event = announced.match(/\[([0-9abcdefghjkmnpqrstvwxyz]{26})\]/)[1];
+    assert.equal(announced, `${green("✓")} ${bold("entity.confirmed")}  ${dim(`${id} ${outcome}`)}  ${dim(`[${event}]`)}`);
+    assert.match(answer.printed, /\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n$/);
 });
 
 // The gate resolves the render once per run and hands it to the blocks that

@@ -11,10 +11,10 @@
 //
 // Rewriting the fixture is only ever correct when a change to what the CLI
 // prints was the intended outcome, and the diff is then the evidence for it.
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { git, machine, selfIn, workIdIn } from "./harness.mjs";
+import { git, idIn, machine, selfIn, workIdIn } from "./harness.mjs";
 
 export const fixturePath = fileURLToPath(new URL("fixtures/golden/piped.txt", import.meta.url));
 
@@ -57,7 +57,8 @@ function section(where, args, result, root)
 // The scenario: one workspace, one project in it, a few records, and then every
 // read surface asked the same question a person would ask. Writes are in the
 // sweep too — the confirmation line an event verb prints is output like any
-// other.
+// other — and since stage 2 moves every write verb whose answer is a receipt
+// behind the gate, each of those verbs is asked here before it is moved.
 export function sweep()
 {
     const box = machine();
@@ -72,6 +73,7 @@ export function sweep()
         return result;
     };
     run(ws, "workspace", ["init"]);
+    run(ws, "workspace", ["init"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
     run(demo, "project", ["project", "init", "--name", "demo", "--desc", "the render gate scenario", "--no-connect"]);
     const work = workIdIn(run(demo, "project", ["work", "add", "stage 1 lands the render gate and its pilot"]).out);
@@ -79,12 +81,13 @@ export function sweep()
     {
         run(cwd, where, args);
     }
+    receiptSweep(box, run, ws, demo, work);
     return { text: sections.join("\n"), root: box.root };
 }
 
-// The rest of the sweep, in the order a session would type it. Every verb here
-// is one stage 1 did not migrate except `lang`, which is the pilot: the point
-// of the fixture is that the unmigrated ones did not move either.
+// The read half, in the order a session would type it. Every verb here is one
+// stage 1 did not migrate except `lang`, which is the pilot: the point of the
+// fixture is that the unmigrated ones did not move either.
 function steps(box, ws, demo, work)
 {
     return [
@@ -113,6 +116,146 @@ function steps(box, ws, demo, work)
         [demo, "project", ["lang", "ko"]],
         [demo, "project", ["lang"]]
     ];
+}
+
+// Every write verb whose answer is a receipt, asked once. The reads above ran
+// first so their answers describe the same small state they always did; what
+// follows is the half stage 2 moves, and each phase is grouped by the module
+// that owns the verbs in it.
+function receiptSweep(box, run, ws, demo, work)
+{
+    machineConfig(run, ws, demo);
+    projectReceipts(box, run, ws, demo);
+    goalReceipts(run, demo, work);
+    aliasReceipts(run, demo);
+    fileReceipts(run, demo, work);
+    outsideRefusals(box, run);
+    syncReceipts(box, run, ws, demo);
+}
+
+// The same write verbs, asked from a directory that resolves to no project.
+// A refusal is composed before a handler has anything to answer with, so it
+// never reaches the gate — which is exactly why it is in the fixture.
+function outsideRefusals(box, run)
+{
+    run(box.root, "outside", ["work", "add", "a unit recorded from nowhere"]);
+    run(box.root, "outside", ["objective", "add", "an outcome recorded from nowhere"]);
+    run(box.root, "outside", ["connect"]);
+    run(box.root, "outside", ["fold"]);
+}
+
+// The workspace pointer and the four store settings, each read, written, and
+// read back: the read is the value beside the receipt, so a byte that moved
+// from one into the other would show here.
+function machineConfig(run, ws, demo)
+{
+    run(ws, "workspace", ["workspace"]);
+    run(ws, "workspace", ["workspace", ws]);
+    run(demo, "project", ["timezone"]);
+    run(demo, "project", ["timezone", "Asia/Seoul"]);
+    run(demo, "project", ["timezone"]);
+    run(demo, "project", ["theme"]);
+    run(demo, "project", ["theme", "cyan"]);
+    run(demo, "project", ["tokens"]);
+    run(demo, "project", ["tokens", "100", "400"]);
+    run(demo, "project", ["tokens"]);
+}
+
+// `project link` over a path whose recorded repository is gone is the
+// disclosure-then-write case: the replacement line is printed before the write
+// and the recorded line after it, and the two may not swap. A second project
+// is registered for it because the disclosure needs a link that named a
+// repository identity, and the identity has to have changed since.
+function projectReceipts(box, run, ws, demo)
+{
+    const second = join(ws, "second");
+    reinitRepository(box, second, "the repository that was linked");
+    run(second, "second", ["project", "init", "--name", "second", "--desc", "the relinked checkout", "--no-connect"]);
+    reinitRepository(box, second, "the repository standing there now");
+    run(second, "second", ["project", "link", "second"]);
+    run(demo, "project", ["project", "link", "demo"]);
+    run(demo, "project", ["connect"]);
+    run(demo, "project", ["connect", "--global"]);
+    run(demo, "project", ["fold"]);
+}
+
+// A repository whose root commit — the identity a link records — is not the one
+// it had a moment ago. Re-creating it is what the stale-link warning is about:
+// the path is the same and the repository standing at it is not. The message
+// differs between the two, because two empty commits made in the same second
+// by the same author under the same message are the same commit.
+function reinitRepository(box, dir, message)
+{
+    rmSync(join(dir, ".git"), { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    git(box, dir, ["init", "-q", "-b", "main"]);
+    git(box, dir, ["commit", "-q", "--allow-empty", "-m", message]);
+}
+
+// The goal graph's own receipts, and the one event `undo` can take back
+// without a person at a terminal: a link displaces nothing, so recording it
+// and reversing it both run piped.
+function goalReceipts(run, demo, work)
+{
+    const objective = idOf(run(demo, "project", ["objective", "add", "the CLI answers through one gate"]).out, "o");
+    const milestone = idOf(run(demo, "project", ["milestone", "add", "the write verbs answer with receipts",
+        "--objective", objective, "--exit", "no write verb prints for itself"]).out, "m");
+    const proposal = idOf(run(demo, "project", ["work", "propose", "the listings move behind the gate",
+        "--milestone", milestone, "--value", "one answer to what a piped run prints",
+        "--success", "every listing returns rows", "--stop", "the gate grows a second print path",
+        "--risk", "a line moves against the announce lines", "--capacity", "one stage",
+        "--evidence-plan", "the golden fixture", "--confidence", "medium", "--expires", "2030-01-01"]).out, "w");
+    run(demo, "project", ["work", "accept", proposal]);
+    const linked = idIn(run(demo, "project", ["work", "link", work, "--milestone", milestone]).out);
+    run(demo, "project", ["undo", linked, "--why", "the checkpoint was the wrong one"]);
+}
+
+function aliasReceipts(run, demo)
+{
+    run(demo, "project", ["alias", "add", "note", "--label", "note", "--exposure", "search"]);
+    run(demo, "project", ["alias", "set", "note", "--priority", "2"]);
+    run(demo, "project", ["alias"]);
+    run(demo, "project", ["alias", "drop", "note"]);
+}
+
+// The two verbs that would put a window on somebody's desktop, and the write
+// that gives one of them something to open. Nobody is at a terminal in a piped
+// run, so both answer with the path they did not launch.
+function fileReceipts(run, demo, work)
+{
+    writeFileSync(join(demo, "evidence.md"), "the sweep carries an artifact\n");
+    run(demo, "project", ["report", work, "the fixture carries an artifact", "--artifact", "evidence.md"]);
+    const artifact = idOf(run(demo, "project", ["artifact", "list"]).out, "a");
+    run(demo, "project", ["artifact", "open", artifact]);
+    run(demo, "project", ["view"]);
+    run(demo, "project", ["view", "demo"]);
+    run(demo, "project", ["work", "done", work, "--report", "the sweep covers every receipt this stage moves"]);
+}
+
+// The sync receipts, against a bare repository on the same disk. `clone` points
+// this machine at what it cloned, so the pointer is put back afterwards —
+// which is the `workspace <path>` receipt asked one more time, from the
+// directory a person would be standing in.
+function syncReceipts(box, run, ws, demo)
+{
+    git(box, box.root, ["init", "-q", "--bare", "remote.git"]);
+    const remote = join(box.root, "remote.git");
+    run(demo, "project", ["remote", "add", remote]);
+    run(demo, "project", ["sync"]);
+    run(box.root, "outside", ["clone", remote, join(box.root, "clone")]);
+    run(ws, "workspace", ["workspace", ws]);
+}
+
+// A minted id of one kind, read off the answer that printed it. The prefixes
+// are the ones `ids.ts` mints, and the normalizer replaces the same shapes.
+function idOf(text, prefix)
+{
+    const match = text.match(new RegExp(`\\b${prefix}-[0-9abcdefghjkmnpqrstvwxyz]{5}\\b`));
+    if (match === null)
+    {
+        throw new Error(`no ${prefix}- id in: ${text}`);
+    }
+    return match[0];
 }
 
 export function committedFixture()
