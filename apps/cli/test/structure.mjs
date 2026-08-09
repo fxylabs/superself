@@ -38,13 +38,9 @@ export const renderGate = "src/output.ts";
 // `console.error` is not this rule's subject: a refusal goes to stderr, and
 // where it is written from is a separate question from where an answer is.
 export const printingModules = [
-    "src/aliases.ts",
-    "src/archive.ts",
-    "src/artifact.ts",
     "src/goals.ts",
     "src/human.ts",
     "src/main.ts",
-    "src/search.ts",
     "src/setup.ts",
     "src/state.ts",
     "src/views.ts"

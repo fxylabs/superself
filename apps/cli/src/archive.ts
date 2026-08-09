@@ -28,7 +28,7 @@ import { CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { buildModel } from "./model.js";
 import { archivedProjects, CliContext, projectArchive, requireRegistered, requireWorkspace } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput, ListingBlock } from "./types.js";
 
 const ARCHIVE_USAGE = 'project archive <slug> --why "<why it is being set aside>"';
 const RESTORE_USAGE = 'project restore <slug> [--why "<reason>"]';
@@ -55,7 +55,11 @@ export const PROJECT_RESTORE_LEAF: CommandLeaf = leaf("restore", RESTORE_OPTIONS
 // tidied from wherever the person is standing, and the project being set aside
 // is frequently one whose checkout is not on this machine at all. The event
 // still lands in the named project's own log, which is where its state lives.
-function archiveProject({ values, positionals }: CommandInput<typeof ARCHIVE_OPTIONS>): void
+// Both verbs answer the same way: what was recorded, and then where the
+// workspace's set-aside projects now stand. The listing is the one this module
+// already writes for `self project --archived` — composing the two blocks is
+// what the shapes are for, and is why neither verb keeps a listing of its own.
+function archiveProject({ values, positionals }: CommandInput<typeof ARCHIVE_OPTIONS>): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     const slug = requireRegistered(ctx.storeDir, requireText(positionals[0], ARCHIVE_USAGE));
@@ -64,11 +68,17 @@ function archiveProject({ values, positionals }: CommandInput<typeof ARCHIVE_OPT
     recordEvent(scopedTo(ctx, slug),
         makeEvent(slug, "project.archived", { project: slug, why: required(values.why) }, undefined, true),
         `archived ${slug}`);
-    console.log(`project "${slug}" is archived — ${openLine(open)} went with it, unchanged; `
-        + `run \`self project restore ${slug}\` to bring it back`);
+    return [
+        {
+            kind: "receipt",
+            text: `project "${slug}" is archived — ${openLine(open)} went with it, unchanged; `
+                + `run \`self project restore ${slug}\` to bring it back`
+        },
+        archivedListing(ctx.storeDir)
+    ];
 }
 
-function restoreProject({ values, positionals }: CommandInput<typeof RESTORE_OPTIONS>): void
+function restoreProject({ values, positionals }: CommandInput<typeof RESTORE_OPTIONS>): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     const slug = requireRegistered(ctx.storeDir, requireText(positionals[0], RESTORE_USAGE));
@@ -79,7 +89,10 @@ function restoreProject({ values, positionals }: CommandInput<typeof RESTORE_OPT
     }
     recordEvent(scopedTo(ctx, slug), makeEvent(slug, "project.restored", restorePayload(slug, values.why),
         undefined, true), `restored ${slug}`);
-    console.log(`project "${slug}" is back — ${openLine(openUnits(ctx, slug))} came back with it, as it was left`);
+    return [
+        { kind: "receipt", text: `project "${slug}" is back — ${openLine(openUnits(ctx, slug))} came back with it, as it was left` },
+        archivedListing(ctx.storeDir)
+    ];
 }
 
 // The reason is left off the payload when it was left off the call, rather than
@@ -96,23 +109,24 @@ function restorePayload(slug: string, why: string | undefined): Record<string, u
 // The one listing an archived project appears in, with the reason and the day
 // it was set aside: a slug missing from everywhere else is only recoverable if
 // something still says where it went.
-export function printArchivedProjects(storeDir: string): void
+export function archivedListing(storeDir: string): ListingBlock
 {
     const rows = archivedProjects(storeDir);
-    if (rows.length === 0)
-    {
-        console.log("no archived projects — `self project` lists the ones this workspace is working on");
-        return;
-    }
-    for (const row of rows)
-    {
-        console.log(`${row.entry.slug} — archived ${row.archive.ts.slice(0, 10)}: ${row.archive.why}`);
-        // The one way back, under the row that needs it, and runnable from
-        // where the listing was read — which is the whole reason there is only
-        // one. A reason on it says the archive should never have been written.
-        console.log(`    self project restore ${row.entry.slug}`
-            + ` [--why "<why it should never have been archived>"]`);
-    }
+    return {
+        kind: "listing",
+        rows: rows.length === 0
+            ? ["no archived projects — `self project` lists the ones this workspace is working on"]
+            // The one way back goes under the row that needs it, and is
+            // runnable from where the listing was read — which is the whole
+            // reason there is only one. A reason on it says the archive should
+            // never have been written.
+            : rows.flatMap((row) => [
+                `${row.entry.slug} — archived ${row.archive.ts.slice(0, 10)}: ${row.archive.why}`,
+                `    self project restore ${row.entry.slug} [--why "<why it should never have been archived>"]`
+            ]),
+        total: rows.length,
+        noun: "archived project"
+    };
 }
 
 // A second archive is refused rather than recorded twice: the project is

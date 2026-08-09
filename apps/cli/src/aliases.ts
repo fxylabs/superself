@@ -177,20 +177,28 @@ export const ALIAS_COMMAND: Command = {
     })
 };
 
-function aliasList(): void
+function aliasList(): CommandOutput
 {
-    const ctx = requireWorkspace(process.cwd());
-    const config = readStoreConfig(ctx.storeDir);
+    const config = readStoreConfig(requireWorkspace(process.cwd()).storeDir);
     const table = aliasTable(config);
-    for (const verb of Object.keys(table).sort((left, right) => left.localeCompare(right)))
-    {
-        const row = table[verb];
-        const place = `${row.exposure}${row.priority === undefined ? "" : ` p${row.priority}`}`;
-        const origin = config.aliases?.[verb] !== undefined
-            ? (BUILTIN_ROWS[verb] === undefined ? "custom" : "built-in, overridden")
-            : "built-in";
-        console.log(`${verb.padEnd(12)} ${row.label.padEnd(12)} ${place.padEnd(10)} (${origin})`);
-    }
+    const verbs = Object.keys(table).sort((left, right) => left.localeCompare(right));
+    return [{
+        kind: "listing",
+        rows: verbs.map((verb) => aliasRow(config, table, verb)),
+        total: verbs.length,
+        noun: "alias",
+        nouns: "aliases"
+    }];
+}
+
+function aliasRow(config: StoreConfig, table: Record<string, PresetRow>, verb: string): string
+{
+    const row = table[verb];
+    const place = `${row.exposure}${row.priority === undefined ? "" : ` p${row.priority}`}`;
+    const origin = config.aliases?.[verb] !== undefined
+        ? (BUILTIN_ROWS[verb] === undefined ? "custom" : "built-in, overridden")
+        : "built-in";
+    return `${verb.padEnd(12)} ${row.label.padEnd(12)} ${place.padEnd(10)} (${origin})`;
 }
 
 function aliasEdit({ values, positionals }: CommandInput<typeof ALIAS_ROW_OPTIONS>, mode: "add" | "set"): CommandOutput

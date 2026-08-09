@@ -21,6 +21,7 @@ import {
     branchTotals,
     currentConventions,
     foreignToward,
+    LogPage,
     otherGoals,
     ProjectModel,
     RecoveryTarget,
@@ -342,9 +343,22 @@ export function pointerTo(target: RecoveryTarget, project: string): Pointer
             ? `self work show ${target.id} --project ${project}` as Pointer
             : scoped("self work", project);
     }
+    if (target.verb === "log")
+    {
+        return `self log -n ${logLines(target)} --project ${project}` as Pointer;
+    }
     const named = target.id === undefined || !usableId(target.id) ? "" : ` ${target.id}`;
     const kind = target.type === undefined || !usableId(target.type) ? "" : ` --type ${target.type}`;
     return `self search${named}${kind} --project ${project}` as Pointer;
+}
+
+// `self log -n 0` prints nothing and `-n 1.5` is refused, so a count that is
+// not a whole line number would render a command that fails where the reader
+// pastes it — the same hole `usableId` closes for an id. One line is the
+// smallest log there is worth pointing at.
+function logLines(page: LogPage): number
+{
+    return Number.isSafeInteger(page.lines) && page.lines > 0 ? page.lines : 1;
 }
 
 // An id a reader can paste, which is what every id these targets carry already
@@ -362,9 +376,11 @@ function usableId(value: string): boolean
 // purpose, and review is what keeps it where it belongs: a
 // literal here reads as reaching no `scoped()` anywhere except inside the two
 // workspace helpers its allowlist names.
-export function workspacePointer(command: ScopableVerb): Pointer
+export function workspacePointer(command: ScopableVerb | LogPage): Pointer
 {
-    return command as Pointer;
+    return typeof command === "string"
+        ? command as Pointer
+        : `self log -n ${logLines(command)} --workspace` as Pointer;
 }
 
 function tableSection(title: string, counts: string, spec: Column[], rows: Row[], recover: Pointer): string[]

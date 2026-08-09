@@ -55,6 +55,7 @@ health: ok
 
 $ self work   (in project, exit 0)
 <w-id>  active  stage 1 lands the render gate and its pilot  — 1 report(s), see `self work show <w-id> --project 'demo'`
+1 open work unit
 
 $ self work show <w-id>   (in project, exit 0)
 # <w-id> — stage 1 lands the render gate and its pilot
@@ -73,15 +74,20 @@ $ self state   (in project, exit 0)
 
 $ self search render gate   (in project, exit 0)
 demo  work  <w-id>  (in progress) [work] stage 1 lands the render gate and its pilot
+1 match
 
 $ self project   (in project, exit 0)
 demo — the render gate scenario  (this directory)
+1 project
 
 $ self artifact   (in project, exit 1)
 error: usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]
 
 $ self objective   (in project, exit 0)
 no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`
+
+$ self milestone   (in project, exit 0)
+no milestones — add one with `self milestone add "<outcome>" --objective <id> --exit "<criterion>"`
 
 $ self convention   (in project, exit 1)
 error: usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w
@@ -92,6 +98,7 @@ $ self log   (in project, exit 0)
 <ts>  entity.confirmed  [<event-id>]  a note the search surface can find
 <ts>  entity.started  [<event-id>]  
 <ts>  report.added  [<event-id>]  the fixture was generated
+5 events
 
 $ self status   (in workspace, exit 0)
 demo — (no goal) (1 active, 0 blocked, 0 next, 0 done)
@@ -225,6 +232,7 @@ note         note         search p2  (custom)
 objective    objective    full p10   (built-in)
 roadmap      roadmap      index      (built-in)
 work         work         search     (built-in)
+9 aliases
 
 $ self alias drop note   (in project, exit 0)
 note dropped — the verb refuses again
@@ -234,6 +242,7 @@ report.added recorded [<event-id>]
 
 $ self artifact list   (in project, exit 0)
 <a-id>  <date>  demo  <w-id>  evidence.md
+1 artifact
 
 $ self artifact open <a-id>   (in project, exit 0)
 <root>/ws/.superself/artifacts/demo/<a-id>-evidence.md — evidence.md (<a-id>) resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed
@@ -273,3 +282,76 @@ run `self project link <slug> [path]` from each project to reconnect it — once
 
 $ self workspace <root>/ws   (in workspace, exit 0)
 this machine now uses the workspace at <root>/ws
+
+$ self objective   (in project, exit 0)
+<o-id>  on-track  the CLI answers through one gate [1 work unit(s)]
+  <m-id>  on-track  the write verbs answer with receipts — 0 of 1 exit criteria covered across 1 work unit(s)
+1 open objective
+
+$ self milestone   (in project, exit 0)
+<m-id>  on-track  the write verbs answer with receipts — 0 of 1 exit criteria covered across 1 work unit(s) [1 work unit(s)]
+1 milestone
+
+$ self work   (in project, exit 0)
+<w-id>  next  the listings move behind the gate  [toward <m-id>]
+(1 done — see log)
+1 open work unit
+
+$ self artifact list   (in project, exit 0)
+<a-id>  <date>  demo  <w-id>  evidence.md
+1 artifact
+
+$ self artifact search evidence   (in project, exit 0)
+<a-id>  <date>  demo  <w-id>  evidence.md
+1 artifact
+
+$ self search gate   (in project, exit 0)
+demo  work  <w-id>  (open) [work] the listings move behind the gate
+1 match
+
+$ self alias   (in project, exit 0)
+convention   convention   full p30   (built-in)
+decide       decision     index p40  (built-in)
+goal         goal         full p0    (built-in)
+idea         idea         search     (built-in)
+milestone    milestone    index p20  (built-in)
+objective    objective    full p10   (built-in)
+roadmap      roadmap      index      (built-in)
+work         work         search     (built-in)
+8 aliases
+
+$ self log -n 5   (in project, exit 0)
+<ts>  entity.linked  [<event-id>]  
+<ts>  entity.restored  [<event-id>]  the checkpoint was the wrong one
+<ts>  report.added  [<event-id>]  the fixture carries an artifact
+<ts>  report.added  [<event-id>]  the sweep covers every receipt this stage moves
+<ts>  entity.done  [<event-id>]  
+last 5 of 15 events · self log -n 15 --project 'demo'
+
+$ self project   (in workspace, exit 0)
+demo — the render gate scenario
+second — the relinked checkout
+2 projects
+
+$ self project --archived   (in workspace, exit 0)
+no archived projects — `self project` lists the ones this workspace is working on
+
+$ self project archive second --why nobody is working on the second checkout   (in project, exit 0)
+project.archived recorded [<event-id>]
+project "second" is archived — 0 open work units went with it, unchanged; run `self project restore second` to bring it back
+second — archived <date>: nobody is working on the second checkout
+    self project restore second [--why "<why it should never have been archived>"]
+1 archived project
+
+$ self project --archived   (in workspace, exit 0)
+second — archived <date>: nobody is working on the second checkout
+    self project restore second [--why "<why it should never have been archived>"]
+1 archived project
+
+$ self project restore second   (in workspace, exit 0)
+project.restored recorded [<event-id>]
+project "second" is back — 0 open work units came back with it, as it was left
+no archived projects — `self project` lists the ones this workspace is working on
+
+$ self project --archived   (in workspace, exit 0)
+no archived projects — `self project` lists the ones this workspace is working on

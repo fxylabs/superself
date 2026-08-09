@@ -36,7 +36,7 @@ import {
 } from "./pretty.js";
 import { artifactSignals, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
-import { CliError, SelfEvent } from "./types.js";
+import { CliError, CommandOutput, SelfEvent } from "./types.js";
 
 // What one piped render may spend (#213). A cap measures what a store may
 // hold; this measures what a single render costs the reader it is handed to,
@@ -893,35 +893,43 @@ function countLine(works: WorkState[]): string
         + (retired > 0 ? `, ${retired} retired` : "");
 }
 
-export function printWorkList(ctx: ProjectScope, render: RenderMode): void
+// The size this listing states is the open units, which is what its rows are:
+// the two bucket lines under them say how much was left out and are not part of
+// the count. A project with nothing open answers with the wording it always
+// did, and the buckets still follow it.
+export function workList(ctx: ProjectScope, render: RenderMode): CommandOutput
 {
     const model = renderedModel(ctx.storeDir, ctx.project);
-    const project = shellArgument(model.slug);
     if (render === "pretty")
     {
-        console.log(renderWorkList(model).join("\n"));
-        return;
+        return [{ kind: "document", lines: renderWorkList(model) }];
     }
     const open = model.works.filter((w) => w.status !== "done" && w.status !== "retired");
-    if (open.length === 0)
-    {
-        console.log("no open work");
-    }
-    for (const work of open)
-    {
-        const toward = [...contributionsOf(model.goals, work).map((item) => item.id), ...foreignToward(work)];
-        console.log(plainWorkLine(work, toward.join(", "), project));
-    }
-    const done = model.works.filter((w) => w.status === "done").length;
-    if (done > 0)
-    {
-        console.log(`(${done} done — see log)`);
-    }
-    const retired = model.works.filter((w) => w.status === "retired").length;
-    if (retired > 0)
-    {
-        console.log(`(${retired} retired — see log)`);
-    }
+    const rows = open.length === 0 ? ["no open work"] : open.map((work) => openWorkRow(model, work));
+    return [{
+        kind: "listing",
+        rows: [...rows, ...hiddenBuckets(model)],
+        total: open.length,
+        noun: "open work unit"
+    }];
+}
+
+function openWorkRow(model: ProjectModel, work: WorkState): string
+{
+    const toward = [...contributionsOf(model.goals, work).map((item) => item.id), ...foreignToward(work)];
+    return plainWorkLine(work, toward.join(", "), shellArgument(model.slug));
+}
+
+// What the listing does not show, said in its own words rather than folded into
+// the size line: a done unit is not a smaller number of open ones, and the log
+// is where it is read.
+function hiddenBuckets(model: ProjectModel): string[]
+{
+    const count = (status: string): number => model.works.filter((w) => w.status === status).length;
+    return [
+        ...count("done") > 0 ? [`(${count("done")} done — see log)`] : [],
+        ...count("retired") > 0 ? [`(${count("retired")} retired — see log)`] : []
+    ];
 }
 
 function plainWorkLine(work: WorkState, toward: string, project: string): string
@@ -941,12 +949,21 @@ function gatedNote(work: WorkState): string
     return work.gatedBy.length === 0 ? "" : `  [gated by ${work.gatedBy.join(", ")}]`;
 }
 
-export function printLog(ctx: ProjectScope, limit: number): void
+// The one listing that is a window by construction: `-n` says how many lines to
+// print and the rest of the log is still there. The total is counted from the
+// same read the rows are cut from — reading the log twice would let the number
+// a reader is given describe a log that has moved on since.
+export function projectLog(ctx: ProjectScope, limit: number): CommandOutput
 {
-    for (const event of readEvents(ctx.storeDir, ctx.project).slice(-limit))
-    {
-        console.log(logLine(event, undefined));
-    }
+    const events = readEvents(ctx.storeDir, ctx.project);
+    const shown = events.slice(-limit);
+    return [{
+        kind: "listing",
+        rows: shown.map((event) => logLine(event, undefined)),
+        total: events.length,
+        noun: "event",
+        window: { shown: shown.length, recover: pointerTo({ verb: "log", lines: events.length }, shellArgument(ctx.project)) }
+    }];
 }
 
 /* ── one record's own history (#212 R3) ────────────────────────────── */
@@ -1041,15 +1058,22 @@ function nextPage(record: HistoryRecord, page: number): string
 // N events, not the last N of each project pasted together. The slug leads
 // each line as it does in `self search`, because a merged log that says what
 // happened without saying where is not readable.
-export function printWorkspaceLog(scopes: ProjectScope[], limit: number): void
+export function workspaceLog(scopes: ProjectScope[], limit: number): CommandOutput
 {
     const merged = scopes.flatMap((scope) => readEvents(scope.storeDir, scope.project)
         .map((event) => ({ event, slug: scope.project })));
     merged.sort((left, right) => compareDated(left.event, right.event));
-    for (const item of merged.slice(-limit))
-    {
-        console.log(logLine(item.event, item.slug));
-    }
+    const shown = merged.slice(-limit);
+    // The whole of this log is the workspace's, so the command for the rest
+    // names `--workspace` and no project: pointing at one of the projects it
+    // merged would answer a narrower question than the one that was asked.
+    return [{
+        kind: "listing",
+        rows: shown.map((item) => logLine(item.event, item.slug)),
+        total: merged.length,
+        noun: "event",
+        window: { shown: shown.length, recover: workspacePointer({ verb: "log", lines: merged.length }) }
+    }];
 }
 
 // One event, styled for a terminal and plain for everything else. The plain

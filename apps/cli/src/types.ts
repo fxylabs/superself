@@ -113,16 +113,29 @@ interface ReceiptBlock
     next?: Pointer;
 }
 
-// Rows a reader scans, the count they are a window onto, and the command that
-// prints the rest. `total` and `recover` are required because a listing that
-// shows some of its rows and says neither how many there are nor how to reach
-// them is the defect the type exists to make unwritable.
-interface ListingBlock
+// Rows a reader scans, and how much there is of what they are scanning. The
+// size is required because a listing that prints rows and never says how many
+// things they are is the defect the type exists to make unwritable — `self
+// project` printed 33 slugs and said 33 nowhere.
+export interface ListingBlock
 {
     kind: "listing";
     rows: string[];
+    // How many things the listing is about, which is not how many lines it
+    // takes: a row can carry a nested checkpoint under it, a way back under it,
+    // or a bucket the listing does not show. Counted from the collection the
+    // rows were built from, never from `rows.length`.
     total: number;
-    recover: Pointer;
+    // What is being counted, singular, and its plural where an `s` is the wrong
+    // one. The gate writes the size line from these, so every listing in the
+    // CLI states its size in the same words.
+    noun: string;
+    nouns?: string;
+    // Set only where the rows are a window onto a longer list: how many of
+    // `total` they show, and the command that prints the whole thing. The two
+    // travel together because either alone is the defect — a count with no way
+    // to reach the rest, or a way back that never says what is missing.
+    window?: { shown: number; recover: Pointer };
 }
 
 // A page a render already composed — the markdown a `show` verb prints. The
