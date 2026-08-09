@@ -82,6 +82,7 @@ export function sweep()
         run(cwd, where, args);
     }
     receiptSweep(box, run, ws, demo, work);
+    listingSweep(run, ws, demo);
     return { text: sections.join("\n"), root: box.root };
 }
 
@@ -105,6 +106,7 @@ function steps(box, ws, demo, work)
         [demo, "project", ["project"]],
         [demo, "project", ["artifact"]],
         [demo, "project", ["objective"]],
+        [demo, "project", ["milestone"]],
         [demo, "project", ["convention"]],
         [demo, "project", ["log"]],
         [ws, "workspace", ["status"]],
@@ -244,6 +246,42 @@ function syncReceipts(box, run, ws, demo)
     run(demo, "project", ["sync"]);
     run(box.root, "outside", ["clone", remote, join(box.root, "clone")]);
     run(ws, "workspace", ["workspace", ws]);
+}
+
+// Every standalone listing, asked once the scenario has something in it. The
+// reads in `steps` above ran against a project with no objectives, no
+// checkpoints and no archived siblings, which is the empty answer; a listing
+// only states a size where there is one to state, so each surface is asked
+// again here with rows in it. `self log` is asked with an `-n` below its event
+// count, because a window onto a longer log is the only listing that says how
+// much it is not showing. Its `--workspace` form is not here and belongs in a
+// test instead: a merged log orders two events of one millisecond by their
+// random id, so its row order is not a fixture anything could pin.
+
+function listingSweep(run, ws, demo)
+{
+    run(demo, "project", ["objective"]);
+    run(demo, "project", ["milestone"]);
+    run(demo, "project", ["work"]);
+    run(demo, "project", ["artifact", "list"]);
+    run(demo, "project", ["artifact", "search", "evidence"]);
+    run(demo, "project", ["search", "gate"]);
+    run(demo, "project", ["alias"]);
+    run(demo, "project", ["log", "-n", "5"]);
+    run(ws, "workspace", ["project"]);
+    archiveSweep(run, ws, demo);
+}
+
+// The archived listing on both sides of the round trip, and the two verbs that
+// move a project across it. `second` is the project registered for the link
+// receipt, so archiving it leaves the scenario's own project untouched.
+function archiveSweep(run, ws, demo)
+{
+    run(ws, "workspace", ["project", "--archived"]);
+    run(demo, "project", ["project", "archive", "second", "--why", "nobody is working on the second checkout"]);
+    run(ws, "workspace", ["project", "--archived"]);
+    run(ws, "workspace", ["project", "restore", "second"]);
+    run(ws, "workspace", ["project", "--archived"]);
 }
 
 // A minted id of one kind, read off the answer that printed it. The prefixes
