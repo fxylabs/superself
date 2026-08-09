@@ -20,6 +20,8 @@ import {
     memoryTree,
     packageRoot,
     parseSource,
+    printingModules,
+    printSiteViolations,
     resolveBase
 } from "./structure.mjs";
 
@@ -151,6 +153,62 @@ test("every length violation the check reports is genuinely over the ceiling", (
         const span = spans.get(violation.file).find((candidate) => candidate.line === violation.line);
         assert.ok(span.lines > 60, `${violation.file}:${violation.line} reported at ${span.lines} lines`);
     }
+});
+
+// ---------------------------------------------------------------- print sites
+
+// Cells 12 and 13 of the render-gate case table (w-5emx6 stage 1).
+
+test("cell 12: a print from a module off the allowlist is refused, naming the file, line and rule", () =>
+{
+    const tree = memoryTree({
+        "src/pipeline.ts": "export function announce()\n{\n    console.log(\"recorded\");\n}\n"
+    });
+    const [violation] = printSiteViolations(tree);
+    assert.equal(violation.file, "src/pipeline.ts");
+    assert.equal(violation.line, 3);
+    assert.equal(violation.rule, "print-site");
+    assert.match(violation.detail, /console\.log outside the render gate/);
+});
+
+test("cell 12: writing to the descriptor is the same violation as logging", () =>
+{
+    const tree = memoryTree({ "src/fold.ts": "export function say()\n{\n    process.stdout.write(\"x\\n\");\n}\n" });
+    const [violation] = printSiteViolations(tree);
+    assert.equal(violation.line, 3);
+    assert.match(violation.detail, /process\.stdout\.write outside the render gate/);
+});
+
+test("cell 12: the render gate itself prints, and a module still on the allowlist may", () =>
+{
+    const tree = memoryTree({
+        "src/output.ts": "export function notice(line: string)\n{\n    console.log(line);\n}\n",
+        "src/views.ts": "export function say()\n{\n    console.log(\"row\");\n}\n"
+    });
+    assert.deepEqual(printSiteViolations(tree), []);
+});
+
+// A refusal goes to stderr, and where that is written from is a separate
+// question from where an answer is. The rule says nothing about it.
+test("cell 12: console.error is not this rule's subject", () =>
+{
+    const tree = memoryTree({ "src/pipeline.ts": "export function warn()\n{\n    console.error(\"x\");\n}\n" });
+    assert.deepEqual(printSiteViolations(tree), []);
+});
+
+test("cell 13: the repository's own source prints only from the gate and the allowlist", () =>
+{
+    assert.deepEqual(printSiteViolations(diskTree(packageRoot)), []);
+});
+
+// The allowlist is a ratchet: a stage of the migration takes the last print out
+// of a module and the line goes with it. A stale entry is a rule that has
+// quietly stopped holding for that module.
+test("cell 13: every module on the allowlist still prints", () =>
+{
+    const tree = diskTree(packageRoot);
+    const printing = printingModules.filter((path) => /console\.log|process\.stdout\.write/.test(tree.read(path)));
+    assert.deepEqual(printing, printingModules);
 });
 
 // ---------------------------------------------------------------- dead exports
