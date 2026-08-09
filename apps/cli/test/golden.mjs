@@ -81,8 +81,9 @@ export function sweep()
     {
         run(cwd, where, args);
     }
-    receiptSweep(box, run, ws, demo, work);
+    const goals = receiptSweep(box, run, ws, demo, work);
     listingSweep(run, ws, demo);
+    documentSweep(box, run, ws, demo, work, goals);
     return { text: sections.join("\n"), root: box.root };
 }
 
@@ -128,11 +129,12 @@ function receiptSweep(box, run, ws, demo, work)
 {
     machineConfig(run, ws, demo);
     projectReceipts(box, run, ws, demo);
-    goalReceipts(run, demo, work);
+    const goals = goalReceipts(run, demo, work);
     aliasReceipts(run, demo);
     fileReceipts(run, demo, work);
     outsideRefusals(box, run);
     syncReceipts(box, run, ws, demo);
+    return goals;
 }
 
 // The same write verbs, asked from a directory that resolves to no project.
@@ -210,6 +212,7 @@ function goalReceipts(run, demo, work)
     run(demo, "project", ["work", "accept", proposal]);
     const linked = idIn(run(demo, "project", ["work", "link", work, "--milestone", milestone]).out);
     run(demo, "project", ["undo", linked, "--why", "the checkpoint was the wrong one"]);
+    return { objective, milestone };
 }
 
 function aliasReceipts(run, demo)
@@ -282,6 +285,28 @@ function archiveSweep(run, ws, demo)
     run(ws, "workspace", ["project", "--archived"]);
     run(ws, "workspace", ["project", "restore", "second"]);
     run(ws, "workspace", ["project", "--archived"]);
+}
+
+// The pages a `show` verb composes, and the diagnostics `self setup` prints.
+// These are the surfaces stage 4 moves behind the gate, and a document has no
+// size line to gain — so the whole of what they say is evidence that the move
+// changed nothing. Asked last, after every write the scenario makes, so the
+// state each page describes has stopped moving.
+//
+// `setup` is asked from all three places a directory can resolve from, because
+// what it answers is exactly which of them the caller is standing in.
+function documentSweep(box, run, ws, demo, work, goals)
+{
+    const note = idOf(run(demo, "project", ["state", "add", "a record the document sweep reads back",
+        "--exposure", "index"]).out, "e");
+    run(demo, "project", ["state", "show", note]);
+    run(demo, "project", ["state", "show", note, "--history"]);
+    run(demo, "project", ["work", "show", work, "--history"]);
+    run(demo, "project", ["objective", "show", goals.objective]);
+    run(demo, "project", ["milestone", "show", goals.milestone]);
+    run(demo, "project", ["setup"]);
+    run(ws, "workspace", ["setup"]);
+    run(box.root, "outside", ["setup"]);
 }
 
 // A minted id of one kind, read off the answer that printed it. The prefixes

@@ -355,3 +355,88 @@ no archived projects — `self project` lists the ones this workspace is working
 
 $ self project --archived   (in workspace, exit 0)
 no archived projects — `self project` lists the ones this workspace is working on
+
+$ self state add a record the document sweep reads back --exposure index   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+<e-id>
+
+$ self state show <e-id>   (in project, exit 0)
+<e-id>  confirmed
+text: a record the document sweep reads back
+labels: -
+placement: project · index
+recorded: <date>
+
+$ self state show <e-id> --history   (in project, exit 0)
+<e-id>  live  1 event
+<ts>  entity.confirmed  [<event-id>]  a record the document sweep reads back
+
+$ self work show <w-id> --history   (in project, exit 0)
+<w-id>  done  5 events
+<ts>  entity.confirmed  [<event-id>]  stage 1 lands the render gate and its pilot
+<ts>  entity.started  [<event-id>]  
+<ts>  entity.linked  [<event-id>]  
+<ts>  entity.restored  [<event-id>]  the checkpoint was the wrong one
+<ts>  entity.done  [<event-id>]  
+
+$ self objective show <o-id>   (in project, exit 0)
+# <o-id> — the CLI answers through one gate
+
+- Status: active
+- Target state: on-track — <m-id>: 0 of 1 exit criteria covered across 1 work unit(s)
+- Revision: 1
+- Progress: 0 of 1 exit criteria covered
+- Work: <w-id>
+
+## Milestone <m-id>
+
+- Objective: <o-id> the CLI answers through one gate
+- State: on-track — 0 of 1 exit criteria covered across 1 work unit(s)
+- Revision: 1 (objective revision 1)
+- Critical path: no
+- Work: <w-id>
+
+## Exit criteria
+
+- c1 — no write verb prints for itself _(open)_
+
+$ self milestone show <m-id>   (in project, exit 0)
+# <m-id> — the write verbs answer with receipts
+
+- Objective: <o-id> the CLI answers through one gate
+- State: on-track — 0 of 1 exit criteria covered across 1 work unit(s)
+- Revision: 1 (objective revision 1)
+- Critical path: no
+- Work: <w-id>
+
+## Exit criteria
+
+- c1 — no write verb prints for itself _(open)_
+
+$ self setup   (in project, exit 0)
+project    demo
+           <root>/ws/demo (via .self)
+workspace  <root>/ws
+store      <root>/ws/.superself (26 commits, <root>/remote.git)
+pointer    <root>/config/superself/machine.json
+views      ko
+projects   demo → <root>/ws/demo
+           second → <root>/ws/second
+
+$ self setup   (in workspace, exit 0)
+project    (none) — this directory is not registered; run `self project init`
+workspace  <root>/ws
+store      <root>/ws/.superself (26 commits, <root>/remote.git)
+pointer    <root>/config/superself/machine.json
+views      ko
+projects   demo → <root>/ws/demo
+           second → <root>/ws/second
+
+$ self setup   (in outside, exit 0)
+project    (none) — this directory is not registered; run `self project init`
+workspace  <root>/ws
+store      <root>/ws/.superself (26 commits, <root>/remote.git)
+pointer    <root>/config/superself/machine.json
+views      ko
+projects   demo → <root>/ws/demo
+           second → <root>/ws/second
