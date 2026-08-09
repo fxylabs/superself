@@ -11,12 +11,7 @@
 // holds the shapes, the resolution, and the checks — never a command body.
 
 import { OptionSpec, OptionSpecs, ParsedArguments, Requirement, subcommand } from "./args.js";
-// The shape a handler answers with, and nothing else from the render layer: a
-// type-only import erases at build, so the declaration a leaf makes can name
-// the output shape while the runtime dependency still points one way — the
-// dispatcher into the gate, never the gate back into the contract.
-import type { CommandOutput } from "./output.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput } from "./types.js";
 
 /* ── shapes ────────────────────────────────────────────────────────── */
 

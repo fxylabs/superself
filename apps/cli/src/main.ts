@@ -48,7 +48,7 @@ import {
     StoreConfig,
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
-import { CommandOutput, renderOutput } from "./output.js";
+import { notice, renderOutput } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
@@ -61,7 +61,7 @@ import { countCharacters, dim, errRed, markdownHeadings, styled } from "./style.
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
 import { printContext, printHistory, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
-import { CliError, EventRefs, SelfEvent } from "./types.js";
+import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
 {
@@ -978,7 +978,7 @@ registerReservedVerbs(COMMANDS.map((command) => command.name));
 
 /* ── the workspace and project verbs this module implements ────────── */
 
-async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<void>
+async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<CommandOutput>
 {
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
@@ -988,8 +988,7 @@ async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<v
         {
             throw new CliError(`${storeDir} already exists and is not a workspace store — another tool owns that directory`);
         }
-        console.log(`workspace already initialized at ${storeDir}`);
-        return;
+        return [{ kind: "receipt", text: `workspace already initialized at ${storeDir}` }];
     }
     const lang = validLang(values.lang ?? await askLang());
     ensureDir(storeDir);
@@ -1000,11 +999,9 @@ async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<v
     excludeLocally(cwd, STORE_DIR + "/");
     commitAll(storeDir, "self init");
     setMachineWorkspace(cwd);
-    console.log(`workspace initialized at ${storeDir} (views in "${lang}")`);
-    if (values.agents === true || await askAgents())
-    {
-        connectMachineAgents();
-    }
+    const opened: CommandOutput = [{ kind: "receipt", text: `workspace initialized at ${storeDir} (views in "${lang}")` }];
+    const agents = values.agents === true || await askAgents();
+    return agents ? [...opened, ...connectMachineAgents()] : opened;
 }
 
 // Asked once, at the only moment a person is certain to be present.
@@ -1020,24 +1017,30 @@ async function askAgents(): Promise<boolean>
     return !answer.trim().toLowerCase().startsWith("n");
 }
 
-function connectMachineAgents(): void
+// Nothing written is still an answer: the block a person has to paste is what
+// the write would have produced, so it comes back as the page it is rather
+// than as a sentence with newlines in it.
+function connectMachineAgents(): CommandOutput
 {
     const files = connectMachine();
-    if (files.length === 0)
+    if (files.length > 0)
     {
-        console.log("no agent instruction files found on this machine — paste this into yours:\n");
-        console.log(machineBlock());
-        return;
+        return [{ kind: "receipt", text: `agents on this machine now know about self — block written into ${files.join(", ")}` }];
     }
-    console.log(`agents on this machine now know about self — block written into ${files.join(", ")}`);
+    return [
+        { kind: "receipt", text: "no agent instruction files found on this machine — paste this into yours:\n" },
+        { kind: "document", lines: machineBlock().split("\n") }
+    ];
 }
 
-function cmdWorkspace(path: string | undefined): void
+function cmdWorkspace(path: string | undefined): CommandOutput
 {
     if (path === undefined)
     {
+        // A scalar read, still printed by the verb: the value shapes move in a
+        // later stage of the render gate, and this stage moves the receipts.
         console.log(machineWorkspace() ?? "no workspace set — run `self init` in the directory that should hold it");
-        return;
+        return [];
     }
     const dir = resolve(path);
     if (!isStore(join(dir, STORE_DIR)))
@@ -1045,7 +1048,7 @@ function cmdWorkspace(path: string | undefined): void
         throw new CliError(`${dir} holds no workspace store — run \`self init\` there first`);
     }
     setMachineWorkspace(dir);
-    console.log(`this machine now uses the workspace at ${dir}`);
+    return [{ kind: "receipt", text: `this machine now uses the workspace at ${dir}` }];
 }
 
 async function askLang(): Promise<string>
@@ -1085,40 +1088,40 @@ function cmdLang(code: string | undefined): CommandOutput
     return [{ kind: "receipt", text: `views now render in "${lang}"` }];
 }
 
-function cmdTimezone(zone: string | undefined): void
+function cmdTimezone(zone: string | undefined): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     if (zone === undefined)
     {
         console.log(readStoreConfig(ctx.storeDir).timezone ?? DEFAULT_ZONE);
-        return;
+        return [];
     }
     const timezone = validZone(zone);
     writeConfig(ctx, { timezone }, `timezone set ${timezone}`);
-    console.log(`target dates are now judged in "${timezone}"`);
+    return [{ kind: "receipt", text: `target dates are now judged in "${timezone}"` }];
 }
 
-function cmdTheme(name: string | undefined): void
+function cmdTheme(name: string | undefined): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     if (name === undefined)
     {
         console.log(readStoreConfig(ctx.storeDir).theme ?? "violet");
-        return;
+        return [];
     }
     const theme = validTheme(name);
     writeConfig(ctx, { theme }, `theme set ${theme}`);
-    console.log(`views now render with the "${theme}" accent`);
+    return [{ kind: "receipt", text: `views now render with the "${theme}" accent` }];
 }
 
-function cmdTokens(tokens: string | undefined, characters: string | undefined): void
+function cmdTokens(tokens: string | undefined, characters: string | undefined): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     if (tokens === undefined)
     {
         const scale = tokenScale(readStoreConfig(ctx.storeDir));
         console.log(`${scale.perCharacter} tokens per character — ${scale.measured ? "measured" : "the shipped estimate"}`);
-        return;
+        return [];
     }
     const measured = countArgument(tokens, "tokens");
     const held = countArgument(characters, "characters");
@@ -1129,7 +1132,7 @@ function cmdTokens(tokens: string | undefined, characters: string | undefined): 
     }
     writeConfig(ctx, { tokensPerCharacter: measured / held, tokensMeasured: true },
         `tokens measured at ${measured / held} per character`);
-    console.log(`${measured / held} tokens per character — measured from ${measured} tokens of ${held} characters`);
+    return [{ kind: "receipt", text: `${measured / held} tokens per character — measured from ${measured} tokens of ${held} characters` }];
 }
 
 // Both arguments are counts of real things, so both are whole and positive.
@@ -1232,7 +1235,7 @@ function projectRefusal(verb: string | undefined): string
 // arity gate would answer a stray argument with the syntax alone, and the
 // mistake this verb exists to end is precisely a caller who believes it takes
 // one (#251 T1.8).
-function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_OPTIONS>): void
+function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_OPTIONS>): CommandOutput
 {
     if (positionals[0] !== undefined)
     {
@@ -1244,12 +1247,12 @@ function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_O
     const slug = values.name ?? basename(projectDir);
     refuseDuplicateProject(ctx.storeDir, projectDir, slug);
     registerProject(ctx, projectDir, slug, values.desc);
-    console.log(`project "${slug}" registered`);
-    if (values["no-connect"] !== true)
+    const registered: CommandOutput = [{ kind: "receipt", text: `project "${slug}" registered` }];
+    if (values["no-connect"] === true)
     {
-        const files = connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date()));
-        console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
+        return registered;
     }
+    return [...registered, ...blockReceipt(connectProject(projectDir, buildModel(ctx.storeDir, slug, new Date())))];
 }
 
 // Every write a registration makes, reached only once every refusal above has
@@ -1334,7 +1337,7 @@ function danglingScopes(models: ProjectModel[], registered: Set<string>): string
     return lines;
 }
 
-function projectLink(wanted: string | undefined, path: string | undefined): void
+function projectLink(wanted: string | undefined, path: string | undefined): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     const projectDir = resolve(path ?? process.cwd());
@@ -1354,7 +1357,7 @@ function projectLink(wanted: string | undefined, path: string | undefined): void
     // it is guaranteed here exactly as registerProject guarantees it (#257).
     ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
     foldProject(ctx.storeDir, slug);
-    console.log(`project "${slug}" linked to ${projectDir}`);
+    return [{ kind: "receipt", text: `project "${slug}" linked to ${projectDir}` }];
 }
 
 // Omitting the slug is the worktree case: the repository already answers which
@@ -1382,14 +1385,14 @@ function inferredSlug(storeDir: string, projectDir: string): string
     return requireText(undefined, "project link <slug> [path]");
 }
 
-function cmdView(slug: string | undefined): void
+function cmdView(slug: string | undefined): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     if (slug !== undefined)
     {
         requireRegistered(ctx.storeDir, slug);
     }
-    openFile(ctx, viewFile(ctx.storeDir, slug));
+    return openFile(ctx, viewFile(ctx.storeDir, slug));
 }
 
 // The link records which repository stood here, not the path alone: a path is
@@ -1402,7 +1405,10 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
     excludeLocally(ctx.storeDir, LINKS_FILE);
     if (recordLink(ctx.storeDir, slug, projectDir, repositoryIdentity(projectDir)))
     {
-        console.log(`replacing the repository previously linked at ${projectDir}`);
+        // A disclosure the caller is owed before the link is replaced, not the
+        // verb's answer: it prints where it stands, through the gate's notice,
+        // so nothing moves relative to the recorded line that follows it.
+        notice(`replacing the repository previously linked at ${projectDir}`);
     }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
@@ -1688,7 +1694,7 @@ function decisionRefs(ctx: ProjectContext, options: DecisionOptions): EventRefs 
     return Object.keys(refs).length === 0 ? undefined : refs;
 }
 
-function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTIONS>): void
+function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTIONS>): CommandOutput
 {
     const outcome = requireText(positionals[0], WORK_ADD_USAGE);
     const ctx = requireProject(process.cwd());
@@ -1707,7 +1713,7 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
             return events;
         },
         `${id} ${outcome}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<string, unknown>
@@ -1841,11 +1847,13 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
     const { work, owner } = requireOpenWork(ctx, positionals[0]);
     const mine = sessionToken();
     // Read before anything is written, and printed before it too: the fact a
-    // session is deciding on is who held the unit when it walked up.
+    // session is deciding on is who held the unit when it walked up. A
+    // disclosure, not the verb's answer, so it goes through the gate's notice
+    // at the moment it stood.
     const held = holderNote(work);
     if (held !== null)
     {
-        console.log(held);
+        notice(held);
     }
     if (claimMoves(work.claim, mine, work.process))
     {
@@ -1869,9 +1877,10 @@ function holderNote(work: WorkState): string | null
 // wrong. The holder itself is told nothing — it already knows.
 function announceOtherHolder(work: WorkState): void
 {
-    if (work.claim?.session !== undefined && work.claim.session !== sessionToken())
+    const held = holderNote(work);
+    if (held !== null && work.claim?.session !== sessionToken())
     {
-        console.log(holderNote(work));
+        notice(held);
     }
 }
 
@@ -2355,25 +2364,30 @@ function cmdSearch({ values, positionals }: CommandInput<typeof SEARCH_OPTIONS>)
     runSearch(requireWorkspace(process.cwd()), query, values);
 }
 
-function cmdConnect(global: boolean): void
+function cmdConnect(global: boolean): CommandOutput
 {
     if (global)
     {
-        connectMachineAgents();
-        return;
+        return connectMachineAgents();
     }
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const files = connectProject(ctx.projectDir, model);
-    console.log(`managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it`);
+    return blockReceipt(connectProject(ctx.projectDir, model));
 }
 
-function cmdFold(): void
+// What a rendered managed block leaves the caller to do. Both writers of it —
+// registration and `connect` — say it the same way, from here.
+function blockReceipt(files: string[]): CommandOutput
+{
+    return [{ kind: "receipt", text: `managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it` }];
+}
+
+function cmdFold(): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     foldWorkspace(ctx.storeDir, ctx.project);
     commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
-    console.log(`refolded ${ctx.project}`);
+    return [{ kind: "receipt", text: `refolded ${ctx.project}` }];
 }
 
 function requireText(value: string | undefined, usage: string): string
@@ -2427,7 +2441,7 @@ const UNDOABLE: Record<string, string> = {
 // is what lets this stay safe under a merge: an undo cannot have been written
 // without seeing the event it reverses, which is the exact case a withdrawal
 // stays terminal against.
-function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | undefined): void
+function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | undefined): CommandOutput
 {
     const usage = 'undo <event-id> --why "<why the retirement was wrong>"';
     const event = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, usage));
@@ -2443,9 +2457,12 @@ function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | 
         { entity: restored, why: required(why) }, { annuls: event.id }, true), text);
     // Undoing a link never removed the record itself, so "standing again"
     // would claim a restoration that did not happen.
-    console.log(undone === "link"
-        ? `${restored} no longer carries the link — the linked event was taken back`
-        : `${restored} is standing again — its ${undone} was taken back`);
+    return [{
+        kind: "receipt",
+        text: undone === "link"
+            ? `${restored} no longer carries the link — the linked event was taken back`
+            : `${restored} is standing again — its ${undone} was taken back`
+    }];
 }
 
 // Which act this event was, or a refusal naming the ones that can be taken

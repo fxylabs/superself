@@ -5,9 +5,11 @@
 // and a rule about output — a total line, a recovery pointer, a render mode —
 // had nowhere to live but in each of them.
 //
-// The gate is staged. Stage 1 is this module, the dispatcher's call to it, and
-// one migrated verb; the shapes a later stage needs are declared here now so a
-// verb moves to a block that already exists rather than minting its own.
+// The gate is staged. Stage 1 was this module, the dispatcher's call to it and
+// one migrated verb; stage 2 moved every write verb whose answer is a receipt.
+// The shapes a command answers with are declared in `types.ts`, which imports
+// nothing, so a leaf can name what its handler returns without the CLI surface
+// having to reach up into this layer for the declaration.
 //
 // Two rules hold the module in place:
 //
@@ -18,52 +20,9 @@
 //     this module importing either of them would let a render write state.
 
 import { ParsedArguments } from "./args.js";
-import { Pointer, RenderMode, resolveRender } from "./pretty.js";
+import { RenderMode, resolveRender } from "./pretty.js";
 import { bold } from "./style.js";
-
-/* ── the shapes a command answers with ─────────────────────────────── */
-
-// One scalar answer, printed as itself: `self lang` says `ko` and nothing
-// around it, because a caller reads that line as a value.
-interface ValueBlock
-{
-    kind: "value";
-    text: string;
-}
-
-// What a write recorded, in the caller's terms, and — where the write leaves
-// something obvious to do next — the command that does it. The pointer is a
-// `Pointer` rather than a string so it cannot reach a reader unscoped.
-interface ReceiptBlock
-{
-    kind: "receipt";
-    text: string;
-    next?: Pointer;
-}
-
-// Rows a reader scans, the count they are a window onto, and the command that
-// prints the rest. `total` and `recover` are required because a listing that
-// shows some of its rows and says neither how many there are nor how to reach
-// them is the defect the type exists to make unwritable.
-interface ListingBlock
-{
-    kind: "listing";
-    rows: string[];
-    total: number;
-    recover: Pointer;
-}
-
-// A page a render already composed — the markdown a `show` verb prints. The
-// gate does not lay it out; it puts it on stdout.
-interface DocumentBlock
-{
-    kind: "document";
-    lines: string[];
-}
-
-type OutputBlock = ValueBlock | ReceiptBlock | ListingBlock | DocumentBlock;
-
-export type CommandOutput = OutputBlock[];
+import { CommandOutput, OutputBlock, Pointer } from "./types.js";
 
 /* ── the gate ──────────────────────────────────────────────────────── */
 

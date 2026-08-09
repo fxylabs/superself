@@ -22,7 +22,7 @@ import { DERIVATION_LABEL, derivationOf, EntityState } from "./entities.js";
 import { ProjectModel, workspaceModels } from "./model.js";
 import { ProjectContext, requireProject, requireRegistered } from "./paths.js";
 import { composedEntityAdd } from "./state.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput } from "./types.js";
 
 const FROM_USAGE = 'project from <parent-slug> --why "<why the relation was drawn>"';
 
@@ -47,14 +47,14 @@ export const PROJECT_FROM_LEAF: CommandLeaf = leaf("from", FROM_OPTIONS, 1, proj
 
 // A write verb: it takes no read-scope flag and records into the project it
 // runs in, because "this project came from that one" is the child's own fact.
-function projectFrom({ values, positionals }: CommandInput<typeof FROM_OPTIONS>): void
+function projectFrom({ values, positionals }: CommandInput<typeof FROM_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const parent = requireParent(ctx, requireText(positionals[0], FROM_USAGE));
     const models = workspaceModels(ctx.storeDir, ctx.project);
     const supersedes = requireCorrection(derivationOf(models[0].entities), values.supersedes, parent);
     requireNoCycle(models, ctx.project, parent);
-    composedEntityAdd(DERIVATION_ROW, { from: parent },
+    return composedEntityAdd(DERIVATION_ROW, { from: parent },
         { why: values.why, supersedes, demote: values.demote }, `came from ${parent}`);
 }
 

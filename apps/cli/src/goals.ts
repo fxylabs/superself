@@ -29,7 +29,7 @@ import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, tierOf } from "./state.js";
 import { countCharacters, dim, errYellow, markdownHeadings, styled } from "./style.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
 
@@ -313,7 +313,7 @@ function objectiveAddPayload(id: string, outcome: string, row: ReturnType<typeof
     };
 }
 
-function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>): void
+function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const models = workspaceModels(ctx.storeDir, ctx.project);
@@ -331,7 +331,7 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed),
         ...demotionEvents(demotions, id, proposed)],
         `${id} ${outcome}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 function confirmObjective({ positionals }: CommandInput): void
@@ -379,7 +379,7 @@ function refuseObjectiveRevise(objective: ObjectiveState, values: CommandInput<t
     }
 }
 
-function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): void
+function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): CommandOutput
 {
     const { ctx, model } = writeTarget();
     const objective = requireObjective(model, positionals[0]);
@@ -404,7 +404,7 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
         `${id} ${why}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 // What a revision does to one field: absent keeps the predecessor's value, a
@@ -611,7 +611,7 @@ function milestoneAddPayload(id: string, outcome: string, row: ReturnType<typeof
     };
 }
 
-function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD_OPTIONS>): void
+function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const models = workspaceModels(ctx.storeDir, ctx.project);
@@ -633,7 +633,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
         ...demotionEvents(demotions, id, false)],
         `${id} ${outcome}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 function refuseMilestoneRevise(milestone: MilestoneState, values: CommandInput<typeof MILESTONE_REVISE_OPTIONS>["values"]): void
@@ -653,7 +653,7 @@ function refuseMilestoneRevise(milestone: MilestoneState, values: CommandInput<t
 // A revision is a supersession (#207 B12): a new milestone entity carries the
 // revised criteria and the grouping, the predecessor reads superseded, and its
 // coverage is stale by construction — claims bind to the entity id.
-function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): void
+function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_REVISE_OPTIONS>): CommandOutput
 {
     const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const why = required(values.why);
@@ -679,7 +679,7 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
         `${id} ${why}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 // A checkpoint given up on, with nothing taking its place. Revising it would
@@ -899,7 +899,7 @@ function linkEdges(ctx: ProjectContext, model: ProjectModel,
 // A proposal is a proposed work entity (#207 B13): the brief rides the
 // creation event, and accepting is confirming — the proposal's id is the
 // unit's id.
-function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTIONS>): void
+function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const outcome = requireText(positionals[0], 'work propose "<required outcome>" --milestone <id> …');
@@ -922,7 +922,7 @@ function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTION
         ...rest
     };
     recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip(payload)), `${outcome}`);
-    console.log(id);
+    return [{ kind: "receipt", text: id }];
 }
 
 // The gate refused a proposal missing any of its required options before this
@@ -994,7 +994,7 @@ function normalize(text: string): string
 // Accept is confirm and decline is the withdrawal (#207 B13): the proposal
 // entity becomes the unit under its own id, and the grouping edge toward the
 // outcome it closes lands in the same append.
-function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OPTION>, accept: boolean): void
+function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OPTION>, accept: boolean): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
@@ -1002,8 +1002,10 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
     if (!accept)
     {
         const why = required(values.why);
+        // Declining answers with the append's own line and nothing more: the
+        // proposal is gone, so there is no id left worth handing back.
         recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.outcome}`);
-        return;
+        return [];
     }
     const target = proposal.milestone ?? proposal.objective;
     const events = [makeEvent(ctx.project, "entity.confirmed", { entity: proposal.id }, { confirms: proposal.id }, true)];
@@ -1012,7 +1014,7 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
         events.push(makeEvent(ctx.project, "entity.linked", { entity: proposal.id, link: { type: "member-of", target } }, undefined, true));
     }
     recordEvents(ctx, events, `${proposal.id} ${proposal.outcome}`);
-    console.log(proposal.id);
+    return [{ kind: "receipt", text: proposal.id }];
 }
 
 /* ── console output ────────────────────────────────────────────────── */

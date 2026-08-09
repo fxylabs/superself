@@ -4,7 +4,7 @@ import { foldEveryProject } from "./fold.js";
 import { commitAll, configureStoreIdentity, excludeLocally, git } from "./gitutil.js";
 import { setMachineWorkspace } from "./machine.js";
 import { CliContext, ensureDir, EVIDENCE_HEAD_EXCLUDE, LINKS_FILE, readRegistry, STORE_DIR } from "./paths.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput } from "./types.js";
 
 const ATTRIBUTES = [
     "registry.jsonl merge=union",
@@ -31,7 +31,7 @@ export function ensureSyncConfig(storeDir: string): void
     excludeLocally(storeDir, EVIDENCE_HEAD_EXCLUDE);
 }
 
-export function remoteAdd(ctx: CliContext, url: string): void
+export function remoteAdd(ctx: CliContext, url: string): CommandOutput
 {
     ensureSyncConfig(ctx.storeDir);
     const existing = git(ctx.storeDir, "remote", "get-url", "origin");
@@ -43,10 +43,10 @@ export function remoteAdd(ctx: CliContext, url: string): void
         throw new CliError(`git remote failed: ${result.err}`);
     }
     commitAll(ctx.storeDir, "remote add: sync merge attributes");
-    console.log(`workspace store now syncs with ${url} — run \`self sync\` to push`);
+    return [{ kind: "receipt", text: `workspace store now syncs with ${url} — run \`self sync\` to push` }];
 }
 
-export function syncStore(ctx: CliContext): void
+export function syncStore(ctx: CliContext): CommandOutput
 {
     ensureSyncConfig(ctx.storeDir);
     const remote = git(ctx.storeDir, "remote", "get-url", "origin");
@@ -62,7 +62,7 @@ export function syncStore(ctx: CliContext): void
     {
         throw new CliError(`push failed: ${push.err}`);
     }
-    console.log(`synced with ${remote.out}`);
+    return [{ kind: "receipt", text: `synced with ${remote.out}` }];
 }
 
 function pullAndRefold(storeDir: string, branch: string): void
@@ -96,7 +96,7 @@ function storeName(url: string): string
     return name;
 }
 
-export function cloneStore(url: string, dir: string | undefined): void
+export function cloneStore(url: string, dir: string | undefined): CommandOutput
 {
     const target = resolve(dir ?? storeName(url));
     const storeDir = join(target, STORE_DIR);
@@ -115,10 +115,14 @@ export function cloneStore(url: string, dir: string | undefined): void
     const slugs = readRegistry(storeDir).map((entry) => entry.slug);
     foldEveryProject(storeDir);
     setMachineWorkspace(target);
-    console.log(`workspace cloned into ${target}`);
+    // Three receipts rather than one with newlines in it: each line is a fact
+    // the clone recorded, and the reconnection line only exists where there is
+    // something to reconnect.
+    const cloned: CommandOutput = [{ kind: "receipt", text: `workspace cloned into ${target}` }];
     if (slugs.length > 0)
     {
-        console.log(`registered projects: ${slugs.join(", ")}`);
-        console.log("run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout");
+        cloned.push({ kind: "receipt", text: `registered projects: ${slugs.join(", ")}` });
+        cloned.push({ kind: "receipt", text: "run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout" });
     }
+    return cloned;
 }
