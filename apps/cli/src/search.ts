@@ -14,9 +14,10 @@
 
 import { EntityState, Exposure, EXPOSURES, isCurrent, scopeTarget } from "./entities.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { notice } from "./output.js";
 import { activeProjects, CliContext, requireRegistered } from "./paths.js";
 import { bold, dim, displayWidth, fitDisplay, oneLine, styled } from "./style.js";
-import { CliError } from "./types.js";
+import { CliError, CommandOutput } from "./types.js";
 import { contextRendered, recordLine } from "./views.js";
 
 // The record kinds `--type` narrows to (R2). The preset sources plus the free
@@ -51,7 +52,7 @@ interface LiveRecord
     haystack: string;
 }
 
-export function runSearch(ctx: CliContext, query: string, choice: SearchChoice): void
+export function runSearch(ctx: CliContext, query: string, choice: SearchChoice): CommandOutput
 {
     const tier = requireOneWidening(choice);
     const kind = choice.type === undefined ? undefined : requireKind(choice.type);
@@ -67,23 +68,27 @@ export function runSearch(ctx: CliContext, query: string, choice: SearchChoice):
     const needle = query.trim().toLowerCase();
     const hits = match(models.filter((model) => wanted === null || model.slug === wanted).flatMap(liveRecords)
         .filter((record) => admits(record, tier, kind, choice.all === true, shown)), needle);
-    report(unreadable.filter((slug) => wanted === null || slug === wanted), hits, needle);
+    return report(unreadable.filter((slug) => wanted === null || slug === wanted), hits, needle);
 }
 
-function report(unreadable: string[], hits: LiveRecord[], needle: string): void
+// A store this machine could not read is a notice, not a row and not part of
+// the size: it says the answer is short of a project, which is true at the
+// moment the search ran and belongs above the rows rather than inside a count
+// of what was found. `no matches` stays the empty wording — the size line adds
+// nothing to a listing with nothing in it.
+function report(unreadable: string[], hits: LiveRecord[], needle: string): CommandOutput
 {
     for (const slug of unreadable)
     {
-        console.log(`${slug}: its state could not be read here, so its records are not in this answer`);
+        notice(`${slug}: its state could not be read here, so its records are not in this answer`);
     }
-    for (const record of hits)
-    {
-        console.log(row(record, needle));
-    }
-    if (hits.length === 0)
-    {
-        console.log("no matches");
-    }
+    return [{
+        kind: "listing",
+        rows: hits.length === 0 ? ["no matches"] : hits.map((record) => row(record, needle)),
+        total: hits.length,
+        noun: "match",
+        nouns: "matches"
+    }];
 }
 
 /* ── which records the answer is drawn from ────────────────────────── */

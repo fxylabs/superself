@@ -326,7 +326,7 @@ export const ARTIFACT_COMMAND: Command = {
         refusal: "usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]",
         children: [
             leaf("list", { work: { type: "string" }, project: { type: "string" } }, 0, ({ values }) =>
-                printRecords(scopedRecords(workspace(), values.work, values.project))),
+                artifactListing(scopedRecords(workspace(), values.work, values.project))),
             leaf("search", {}, 1, ({ positionals }) => searchArtifacts(workspace(), positionals[0])),
             leaf("open", { project: { type: "string" } }, 1, ({ values, positionals }) =>
                 openArtifact(workspace(), positionals[0], values.project))
@@ -360,7 +360,7 @@ function requireRegistered(ctx: CliContext, slug: string): string
     return slug;
 }
 
-function searchArtifacts(ctx: CliContext, query: string | undefined): void
+function searchArtifacts(ctx: CliContext, query: string | undefined): CommandOutput
 {
     if (query === undefined || query.trim() === "")
     {
@@ -370,20 +370,23 @@ function searchArtifacts(ctx: CliContext, query: string | undefined): void
     const slugs = activeProjects(ctx.storeDir).map((entry) => entry.slug);
     const hits = listArtifacts(ctx.storeDir, slugs).filter((record) =>
         [record.id, record.name, record.work ?? "", record.summary].join(" ").toLowerCase().includes(needle));
-    printRecords(hits);
+    return artifactListing(hits);
 }
 
-function printRecords(records: ArtifactRecord[]): void
+// The one listing both artifact reads answer with: the whole registry and the
+// hits of a query are the same rows counted the same way, so the search half
+// cannot drift into stating its size differently from the list half.
+function artifactListing(records: ArtifactRecord[]): CommandOutput
 {
-    if (records.length === 0)
-    {
-        console.log("no artifacts — attach one with `self report <work-id> \"…\" --artifact <path>`");
-        return;
-    }
-    for (const record of records)
-    {
-        console.log(`${record.id}  ${record.ts.slice(0, 10)}  ${record.project}  ${record.work ?? "-"}  ${record.name}`);
-    }
+    return [{
+        kind: "listing",
+        rows: records.length === 0
+            ? ["no artifacts — attach one with `self report <work-id> \"…\" --artifact <path>`"]
+            : records.map((record) =>
+                `${record.id}  ${record.ts.slice(0, 10)}  ${record.project}  ${record.work ?? "-"}  ${record.name}`),
+        total: records.length,
+        noun: "artifact"
+    }];
 }
 
 // An id is minted per artifact, not per workspace, so two projects can hold the

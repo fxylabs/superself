@@ -212,7 +212,20 @@ export type ScopableVerb =
 // leaves the caller nothing to malform: `pretty.ts` `pointerTo` writes it.
 export type RecoveryTarget =
     | { verb: "work-show"; id: string }
-    | { verb: "search"; id?: string; type?: string };
+    | { verb: "search"; id?: string; type?: string }
+    | LogPage;
+
+// The whole of a log a listing showed the last few lines of. `self log` is the
+// one listing that takes a window — `-n` is how many lines it prints — so the
+// command for the rest is the same verb carrying the count the window was cut
+// from. It is a target of its own rather than a `ScopableVerb` because the
+// number is part of the command, and a scopable verb is an exact string with
+// the project appended to it.
+export interface LogPage
+{
+    verb: "log";
+    lines: number;
+}
 
 // One thing that waits on the human. `full` is the sentence shown while space
 // allows; when the context budget forces the short form, `identity` still

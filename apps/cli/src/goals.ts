@@ -29,7 +29,7 @@ import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, tierOf } from "./state.js";
 import { countCharacters, dim, errYellow, markdownHeadings, styled } from "./style.js";
-import { CliError, CommandOutput } from "./types.js";
+import { CliError, CommandOutput, ListingBlock } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
 
@@ -199,7 +199,7 @@ export const OBJECTIVE_COMMAND: Command = {
     })
 };
 
-function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>): void
+function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>): CommandOutput
 {
     const scopes = readScopes(process.cwd(), values);
     // One fold per registered project, however many scopes are listed: the
@@ -207,14 +207,17 @@ function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>)
     const models = workspaceModels(scopes[0].storeDir, scopes[0].project);
     if (values.workspace !== true)
     {
-        printObjectives(models[0], contributorsTo(scopes[0].project, models));
-        return;
+        return [objectiveListing(models[0], contributorsTo(scopes[0].project, models))];
     }
-    scopes.forEach((scope, index) =>
+    // One block per project, each stating its own size: the workspace form is
+    // that many listings printed together, not one listing of everything, and a
+    // reader asking how many one project has is answered under its own heading.
+    return scopes.map((scope, index) =>
     {
-        console.log(`${index === 0 ? "" : "\n"}${styled ? dim(scope.project) : scope.project}`);
         const model = models.find((item) => item.slug === scope.project) as ProjectModel;
-        printObjectives(model, contributorsTo(scope.project, models));
+        const listing = objectiveListing(model, contributorsTo(scope.project, models));
+        const heading = `${index === 0 ? "" : "\n"}${styled ? dim(scope.project) : scope.project}`;
+        return { ...listing, rows: [heading, ...listing.rows] };
     });
 }
 
@@ -566,9 +569,9 @@ export const MILESTONE_COMMAND: Command = {
     })
 };
 
-function milestoneList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
+function milestoneList({ values }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
-    printMilestones(scopeModel(readScopes(process.cwd(), values)[0]));
+    return [milestoneListing(scopeModel(readScopes(process.cwd(), values)[0]))];
 }
 
 function milestoneShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): void
@@ -1019,47 +1022,58 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
 
 /* ── console output ────────────────────────────────────────────────── */
 
-function printObjectives(model: ProjectModel, contributors: Map<string, string[]>): void
+// The size is the objectives, not the lines: a checkpoint renders indented
+// under the objective it belongs to, and counting those rows would tell a
+// reader they have more outcomes than they have.
+function objectiveListing(model: ProjectModel, contributors: Map<string, string[]>): ListingBlock
 {
     const objectives = openObjectives(model.goals);
-    if (objectives.length === 0)
-    {
-        console.log('no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`');
-        return;
-    }
-    for (const objective of objectives)
-    {
-        const target = objective.target === undefined ? "" : ` · ${objective.horizon ?? "target"} ${objective.target}`;
-        const linked = openLocalWork(model, objective).length + (contributors.get(objective.id) ?? []).length;
-        const flags = ` [${linked === 0 ? "no work linked" : `${linked} work unit(s)`}]`;
-        console.log(`${objective.id}  ${stateMark(objective.state)}  ${objective.outcome}${styled ? dim(target) : target}${flags}`);
-        for (const milestone of objective.milestones)
-        {
-            console.log(`  ${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome} — ${milestone.reason}`);
-        }
-    }
+    return {
+        kind: "listing",
+        rows: objectives.length === 0
+            ? ['no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`']
+            : objectives.flatMap((objective) => [
+                objectiveRow(model, objective, contributors),
+                ...objective.milestones.map((milestone) =>
+                    `  ${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome} — ${milestone.reason}`)
+            ]),
+        total: objectives.length,
+        noun: "open objective"
+    };
 }
 
-function printMilestones(model: ProjectModel): void
+function objectiveRow(model: ProjectModel, objective: ObjectiveState, contributors: Map<string, string[]>): string
+{
+    const target = objective.target === undefined ? "" : ` · ${objective.horizon ?? "target"} ${objective.target}`;
+    const linked = openLocalWork(model, objective).length + (contributors.get(objective.id) ?? []).length;
+    const flags = ` [${linked === 0 ? "no work linked" : `${linked} work unit(s)`}]`;
+    return `${objective.id}  ${stateMark(objective.state)}  ${objective.outcome}${styled ? dim(target) : target}${flags}`;
+}
+
+function milestoneListing(model: ProjectModel): ListingBlock
 {
     // Closed checkpoints are left out for the same reason every other current
     // render leaves them out: dropped, superseded, or belonging to a closed
     // objective, none of them is a checkpoint anybody is working toward.
     // `self milestone show` and `self search --type milestone` still answer.
     const milestones = allMilestones(model.goals).filter((milestone) => milestone.state !== "closed");
-    if (milestones.length === 0)
-    {
-        console.log("no milestones — add one with `self milestone add \"<outcome>\" --objective <id> --exit \"<criterion>\"`");
-        return;
-    }
-    for (const milestone of milestones)
-    {
-        const flags = [
-            milestone.criticalPath ? "critical path" : "",
-            milestone.works.length === 0 ? "no work linked" : `${milestone.works.length} work unit(s)`
-        ].filter((flag) => flag !== "").join(" · ");
-        console.log(`${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome} — ${milestone.reason} [${flags}]`);
-    }
+    return {
+        kind: "listing",
+        rows: milestones.length === 0
+            ? ["no milestones — add one with `self milestone add \"<outcome>\" --objective <id> --exit \"<criterion>\"`"]
+            : milestones.map((milestone) =>
+                `${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome} — ${milestone.reason} [${milestoneFlags(milestone)}]`),
+        total: milestones.length,
+        noun: "milestone"
+    };
+}
+
+function milestoneFlags(milestone: MilestoneState): string
+{
+    return [
+        milestone.criticalPath ? "critical path" : "",
+        milestone.works.length === 0 ? "no work linked" : `${milestone.works.length} work unit(s)`
+    ].filter((flag) => flag !== "").join(" · ");
 }
 
 function stateMark(state: string): string

@@ -6,7 +6,9 @@
 // had nowhere to live but in each of them.
 //
 // The gate is staged. Stage 1 was this module, the dispatcher's call to it and
-// one migrated verb; stage 2 moved every write verb whose answer is a receipt.
+// one migrated verb; stage 2 moved every write verb whose answer is a receipt;
+// stage 3 moved the standalone listings, and with them the one rule the move
+// was for — a listing states its size, in the same words on every surface.
 // The shapes a command answers with are declared in `types.ts`, which imports
 // nothing, so a leaf can name what its handler returns without the CLI surface
 // having to reach up into this layer for the declaration.
@@ -21,8 +23,8 @@
 
 import { ParsedArguments } from "./args.js";
 import { RenderMode, resolveRender } from "./pretty.js";
-import { bold } from "./style.js";
-import { CommandOutput, OutputBlock, Pointer } from "./types.js";
+import { bold, plural } from "./style.js";
+import { CommandOutput, ListingBlock, OutputBlock, Pointer } from "./types.js";
 
 /* ── the gate ──────────────────────────────────────────────────────── */
 
@@ -61,9 +63,33 @@ function printBlock(block: OutputBlock, mode: RenderMode): void
     if (block.kind === "listing")
     {
         block.rows.forEach((row) => console.log(row));
+        printSize(block, mode);
         return;
     }
     block.lines.forEach((line) => console.log(line));
+}
+
+// How much there is, under the rows that are some of it. A person at a terminal
+// reads a ruled render that frames its own rows; a pipe gets no frame, so this
+// is the one line that tells a reader who is not looking at a screen whether
+// they have the whole answer — which is why it is written here and not by any
+// of the listings, and why it is on the plain render alone.
+//
+// A listing with nothing in it says nothing: the empty wording each surface
+// already prints ("no open work", "no matches") states the size in the words
+// that also say what to do about it, and a `0 matches` under it would be the
+// same fact twice.
+function printSize(block: ListingBlock, mode: RenderMode): void
+{
+    if (mode !== "plain" || block.total === 0)
+    {
+        return;
+    }
+    const size = plural(block.total, block.noun, block.nouns);
+    const window = block.window;
+    console.log(window === undefined || window.shown >= block.total
+        ? size
+        : `last ${window.shown} of ${size} · ${window.recover}`);
 }
 
 // A command to type, under the line that made it worth typing, indented the

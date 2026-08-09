@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ALIAS_COMMAND, presetRow, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
-import { printArchivedProjects, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
+import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
@@ -60,7 +60,7 @@ import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { countCharacters, dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
-import { printContext, printHistory, printLog, printStatus, printWorkList, printWorkspaceLog } from "./views.js";
+import { printContext, printHistory, printStatus, projectLog, workList, workspaceLog } from "./views.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
@@ -1287,30 +1287,37 @@ function registerProject(ctx: CliContext, projectDir: string, slug: string, desc
 // workspace as a whole, and one broken store must not take the rest with it.
 // An archived project is out of this listing and in `--archived` instead
 // (#283): the bare list answers "what is this workspace working on".
-function projectList({ values }: CommandInput<typeof PROJECT_LIST_OPTIONS>): void
+function projectList({ values }: CommandInput<typeof PROJECT_LIST_OPTIONS>): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     if (values.archived === true)
     {
-        printArchivedProjects(ctx.storeDir);
-        return;
+        return [archivedListing(ctx.storeDir)];
     }
     const { models, unreadable } = readableModels(ctx.storeDir);
-    if (models.length === 0 && unreadable.length === 0)
-    {
-        console.log(readRegistry(ctx.storeDir).length === 0
-            ? "no projects registered — run `self project init` inside a project directory"
-            : "every registered project is archived — run `self project --archived` to list them");
-        return;
-    }
     const registered = new Set(readRegistry(ctx.storeDir).map((entry) => entry.slug));
-    for (const model of models)
-    {
-        console.log(projectRow(model, ctx.project));
-        derivationLines(models, model, registered).forEach((line) => console.log(line));
-    }
-    unreadable.forEach((line) => console.log(line));
-    danglingScopes(models, registered).forEach((line) => console.log(line));
+    // The size is the projects, not the lines under them: a parent, a child, an
+    // unreadable store and a dangling scope each add a line that is about a
+    // project rather than being one.
+    return [{
+        kind: "listing",
+        rows: models.length === 0 && unreadable.length === 0
+            ? [emptyWorkspaceLine(ctx.storeDir)]
+            : [
+                ...models.flatMap((model) => [projectRow(model, ctx.project), ...derivationLines(models, model, registered)]),
+                ...unreadable,
+                ...danglingScopes(models, registered)
+            ],
+        total: models.length,
+        noun: "project"
+    }];
+}
+
+function emptyWorkspaceLine(storeDir: string): string
+{
+    return readRegistry(storeDir).length === 0
+        ? "no projects registered — run `self project init` inside a project directory"
+        : "every registered project is archived — run `self project --archived` to list them";
 }
 
 function projectRow(model: ProjectModel, here: string | undefined): string
@@ -1763,9 +1770,9 @@ function supersededRetirement(ctx: ProjectContext, successor: string, values: Co
     return makeEvent(ctx.project, "entity.retired", { entity: work.id, why, successor, successorProject: ctx.project }, undefined, true);
 }
 
-function cmdWorkList({ values }: CommandInput<typeof SCOPED_RENDER_OPTIONS>): void
+function cmdWorkList({ values }: CommandInput<typeof SCOPED_RENDER_OPTIONS>): CommandOutput
 {
-    printWorkList(readScopes(process.cwd(), values)[0], resolveRender(values));
+    return workList(readScopes(process.cwd(), values)[0], resolveRender(values));
 }
 
 function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTIONS>): void
@@ -2337,7 +2344,7 @@ function currentConventionIds(model: ProjectModel, prefixes: string[]): string[]
     });
 }
 
-function cmdLog({ values }: CommandInput<typeof LOG_OPTIONS>): void
+function cmdLog({ values }: CommandInput<typeof LOG_OPTIONS>): CommandOutput
 {
     const limit = values.lines === undefined ? 20 : Number.parseInt(values.lines, 10);
     if (Number.isNaN(limit) || limit <= 0)
@@ -2345,15 +2352,10 @@ function cmdLog({ values }: CommandInput<typeof LOG_OPTIONS>): void
         throw new CliError("log -n expects a positive number");
     }
     const scopes = readScopes(process.cwd(), values);
-    if (values.workspace === true)
-    {
-        printWorkspaceLog(scopes, limit);
-        return;
-    }
-    printLog(scopes[0], limit);
+    return values.workspace === true ? workspaceLog(scopes, limit) : projectLog(scopes[0], limit);
 }
 
-function cmdSearch({ values, positionals }: CommandInput<typeof SEARCH_OPTIONS>): void
+function cmdSearch({ values, positionals }: CommandInput<typeof SEARCH_OPTIONS>): CommandOutput
 {
     // Context recovery pointers pull whole categories, so a narrowing flag
     // alone is a complete request and stands in for the query.
@@ -2361,7 +2363,7 @@ function cmdSearch({ values, positionals }: CommandInput<typeof SEARCH_OPTIONS>)
         || values.exposure !== undefined || values.all === true;
     const query = positionals[0] ?? (narrowed ? ""
         : requireText(undefined, "search <query>, or search with --type <kind>, --exposure <tier>, --all, or --project <slug>"));
-    runSearch(requireWorkspace(process.cwd()), query, values);
+    return runSearch(requireWorkspace(process.cwd()), query, values);
 }
 
 function cmdConnect(global: boolean): CommandOutput

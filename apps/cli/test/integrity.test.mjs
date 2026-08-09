@@ -24,6 +24,14 @@ mkdirSync(ws, { recursive: true });
 cpSync(join(fixtures, "pre-cutover-store"), store, { recursive: true });
 must(e1, ws, ["workspace", ws]);
 
+// The listings among the captures gained exactly one line with the render
+// gate's stage 3 (#294): the size a piped listing states, which is that stage's
+// one deliberate output change. The captured bytes are still the assertion for
+// everything above it — they have to be there, in that order — and the added
+// line is asserted as the only thing that follows them.
+const SIZED_READS = new Set(["work-list", "objective-list", "milestone-list", "log"]);
+const SIZE_LINE = /^\d+ (open work units?|open objectives?|milestones?|events?)\n$/;
+
 test("E1: every captured read surface answers byte-identically for a pre-cutover store", () =>
 {
     const manifest = JSON.parse(readFileSync(join(fixtures, "pre-cutover-reads", "manifest.json"), "utf8"));
@@ -32,7 +40,14 @@ test("E1: every captured read surface answers byte-identically for a pre-cutover
     {
         const expected = readFileSync(join(fixtures, "pre-cutover-reads", `${name}.txt`), "utf8");
         const result = must(e1, ws, args);
-        assert.equal(result.out, expected, `\`self ${args.join(" ")}\` drifted from the pre-cutover binary (${name})`);
+        const drifted = `\`self ${args.join(" ")}\` drifted from the pre-cutover binary (${name})`;
+        if (!SIZED_READS.has(name))
+        {
+            assert.equal(result.out, expected, drifted);
+            continue;
+        }
+        assert.equal(result.out.slice(0, expected.length), expected, drifted);
+        assert.match(result.out.slice(expected.length), SIZE_LINE, drifted);
     }
 });
 
@@ -46,7 +61,11 @@ test("E1: a pre-cutover store answers search over its live records, not its log"
     const decisions = must(e1, ws, ["search", "ship", "--type", "decision", "--all"]).out;
     assert.match(decisions, /ship daily/);
     assert.doesNotMatch(decisions, /ship weekly/, "a superseded decision answered a live-record search");
-    for (const line of decisions.split("\n").filter((row) => row.trim() !== ""))
+    const printed = decisions.split("\n").filter((row) => row.trim() !== "");
+    // The last line is the size the gate states under a listing (#294); the
+    // rest are the hits, and every one of them has to read as a row.
+    assert.match(printed.at(-1), /^\d+ match(es)?$/, `the answer did not state its size: ${printed.at(-1)}`);
+    for (const line of printed.slice(0, -1))
     {
         assert.doesNotMatch(line, /"type":|"payload":|"origin":/, `a raw event object reached the answer: ${line}`);
         assert.match(line, /^demo {2}decision {2}\S+ {2}/, `a hit did not read as a row: ${line}`);

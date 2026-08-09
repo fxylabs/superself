@@ -66,9 +66,12 @@ function entityIn(text)
     return event[1];
 }
 
+// The rows of an answer. The size line the render gate states under every
+// listing (#294) is not one of them: this file is about which records answered
+// a query, and how many there are is the subject of stage 3's own cell 10.
 function lines(text)
 {
-    return text.split("\n").filter((line) => line.trim() !== "");
+    return text.split("\n").filter((line) => line.trim() !== "" && !/^\d+ match(es)?$/.test(line));
 }
 
 /* ── the population T1–T4 and T7 read ──────────────────────────────── */

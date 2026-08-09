@@ -1,5 +1,5 @@
 // The terminal half of the render-gate case table (w-5emx6 stage 1): cells 2,
-// 5 and 8, plus stage 2's cell 2. `style.ts` answers "is this run styled" once, when it is first
+// 5 and 8, plus stage 2's cell 2 and stage 3's cell 13. `style.ts` answers "is this run styled" once, when it is first
 // imported, from stdout — so a test that wants the styled answer has to say so
 // before the built modules load, and run the command in this process rather
 // than in a child whose stdout is a pipe.
@@ -13,7 +13,9 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const { approvedIn, git, machine, must } = await import("./harness.mjs");
+const { buildModel } = await import("../dist/model.js");
 const { renderOutput } = await import("../dist/output.js");
+const { renderWorkList } = await import("../dist/pretty.js");
 const { bold, dim, green, styled } = await import("../dist/style.js");
 
 const box = machine();
@@ -75,6 +77,40 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
     assert.equal(announced, `${green("✓")} ${bold("entity.confirmed")}  ${dim(`${id} ${outcome}`)}  ${dim(`[${event}]`)}`);
     assert.match(answer.printed, /\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n$/);
 });
+
+/* ── stage 3 cell 13: the size line is a plain-render line ─────────── */
+
+// The listings state their size for a reader who is not looking at a screen.
+// A person at a terminal reads a ruled render that frames its own rows, so the
+// pretty half of every migrated surface prints exactly what it printed before
+// the move — which for `self work` is the ruled list and nothing under it.
+test("stage 3 cell 13: at a terminal, `self work` prints the ruled list with no size line under it", async () =>
+{
+    must(box, demo, ["work", "add", "the listings answer with blocks"]);
+    const answer = await approvedIn(box, demo, ["work"], "");
+    assert.equal(answer.code, 0, answer.out);
+    const model = buildModel(join(ws, ".superself"), "demo", new Date());
+    assert.equal(answer.printed, `${renderWorkList(model).join("\n")}\n`);
+    assert.equal(sizeLines(answer.printed).length, 0, answer.printed);
+});
+
+test("stage 3 cell 13: at a terminal, `self context` and `self status` gained no size line", async () =>
+{
+    for (const verb of ["context", "status"])
+    {
+        const answer = await approvedIn(box, demo, [verb], "");
+        assert.equal(answer.code, 0, answer.out);
+        assert.deepEqual(sizeLines(answer.printed), [], verb);
+    }
+});
+
+// A size line is a whole line that is a count and the thing counted, which is
+// the shape nothing a document render prints has.
+function sizeLines(printed)
+{
+    return printed.split("\n").filter((line) =>
+        /^\d+ (project|archived project|open objective|milestone|open work unit|event|artifact|match|alias)e?s?$/.test(line));
+}
 
 // The gate resolves the render once per run and hands it to the blocks that
 // have two forms. A receipt's next command is the one stage 1 declares: weight
