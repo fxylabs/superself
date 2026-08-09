@@ -71,6 +71,7 @@ $ self state   (in project, exit 0)
 <event-id>  decision  index p40  the render gate is the one path to stdout
 <e-id>  -  search  a note the search surface can find
 <w-id>  work  search  stage 1 lands the render gate and its pilot
+3 live entities
 
 $ self search render gate   (in project, exit 0)
 demo  work  <w-id>  (in progress) [work] stage 1 lands the render gate and its pilot
