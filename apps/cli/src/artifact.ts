@@ -4,7 +4,7 @@ import { branch, Command, leaf } from "./contract.js";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
 import { digestFile } from "./repo.js";
-import { CliContext, readRegistry, requireWorkspace } from "./paths.js";
+import { activeProjects, CliContext, readRegistry, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMeta, CliError } from "./types.js";
 
@@ -342,8 +342,10 @@ function workspace(): CliContext
 function scopedRecords(ctx: CliContext, work: string | undefined, project: string | undefined): ArtifactRecord[]
 {
     const scope = project ?? ctx.project;
+    // Outside a project the listing is a workspace answer, so an archived
+    // project's artifacts are not in it (#283); naming the slug still reads them.
     const slugs = scope === undefined
-        ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
+        ? activeProjects(ctx.storeDir).map((entry) => entry.slug)
         : [requireRegistered(ctx, scope)];
     const records = listArtifacts(ctx.storeDir, slugs);
     return work === undefined ? records : records.filter((record) => record.work === work);
@@ -365,7 +367,7 @@ function searchArtifacts(ctx: CliContext, query: string | undefined): void
         throw new CliError("usage: self artifact search <query>");
     }
     const needle = query.toLowerCase();
-    const slugs = readRegistry(ctx.storeDir).map((entry) => entry.slug);
+    const slugs = activeProjects(ctx.storeDir).map((entry) => entry.slug);
     const hits = listArtifacts(ctx.storeDir, slugs).filter((record) =>
         [record.id, record.name, record.work ?? "", record.summary].join(" ").toLowerCase().includes(needle));
     printRecords(hits);

@@ -21,7 +21,7 @@ prints them during the same run.
 | Family | Current entry points |
 | --- | --- |
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
-| Projects and state remotes | `project`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
+| Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
@@ -44,6 +44,26 @@ log search fold
 Beyond that list, the alias table dispatches its own verbs: `self idea add`
 and `self roadmap add` ship as built-in rows with no dedicated command, and
 `self alias add <verb>` makes any user-added row callable the same way.
+
+### Setting a project aside
+
+`self project archive <slug> --why "<reason>"` takes a project out of the
+default `self project` listing, `self context`, and every `--workspace`
+aggregate, with its records and its open work exactly as they stand. It is not
+retirement: open work neither blocks the archive nor is retired by it, the
+command says how many open units went with the project, and nothing is recorded
+into the project again until it comes back.
+
+`self project restore <slug>` brings it back, with every work unit in the state
+it was left. It takes an optional `--why` for the archive that should never
+have been written. While a project is archived it stays readable — `self
+project --archived` lists it with its reason, and `--project <slug>` reads it
+as any other project, with one line saying it is set aside.
+
+`self undo` does not take an archive back. Both verbs above name a slug and run
+from anywhere in the workspace, while `undo` reads its project from the working
+directory — and a project that is set aside frequently has no checkout on this
+machine at all.
 
 ### The entity grammar
 

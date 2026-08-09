@@ -4,7 +4,7 @@ import { foldProject } from "./fold.js";
 import { commitAll, currentBranch } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { sessionToken } from "./machine.js";
-import { CliContext, ensureDir, invalidateResolution, projectStateDir } from "./paths.js";
+import { CliContext, ensureDir, invalidateResolution, projectStateDir, refuseArchived } from "./paths.js";
 import { assertSanitized } from "./sanitize.js";
 import { bold, dim, green, styled } from "./style.js";
 import { EventRefs, SelfEvent } from "./types.js";
@@ -57,11 +57,8 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     // First, before the branch stamp and before a byte reaches the log: what an
     // event carries is checked while refusing it still costs only this command.
     events.forEach((event) => assertSanitized(event));
-    const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
-    if (branch !== null)
-    {
-        events.forEach((event) => { event.refs = { ...event.refs, branch }; });
-    }
+    requireWritable(ctx, events);
+    stampBranch(ctx, events);
     // Grouped by the project each event names, because a placement that moves a
     // record between projects writes into the log that owns the record and into
     // the log that owns the seat it frees (#181 D3). Each group is one append,
@@ -81,6 +78,37 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     projects.forEach((project) => foldProject(ctx.storeDir, project));
     commitAll(ctx.storeDir, `${events.map((event) => event.type).join(" ")} ${projects.join(" ")}: ${truncate(summary, 60)}`);
     announce(events, summary);
+}
+
+// The branch every event was composed on, stamped once for the batch: history
+// ("this happened here"), never a live pointer.
+function stampBranch(ctx: CliContext, events: SelfEvent[]): void
+{
+    const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
+    if (branch !== null)
+    {
+        events.forEach((event) => { event.refs = { ...event.refs, branch }; });
+    }
+}
+
+// Recording into an archived project is what "it is being worked on again"
+// means, so it is refused and `restore` is named (#283). The refusal sits on
+// the append rather than on each verb: every write the CLI has goes through
+// here, and every write it grows will too, which is the only way the rule
+// cannot be missed by a verb added later.
+//
+// The way back is the one exception. `project restore` and the `self undo` that
+// takes an archive record back both write this event into the archived project,
+// and neither is work resuming under another name.
+const ARCHIVE_EXIT = "project.restored";
+
+function requireWritable(ctx: CliContext, events: SelfEvent[]): void
+{
+    const projects = new Set(events.filter((event) => event.type !== ARCHIVE_EXIT).map((event) => event.project));
+    for (const project of projects)
+    {
+        refuseArchived(ctx.storeDir, project, "nothing more is recorded into it");
+    }
 }
 
 // One append per log, in the order the events were composed, and the projects

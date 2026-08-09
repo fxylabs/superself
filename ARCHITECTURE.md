@@ -24,14 +24,14 @@ it. The layers, lowest first:
 | Types | `types.ts` | the event and context shapes; imports nothing local |
 | CLI surface | `args.ts`, `contract.ts`, `help.ts`, `guide.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, explains itself, and confirms a human; `human.ts` and `guide.ts` import nothing local, `contract.ts` imports only `args.ts` and `types.ts`, and `help.ts` renders the contract rather than keeping a list of its own. `guide.ts` holds the concept pages `self help <topic>` prints — prose the contract cannot state, which is why it is data rather than a render |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
-| Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`) |
+| Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`) |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
 | Render | `view.ts`, `views.ts`, `pretty.ts`, `reachability.ts` | HTML and terminal rendering of a folded model |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
-| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, and the `--archived` listing |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
@@ -77,7 +77,7 @@ of them is a review finding, not a refactor note.
 
 | Gate | Module | Rule |
 | --- | --- | --- |
-| Event append | `pipeline.ts` `recordEvent` / `recordEvents` | the only writer of `log.jsonl`; every event verb goes through it. Each event names the project whose log it belongs to, and the append is grouped by that name — one write per log — so a placement that moves a record between projects still cannot leave half a state change in either (#181) |
+| Event append | `pipeline.ts` `recordEvent` / `recordEvents` | the only writer of `log.jsonl`; every event verb goes through it. Each event names the project whose log it belongs to, and the append is grouped by that name — one write per log — so a placement that moves a record between projects still cannot leave half a state change in either (#181). It is also the one answer to "may this project be written into": an archived project is refused here rather than on each verb, so a verb added later cannot miss the rule (#283) |
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from `recordEvents`, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess`, `recordSession` / `judgeSession` | the one writer and the one reader of the machine-local pid ledger, for a work unit's process and for the agent session that claimed it; a pid never reaches a synced event, and the sentence a reader is given about liveness is minted here too (`claimNote`) rather than re-derived per surface |
@@ -107,9 +107,23 @@ concern.
 | Namespace | Owner | Emitted from |
 | --- | --- | --- |
 | `entity.*` | the shared entity record (#197); `entities.ts` owns the fold | `state.ts`, `main.ts`, `goals.ts` — every preset verb writes this grammar since the cutover (#207) |
+| `project.archived`, `project.restored` | the project's own two-state lifecycle (#283); `paths.ts` owns the fold, beside the store's other per-project state, because the scope resolver and the model enumeration both read it | `archive.ts` |
 | `work.run-started`, `work.run-exited` | the process transitions | `main.ts` |
 | `report.*` | work reports | `main.ts` |
 | `goal.*`, `decision.*`, `convention.*`, `objective.*`, `milestone.*`, the rest of `work.*` | the pre-cutover record kinds — read forever (#197 §8), written by no verb | nothing |
+
+`project.*` is a namespace about a project rather than about a record, which
+is why it is its own and not an extension of `entity.*`. `derivation.ts`
+records the one *relation* between projects as an entity, correctly: that is a
+record a person asserts. Archiving is not — it is a transition of the project
+itself, with no text, no placement and no lifecycle of its own, so it is a
+declared non-statement namespace like the process transitions below. Being a
+transition and not a statement is also why `self undo` does not reach it:
+`undo` resolves its project from the working directory, while both verbs here
+name a slug so a workspace is tidied from anywhere — including when the
+project's checkout is on another machine, which is the ordinary case for a
+project being set aside. `project restore` is the only way out of the archive,
+and the optional `--why` on it is what a withdrawal would have said.
 
 The process transitions are `work.run-started` and `work.run-exited`. They
 carry the work id and, on exit, the code — never the pid: a pid is
@@ -236,6 +250,13 @@ Standing rules, not per-issue reminders:
   rules out, under another name.
 - One artifact declaration shape: `{name, sha256, bytes}`. `name`, never
   `path`.
+- One archived-project reader, and every aggregate goes through it. `paths.ts`
+  `projectArchive` folds a project's `project.*` events into its archived state,
+  and `activeProjects` is what the scope resolver, the model enumeration
+  (`workspaceModels`, `readableModels`), the rendered workspace, search and the
+  artifact listing all answer from (#283). Two families read the workspace —
+  scopes and models — and a second reader of the same events is what would let
+  one of them keep a project the other dropped.
 - One scope contract, and one resolver behind it. A read verb answers for the
   project the directory resolves to, takes `--project <slug>` to answer for
   another registered project, and — where a workspace-wide form makes sense —

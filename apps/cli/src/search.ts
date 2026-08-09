@@ -14,7 +14,7 @@
 
 import { EntityState, Exposure, EXPOSURES, isCurrent, scopeTarget } from "./entities.js";
 import { buildModel, ProjectModel, WorkState } from "./model.js";
-import { CliContext, readRegistry, requireRegistered } from "./paths.js";
+import { activeProjects, CliContext, requireRegistered } from "./paths.js";
 import { bold, dim, displayWidth, fitDisplay, oneLine, styled } from "./style.js";
 import { CliError } from "./types.js";
 import { contextRendered, recordLine } from "./views.js";
@@ -140,9 +140,11 @@ function requireKind(type: string): string
     return type;
 }
 
+// The projects a workspace-wide search answers for. An archived project is not
+// among them (#283) — `--project <slug>` is how its records are still found.
 function orderedSlugs(ctx: CliContext): string[]
 {
-    return readRegistry(ctx.storeDir).map((entry) => entry.slug)
+    return activeProjects(ctx.storeDir).map((entry) => entry.slug)
         .sort((left, right) => rank(left, ctx) - rank(right, ctx));
 }
 

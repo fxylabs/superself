@@ -19,7 +19,7 @@ import {
     WorkState
 } from "./model.js";
 import { contributionsOf, ObjectiveState, openObjectives, openProposals } from "./objectives.js";
-import { CliContext, ProjectScope, readRegistry, readStoreConfig, readVerdicts, tokenScale, TokenScale } from "./paths.js";
+import { activeProjects, archivedNote, CliContext, ProjectScope, readRegistry, readStoreConfig, readVerdicts, tokenScale, TokenScale } from "./paths.js";
 import {
     AttemptRow,
     Pointer,
@@ -83,12 +83,14 @@ function renderedModel(storeDir: string, slug: string): ProjectModel
     return model;
 }
 
-// Every registered project as it renders, from one fold each. The workspace
+// Every active project as it renders, from one fold each. The workspace
 // surfaces answer for all of them at once, and folding per project per answer
-// would cost one fold for every pair — well past #128's half-second budget.
+// would cost one fold for every pair — well past #128's half-second budget. An
+// archived project is not one of them (#283): it is out of the workspace answer
+// until it is restored, here and in the scope resolver alike.
 function renderedModels(storeDir: string): ProjectModel[]
 {
-    const folded = readRegistry(storeDir).map((entry) => buildModel(storeDir, entry.slug, new Date()));
+    const folded = activeProjects(storeDir).map((entry) => buildModel(storeDir, entry.slug, new Date()));
     // Collected before anything is assigned: a model's own works are still the
     // fold's while the next model is reading them.
     const scoped = folded.map((model) => folded.flatMap((other) => scopedWorks(other, model.slug)));
@@ -98,7 +100,7 @@ function renderedModels(storeDir: string): ProjectModel[]
 
 function foreignModels(storeDir: string, slug: string | undefined): ProjectModel[]
 {
-    return readRegistry(storeDir).filter((entry) => entry.slug !== slug)
+    return activeProjects(storeDir).filter((entry) => entry.slug !== slug)
         .map((entry) => buildModel(storeDir, entry.slug, new Date()));
 }
 
@@ -115,16 +117,20 @@ export function printContext(ctx: CliContext, render: RenderMode): void
 {
     if (ctx.project === undefined)
     {
-        const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
-        if (render === "pretty" && models.length > 0)
-        {
-            console.log(renderWorkspace(models).join("\n"));
-            return;
-        }
-        writeContext(renderWorkspaceContext(models, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir)))));
+        printWorkspaceContext(ctx, render);
         return;
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
+    // An archived project still renders its context — a session standing in its
+    // checkout has to be able to read the state it left (#283). What it owes
+    // that session is one line saying the project is set aside and how it comes
+    // back, on the stream the context itself is written to; a `--project` read
+    // has already been told, on stderr, by the scope resolver.
+    const note = archivedNote(ctx.storeDir, ctx.project);
+    if (note !== null)
+    {
+        console.log(note);
+    }
     if (render === "pretty")
     {
         console.log(renderContext({ model, waiting: unrankedWaitingRows(model) }).join("\n"));
@@ -136,6 +142,19 @@ export function printContext(ctx: CliContext, render: RenderMode): void
     const all = [model, ...foreignModels(ctx.storeDir, ctx.project)];
     writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))),
         scopedIn(all, ctx.project), all));
+}
+
+// Every active project at once, for a directory that belongs to none of them.
+// An archived project is not in this answer (#283) — it is read by naming it.
+function printWorkspaceContext(ctx: CliContext, render: RenderMode): void
+{
+    const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
+    if (render === "pretty" && models.length > 0)
+    {
+        console.log(renderWorkspace(models).join("\n"));
+        return;
+    }
+    writeContext(renderWorkspaceContext(models, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir)))));
 }
 
 // The placement projection (#197 §6, #202): collect the live entities, order
@@ -846,10 +865,11 @@ function waitingCount(model: ProjectModel): number
 
 function printWorkspaceOverview(ctx: CliContext, render: RenderMode): void
 {
-    const registry = readRegistry(ctx.storeDir);
-    if (registry.length === 0)
+    if (activeProjects(ctx.storeDir).length === 0)
     {
-        console.log("no projects registered — run `self project init` inside a project directory");
+        console.log(readRegistry(ctx.storeDir).length === 0
+            ? "no projects registered — run `self project init` inside a project directory"
+            : "every registered project is archived — run `self project --archived` to list them");
         return;
     }
     const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
