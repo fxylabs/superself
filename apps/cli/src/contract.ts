@@ -11,6 +11,11 @@
 // holds the shapes, the resolution, and the checks — never a command body.
 
 import { OptionSpec, OptionSpecs, ParsedArguments, Requirement, subcommand } from "./args.js";
+// The shape a handler answers with, and nothing else from the render layer: a
+// type-only import erases at build, so the declaration a leaf makes can name
+// the output shape while the runtime dependency still points one way — the
+// dispatcher into the gate, never the gate back into the contract.
+import type { CommandOutput } from "./output.js";
 import { CliError } from "./types.js";
 
 /* ── shapes ────────────────────────────────────────────────────────── */
@@ -33,7 +38,10 @@ export interface CommandInput<T extends OptionSpecs = OptionSpecs>
 // the type. `leaf` is the only place the two shapes meet.
 type ParsedInput = ParsedArguments;
 
-type CommandRun = (input: ParsedInput) => void | Promise<void>;
+// A handler either prints for itself — what every verb did before the render
+// gate — or returns what it has to say and lets the gate print it. Both forms
+// are declared here so a verb can be migrated one at a time.
+type CommandRun = (input: ParsedInput) => void | CommandOutput | Promise<void | CommandOutput>;
 
 export interface CommandLeaf
 {
@@ -110,12 +118,15 @@ export function leaf<const T extends OptionSpecs>(
     name: string,
     options: T,
     positionals: number,
-    run: (input: CommandInput<T>) => void | Promise<void>,
+    run: (input: CommandInput<T>) => void | CommandOutput | Promise<void | CommandOutput>,
     extras: LeafExtras = {}
 ): CommandLeaf
 {
     // The one place the declared option set is erased. Everything downstream
-    // parses with `options`, so what a handler reads is what was declared.
+    // parses with `options`, so what a handler reads is what was declared. The
+    // erasure is of the *input* type only: the parameter above states the
+    // return union, so a handler answering with something the gate cannot
+    // print is a type error at this call site rather than a cast that hides it.
     return {
         kind: "leaf",
         name,

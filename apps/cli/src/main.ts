@@ -48,6 +48,7 @@ import {
     StoreConfig,
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
+import { CommandOutput, renderOutput } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
@@ -107,11 +108,22 @@ async function runAlias(argv: string[]): Promise<void>
 // The one parse in the CLI: the option set, the positional count and what the
 // verb cannot run without all come from the leaf the contract resolved to, so
 // nothing a command accepts or demands can be declared anywhere else.
+//
+// A handler that answers with blocks is printed by the render gate, once, with
+// the flags this run was parsed with. One that prints for itself returns
+// nothing and is unaffected — the migration is per verb. Neither path touches
+// the refusal path: a `CliError` thrown in a handler passes straight through
+// here to the top-level catch, so nothing a command refuses is swallowed by
+// having something to print.
 async function runLeaf(resolved: Resolved): Promise<void>
 {
     const parsed = parseCommand(resolved.path, resolved.args, resolved.leaf.options,
         resolved.leaf.positionals, resolved.leaf.requires);
-    await resolved.leaf.run(parsed);
+    const output = await resolved.leaf.run(parsed);
+    if (Array.isArray(output))
+    {
+        renderOutput(output, parsed.values);
+    }
 }
 
 // Bare `self` is a request for the verb list; anything else that reached no
@@ -1058,17 +1070,19 @@ function validLang(code: string): string
     return lang;
 }
 
-function cmdLang(code: string | undefined): void
+// The pilot for the render gate: the read answers with the one value it was
+// asked for, the write with what it recorded, and the printing is the gate's.
+// The bytes are what they always were — a migrated verb is not a redesigned one.
+function cmdLang(code: string | undefined): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
     if (code === undefined)
     {
-        console.log(readStoreConfig(ctx.storeDir).lang ?? "en");
-        return;
+        return [{ kind: "value", text: readStoreConfig(ctx.storeDir).lang ?? "en" }];
     }
     const lang = validLang(code);
     writeConfig(ctx, { lang }, `lang set ${lang}`);
-    console.log(`views now render in "${lang}"`);
+    return [{ kind: "receipt", text: `views now render in "${lang}"` }];
 }
 
 function cmdTimezone(zone: string | undefined): void

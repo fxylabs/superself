@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
+import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
 import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
@@ -81,7 +82,7 @@ export function foldWorkspace(storeDir: string, active?: string): void
     claimChrome(storeDir);
     if (others.length > 0)
     {
-        console.log(`viewer updated — refolded ${others.length} other project${others.length === 1 ? "" : "s"}`);
+        notice(`viewer updated — refolded ${others.length} other project${others.length === 1 ? "" : "s"}`);
     }
 }
 
@@ -104,7 +105,7 @@ function reportPruned(pruned: PrunedLink[]): void
 {
     for (const link of pruned)
     {
-        console.log(`pruned the link to ${link.path} — no checkout there any more; ` +
+        notice(`pruned the link to ${link.path} — no checkout there any more; ` +
             `run \`self project link ${link.slug}\` in it if it comes back`);
     }
 }
