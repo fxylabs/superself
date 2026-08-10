@@ -235,7 +235,7 @@ function proposalSummaryLines(model: ProjectModel): string[]
 {
     return openProposals(model.goals).map((proposal) =>
         `- ${proposal.outcome} → ${proposal.milestone ?? proposal.objective} — ${proposal.confidence} confidence, ` +
-        `${proposal.capacity}, expires ${proposal.expires} _(\`self work accept ${proposal.id.slice(0, 8)}\`)_`);
+        `${proposal.capacity}, expires ${proposal.expires} _(\`self work accept ${proposal.id}\`)_`);
 }
 
 function decisionLines(decisions: DecisionState[]): string[]

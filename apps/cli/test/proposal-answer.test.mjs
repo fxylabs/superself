@@ -7,9 +7,7 @@
 // on the native kind while the legacy kind answered nothing at all.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { demoWorkspace, git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = demoWorkspace(box);
@@ -154,30 +152,21 @@ for (const kind of KINDS)
     });
 }
 
-// Cell 8 stands apart because the line under test carries an id, and the id a
-// legacy waiting row prints is unique only against the proposals beside it.
-// Each kind answers in a project of its own holding one proposal, so what the
-// cell fails on is the advertised command not resolving where the context was
-// read — the thing it was drawn to catch — and not two ids sharing a prefix,
-// which is #304 and would mask it.
+// Cell 8 was isolated in a project of its own while the waiting row printed a
+// legacy proposal's id cut to eight characters, because four proposals from
+// one burst answered to one prefix and the ambiguity masked what the cell was
+// drawn to catch. The row prints the whole id since #304, so the cell runs
+// where the others do.
 for (const kind of KINDS)
 {
     test(`${kind.name} cell 8: the accept line context prints resolves where context was read`, () =>
     {
-        const slug = `alone-${kind.name}`;
-        const cwd = join(ws, slug);
-        mkdirSync(cwd, { recursive: true });
-        git(box, cwd, ["init", "-q", "-b", "main"]);
-        must(box, cwd, ["project", "init", "--name", slug, "--desc", "one proposal and nothing else"]);
-        must(box, cwd, ["goal", "add", "a direction"]);
-        const target = must(box, cwd, ["objective", "add", "a measurable outcome", "--target", "2099-01-01"])
-            .out.match(/\bo-[0-9a-z]{5}\b/)[0];
         const outcome = `${kind.name}: an outcome accepted as advertised`;
-        kind.make(cwd, outcome, target, slug);
-        const block = waitingBlock(context(cwd), outcome);
+        kind.make(demo, outcome, objective);
+        const block = waitingBlock(context(), outcome);
         const printed = block?.match(/`self (work accept [^`]+)`/);
-        assert.notEqual(printed ?? null, null, `context advertised no accept command:\n${context(cwd)}`);
-        const ran = selfIn(box, cwd, printed[1].split(" "));
+        assert.notEqual(printed ?? null, null, `context advertised no accept command:\n${context()}`);
+        const ran = selfIn(box, demo, printed[1].split(" "));
         assert.equal(ran.code, 0, `the advertised command failed where the context was read:\n${ran.out}`);
     });
 }

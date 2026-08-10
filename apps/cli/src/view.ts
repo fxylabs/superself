@@ -409,7 +409,7 @@ function rulingRows(model: ProjectModel): WaitingRow[]
         ...openProposals(model.goals).map((proposal) => ({
             kind: "work",
             text: firstLine(`${proposal.outcome} — ${proposalBrief(proposal)}`, 240),
-            ref: shortId(proposal.id),
+            ref: proposal.id,
             action: "accept"
         }))
     ];
@@ -671,7 +671,7 @@ function milestonePanel(slug: string, milestone: MilestoneState): string
 function proposalRows(model: ProjectModel): string[]
 {
     return openProposals(model.goals).map((proposal) =>
-        `<tr><td class="n">${esc(shortId(proposal.id))}</td>` +
+        `<tr><td class="n">${esc(proposal.id)}</td>` +
         `<td>${esc(proposal.outcome)}<span class="hf-sub">${esc(proposalBrief(proposal))}</span></td>` +
         `<td class="act">${esc(proposal.confidence)}</td></tr>`);
 }

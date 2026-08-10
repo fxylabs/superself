@@ -120,7 +120,7 @@ export async function approvedIn(box, cwd, args, answer)
 // produces are asserted there in-process.
 export function retireFixture(box, ws, project, type, payload, refs)
 {
-    const event = {
+    return logFixture(ws, project, {
         id: ulid(),
         ts: new Date().toISOString(),
         type,
@@ -128,9 +128,16 @@ export function retireFixture(box, ws, project, type, payload, refs)
         project,
         payload,
         ...(refs === undefined ? {} : { refs })
-    };
-    const dir = join(ws, ".superself", "projects", project);
-    appendFileSync(join(dir, "log.jsonl"), JSON.stringify(event) + "\n");
+    });
+}
+
+// One already-formed event appended and folded in, the way the pipeline would
+// have written it. Where a test needs the id itself to be the subject — two
+// records minted in the same millisecond, so their ids share a prefix — it
+// mints the event and hands it over rather than taking whatever `ulid()` gave.
+export function logFixture(ws, project, event)
+{
+    appendFileSync(join(ws, ".superself", "projects", project, "log.jsonl"), JSON.stringify(event) + "\n");
     foldProject(join(ws, ".superself"), project);
     return event.id;
 }
