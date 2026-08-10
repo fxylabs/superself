@@ -27,7 +27,7 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
-import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, tierOf } from "./state.js";
+import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
 import { countCharacters, dim, errYellow, markdownHeadings, styled } from "./style.js";
 import { CliError, CommandOutput, ListingBlock } from "./types.js";
 
@@ -1003,11 +1003,16 @@ function normalize(text: string): string
 // Accept is confirm and decline is the withdrawal (#207 B13): the proposal
 // entity becomes the unit under its own id, and the grouping edge toward the
 // outcome it closes lands in the same append.
+//
+// Both resolve their project from the proposal rather than from the directory
+// (#302): `self work accept <id>` is the call to action a `--project` context
+// prints under Waiting on you, and a reader outside that project was handed a
+// line they could not run.
 function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OPTION>, accept: boolean): CommandOutput
 {
-    const ctx = requireProject(process.cwd());
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const proposal = requireProposal(model, positionals[0]);
+    const wanted = requireText(positionals[0], PROPOSAL_USAGE);
+    const { ctx, model } = recordOwner(process.cwd(), wanted, (candidate) => holdsProposal(candidate, wanted));
+    const proposal = requireProposal(model, wanted);
     if (!accept)
     {
         const why = required(values.why);
@@ -1216,9 +1221,21 @@ function requireLinkedWork(model: ProjectModel, milestone: MilestoneState, id: s
     return work;
 }
 
+const PROPOSAL_USAGE = "… <proposal-id> — run `self context` to list open proposals";
+
+// Whether `requireProposal` would find anything here, asked of a whole project
+// so `recordOwner` can pick the one whose lookup is about to succeed. Status is
+// deliberately not part of it: a proposal already accepted or declined is held
+// by its project, and "it is already declined" is the answer a reader needs —
+// not "no registered project holds it".
+function holdsProposal(model: ProjectModel, wanted: string): boolean
+{
+    return model.goals.proposals.some((proposal) => proposal.id.startsWith(wanted));
+}
+
 function requireProposal(model: ProjectModel, prefix: string | undefined): WorkProposal
 {
-    const wanted = requireText(prefix, "… <proposal-id> — run `self context` to list open proposals");
+    const wanted = requireText(prefix, PROPOSAL_USAGE);
     const matches = model.goals.proposals.filter((proposal) => proposal.id.startsWith(wanted));
     if (matches.length !== 1)
     {
