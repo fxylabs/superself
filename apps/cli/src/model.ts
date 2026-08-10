@@ -601,6 +601,52 @@ export function workspaceModels(storeDir: string, first?: string): ProjectModel[
     return (first === undefined ? rest : [first, ...rest]).map((slug) => buildModel(storeDir, slug, now));
 }
 
+// Which registered projects hold the record a call names (#302). A confirm
+// answers to a record that already exists and already has an owning project,
+// so the project is never asked for — it is found, and the caller says what
+// "holds it" means for the record kind it is about to act on.
+//
+// The directory's own project answers first and ends the search, so a call
+// made from the right checkout costs exactly the one fold it always did. Only
+// a call made from outside pays for the enumeration, which is the call that
+// could not be made at all before.
+//
+// The archived projects are in it. Whether an archived project may be written
+// into is the append gate's one rule (#283); leaving them out here would
+// answer "no project holds this record" where the truth is "restore it first".
+//
+// The fold travels with the answer, because the caller is about to look the
+// record up in exactly this model: handing back the slug alone would make
+// every confirm read and fold its project's log twice.
+type Holding = { project: string; model: ProjectModel };
+
+export function projectsHolding(storeDir: string, holds: (model: ProjectModel) => boolean, first?: string): Holding[]
+{
+    const now = new Date();
+    if (first !== undefined)
+    {
+        const model = buildModel(storeDir, first, now);
+        if (holds(model))
+        {
+            return [{ project: first, model }];
+        }
+    }
+    return readRegistry(storeDir)
+        .map((entry) => entry.slug)
+        .filter((slug) => slug !== first)
+        .flatMap((project) => holding(storeDir, project, now, holds));
+}
+
+// Only the matches are kept: a workspace of thirty projects folds thirty logs
+// to answer this, and holding every one of them for the one the caller wants
+// is memory spent on projects the answer already ruled out.
+function holding(storeDir: string, project: string, now: Date,
+    holds: (model: ProjectModel) => boolean): Holding[]
+{
+    const model = buildModel(storeDir, project, now);
+    return holds(model) ? [{ project, model }] : [];
+}
+
 // What a workspace-wide listing reads: every registered project that folds,
 // and a line naming each one that does not (#75 T4.5). `self project` answers
 // about the workspace as a whole — which slugs exist, and which project came

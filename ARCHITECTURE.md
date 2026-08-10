@@ -270,6 +270,22 @@ Standing rules, not per-issue reminders:
   to a project it does not belong to. A write verb has no scope flag: it records
   into the project it runs in, and `--project` on one is an option that command
   never declared, so the argument-parse gate names it instead of dropping it.
+- A confirm finds its project in the record it names (#302). `self work accept`,
+  `self work decline`, `self decide confirm` and `self state confirm` are the
+  calls to action a `--project` context render prints, and every one of them is
+  read somewhere other than the project it is about. They confirm a record that
+  already exists and already has an owner, so the project was never theirs to
+  ask for: `model.ts` `projectsHolding` names the projects that hold the id and
+  `paths.ts` `projectScope` turns the one answer into the context. None of the
+  four reads the checkout, so the line resolves even when that project's
+  checkout is on another machine. This is a third answer to "which project is
+  this" beside the directory and `--project`, and it is the last: it exists
+  because the argument already carried the answer, not because a caller wanted
+  to choose one. It buys no scope flag — `--project` on these four is still the
+  option they never declared. The directory's own project answers first and ends
+  the search, so a call made from the right checkout costs the one fold it
+  always did, and a call made from nowhere in particular is refused by naming
+  every project searched, or by naming the several that answered to one prefix.
 - One placement scope, and it is a render target rather than a storage location
   (#181). `--scope` on `state add`, `state place` and the alias adds names which
   project renders a record: omitted is the project the directory resolves to, a

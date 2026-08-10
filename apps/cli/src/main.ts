@@ -55,7 +55,16 @@ import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { setupOutput } from "./setup.js";
-import { admittingDemotions, CapGateValues, confirmEntityUnit, demotionEvents, Placed, STATE_COMMAND, tierOf } from "./state.js";
+import {
+    admittingDemotions,
+    CapGateValues,
+    confirmEntityUnit,
+    demotionEvents,
+    Placed,
+    recordOwner,
+    STATE_COMMAND,
+    tierOf
+} from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { countCharacters, dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
@@ -635,7 +644,7 @@ export const COMMANDS: Command[] = [
             refusal: 'usage: self decide "<text>" | confirm <id> | retract <id> --why w | decline <id> --why w',
             children: [
                 leaf("", DECIDE_OPTIONS, 1, cmdDecide),
-                leaf("confirm", {}, 1, ({ positionals }) => confirmDecision(requireProject(process.cwd()), positionals[0])),
+                leaf("confirm", {}, 1, ({ positionals }) => confirmDecision(positionals[0])),
                 leaf("decline", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
                     withdrawDecision(requireProject(process.cwd()), "decline", positionals[0], values.why),
                 { requires: [{ flags: ["why"], hint: "why the proposed decision was turned down" }] }),
@@ -1619,10 +1628,23 @@ function requireDecision(model: ProjectModel, prefix: string | undefined): Decis
     return matches[0];
 }
 
-function confirmDecision(ctx: ProjectContext, prefix: string | undefined): void
+// Whether `requireDecision` would find anything here, asked of a whole project
+// so `recordOwner` can pick the one whose lookup is about to succeed. A prefix
+// is what makes this worth stating: two projects can both answer to one, which
+// is the ambiguity `recordOwner` refuses by naming them.
+function holdsDecision(model: ProjectModel, wanted: string): boolean
 {
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const decision = requireDecision(model, requireText(prefix, "decide confirm <event-id>"));
+    return model.decisions.some((item) => item.id === wanted || item.id.startsWith(wanted));
+}
+
+// The project comes from the decision rather than from the directory (#302):
+// this is the line a `--project` context prints beside a proposed decision, and
+// it now resolves where that context was read.
+function confirmDecision(prefix: string | undefined): void
+{
+    const wanted = requireText(prefix, "decide confirm <event-id>");
+    const { ctx, model } = recordOwner(process.cwd(), wanted, (candidate) => holdsDecision(candidate, wanted));
+    const decision = requireDecision(model, wanted);
     if (decision.status !== "proposed")
     {
         throw new CliError(`${decision.id} is not a proposed decision`);

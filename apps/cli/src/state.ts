@@ -34,14 +34,17 @@ import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { entityId } from "./ids.js";
 import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
 import { sessionToken } from "./machine.js";
-import { buildModel, ProjectModel, workspaceModels } from "./model.js";
+import { buildModel, ProjectModel, projectsHolding, workspaceModels } from "./model.js";
 import {
     ProjectContext,
+    ProjectScope,
+    projectScope,
     readRegistry,
     readScopes,
     readStoreConfig,
     refuseArchived,
     requireProject,
+    requireWorkspace,
     retentionCaps,
     RetentionCaps,
     SCOPE_OPTIONS,
@@ -916,10 +919,14 @@ export function demotionEvents(demotions: Placed[], admit: string, proposed: boo
 
 function stateConfirm({ positionals }: CommandInput): void
 {
-    const ctx = requireProject(process.cwd());
+    const wanted = requireText(positionals[0], "state confirm <id>");
+    // The owner's own fold is rebuilt by `workspaceModels`, which this needs
+    // whole: the caps count a tier across every store, so the room judgment
+    // reads every project rather than the one the record sits in.
+    const { ctx } = recordOwner(process.cwd(), wanted, (model) => holdsEntity(model, wanted));
     const models = workspaceModels(ctx.storeDir, ctx.project);
     const model = models[0];
-    const entity = requireEntity(model, positionals[0], "state confirm <id>");
+    const entity = requireEntity(model, wanted, "state confirm <id>");
     const unit = confirmableUnit(model, entity);
     const config = readStoreConfig(ctx.storeDir);
     const scale = tokenScale(config);
@@ -991,11 +998,60 @@ function pairedUnit(model: ProjectModel, entity: EntityState, own: ConfirmMember
     return [...members.values()];
 }
 
+// The project a confirm records into, found from the record it names (#302).
+// Every call to action a `--project` context prints is one of these verbs, and
+// a reader outside that project — an agent session in another one, a person at
+// the workspace root — could not run the line they were handed, because the
+// verb resolved its project from the directory instead of from the id it was
+// given. Nothing here reads the checkout, so the answer holds even when the
+// project's own checkout is on another machine.
+//
+// `holds` is the caller's, because what counts as holding the record is the
+// record kind's question: an entity id, a decision id matched by prefix, an
+// open work proposal. Finding the project is all this does — the verb still
+// runs its own lookup on the model, so every refusal it already had is the
+// refusal a reader still gets.
+//
+// The fold comes back with the context: finding the project meant folding it,
+// and the caller's own lookup runs on that same model rather than reading the
+// log a second time.
+export function recordOwner(cwd: string, wanted: string,
+    holds: (model: ProjectModel) => boolean): { ctx: ProjectScope; model: ProjectModel }
+{
+    const ctx = requireWorkspace(cwd);
+    const owners = projectsHolding(ctx.storeDir, holds, ctx.project);
+    if (owners.length > 1)
+    {
+        throw new CliError(`"${wanted}" names a record in ${owners.map((owner) => owner.project).join(", ")} — `
+            + "spell more of the id, or run this inside the checkout of the project you mean");
+    }
+    if (owners.length === 1)
+    {
+        return { ctx: projectScope(ctx, owners[0].project), model: owners[0].model };
+    }
+    if (ctx.project === undefined)
+    {
+        noOwner(ctx.storeDir, wanted);
+    }
+    // Standing in a project that does not hold it, the verb's own "that is not
+    // a decision" is a better answer than a workspace-wide miss, so hand that
+    // project back and let the lookup speak.
+    return { ctx: ctx as ProjectScope, model: buildModel(ctx.storeDir, ctx.project, new Date()) };
+}
+
+function noOwner(storeDir: string, wanted: string): never
+{
+    const slugs = readRegistry(storeDir).map((entry) => entry.slug);
+    throw new CliError(slugs.length === 0
+        ? `no registered project holds "${wanted}" — this workspace has no registered projects`
+        : `no registered project holds "${wanted}" — it was looked for in ${slugs.join(", ")}`);
+}
+
 // The confirm a preset verb applies (#240 R3): the same unit collection and
 // the same room judgment `state confirm` runs, reached from the verb that
 // owns the record's vocabulary — so a proposed decision or objective is gated
 // at confirm exactly as a raw entity is, paired demotions included.
-export function confirmEntityUnit(ctx: ProjectContext, id: string): void
+export function confirmEntityUnit(ctx: ProjectScope, id: string): void
 {
     const models = workspaceModels(ctx.storeDir, ctx.project);
     const model = models[0];
@@ -1457,6 +1513,16 @@ function requireEntity(model: ProjectModel, value: string | undefined, usage: st
         throw new CliError(`unknown entity "${wanted}" — run \`self state list\` for ids`);
     }
     return matches[0];
+}
+
+// Whether `requireEntity` would find anything here — the same rule, asked of a
+// whole project rather than of one record, so `recordOwner` picks the project
+// whose lookup is about to succeed. An id two entities of one project answer to
+// still holds: the ambiguity is that project's to refuse, and refusing it here
+// would send the reader to a project that does not have the record at all.
+function holdsEntity(model: ProjectModel, wanted: string): boolean
+{
+    return model.entities.some((item) => item.id === wanted || item.id.startsWith(wanted));
 }
 
 // The same resolution rule as `requireEntity`, over the records of every

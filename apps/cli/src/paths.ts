@@ -147,7 +147,13 @@ function unregisteredMessage(storeDir: string, cwd: string): string
 //
 // Writes have no scope flag at all. A write records into the project it runs
 // in, so `--project` on one is an option that command never declared, and the
-// argument gate names it rather than dropping it.
+// argument gate names it rather than dropping it. A write that confirms a
+// record which already exists is the one that does not have to ask: the id it
+// names already has an owner, so `model.ts` `projectsHolding` finds it and
+// `projectScope` below turns that slug into the context (#302). That is a
+// third answer to "which project is this" — the directory, `--project`, and
+// the record itself — and it is the last one: it exists because the argument
+// already carried the answer, not because a caller wanted to choose.
 //
 // An archived project (#283) is registered and readable but out of every
 // workspace-wide answer: `--workspace` resolves the active projects, and
@@ -195,10 +201,6 @@ export function readScopes(cwd: string, choice: ScopeChoice): ProjectScope[]
         .map((entry) => ({ workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project: entry.slug }));
 }
 
-// The checkout travels only when the named project is the one this directory
-// already belongs to. Handing the current directory over as another project's
-// would name a path belonging to somebody else, and deriving that project's
-// own checkout costs a repository probe (#128) no read needs.
 function namedScope(cwd: string, slug: string): ProjectScope
 {
     const ctx = requireWorkspace(cwd);
@@ -212,6 +214,19 @@ function namedScope(cwd: string, slug: string): ProjectScope
     {
         console.error(note);
     }
+    return projectScope(ctx, project);
+}
+
+// The scope for a project whose slug the caller already resolved — from
+// `--project` on a read, or from the record a confirm names (#302).
+//
+// The checkout travels only when that project is the one this directory
+// already belongs to. Handing the current directory over as another project's
+// would name a path belonging to somebody else, deriving that project's own
+// checkout costs a repository probe (#128) no read needs, and a project
+// registered on another machine has no path here to derive.
+export function projectScope(ctx: CliContext, project: string): ProjectScope
+{
     return ctx.project === project
         ? ctx as ProjectScope
         : { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project };
