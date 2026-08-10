@@ -95,6 +95,15 @@ declare const POINTER: unique symbol;
 
 export type Pointer = string & { readonly [POINTER]: true };
 
+// One render of a page, deferred until the gate knows whether this run is for
+// a person or for a pipe. A thunk rather than the lines themselves because the
+// two renders are not two formattings of one text: the piped context runs a
+// token budget over its rows and the terminal one draws ruled tables, so
+// composing both would do the whole of the work that is about to be thrown
+// away — and the terminal render measures the terminal, which is the one
+// question a piped run must never ask.
+type Render = () => string[];
+
 // One scalar answer, printed as itself: `self lang` says `ko` and nothing
 // around it, because a caller reads that line as a value.
 interface ValueBlock
@@ -121,6 +130,10 @@ export interface ListingBlock
 {
     kind: "listing";
     rows: string[];
+    // The same pair as a document's, for the one listing that draws a table
+    // when a person is looking at it. Omitted means the rows are the answer in
+    // both renders, which is what every other listing wants.
+    pretty?: Render;
     // How many things the listing is about, which is not how many lines it
     // takes: a row can carry a nested checkpoint under it, a way back under it,
     // or a bucket the listing does not show. Counted from the collection the
@@ -138,12 +151,19 @@ export interface ListingBlock
     window?: { shown: number; recover: Pointer };
 }
 
-// A page a render already composed — the markdown a `show` verb prints. The
-// gate does not lay it out; it puts it on stdout.
+// A page a render composes — the markdown a `show` verb prints, the context an
+// agent reads. The gate does not lay it out; it picks the render this run gets
+// and puts those lines on stdout.
+//
+// `pretty` is optional, and omitting it is a statement rather than an
+// oversight: a page with one render — a `show` page, the setup diagnostics —
+// reads the same to a person as to a pipe, and saying so here is what keeps
+// the handler from asking which run it is in.
 interface DocumentBlock
 {
     kind: "document";
-    lines: string[];
+    plain: Render;
+    pretty?: Render;
 }
 
 export type OutputBlock = ValueBlock | ReceiptBlock | ListingBlock | DocumentBlock;

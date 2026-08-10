@@ -53,7 +53,7 @@ import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { countCharacters, tokensOf } from "./style.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
-import { printHistory } from "./views.js";
+import { historyOutput } from "./views.js";
 
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
     + ' | cover <id> --criterion c --why w | start <id> | block <id> | unblock <id> | done <id> --report r | retire <id> --why w';
@@ -1320,7 +1320,7 @@ const OWNING_WITHDRAW: Record<EntitySource, string> = {
 
 /* ── the read verbs ────────────────────────────────────────────────── */
 
-function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
+function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
     const scope = readScopes(process.cwd(), values)[0];
     // Current records only: done and retired outcomes left the direction the
@@ -1330,15 +1330,16 @@ function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
     const live = workspaceModels(scope.storeDir, scope.project)
         .flatMap((model) => model.entities.filter((entity) => rendersIn(entity, model.slug, scope.project)))
         .filter(isCurrent);
-    if (live.length === 0)
-    {
-        console.log("no live entities");
-        return;
-    }
-    for (const entity of orderEntities(live))
-    {
-        console.log(stateLine(entity));
-    }
+    // An empty list keeps its own wording and gains nothing under it: "no live
+    // entities" already states the size, in the words that also say what the
+    // project looks like.
+    return [{
+        kind: "listing",
+        rows: live.length === 0 ? ["no live entities"] : orderEntities(live).map(stateLine),
+        total: live.length,
+        noun: "live entity",
+        nouns: "live entities"
+    }];
 }
 
 // The page answers for any record this project resolves (#181 D5): its own,
@@ -1347,7 +1348,7 @@ function stateList({ values }: CommandInput<typeof SCOPE_OPTIONS>): void
 // where it went. `--history` answers with that record's own events instead:
 // history is per-entity and explicit (#212 R3), so it is read here rather than
 // on a verb of its own.
-function stateShow({ values, positionals }: CommandInput<typeof SHOW_OPTIONS>): void
+function stateShow({ values, positionals }: CommandInput<typeof SHOW_OPTIONS>): CommandOutput
 {
     const scope = readScopes(process.cwd(), values)[0];
     const records = allRecords(workspaceModels(scope.storeDir, scope.project));
@@ -1355,10 +1356,9 @@ function stateShow({ values, positionals }: CommandInput<typeof SHOW_OPTIONS>): 
         "state show <id> [--history [--page n]] [--project <slug>]", FIND_WITH_SEARCH);
     if (values.history !== true)
     {
-        console.log(renderEntity(found));
-        return;
+        return [{ kind: "document", plain: () => renderEntity(found).split("\n") }];
     }
-    printHistory({
+    return historyOutput({
         id: found.entity.id,
         storeDir: scope.storeDir,
         owner: found.owner,

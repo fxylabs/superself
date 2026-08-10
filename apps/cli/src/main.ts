@@ -54,13 +54,13 @@ import { recordRetirement, retirementIntent, supersedeTargets } from "./retireme
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
-import { printSetup } from "./setup.js";
+import { setupOutput } from "./setup.js";
 import { admittingDemotions, CapGateValues, confirmEntityUnit, demotionEvents, Placed, STATE_COMMAND, tierOf } from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { countCharacters, dim, errRed, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
-import { RENDER_OPTIONS, resolveRender } from "./pretty.js";
-import { printContext, printHistory, printStatus, projectLog, workList, workspaceLog } from "./views.js";
+import { RENDER_OPTIONS } from "./pretty.js";
+import { contextOutput, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
@@ -894,7 +894,7 @@ export const COMMANDS: Command[] = [
         // outside any project, it renders the workspace summary, and --project
         // names one project to read instead of the directory's own.
         node: leaf("", SCOPED_RENDER_OPTIONS, 0, ({ values }) =>
-            printContext(readScope(process.cwd(), values), resolveRender(values)))
+            contextOutput(readScope(process.cwd(), values)))
     },
     {
         name: "status",
@@ -914,13 +914,13 @@ export const COMMANDS: Command[] = [
             "  --workspace         one line per registered project, from anywhere"
         ],
         node: leaf("", WORKSPACE_RENDER_OPTIONS, 0, ({ values }) =>
-            printStatus(readScope(process.cwd(), values), resolveRender(values)))
+            statusOutput(readScope(process.cwd(), values)))
     },
     {
         name: "setup",
         usage: [{ syntax: "setup", description: ["print the workspace, project, and store this directory resolves to"], verbs: [""] }],
         detail: ["explain how this directory resolves, and what to run when it resolves to nothing."],
-        node: leaf("", {}, 0, () => printSetup(process.cwd()))
+        node: leaf("", {}, 0, () => setupOutput(process.cwd()))
     },
     {
         name: "log",
@@ -1029,7 +1029,7 @@ function connectMachineAgents(): CommandOutput
     }
     return [
         { kind: "receipt", text: "no agent instruction files found on this machine — paste this into yours:\n" },
-        { kind: "document", lines: machineBlock().split("\n") }
+        { kind: "document", plain: () => machineBlock().split("\n") }
     ];
 }
 
@@ -1772,10 +1772,10 @@ function supersededRetirement(ctx: ProjectContext, successor: string, values: Co
 
 function cmdWorkList({ values }: CommandInput<typeof SCOPED_RENDER_OPTIONS>): CommandOutput
 {
-    return workList(readScopes(process.cwd(), values)[0], resolveRender(values));
+    return workList(readScopes(process.cwd(), values)[0]);
 }
 
-function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTIONS>): void
+function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTIONS>): CommandOutput
 {
     const wanted = requireText(positionals[0], "work show <work-id> [--history [--page n]] [--project <slug>]");
     const ctx = requireWorkspace(process.cwd());
@@ -1786,20 +1786,17 @@ function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTION
         // names it rather than a listing that shows open units alone.
         throw new CliError(`unknown work id "${wanted}" — run \`self search "<text>"\` to find one, or \`self work\` to list open ids`);
     }
-    if (values.history === true)
-    {
-        printWorkHistory(ctx, found, values.project, values.page);
-        return;
-    }
-    printWorkPage(ctx, found);
+    return values.history === true
+        ? workHistory(ctx, found, values.project, values.page)
+        : workPage(ctx, found);
 }
 
 // One unit's own events, paged (#212 R3). The unit was already resolved, so
 // history says nothing about which project to stand in that `show` has not
 // already answered.
-function printWorkHistory(ctx: CliContext, found: FoundWork, project: string | undefined, page: string | undefined): void
+function workHistory(ctx: CliContext, found: FoundWork, project: string | undefined, page: string | undefined): CommandOutput
 {
-    printHistory({
+    return historyOutput({
         id: found.work.id,
         storeDir: ctx.storeDir,
         owner: found.slug,
@@ -1810,22 +1807,32 @@ function printWorkHistory(ctx: CliContext, found: FoundWork, project: string | u
     }, page);
 }
 
-function printWorkPage(ctx: CliContext, found: FoundWork): void
+function workPage(ctx: CliContext, found: FoundWork): CommandOutput
 {
-    // Printed here rather than inside `renderWorkBody`, which also writes the
-    // synced `work/<id>.md`: liveness is this machine's answer, and a synced
-    // file carrying it would tell another clone what only this one can judge.
-    const held = holderNote(found.work);
-    if (held !== null)
-    {
-        console.log(held);
-    }
-    const elsewhere = scopeNote(found);
-    if (elsewhere !== null)
-    {
-        console.log(elsewhere);
-    }
-    console.log(markdownHeadings(renderWorkBody(found.work, found.model, readVerdicts(ctx.storeDir, found.slug), supersededSources(ctx, found)).trimEnd()));
+    return [{ kind: "document", plain: () => workPageLines(ctx, found) }];
+}
+
+// The two lines that lead the page, then the page. Both are composed here
+// rather than inside `renderWorkBody`, which also writes the synced
+// `work/<id>.md`: liveness is this machine's answer, and a synced file
+// carrying it would tell another clone what only this one can judge.
+function workPageLines(ctx: CliContext, found: FoundWork): string[]
+{
+    const body = renderWorkBody(found.work, found.model, readVerdicts(ctx.storeDir, found.slug),
+        supersededSources(ctx, found));
+    return [
+        ...optionalLine(holderNote(found.work)),
+        ...optionalLine(scopeNote(found)),
+        ...markdownHeadings(body.trimEnd()).split("\n")
+    ];
+}
+
+// A lead line the page carries only sometimes, as the zero or one line it is.
+// Spreading the `string | null` directly would spread a present line into its
+// characters, which is a defect the types happily admit.
+function optionalLine(text: string | null): string[]
+{
+    return text === null ? [] : [text];
 }
 
 // Where a unit renders when that is no longer the project whose log holds it

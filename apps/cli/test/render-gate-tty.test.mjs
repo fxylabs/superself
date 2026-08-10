@@ -109,8 +109,65 @@ test("stage 3 cell 13: at a terminal, `self context` and `self status` gained no
 function sizeLines(printed)
 {
     return printed.split("\n").filter((line) =>
-        /^\d+ (project|archived project|open objective|milestone|open work unit|event|artifact|match|alias)e?s?$/.test(line));
+        /^\d+ (project|archived project|open objective|milestone|open work unit|event|artifact|match|alias|live entit(y|ie))e?s?$/.test(line));
 }
+
+/* ── stage 4: the terminal half of the document pair ───────────────── */
+
+// Cell 13, restated for the shape stage 4 gives it: `self work` answers with
+// one listing block that carries both renders, and the handler no longer asks
+// which run it is in. What proves the block is one block is that the terminal
+// bytes are the ruled list and the size line the same block would state under
+// a pipe is absent — the gate chose, not the handler.
+test("stage 4 cell 13: at a terminal, `self work` is the listing block's ruled render", async () =>
+{
+    must(box, demo, ["work", "add", "the pages answer with blocks"]);
+    const answer = await approvedIn(box, demo, ["work"], "");
+    assert.equal(answer.code, 0, answer.out);
+    const model = buildModel(join(ws, ".superself"), "demo", new Date());
+    assert.equal(answer.printed, `${renderWorkList(model).join("\n")}\n`);
+    assert.equal(sizeLines(answer.printed).length, 0, answer.printed);
+});
+
+test("stage 4 cell 4: at a terminal, `self context` is the ruled page and never the budgeted one", async () =>
+{
+    const answer = await approvedIn(box, demo, ["context"], "");
+    assert.equal(answer.code, 0, answer.out);
+    const model = buildModel(join(ws, ".superself"), "demo", new Date());
+    assert.ok(answer.printed.startsWith(`${bold(model.slug)}\n`), answer.printed);
+    assert.match(answer.printed, /[┌┬┐├┼┤└┴┘│─]/, "the terminal context drew no table");
+    // The markdown page is what a pipe reads; a terminal never sees its
+    // headings, and never pays for the budget that produced them.
+    assert.ok(!answer.printed.includes("## Work in progress"), answer.printed);
+});
+
+test("stage 4 cell 5: at a terminal, `self context` from the workspace is the ruled project table", async () =>
+{
+    const answer = await approvedIn(box, ws, ["context"], "");
+    assert.equal(answer.code, 0, answer.out);
+    assert.match(answer.printed, /[┌┬┐├┼┤└┴┘│─]/, "the workspace context drew no table");
+    assert.ok(answer.printed.includes(bold("demo")), answer.printed);
+});
+
+test("stage 4 cell 6: at a terminal, `self status` is the ruled page with its bands", async () =>
+{
+    const answer = await approvedIn(box, demo, ["status"], "");
+    assert.equal(answer.code, 0, answer.out);
+    assert.ok(answer.printed.includes(bold("WAITING ON YOU (0)")), answer.printed);
+    assert.ok(answer.printed.includes(bold("ATTEMPTS ON THIS MACHINE (0)")), answer.printed);
+    // The piped roll-up's own lines belong to the other render entirely.
+    assert.ok(!answer.printed.includes("waiting on you: "), answer.printed);
+});
+
+// A page with one render reads the same either way, which is what declaring no
+// terminal thunk says. `self setup` is the case that has to hold on a machine
+// where there is nothing to read.
+test("stage 4 cell 14: at a terminal, `self setup` prints the same diagnostics a pipe gets", async () =>
+{
+    const answer = await approvedIn(box, demo, ["setup"], "");
+    assert.equal(answer.code, 0, answer.out);
+    assert.equal(answer.printed.split("\n")[0].replace(/\[[0-9;]*m/g, ""), "project    demo");
+});
 
 // The gate resolves the render once per run and hands it to the blocks that
 // have two forms. A receipt's next command is the one stage 1 declares: weight

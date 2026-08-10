@@ -19,11 +19,11 @@ import {
     WorkState
 } from "./model.js";
 import { contributionsOf, ObjectiveState, openObjectives, openProposals } from "./objectives.js";
+import { notice } from "./output.js";
 import { activeProjects, archivedNote, CliContext, ProjectScope, readRegistry, readStoreConfig, readVerdicts, tokenScale, TokenScale } from "./paths.js";
 import {
     AttemptRow,
     Pointer,
-    RenderMode,
     renderContext,
     renderStatus,
     renderWorkList,
@@ -112,49 +112,58 @@ function scopedWorks(model: ProjectModel, viewer: string): WorkState[]
 // The pretty render is reached before the budget, never through it: the
 // 3,000-token cap exists to fit an agent's context window, and inflating
 // it with box rules and escape sequences would spend the agent's budget on
-// decoration it never receives.
-export function printContext(ctx: CliContext, render: RenderMode): void
+// decoration it never receives. Which is why both renders are thunks — the
+// gate calls one, and the budget is only ever spent for the reader who has one.
+export function contextOutput(ctx: CliContext): CommandOutput
 {
     if (ctx.project === undefined)
     {
-        printWorkspaceContext(ctx, render);
-        return;
+        return workspaceContextOutput(ctx);
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
     // An archived project still renders its context — a session standing in its
     // checkout has to be able to read the state it left (#283). What it owes
     // that session is one line saying the project is set aside and how it comes
     // back, on the stream the context itself is written to; a `--project` read
-    // has already been told, on stderr, by the scope resolver.
+    // has already been told, on stderr, by the scope resolver. It is a notice
+    // rather than a line of the page: it is owed at the moment the state is
+    // read, and neither render of the page composes it.
     const note = archivedNote(ctx.storeDir, ctx.project);
     if (note !== null)
     {
-        console.log(note);
+        notice(note);
     }
-    if (render === "pretty")
-    {
-        console.log(renderContext({ model, waiting: unrankedWaitingRows(model) }).join("\n"));
-        return;
-    }
-    // One fold per foreign project, read twice: for the records scoped in
-    // here (#181 D2), and for what the linked foreign objectives can be said
-    // to hold — status and target — at read time (#244).
+    return [{
+        kind: "document",
+        plain: () => lines(projectContextText(ctx, model)),
+        pretty: () => renderContext({ model, waiting: unrankedWaitingRows(model) })
+    }];
+}
+
+// One fold per foreign project, read twice: for the records scoped in here
+// (#181 D2), and for what the linked foreign objectives can be said to hold —
+// status and target — at read time (#244). Inside the plain thunk, because
+// that is the render that spends them.
+function projectContextText(ctx: CliContext, model: ProjectModel): string
+{
     const all = [model, ...foreignModels(ctx.storeDir, ctx.project)];
-    writeContext(renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))),
-        scopedIn(all, ctx.project), all));
+    return renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))),
+        scopedIn(all, model.slug), all);
 }
 
 // Every active project at once, for a directory that belongs to none of them.
 // An archived project is not in this answer (#283) — it is read by naming it.
-function printWorkspaceContext(ctx: CliContext, render: RenderMode): void
+// An empty workspace declares no pretty render: the one line it has to say is
+// the same line at a terminal, and the gate renders plain where there is no
+// second form.
+function workspaceContextOutput(ctx: CliContext): CommandOutput
 {
     const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
-    if (render === "pretty" && models.length > 0)
-    {
-        console.log(renderWorkspace(models).join("\n"));
-        return;
-    }
-    writeContext(renderWorkspaceContext(models, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir)))));
+    return [{
+        kind: "document",
+        plain: () => lines(renderWorkspaceContext(models, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))))),
+        pretty: models.length === 0 ? undefined : () => renderWorkspace(models)
+    }];
 }
 
 // The placement projection (#197 §6, #202): collect the live entities, order
@@ -784,40 +793,50 @@ function workspaceOmission(count: number): string
     return `… ${count} project summar${count === 1 ? "y" : "ies"} omitted; run \`${recovery}\` from the workspace for the full summaries`;
 }
 
-function writeContext(text: string): void
+// A page's lines, from the text a render already joined. The gate prints line
+// by line, and printing the whole text at once put out the same bytes — so the
+// split is a change of shape and never of what a reader sees.
+function lines(text: string): string[]
 {
-    process.stdout.write(text + "\n");
+    return text.split("\n");
 }
 
-export function printStatus(ctx: CliContext, render: RenderMode): void
+export function statusOutput(ctx: CliContext): CommandOutput
 {
     if (ctx.project === undefined)
     {
-        printWorkspaceOverview(ctx, render);
-        return;
+        return workspaceOverviewOutput(ctx);
     }
     const model = modelWithVerdicts(ctx.storeDir, ctx.project);
-    if (render === "pretty")
-    {
-        console.log(renderStatus({
+    const project = ctx.project;
+    return [{
+        kind: "document",
+        plain: () => statusLines(project, model),
+        pretty: () => renderStatus({
             model,
             waiting: unrankedWaitingRows(model),
             objectives: objectiveCountLine(model),
-            attempts: openProcesses(ctx.project, model)
-        }).join("\n"));
-        return;
-    }
-    console.log(`${model.slug} — goal: ${(model.goal ?? "(not set)") + otherGoals(model)}`);
-    console.log(`work: ${countLine(model.works)}`);
-    console.log(`objectives: ${objectiveCountLine(model)}`);
-    console.log(`waiting on you: ${waitingCount(model)}`);
-    console.log(`unshipped: ${unshippedLine(model)}`);
-    if (attentionRows(model).length > 0)
-    {
-        console.log(attentionLine(model));
-    }
-    console.log(model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`);
-    printProcesses(ctx.project, model);
+            attempts: openProcesses(project, model)
+        })
+    }];
+}
+
+// The roll-up a pipe reads, one fact per line, with the processes this machine
+// is running under it. The attention line is there only when there is a band
+// to describe, which is what keeps a project with no proposals from carrying
+// three zeroes.
+function statusLines(project: string, model: ProjectModel): string[]
+{
+    return [
+        `${model.slug} — goal: ${(model.goal ?? "(not set)") + otherGoals(model)}`,
+        `work: ${countLine(model.works)}`,
+        `objectives: ${objectiveCountLine(model)}`,
+        `waiting on you: ${waitingCount(model)}`,
+        `unshipped: ${unshippedLine(model)}`,
+        ...(attentionRows(model).length > 0 ? [attentionLine(model)] : []),
+        model.health.length === 0 ? "health: ok" : `health: ${model.health.join("; ")}`,
+        ...processLines(project, model)
+    ];
 }
 
 // Process state on an open unit, judged at read time: the folded transition
@@ -838,12 +857,9 @@ function openProcesses(project: string, model: ProjectModel): AttemptRow[]
     return rows;
 }
 
-function printProcesses(project: string, model: ProjectModel): void
+function processLines(project: string, model: ProjectModel): string[]
 {
-    for (const row of openProcesses(project, model))
-    {
-        console.log(`process ${row.work}: ${row.attempt}`);
-    }
+    return openProcesses(project, model).map((row) => `process ${row.work}: ${row.attempt}`);
 }
 
 // A flat active count can look busy without saying whether the project is
@@ -863,26 +879,34 @@ function waitingCount(model: ProjectModel): number
     return model.openQuestions.length + attentionRows(model).length + openProposals(model.goals).length;
 }
 
-function printWorkspaceOverview(ctx: CliContext, render: RenderMode): void
+// A workspace with nothing active says one line and declares no second render:
+// what a person is owed there is the sentence that names the way out, and a
+// ruled table of no rows would say less.
+function workspaceOverviewOutput(ctx: CliContext): CommandOutput
 {
     if (activeProjects(ctx.storeDir).length === 0)
     {
-        console.log(readRegistry(ctx.storeDir).length === 0
-            ? "no projects registered — run `self project init` inside a project directory"
-            : "every registered project is archived — run `self project --archived` to list them");
-        return;
+        return [{ kind: "document", plain: () => [emptyWorkspaceLine(ctx)] }];
     }
     const models = renderedModels(ctx.storeDir).map((model) => withVerdicts(ctx.storeDir, model));
-    if (render === "pretty")
-    {
-        console.log(renderWorkspace(models).join("\n"));
-        return;
-    }
-    for (const model of models)
-    {
-        const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-        console.log(`${model.slug} — ${(model.goal ?? "(no goal)") + otherGoals(model)} (${countLine(model.works)})${health}`);
-    }
+    return [{
+        kind: "document",
+        plain: () => models.map(overviewLine),
+        pretty: () => renderWorkspace(models)
+    }];
+}
+
+function emptyWorkspaceLine(ctx: CliContext): string
+{
+    return readRegistry(ctx.storeDir).length === 0
+        ? "no projects registered — run `self project init` inside a project directory"
+        : "every registered project is archived — run `self project --archived` to list them";
+}
+
+function overviewLine(model: ProjectModel): string
+{
+    const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
+    return `${model.slug} — ${(model.goal ?? "(no goal)") + otherGoals(model)} (${countLine(model.works)})${health}`;
 }
 
 function countLine(works: WorkState[]): string
@@ -897,18 +921,19 @@ function countLine(works: WorkState[]): string
 // the two bucket lines under them say how much was left out and are not part of
 // the count. A project with nothing open answers with the wording it always
 // did, and the buckets still follow it.
-export function workList(ctx: ProjectScope, render: RenderMode): CommandOutput
+// One block with both renders, rather than a handler that asks which run it is
+// in and answers with a different shape each way (the wrinkle stage 3 left):
+// the rows and the ruled table are two renders of one listing, and the size
+// line the gate writes under the rows belongs to the same listing either way.
+export function workList(ctx: ProjectScope): CommandOutput
 {
     const model = renderedModel(ctx.storeDir, ctx.project);
-    if (render === "pretty")
-    {
-        return [{ kind: "document", lines: renderWorkList(model) }];
-    }
     const open = model.works.filter((w) => w.status !== "done" && w.status !== "retired");
     const rows = open.length === 0 ? ["no open work"] : open.map((work) => openWorkRow(model, work));
     return [{
         kind: "listing",
         rows: [...rows, ...hiddenBuckets(model)],
+        pretty: () => renderWorkList(model),
         total: open.length,
         noun: "open work unit"
     }];
@@ -992,26 +1017,33 @@ interface HistoryRecord
     successor?: string;
 }
 
-export function printHistory(record: HistoryRecord, asked: string | undefined): void
+// A document rather than a listing, even though a page of events looks like
+// rows: what a listing states is how much there is of the thing it is about,
+// and this page already says that in its own head — `<id> live 14 events` —
+// with the next-page pointer under the rows saying what it left. A size line
+// would be the same fact a third time.
+export function historyOutput(record: HistoryRecord, asked: string | undefined): CommandOutput
 {
     const page = requirePage(asked);
+    return [{ kind: "document", plain: () => historyLines(record, page) }];
+}
+
+function historyLines(record: HistoryRecord, page: number): string[]
+{
     const events = historyEvents(record);
     const pages = Math.max(1, Math.ceil(events.length / HISTORY_PAGE));
-    console.log(historyHead(record, events.length));
+    const head = historyHead(record, events.length);
     if (page > pages)
     {
-        console.log(`no events on page ${page} — ${record.id} has ${plural(pages, "page")}`);
-        return;
+        return [head, `no events on page ${page} — ${record.id} has ${plural(pages, "page")}`];
     }
     const start = (page - 1) * HISTORY_PAGE;
-    for (const event of events.slice(start, start + HISTORY_PAGE))
-    {
-        console.log(logLine(event, undefined));
-    }
-    if (start + HISTORY_PAGE < events.length)
-    {
-        console.log(`… ${events.length - start - HISTORY_PAGE} more; run \`${nextPage(record, page + 1)}\``);
-    }
+    const rest = events.length - start - HISTORY_PAGE;
+    return [
+        head,
+        ...events.slice(start, start + HISTORY_PAGE).map((event) => logLine(event, undefined)),
+        ...(rest > 0 ? [`… ${rest} more; run \`${nextPage(record, page + 1)}\``] : [])
+    ];
 }
 
 // A page is counted from one. A page past the last is answered rather than

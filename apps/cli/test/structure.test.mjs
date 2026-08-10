@@ -183,7 +183,7 @@ test("cell 12: the render gate itself prints, and a module still on the allowlis
 {
     const tree = memoryTree({
         "src/output.ts": "export function notice(line: string)\n{\n    console.log(line);\n}\n",
-        "src/views.ts": "export function say()\n{\n    console.log(\"row\");\n}\n"
+        "src/main.ts": "export function say()\n{\n    console.log(\"row\");\n}\n"
     });
     assert.deepEqual(printSiteViolations(tree), []);
 });

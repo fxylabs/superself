@@ -16,12 +16,19 @@ import {
     STORE_DIR,
     workspaceDirFor
 } from "./paths.js";
+import { CommandOutput } from "./types.js";
 
-export function printSetup(cwd: string): void
+// One render, declared as one: the diagnostics say the same thing to a person
+// and to a pipe, and a machine with no workspace at all still has to be able
+// to read them — which is the whole point of the verb.
+export function setupOutput(cwd: string): CommandOutput
 {
     const marker = findUp(cwd, MARKER_FILE);
     const workspaceDir = workspaceDirFor(marker);
-    console.log([...projectLines(marker, cwd, workspaceDir), ...workspaceLines(workspaceDir)].join("\n"));
+    return [{
+        kind: "document",
+        plain: () => [...projectLines(marker, cwd, workspaceDir), ...workspaceLines(workspaceDir)]
+    }];
 }
 
 function projectLines(marker: string | null, cwd: string, workspaceDir: string | null): string[]
