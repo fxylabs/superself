@@ -23,7 +23,8 @@ import {
     findMilestone,
     GoalState,
     MilestoneState,
-    ObjectiveState
+    ObjectiveState,
+    WorkProposal
 } from "./objectives.js";
 import { activeProjects, readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
 import { ArtifactMeta, SelfEvent } from "./types.js";
@@ -543,9 +544,10 @@ function reconcileEntityView(model: ProjectModel, entityFold: EntityFold, events
     // agrees with the entity view; native preset entities project into the
     // legacy read shapes, so those surfaces answer for post-cutover records.
     syncLegacyRecords(model);
+    const answered = answerLegacyProposals(model, entityFold);
     const nativeWorks = projectNativeRecords(model, creations);
     routeEntityWorkFacts(model, entityFold);
-    replayDeferred(model, events, nativeWorks);
+    replayDeferred(model, events, new Set([...nativeWorks, ...answered]));
 }
 
 function deriveVerdictReads(model: ProjectModel, storeDir: string, slug: string): void
@@ -1339,6 +1341,74 @@ function projectProposal(entity: EntityState, creation: SelfEvent)
     };
 }
 
+// The same answers, aimed at a proposal made before the cutover (#301).
+// `work accept` and `work decline` record `entity.confirmed` and
+// `entity.retracted` whatever kind of proposal they answer, and a proposal
+// folded from a legacy `work.proposed` event is not an entity, so neither
+// answer reached a record: it kept rendering as waiting on you, an accepted
+// one never became a unit, and a second answer was never refused. The answers
+// route onto the legacy proposal here, the same way execution events route
+// onto a legacy work unit — over the settled proposal set, because a merged
+// log can carry the answer before the proposal it answers.
+//
+// Only legacy proposals are reachable: `projectNativeRecords` pushes the
+// native ones afterwards, reading these same answers off their own entity.
+// Answers the units this created, so the deferred replay attaches their
+// reports and process history the way it does a native unit's.
+function answerLegacyProposals(model: ProjectModel, fold: EntityFold): Set<string>
+{
+    const accepted = new Set<string>();
+    for (const answer of legacyAnswers(fold))
+    {
+        const proposal = model.goals.proposals.find((item) => item.id === answer.id);
+        if (proposal === undefined || proposal.status !== "open")
+        {
+            continue;
+        }
+        if (!answer.accept)
+        {
+            proposal.status = "declined";
+            proposal.declinedWhy = answer.why;
+            continue;
+        }
+        proposal.status = "accepted";
+        proposal.work = proposal.id;
+        model.works.push(unitFromProposal(model, proposal, answer.ts));
+        accepted.add(proposal.id);
+    }
+    return accepted;
+}
+
+// Both answers as one list in the order they were given — timestamp, then
+// event id — so two clones of one store settle one lifecycle, and the first
+// answer is the one that happened. An undone retraction is dropped here for
+// the reason `applyRetractions` drops it: an undo is a fact about the event
+// it names, not a position in the log.
+function legacyAnswers(fold: EntityFold): { id: string; ts: string; why?: string; accept: boolean }[]
+{
+    return [
+        ...fold.confirms.map((item) => ({ event: item.event, ts: item.ts, id: item.confirms, accept: true })),
+        ...fold.retractions.filter((item) => !fold.annulled.has(item.event))
+            .map((item) => ({ event: item.event, ts: item.ts, id: item.entity, why: item.why, accept: false }))
+    ].sort((left, right) => left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+}
+
+// Accept is confirm (#207 B13) for a legacy proposal too: the unit takes the
+// proposal's own id, so the whole lifecycle stays under one id. The outcome it
+// contributes to is read off the proposal rather than off the `entity.linked`
+// line the accept also records, because that edge lands in the entity view,
+// which carries no record for this proposal — the two name the same target.
+function unitFromProposal(model: ProjectModel, proposal: WorkProposal, ts: string): WorkState
+{
+    const milestone = proposal.milestone === undefined ? undefined : findMilestone(model.goals, proposal.milestone);
+    return {
+        ...emptyWork(proposal.id, proposal.outcome, proposal.ts),
+        lastEventTs: ts,
+        objectives: model.goals.objectives.some((item) => item.id === proposal.objective) ? [proposal.objective as string] : [],
+        milestones: milestone === null || milestone === undefined ? [] : [proposal.milestone as string]
+    };
+}
+
 /* ── entity work facts on legacy units, and the deferred replay ────── */
 
 // Post-cutover, `work start` and its siblings record `entity.*` execution
@@ -1586,17 +1656,25 @@ function noteBranch(work: WorkState, event: SelfEvent): void
 
 function newWork(event: SelfEvent): WorkState
 {
+    return { ...emptyWork(String(event.payload.work), String(event.payload.outcome), event.ts), branches: branchOf(event) };
+}
+
+// A unit at the moment it was created: named, dated, and carrying nothing yet.
+// One shape, because a unit minted from an accepted legacy proposal starts
+// life exactly where one minted by `work.created` does.
+function emptyWork(id: string, outcome: string, ts: string): WorkState
+{
     return {
-        id: String(event.payload.work),
-        outcome: String(event.payload.outcome),
-        ts: event.ts,
-        lastEventTs: event.ts,
+        id,
+        outcome,
+        ts,
+        lastEventTs: ts,
         status: "next",
         reports: [],
         evidence: [],
         notes: [],
         artifacts: [],
-        branches: branchOf(event),
+        branches: [],
         objectives: [],
         milestones: [],
         foreignObjectives: [],
