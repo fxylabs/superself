@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git, machine, must, selfIn, workIdIn } from "./harness.mjs";
-import { diskTree, packageRoot, printingModules, printSiteViolations } from "./structure.mjs";
+import { diskTree, packageRoot, printSiteViolations } from "./structure.mjs";
 
 const { renderOutput } = await import("../dist/output.js");
 const { readScope, readScopes } = await import("../dist/paths.js");
@@ -277,9 +277,12 @@ test("stage 4 cell 15: the state listing in the committed sweep ends with the si
     assert.match(listing.replace(/\n+$/, "").split("\n").at(-1), /^\d+ live entities$/);
 });
 
-test("stage 4 cell 16: the ratchet holds main and human alone, and nothing else prints", () =>
+// The cell as stage 4 left it read the ratchet's two remaining entries by
+// name. Stage 5 took both off and emptied the list, so what survives of the
+// cell is the half that was always the point: nothing in the tree prints
+// outside the gate. The empty list itself is stage 5's cell 11.
+test("stage 4 cell 16: nothing in the tree prints outside the gate", () =>
 {
-    assert.deepEqual([...printingModules].sort(), ["src/human.ts", "src/main.ts"]);
     assert.deepEqual(printSiteViolations(diskTree(packageRoot)), []);
 });
 

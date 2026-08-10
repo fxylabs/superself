@@ -70,7 +70,7 @@ async function main(argv: string[]): Promise<void>
     // naming it there is the answer that surface owes.
     if (argv[0] === "--version" || argv[0] === "-V")
     {
-        console.log(cliVersion());
+        renderOutput([{ kind: "value", text: cliVersion() }]);
         return;
     }
     const help = helpText(argv);
@@ -200,15 +200,28 @@ function asksForHelp(argv: string[]): boolean
     return false;
 }
 
-// Dim the description column so the command column stands out; piped output is untouched.
+// The verb list and a command's own page are answers with no command behind
+// them: they are composed before anything resolves, so there is no leaf to
+// return them from and no handler for the dispatcher to print for. They reach
+// the gate directly, which asks for neither — a workspace least of all, since
+// what the CLI can do has to answer on a machine that has none.
 function printUsage(usage: string): void
+{
+    renderOutput([{ kind: "document", plain: () => usageLines(usage) }]);
+}
+
+// Dim the description column so the command column stands out; piped output is
+// untouched. The page carries one render because what differs between a
+// terminal and a pipe here is paint, and paint is `style.ts`'s answer rather
+// than the render mode's: a usage list is not a ruled table, so a terminal too
+// narrow for one is no reason for it to lose its dimming.
+function usageLines(usage: string): string[]
 {
     if (!styled)
     {
-        console.log(usage);
-        return;
+        return usage.split("\n");
     }
-    console.log(usage.split("\n").map((line) =>
+    return usage.split("\n").map((line) =>
     {
         const match = line.match(/^(  \S.*?)(\s{2,})(\S.*)$/);
         if (match !== null)
@@ -216,7 +229,7 @@ function printUsage(usage: string): void
             return match[1] + match[2] + dim(match[3]);
         }
         return /^\s{20,}\S/.test(line) ? dim(line.trimEnd()) : line;
-    }).join("\n"));
+    });
 }
 
 /* ── the option sets this module's leaves declare ──────────────────── */
@@ -1037,10 +1050,10 @@ function cmdWorkspace(path: string | undefined): CommandOutput
 {
     if (path === undefined)
     {
-        // A scalar read, still printed by the verb: the value shapes move in a
-        // later stage of the render gate, and this stage moves the receipts.
-        console.log(machineWorkspace() ?? "no workspace set — run `self init` in the directory that should hold it");
-        return [];
+        // The sentence a machine with no pointer gets is the value, not a
+        // refusal: nothing was asked for that could not be answered, and the
+        // answer is where to make the workspace that is missing.
+        return [{ kind: "value", text: machineWorkspace() ?? "no workspace set — run `self init` in the directory that should hold it" }];
     }
     const dir = resolve(path);
     if (!isStore(join(dir, STORE_DIR)))
@@ -1093,8 +1106,7 @@ function cmdTimezone(zone: string | undefined): CommandOutput
     const ctx = requireWorkspace(process.cwd());
     if (zone === undefined)
     {
-        console.log(readStoreConfig(ctx.storeDir).timezone ?? DEFAULT_ZONE);
-        return [];
+        return [{ kind: "value", text: readStoreConfig(ctx.storeDir).timezone ?? DEFAULT_ZONE }];
     }
     const timezone = validZone(zone);
     writeConfig(ctx, { timezone }, `timezone set ${timezone}`);
@@ -1106,8 +1118,7 @@ function cmdTheme(name: string | undefined): CommandOutput
     const ctx = requireWorkspace(process.cwd());
     if (name === undefined)
     {
-        console.log(readStoreConfig(ctx.storeDir).theme ?? "violet");
-        return [];
+        return [{ kind: "value", text: readStoreConfig(ctx.storeDir).theme ?? "violet" }];
     }
     const theme = validTheme(name);
     writeConfig(ctx, { theme }, `theme set ${theme}`);
@@ -1120,8 +1131,7 @@ function cmdTokens(tokens: string | undefined, characters: string | undefined): 
     if (tokens === undefined)
     {
         const scale = tokenScale(readStoreConfig(ctx.storeDir));
-        console.log(`${scale.perCharacter} tokens per character — ${scale.measured ? "measured" : "the shipped estimate"}`);
-        return [];
+        return [{ kind: "value", text: `${scale.perCharacter} tokens per character — ${scale.measured ? "measured" : "the shipped estimate"}` }];
     }
     const measured = countArgument(tokens, "tokens");
     const held = countArgument(characters, "characters");
@@ -1855,7 +1865,13 @@ function scopeNote(found: FoundWork): string | null
 // `show` stays a pure read — three looks must not be three claims — and this
 // verb is what an agent calls because it needs what comes back, not because a
 // managed block told it to.
-function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>): void
+//
+// The brief is the verb's answer and comes back as the page it is; everything
+// above it — the note that another session holds the unit, the line the append
+// prints — is a disclosure from a lower layer, said through `notice` while the
+// command is still running. That is what keeps the order a reader has always
+// read: notices land as they happen, the answer lands when there is one.
+function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const { work, owner } = requireOpenWork(ctx, positionals[0]);
@@ -1874,8 +1890,16 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
         recordEvent(ctx, makeEvent(owner, "entity.started", { entity: work.id }), `${work.id} ${work.outcome}`);
     }
     noteSessionSeen(mine, new Date().toISOString());
-    console.log(markdownHeadings(renderWorkBody(work, buildModel(ctx.storeDir, owner, new Date()),
-        readVerdicts(ctx.storeDir, owner)).trimEnd()));
+    return [{ kind: "document", plain: () => briefLines(ctx, owner, work) }];
+}
+
+// The unit as it stood when the session walked up, against the model the claim
+// it just recorded is already folded into — which is the pair the line above
+// this call has always composed.
+function briefLines(ctx: ProjectContext, owner: string, work: WorkState): string[]
+{
+    const model = buildModel(ctx.storeDir, owner, new Date());
+    return markdownHeadings(renderWorkBody(work, model, readVerdicts(ctx.storeDir, owner)).trimEnd()).split("\n");
 }
 
 // What a reader is told about who holds a unit, or nothing when no session
@@ -1968,7 +1992,7 @@ function orderedSlugs(ctx: CliContext): string[]
 // Retiring a unit records that its outcome was deliberately given up or moved
 // — never achieved. The unit keeps every report, evidence hash, and artifact,
 // and stops counting as live work everywhere the status is read.
-function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_OPTIONS>): void
+function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_OPTIONS>): CommandOutput
 {
     if (values.requirement !== undefined)
     {
@@ -1982,14 +2006,27 @@ function cmdWorkRetireUnit({ values, positionals }: CommandInput<typeof RETIRE_O
     if (work.status === "retired")
     {
         // Idempotent by design: the state the caller asked for already holds,
-        // so repeating the transition records nothing and refuses nothing.
-        console.log(`${work.id} is already retired — ${work.retiredWhy}`);
-        return;
+        // so repeating the transition records nothing and refuses nothing —
+        // and a receipt for a state that already held is still a receipt.
+        return [{ kind: "receipt", text: `${work.id} is already retired — ${work.retiredWhy}` }];
     }
     const why = required(values.why);
     // Before the approval prompt, not after: a person deciding whether to
     // destroy the record should read that another session is on it first.
     announceOtherHolder(work);
+    recordUnitRetirement(ctx, model, work, why, values);
+    // The approved path says what it recorded through the append's own
+    // announce line, so the verb has nothing of its own left to answer with.
+    return [];
+}
+
+// What the retirement gate does with a unit that is still live: disclose it,
+// read a typed confirmation from a terminal, append only then. `why` is
+// resolved by the caller, because a reason that is present but empty is
+// refused before the holder is announced rather than after.
+function recordUnitRetirement(ctx: ProjectContext, model: ProjectModel, work: WorkState, why: string,
+    values: CommandInput<typeof RETIRE_OPTIONS>["values"]): void
+{
     const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
     recordRetirement(ctx, retirementIntent(model, "retire", [work.id]), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retired",

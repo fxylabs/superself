@@ -17,10 +17,10 @@ import {
     functionLengthViolations,
     functionSpans,
     importDirectionViolations,
+    interactionPrompt,
     memoryTree,
     packageRoot,
     parseSource,
-    printingModules,
     printSiteViolations,
     resolveBase
 } from "./structure.mjs";
@@ -179,11 +179,11 @@ test("cell 12: writing to the descriptor is the same violation as logging", () =
     assert.match(violation.detail, /process\.stdout\.write outside the render gate/);
 });
 
-test("cell 12: the render gate itself prints, and a module still on the allowlist may", () =>
+test("cell 12: the render gate itself prints, and so does the one declared interaction", () =>
 {
     const tree = memoryTree({
         "src/output.ts": "export function notice(line: string)\n{\n    console.log(line);\n}\n",
-        "src/main.ts": "export function say()\n{\n    console.log(\"row\");\n}\n"
+        "src/human.ts": "export function ask()\n{\n    process.stdout.write(\"type it: \");\n}\n"
     });
     assert.deepEqual(printSiteViolations(tree), []);
 });
@@ -196,19 +196,18 @@ test("cell 12: console.error is not this rule's subject", () =>
     assert.deepEqual(printSiteViolations(tree), []);
 });
 
-test("cell 13: the repository's own source prints only from the gate and the allowlist", () =>
+test("cell 13: the repository's own source prints only from the gate and the one interaction", () =>
 {
     assert.deepEqual(printSiteViolations(diskTree(packageRoot)), []);
 });
 
-// The allowlist is a ratchet: a stage of the migration takes the last print out
-// of a module and the line goes with it. A stale entry is a rule that has
-// quietly stopped holding for that module.
-test("cell 13: every module on the allowlist still prints", () =>
+// A declared exception that no longer prints is a rule that has quietly
+// stopped holding for that module — the same defect a stale allowlist entry
+// was, now that the allowlist the migration ratcheted down is empty.
+test("cell 13: the declared interaction still writes its prompt", () =>
 {
     const tree = diskTree(packageRoot);
-    const printing = printingModules.filter((path) => /console\.log|process\.stdout\.write/.test(tree.read(path)));
-    assert.deepEqual(printing, printingModules);
+    assert.match(tree.read(interactionPrompt), /process\.stdout\.write/);
 });
 
 // ---------------------------------------------------------------- dead exports

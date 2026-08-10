@@ -32,15 +32,14 @@ export const sanctionedEdges = [];
 // The render gate: the one module that may put a command's answer on stdout.
 export const renderGate = "src/output.ts";
 
-// The modules that still print for themselves, one per line because this list
-// is a ratchet — a stage of the render-gate migration takes a module off it,
-// and taking one off is a single deleted line. Nothing is ever added back.
-// `console.error` is not this rule's subject: a refusal goes to stderr, and
-// where it is written from is a separate question from where an answer is.
-export const printingModules = [
-    "src/human.ts",
-    "src/main.ts"
-];
+// The modules that still print for themselves. It was a ratchet through the
+// five stages of the render-gate migration — a stage took a module off it, and
+// taking one off was a single deleted line — and stage 5 emptied it. Nothing
+// is ever added back: a module that has something to say returns it and the
+// gate prints it. `console.error` is not this rule's subject, since a refusal
+// goes to stderr and where it is written from is a separate question from
+// where an answer is.
+export const printingModules = [];
 
 // dist/ still carries directories from that deleted code and would read as
 // three subsystems. It is build output, not a source of truth.
@@ -341,9 +340,18 @@ function touches(touched, span)
 // were call sites.
 const printCalls = new Set(["console.log", "process.stdout.write"]);
 
+// The one write outside the gate, declared in the rule rather than listed
+// beside the migration's leftovers: `human.ts` puts the confirmation question
+// on stdout without a newline and reads the typed reply on the same line. That
+// is an interaction with a person, not a command's answer — there is no block
+// to return, nothing for a handler to hand over, and no run in which the gate
+// could render it, because the reply has to arrive before the command knows
+// what it will answer at all.
+export const interactionPrompt = "src/human.ts";
+
 export function printSiteViolations(tree)
 {
-    const allowed = new Set([renderGate, ...printingModules]);
+    const allowed = new Set([renderGate, interactionPrompt, ...printingModules]);
     return sourcesOf(tree).filter((path) => !allowed.has(path)).flatMap((path) =>
         printSites(parseSource(tree, path)).map((site) => ({
             file: path,
