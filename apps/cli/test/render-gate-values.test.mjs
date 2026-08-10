@@ -24,7 +24,8 @@ const { ws, demo } = demoWorkspace(box);
 
 // A machine that was never initialized: no workspace pointer, no store, no
 // project. The answers that run before a command resolves have to come back
-// from here too, which is what says the gate asked for neither.
+// from here too, which is what says the gate needed neither a leaf to be
+// resolved nor a workspace to be read.
 const bare = machine();
 
 // The merged stream `selfIn` reports cannot say which descriptor a line came
