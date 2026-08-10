@@ -700,21 +700,30 @@ function unitCount(branch: BranchUnshipped): string
 
 // A proposal is only actionable if the reader can weigh it, so the whole brief
 // travels with it rather than an outcome line pointing at a page.
+//
+// The id travels whole (#304). A proposal made before the cutover is named by
+// its event id, whose first ten characters are the millisecond it was written
+// in, so eight of them name every record from the same quarter-second — three
+// proposals written by one script answered to one prefix, and the accept line
+// this row printed refused as ambiguous. A native proposal's id is a short id
+// already, so nothing about that kind of row changes. Cutting to a unique
+// prefix instead would print a line that stops resolving the moment the next
+// record lands, which is worse than a long one.
 function workProposalItems(model: ProjectModel): WaitingItem[]
 {
     const project = shellArgument(model.slug);
     return openProposals(model.goals).map((proposal): WaitingItem => ({
-        action: `self work accept ${proposal.id.slice(0, 8)}`,
+        action: `self work accept ${proposal.id}`,
         full: [
-            `work proposal ${proposal.id.slice(0, 8)}: ${proposal.outcome}`,
+            `work proposal ${proposal.id}: ${proposal.outcome}`,
             `  toward ${proposal.milestone ?? proposal.objective} · value: ${proposal.value}`,
             `  success: ${proposal.success.join("; ")} · stop: ${proposal.stop.join("; ")}`,
             `  depends: ${proposal.depends.length === 0 ? "nothing" : proposal.depends.join(", ")} · risk: ${proposal.risk}`,
             `  capacity: ${proposal.capacity} · evidence plan: ${proposal.evidencePlan}`,
-            `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work accept ${proposal.id.slice(0, 8)}\``
+            `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work accept ${proposal.id}\``
         ].join("\n"),
-        identity: `work proposal ${proposal.id.slice(0, 8)}`,
-        recovery: { verb: "search", id: proposal.id.slice(0, 8) }
+        identity: `work proposal ${proposal.id}`,
+        recovery: { verb: "search", id: proposal.id }
     }));
 }
 

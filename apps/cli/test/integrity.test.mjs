@@ -37,13 +37,30 @@ must(e1, ws, ["workspace", ws]);
 const SIZED_READS = new Set(["work-list", "objective-list", "milestone-list", "state-list", "log"]);
 const SIZE_LINE = /^\d+ (open work units?|open objectives?|milestones?|live entit(y|ies)|events?)\n$/;
 
+// The capture's other deliberate change, #304. A proposal made before the
+// cutover is named by its event id, and the row printed eight characters of
+// it — the millisecond it was written in, which names every record from the
+// same quarter-second, so the accept line it advertised refused as ambiguous
+// wherever a store held two. The capture stays as the old binary wrote it and
+// the one lengthened id is stated here, which is why this is a replacement on
+// the expected text rather than a rewritten fixture: what the old binary
+// printed is still on record, and only the difference is asserted away.
+const PROPOSAL_ID = "01kz41h20mtyytk9dt7ay013bd";
+
+// Only where the cut id stands alone: the log capture prints the same
+// proposal's id in full, and a blind replacement lengthens that one too.
+function asThisBinaryPrints(text)
+{
+    return text.replace(new RegExp(`${PROPOSAL_ID.slice(0, 8)}(?![0-9a-z])`, "g"), PROPOSAL_ID);
+}
+
 test("E1: every captured read surface answers byte-identically for a pre-cutover store", () =>
 {
     const manifest = JSON.parse(readFileSync(join(fixtures, "pre-cutover-reads", "manifest.json"), "utf8"));
     assert.ok(manifest.length >= 15, "the fixture manifest shrank unexpectedly");
     for (const [name, args] of manifest)
     {
-        const expected = readFileSync(join(fixtures, "pre-cutover-reads", `${name}.txt`), "utf8");
+        const expected = asThisBinaryPrints(readFileSync(join(fixtures, "pre-cutover-reads", `${name}.txt`), "utf8"));
         const result = must(e1, ws, args);
         const drifted = `\`self ${args.join(" ")}\` drifted from the pre-cutover binary (${name})`;
         if (!SIZED_READS.has(name))
@@ -86,7 +103,7 @@ test("E1: a refold leaves the pre-cutover canonical files byte-identical", () =>
     const canonical = ["state.md",
         ...readdirSync(join(dir, "objective")).map((name) => join("objective", name)),
         ...readdirSync(join(dir, "work")).map((name) => join("work", name))];
-    const before = new Map(canonical.map((rel) => [rel, readFileSync(join(dir, rel), "utf8")]));
+    const before = new Map(canonical.map((rel) => [rel, asThisBinaryPrints(readFileSync(join(dir, rel), "utf8"))]));
     // The store travels without its git history; the refold path commits, so
     // the copy gets a fresh repository first. `lang en` is the workspace-wide
     // refold every view setting takes (the language is already en).

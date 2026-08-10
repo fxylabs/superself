@@ -979,7 +979,7 @@ function requireNovel(model: ProjectModel, outcome: string, payload: Record<stri
         && (proposal.milestone ?? proposal.objective) === target);
     if (clash !== undefined)
     {
-        throw new CliError(`proposal ${clash.id.slice(0, 8)} already proposes this outcome for ${target} — accept or decline it instead`);
+        throw new CliError(`proposal ${clash.id} already proposes this outcome for ${target} — accept or decline it instead`);
     }
     const existing = model.works.find((work) => work.status !== "done" && work.status !== "retired" && normalize(work.outcome) === key
         && [...work.objectives, ...work.milestones].includes(target));
@@ -1228,7 +1228,7 @@ function requireProposal(model: ProjectModel, prefix: string | undefined): WorkP
     }
     if (matches[0].status !== "open")
     {
-        throw new CliError(`proposal ${matches[0].id.slice(0, 8)} is already ${matches[0].status}`);
+        throw new CliError(`proposal ${matches[0].id} is already ${matches[0].status}`);
     }
     return matches[0];
 }
