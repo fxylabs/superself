@@ -113,7 +113,7 @@ pnpm build
 
 ## Adding a command verb
 
-A new verb ships as a set. A pull request that adds one without all five is
+A new verb ships as a set. A pull request that adds one without all six is
 incomplete:
 
 1. A `leaf` in the owning command's contract declaration, stating its options,
@@ -141,12 +141,28 @@ incomplete:
    Both resolve through `paths.ts` `readScope`/`readScopes` rather than reading
    the registry themselves — see the scope contract in
    [ARCHITECTURE.md](ARCHITECTURE.md#fixed-naming).
+6. What a successful run answers, returned rather than printed. The handler
+   hands back a `CommandOutput` — blocks of the four shapes a command can
+   answer with, `value` for a scalar a caller reads, `receipt` for what a write
+   recorded, `listing` for rows a reader scans, `document` for a page — and
+   calls neither `console.log` nor `process.stdout.write`; `pnpm structure`
+   fails a verb that does, by file, line and rule. The gate in `output.ts`
+   prints them, and it owns the render-mode resolution: a block that reads two
+   ways carries both renders as thunks and the gate calls exactly one, so no
+   handler asks whether this run is a terminal or a pipe. A listing states its
+   `total` — not `rows.length` — and, where the rows are a window onto more, a
+   `window` carrying both how many are shown and the command that prints the
+   rest; either half without the other is what the required field exists to
+   refuse. The gate writes the size line from them, so every listing in the CLI
+   states its size in the same words. Shapes compose: a verb that records
+   something and then lists the result returns `[receipt, listing]` rather than
+   a fifth shape that is both.
 
 Subcommand dispatch reads through `args.ts` `subcommand`, so `--` means the
 same thing across the whole CLI.
 
 A verb that introduces a new *statement-type record* — something a person
-asserts and can later take back — ships more than those four. It ships the
+asserts and can later take back — ships more than those six. It ships the
 whole lifecycle set: supersede with a linked successor, withdraw with `--why`
 and no successor, and decline where the type has proposals. See
 [the record lifecycle](ARCHITECTURE.md#the-record-lifecycle) for what each

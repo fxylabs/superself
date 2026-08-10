@@ -9,10 +9,12 @@ delete process.env.NO_COLOR;
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const { approvedIn, git, machine, must } = await import("./harness.mjs");
+const { rootUsage } = await import("../dist/help.js");
+const { COMMANDS } = await import("../dist/main.js");
 const { buildModel } = await import("../dist/model.js");
 const { renderOutput } = await import("../dist/output.js");
 const { renderWorkList } = await import("../dist/pretty.js");
@@ -167,6 +169,33 @@ test("stage 4 cell 14: at a terminal, `self setup` prints the same diagnostics a
     const answer = await approvedIn(box, demo, ["setup"], "");
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.printed.split("\n")[0].replace(/\[[0-9;]*m/g, ""), "project    demo");
+});
+
+/* ── stage 5: the answers that run before any command resolves ─────── */
+
+// The version is a scalar, and a scalar reads the same to a person as to a
+// pipe. It reaches the gate before a leaf or a workspace exists, so what this
+// cell holds is that neither turned out to be needed.
+test("stage 5 cell 5: at a terminal, `self --version` prints the packaged version alone", async () =>
+{
+    const version = String(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+    const answer = await approvedIn(box, demo, ["--version"], "");
+    assert.equal(answer.code, 0, answer.out);
+    assert.equal(answer.printed, `${version}\n`);
+});
+
+// The verb list dims its description column for a person and leaves a pipe the
+// characters. Both renders are the same page composed the same way — what the
+// terminal adds is paint, which is `style.ts`'s answer — so the cell is that
+// stripping the paint gives back exactly the bytes a pipe reads.
+test("stage 5 cell 6: at a terminal, the verb list is the piped list with its descriptions dimmed", async () =>
+{
+    const answer = await approvedIn(box, demo, [], "");
+    assert.equal(answer.code, 0, answer.out);
+    const plain = `${rootUsage(COMMANDS)}\n`;
+    assert.notEqual(answer.printed, plain, "nothing was dimmed at a styled terminal");
+    assert.equal(answer.printed.replace(/\x1b\[[0-9;]*m/g, ""), plain);
+    assert.ok(answer.printed.includes(dim("show or set the workspace this machine uses")), answer.printed);
 });
 
 // The gate resolves the render once per run and hands it to the blocks that

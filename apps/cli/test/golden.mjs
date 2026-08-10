@@ -72,6 +72,10 @@ export function sweep()
         sections.push(section(where, args, result, box.root));
         return result;
     };
+    // Asked before anything exists, because the answer is the wording rather
+    // than the path: a machine with no workspace pointer is told where to make
+    // one, and that sentence is as much a read's value as a path is.
+    run(box.root, "outside", ["workspace"]);
     run(ws, "workspace", ["init"]);
     run(ws, "workspace", ["init"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
@@ -116,6 +120,12 @@ function steps(box, ws, demo, work)
         [demo, "project", ["lang", "--plain"]],
         [demo, "project", ["nope"]],
         [demo, "project", ["lang", "--help"]],
+        // The two answers the binary gives before any command resolves: the
+        // verb list a bare call asks for, and one command's own page. Neither
+        // carries an id, a path or a version, so both are the same bytes on
+        // every machine and belong in the sweep rather than in a test.
+        [demo, "project", []],
+        [demo, "project", ["work", "--help"]],
         [demo, "project", ["lang", "ko"]],
         [demo, "project", ["lang"]]
     ];
