@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readSync } from "node:fs";
 
 // The record of how a human was verified. It travels in the event payload,
@@ -108,7 +109,44 @@ function readChunk(buffer: Buffer): number | null
     }
 }
 
-function readLine(): string
+// EAGAIN means a prior process left fd 0 with O_NONBLOCK set. Input still
+// arrives when typed, but a bare retry spins a core for the whole wait — so
+// each empty read pauses briefly before asking again (#309). Atomics.wait is
+// the synchronous sleep: nothing else can wake this array, so the timeout is
+// the whole story.
+const PAUSE = new Int32Array(new SharedArrayBuffer(4));
+
+// The terminal's own state is the other way the gate can present as frozen: a
+// process that died mid-raw-mode leaves echo off, and the challenge is then
+// typed into what looks like a hung prompt (#309). stty on the inherited fd 0
+// reads and sets that state directly; a terminal it cannot describe is used
+// as found, which is exactly the behaviour before this existed.
+function ttyState(): string | null
+{
+    try
+    {
+        return execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "ignore"] }).toString().trim();
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+function setTtyState(state: string): void
+{
+    try
+    {
+        execFileSync("stty", [state], { stdio: ["inherit", "ignore", "ignore"] });
+    }
+    catch
+    {
+        // A state that cannot be applied changes nothing — the read below
+        // works either way, it just may not echo.
+    }
+}
+
+function collectLine(): string
 {
     const buffer = Buffer.alloc(256);
     let line = "";
@@ -117,6 +155,7 @@ function readLine(): string
         const read = readChunk(buffer);
         if (read === null)
         {
+            Atomics.wait(PAUSE, 0, 0, 25);
             continue;
         }
         if (read === 0)
@@ -128,6 +167,26 @@ function readLine(): string
         if (cut !== -1)
         {
             return line.slice(0, cut).trim();
+        }
+    }
+}
+
+function readLine(): string
+{
+    const found = ttyState();
+    if (found !== null)
+    {
+        setTtyState("sane");
+    }
+    try
+    {
+        return collectLine();
+    }
+    finally
+    {
+        if (found !== null)
+        {
+            setTtyState(found);
         }
     }
 }
