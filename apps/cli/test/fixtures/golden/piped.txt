@@ -429,7 +429,7 @@ managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent 
 $ self connect --global   (in project, exit 0)
 no agent instruction files found on this machine — paste this into yours:
 
-<!-- superself:machine:begin v0.6.0 -->
+<!-- superself:machine:begin v0.6.1 -->
 ## Project state (superself)
 
 The `self` CLI version-controls project state — goals, decisions, work

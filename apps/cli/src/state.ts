@@ -31,7 +31,7 @@ import {
     uncoveredCriteria
 } from "./entities.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
-import { entityId } from "./ids.js";
+import { entityId, wrongKindHint } from "./ids.js";
 import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { buildModel, ProjectModel, projectsHolding, workspaceModels } from "./model.js";
@@ -1166,7 +1166,7 @@ function requireCitedWork(model: ProjectModel, id: string): string
     const work = model.works.find((item) => item.id === id);
     if (work === undefined)
     {
-        throw new CliError(`unknown work id "${id}" — run \`self work\` to list ids`);
+        throw new CliError(wrongKindHint(id, "work") ?? `unknown work id "${id}" — run \`self work\` to list ids`);
     }
     return work.id;
 }

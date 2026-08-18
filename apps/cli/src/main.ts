@@ -15,7 +15,7 @@ import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
-import { workId } from "./ids.js";
+import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
 import { buildModel, DecisionState, ProjectModel, readableModels, workScope, workspaceModels, WorkState } from "./model.js";
@@ -1816,7 +1816,7 @@ function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTION
     {
         // Search is the surface that finds a record now (#212), so the refusal
         // names it rather than a listing that shows open units alone.
-        throw new CliError(`unknown work id "${wanted}" — run \`self search "<text>"\` to find one, or \`self work\` to list open ids`);
+        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self search "<text>"\` to find one, or \`self work\` to list open ids`);
     }
     return values.history === true
         ? workHistory(ctx, found, values.project, values.page)
@@ -2066,7 +2066,7 @@ function requireRetirable(model: ProjectModel, id: string | undefined): WorkStat
     const work = model.works.find((item) => item.id === wanted);
     if (work === undefined)
     {
-        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
     }
     if (work.status === "done")
     {
@@ -2257,7 +2257,7 @@ function requireKnownWorks(ctx: ProjectContext, ids: string[]): string[]
     const unknown = ids.find((id) => !model.works.some((item) => item.id === id));
     if (unknown !== undefined)
     {
-        throw new CliError(`unknown work id "${unknown}" — run \`self work\` to list ids`);
+        throw new CliError(wrongKindHint(unknown, "work") ?? `unknown work id "${unknown}" — run \`self work\` to list ids`);
     }
     return [...new Set(ids)];
 }
@@ -2303,7 +2303,7 @@ function requireRenderedWork(ctx: ProjectContext, wanted: string): OpenWork
             return { work, owner: model.slug };
         }
     }
-    throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+    throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
 }
 
 function readReportFile(path: string): string

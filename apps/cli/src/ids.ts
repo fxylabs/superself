@@ -63,6 +63,30 @@ export function milestoneId(): string
     return "m-" + shortId();
 }
 
+// A short id names its kind in its prefix, so a lookup that failed can tell a
+// wrong-kind id apart from a missing one and answer with the command that
+// resolves it, instead of a listing that could never contain it.
+const KIND_BY_PREFIX: Record<string, { kind: string; show: string }> = {
+    "w-": { kind: "work", show: "self work show" },
+    "o-": { kind: "objective", show: "self objective show" },
+    "m-": { kind: "milestone", show: "self milestone show" }
+};
+
+export function wrongKindHint(id: string, expected: "work" | "objective" | "milestone"): string | null
+{
+    const entry = KIND_BY_PREFIX[id.slice(0, 2)];
+    if (entry === undefined || entry.kind === expected)
+    {
+        return null;
+    }
+    return `"${id}" is ${article(entry.kind)} ${entry.kind} id, not ${article(expected)} ${expected} id — run \`${entry.show} ${id}\``;
+}
+
+function article(kind: string): string
+{
+    return kind === "objective" ? "an" : "a";
+}
+
 function shortId(): string
 {
     let id = "";
