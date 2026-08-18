@@ -4,7 +4,7 @@ import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js"
 import { validDate } from "./dates.js";
 import { Exposure, requireSupersedeKind } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
-import { milestoneId, objectiveId, workId } from "./ids.js";
+import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
 import {
     allMilestones,
@@ -1100,7 +1100,7 @@ function requireObjective(model: ProjectModel, id: string | undefined): Objectiv
     const objective = model.goals.objectives.find((item) => item.id === wanted);
     if (objective === undefined)
     {
-        throw new CliError(`unknown objective "${wanted}" — run \`self objective\` to list ids`);
+        throw new CliError(wrongKindHint(wanted, "objective") ?? `unknown objective "${wanted}" — run \`self objective\` to list ids`);
     }
     return objective;
 }
@@ -1149,7 +1149,7 @@ function settleObjectiveMatches(ctx: ProjectContext, wanted: string, matches: Fo
     }
     if (matches.length === 0)
     {
-        throw new CliError(`unknown objective "${wanted}" — no registered project has it; run \`self objective --workspace\` to list ids`);
+        throw new CliError(wrongKindHint(wanted, "objective") ?? `unknown objective "${wanted}" — no registered project has it; run \`self objective --workspace\` to list ids`);
     }
     return matches[0];
 }
@@ -1173,7 +1173,7 @@ function requireMilestone(model: ProjectModel, id: string | undefined): { object
     const found = findMilestone(model.goals, wanted);
     if (found === null)
     {
-        throw new CliError(`unknown milestone "${wanted}" — run \`self milestone\` to list ids`);
+        throw new CliError(wrongKindHint(wanted, "milestone") ?? `unknown milestone "${wanted}" — run \`self milestone\` to list ids`);
     }
     return found;
 }
@@ -1204,7 +1204,7 @@ function requireWork(model: ProjectModel, id: string | undefined): WorkState
     const work = model.works.find((item) => item.id === wanted);
     if (work === undefined)
     {
-        throw new CliError(`unknown work id "${wanted}" — run \`self work\` to list ids`);
+        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
     }
     return work;
 }
