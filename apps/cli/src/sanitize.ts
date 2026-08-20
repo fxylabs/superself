@@ -119,16 +119,16 @@ function assertValue(text: string, at: string, declared: DeclaredSecret[]): void
             throw new CliError(`refusing to record ${at} — it repeats the value the environment variable ${name} holds`);
         }
     }
-    // Held back where redaction is eager, and only there. `findCredential`
-    // judges each rule at the span it matched: an explicit encoding —
-    // `api_key="abc123secret"`, a header, a vendor-prefixed literal — is
-    // refused however short and however ordinary the value reads, while the
-    // rules a sentence can trip have to find key material inside their own
-    // match. That is what keeps "reduced token counting overhead" recordable
-    // in the one log that exists to keep it, without the branch slug in the
-    // same sentence deciding anything. The refusal carries the rule and the
-    // redacted span, because "rephrase and retry" is the only recourse a
-    // refused writer has, and both are already safe to print.
+    // Held back where a rule matches ordinary prose, and only there.
+    // `findCredential` judges each rule at the span it matched: an explicit
+    // encoding — `api_key="abc123secret"`, a header, a vendor-prefixed literal,
+    // a `name:` line whose value is the whole rest of the line — is refused
+    // however short and however ordinary the value reads, while the rules a
+    // sentence can trip have to find key material inside their own match. That
+    // is what keeps "reduced token counting overhead" recordable in the one log
+    // that exists to keep it, without the branch slug in the same sentence
+    // deciding anything. The refusal carries the rule and the redacted span,
+    // because "rephrase and retry" is the only recourse a refused writer has.
     const found = findCredential(text);
     if (found !== null)
     {
