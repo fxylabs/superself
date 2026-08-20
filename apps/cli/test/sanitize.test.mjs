@@ -38,6 +38,40 @@ test("a credential-shaped value is refused", () =>
     );
 });
 
+// A design document describing a credential lifecycle names the credential on
+// every other line, and naming one is not carrying one (#317).
+test("a design document that labels credential fields in prose is recordable", () =>
+{
+    assertSanitized(event({ text: [
+        "## Credential lifecycle",
+        "",
+        "Credential — agent-scoped token: account_id, scopes[], expires_at",
+        "- refresh token (30d, revocable)",
+        "- api_key: rotated quarterly",
+        "- idempotency_key: caller-supplied"
+    ].join("\n") }));
+});
+
+test("an explicit encoding is still refused however ordinary its value reads", () =>
+{
+    for (const text of ["API_KEY=hunter2correct", 'token: "hunter2correct"', "password = hunter2correct"])
+    {
+        assert.throws(
+            () => assertSanitized(event({ text })),
+            (error) => error instanceof CliError && error.message.includes("credential"),
+            text
+        );
+    }
+});
+
+test("a prose label carrying key material is refused", () =>
+{
+    assert.throws(
+        () => assertSanitized(event({ text: "rotate the token: 3fK92mQ7bZ1xLp8vR4nT6wY once a month" })),
+        (error) => error instanceof CliError && error.message.includes("credential")
+    );
+});
+
 test("a terminal control character is refused by code point", () =>
 {
     assert.throws(

@@ -29,7 +29,7 @@ const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|password|passwd|token|ap
 // word follows "token", which costs nothing in provider output and is not a
 // credential in a sentence. Redaction runs every rule the same way, but a
 // caller that refuses a payload instead of rewriting it has to tell the two
-// kinds apart — the rest of these are encodings nothing but a credential
+// kinds apart — the rules left unmarked are encodings nothing but a credential
 // produces, at whatever entropy the value happens to have.
 //
 // The name is what a refusal says matched. It is the one part of a refusal an
@@ -57,7 +57,21 @@ const PATTERNS: Rule[] = [
     // for `NAME=value` cannot reach it. The replacement stays a quoted string
     // because these files are read back with JSON.parse.
     { name: "secret-json-field", pattern: new RegExp(String.raw`("${SECRET_NAME}"[ \t]*:[ \t]*)"(?:[^"\\\r\n]|\\.)+"`, "gi"), replacement: `$1"${REDACTED}"` },
-    { name: "secret-assignment", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*[:=][ \t]*"?)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
+    // Two halves of what was one rule, split by what the separator says. An
+    // `=`, or a quoted value after either separator, is what a config file, an
+    // export line or a pasted snippet writes and what no sentence writes, so
+    // it stays refused at whatever entropy the value happens to have. That is
+    // where a hand-chosen `api_key=hunter2` lives.
+    { name: "secret-assignment", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*(?:=[ \t]*"?|:[ \t]*"))([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
+    // A bare colon is the other half, and it is how prose labels a field:
+    // `agent-scoped token: account_id, scopes[], expires_at` is a schema line
+    // in a design document, not an assignment. Documents about auth systems
+    // are exactly the artifacts a report attaches, and every one of them
+    // writes that shape (#317), so this half is eager — it refuses only where
+    // its own match carries key material. What is given up is a short
+    // hand-chosen value after a bare colon; anything a generator produced is
+    // long enough and varied enough to still be caught here.
+    { name: "secret-label", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*:[ \t]*)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}`, eager: true },
     { name: "provider-key", pattern: /\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED, lead: /^(?:sk|rk|pk)-/ },
     { name: "github-token", pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: REDACTED, lead: /^gh[pousr]_/ },
     { name: "aws-key-id", pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED, lead: /^AKIA/ },
