@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "pnpm --filter superself build",
+    "check:business-facts": "node scripts/check-business-facts.mjs",
     "test": "pnpm --filter superself test",
     "structure": "pnpm --filter superself structure",
     "typecheck": "pnpm --filter superself typecheck"

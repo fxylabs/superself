@@ -1,0 +1,372 @@
+<!doctype html>
+<!--
+  Product page (Korean) — the S1 Agent-Native business API family.
+
+  Served verbatim by @spfn/pages, the same escape hatch the landing uses: this
+  document owns its own head, nav, footer, responsive behaviour and theme
+  switch, and shares the landing's three themes (t-a / t-b / t-c).
+
+  The copy is approved content, converted from
+  artifacts/2026-08-21-s1-sales-pages/product.md. Markup is this page's choice;
+  wording is not. A sentence changes in the artifact first.
+
+  The seller block in the footer is the 전자상거래법 제10조 disclosure. Its values
+  live in site/business-facts.json and are checked by
+  scripts/check-business-facts.mjs (`pnpm check:business-facts`).
+-->
+<html lang="ko" class="t-a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>제품 — Superself 업무 API</title>
+<meta name="description" content="Superself는 고객의 AI 에이전트가 API로 실제 업무를 실행할 수 있게 하는 플랫폼입니다. 이메일 API, 알림톡 API, Landing Kit을 하나의 계정과 선불 지갑으로 운영합니다.">
+<meta name="theme-color" content="#101014">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://superselfs.com/product">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Superself">
+<meta property="og:title" content="제품 — Superself 업무 API">
+<meta property="og:description" content="에이전트가 이메일을 보내고, 랜딩 페이지를 배포하고, 결과와 비용을 확인합니다. 사람은 하나의 계정에서 결제수단과 한도를 정합니다.">
+<meta property="og:url" content="https://superselfs.com/product">
+<meta property="og:image" content="https://superselfs.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+/* Pick the theme before first paint: ?theme=a|b|c wins, then the stored choice. */
+(function ()
+{
+    var themes = ['a', 'b', 'c'];
+    var query = new URLSearchParams(location.search).get('theme');
+    var stored = null;
+    try { stored = localStorage.getItem('sf-theme'); } catch (error) { }
+    var key = themes.indexOf(query) >= 0 ? query : (themes.indexOf(stored) >= 0 ? stored : 'a');
+    document.documentElement.className = 't-' + key;
+})();
+</script>
+<style>
+/* =====================================================================
+   Superself sales pages — one shell, the landing's three themes.
+
+   This block is byte-identical across product / pricing / terms / refund /
+   privacy, and scripts/check-business-facts.mjs fails when the five drift
+   apart. Copy is per page; a theme (.t-a / .t-b / .t-c) sets tokens only.
+   ===================================================================== */
+
+/* ---------- theme A · product-native dark (viewer violet) ---------- */
+.t-a {
+  --bg: #101014; --bg-alt: #131319; --surface: #14141a; --surface-2: #17171f;
+  --border: #232330; --rule: #202029;
+  --text: #f2f2f7; --body: #d6d6de; --muted: #8f8fa3; --faint: #6e6e80;
+  --accent: #a78bfa; --accent-soft: #a78bfa1a; --accent-line: #a78bfa4d;
+  --btn-bg: #a78bfa; --btn-fg: #101014;
+  --h1-size: 38px; --h1-ls: -.02em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+/* ---------- theme B · terminal warm (viewer orange) ---------- */
+.t-b {
+  --bg: #0c0c10; --bg-alt: #101014; --surface: #101014; --surface-2: #17171d;
+  --border: #2a2a32; --rule: #26262e;
+  --text: #fff6ec; --body: #cfc8bd; --muted: #a39c92; --faint: #7d776e;
+  --accent: #ff6b35; --accent-soft: #ff6b351a; --accent-line: #ff6b354d;
+  --btn-bg: #ff6b35; --btn-fg: #0c0c10;
+  --h1-size: 32px; --h1-ls: 0; --h1-weight: 700;
+  --display: var(--mono);
+}
+
+/* ---------- theme C · editorial light ---------- */
+.t-c {
+  --bg: #fafafa; --bg-alt: #fafafa; --surface: #ffffff; --surface-2: #f0f0f2;
+  --border: #e4e4e8; --rule: #ececf0;
+  --text: #19171d; --body: #3a3a42; --muted: #6e6e78; --faint: #9a9aa4;
+  --accent: #7c5ce0; --accent-soft: #7c5ce014; --accent-line: #7c5ce04d;
+  --btn-bg: #19171d; --btn-fg: #fafafa;
+  --h1-size: 42px; --h1-ls: -.03em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+:root {
+  --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px;
+  --page: 1120px;
+  --doc: 780px;
+  --gutter: 40px;
+  color-scheme: dark;
+}
+.t-c { color-scheme: light; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--body);
+  font: 14px/1.72 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- nav — the landing's chrome, carrying every sales page ---------- */
+.lp-nav {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 18px max(var(--gutter), calc((100% - var(--page)) / 2));
+  background: var(--bg-alt); border-bottom: 1px solid var(--border);
+}
+.lp-word { display: flex; align-items: center; gap: 8px; font: 700 14px var(--mono); color: var(--accent); text-decoration: none; }
+/* the product's own logo symbol, verbatim from the CLI viewer; currentColor
+   takes the theme accent, so the mark needs no second color source */
+.lp-mark { width: 13px; height: 15px; flex: none; display: block; }
+.lp-nav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+.lp-nav a:hover { color: var(--text); }
+.lp-nav a[aria-current="page"] { color: var(--accent); }
+.lp-nav .sub { font-size: 12.5px; color: var(--faint); }
+.lp-nav .lp-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* theme switch — the same A/B/C comparison the landing keeps on the page */
+.lp-themes { display: flex; gap: 4px; align-items: center; }
+.lp-themes .lbl { font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+.lp-theme {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
+}
+.lp-theme[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- page head ---------- */
+.pg-hero { max-width: var(--doc); margin: 0 auto; padding: 72px var(--gutter) 4px; }
+.pg-h1 {
+  margin: 0 0 20px; font-family: var(--display);
+  font-size: var(--h1-size); letter-spacing: var(--h1-ls); font-weight: var(--h1-weight);
+  line-height: 1.24; color: var(--text);
+}
+.pg-lead p { margin: 0 0 16px; font-size: 15px; line-height: 1.88; color: var(--muted); }
+.pg-lead code { font: 13px var(--mono); color: var(--accent); }
+
+/* ---------- document body — the prose system every page shares ---------- */
+.doc { max-width: var(--doc); margin: 0 auto; padding: 4px var(--gutter) 96px; }
+.doc h2 {
+  margin: 54px 0 14px; font-size: 20px; font-weight: 650; letter-spacing: -.012em;
+  color: var(--text); line-height: 1.45; scroll-margin-top: 20px;
+}
+.doc h3 { margin: 34px 0 10px; font-size: 16px; font-weight: 650; color: var(--text); line-height: 1.5; }
+.doc p { margin: 0 0 15px; font-size: 14.5px; line-height: 1.95; color: var(--body); }
+.doc ul, .doc ol { margin: 0 0 16px; padding-left: 22px; }
+.doc li { margin: 8px 0; font-size: 14.5px; line-height: 1.9; color: var(--body); }
+.doc li::marker { color: var(--faint); }
+.doc code { font: 12.5px var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+.doc a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); }
+.doc a:hover { border-bottom-color: var(--accent); }
+
+/* a note the copy sets apart from the body around it */
+.doc .note {
+  margin: 0 0 18px; padding: 16px 20px;
+  border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  font-size: 14px; line-height: 1.9; color: var(--body);
+}
+
+/* tables scroll inside their own frame rather than widening the page */
+.doc-table { margin: 0 0 18px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.doc table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 13.5px; }
+.doc th, .doc td { padding: 12px 16px; text-align: left; vertical-align: top; line-height: 1.75; border-bottom: 1px solid var(--rule); }
+/* Korean column labels: no tracking, no uppercase — both only hurt 한글 */
+.doc thead th { font: 600 12px var(--sans); color: var(--muted); background: var(--surface-2); }
+.doc tbody th { font-weight: 600; color: var(--text); white-space: nowrap; }
+.doc tbody tr:last-child th, .doc tbody tr:last-child td { border-bottom: none; }
+.doc td.num { text-align: right; white-space: nowrap; color: var(--text); font-weight: 600; }
+
+/* the top-up packs the pricing copy states as one line */
+.doc .packs { font: 15px/1.9 var(--mono); color: var(--text); }
+
+/* ---------- table of contents — the legal pages' entry point ---------- */
+.toc { margin: 26px 0 8px; padding: 20px 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.toc h2 { margin: 0 0 12px; font: 600 12px var(--sans); color: var(--muted); }
+.toc ol { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 30px; }
+.toc li { margin: 0; padding: 5px 0; font-size: 13.5px; line-height: 1.6; break-inside: avoid; }
+.toc a { color: var(--muted); text-decoration: none; border-bottom: 0; }
+.toc a:hover { color: var(--accent); }
+
+/* ---------- effective date — the one value the deploy step fills in ---------- */
+.eff {
+  display: inline-block; margin: 0 0 6px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+  font: 12px var(--mono); color: var(--muted);
+}
+
+/* ---------- footer — seller disclosure on every page ---------- */
+.lp-foot {
+  padding: 36px max(var(--gutter), calc((100% - var(--page)) / 2)) 48px;
+  border-top: 1px solid var(--border); color: var(--faint);
+}
+.lp-foot .biz { margin: 0 0 14px; font-size: 12px; line-height: 2; color: var(--muted); }
+.lp-foot .biz b { color: var(--body); font-weight: 600; }
+.lp-foot .legal { margin: 0 0 14px; font-size: 12.5px; }
+.lp-foot .legal a { color: var(--body); text-decoration: none; }
+.lp-foot .legal a:hover { color: var(--accent); }
+.lp-foot .legal span { color: var(--faint); margin: 0 8px; }
+.lp-foot .copy { margin: 0; font: 11px var(--mono); color: var(--faint); }
+.lp-foot .copy a { color: var(--faint); text-decoration: none; }
+.lp-foot .copy a:hover { color: var(--muted); }
+
+/* ---------- narrow screens: one column, tables scroll rather than clip ---------- */
+@media (max-width: 900px) {
+  :root { --gutter: 22px; }
+  .pg-hero { padding-top: 48px; }
+  .lp-nav { gap: 12px; }
+  .lp-nav .lp-right { gap: 8px; margin-left: auto; }
+  .toc ol { columns: 1; }
+}
+@media (max-width: 560px) {
+  .pg-h1 { font-size: calc(var(--h1-size) * .8); }
+  .lp-themes .lbl { display: none; }
+  .doc h2 { margin-top: 42px; font-size: 18.5px; }
+}
+</style>
+<script>/* PostHog loader — same shape the site layouts inject into mounted pages; raw HTML pages are served verbatim so each one carries its own copy. */(function(){var s=document.createElement('script');s.async=true;s.crossOrigin='anonymous';s.src='https://us-assets.i.posthog.com/static/array.js';s.onload=function(){window.posthog&&window.posthog.init('phc_sg3X7M6CtErmTgKkAk5ajcJbJyCCZsFkmVhikdjr4SLt',{api_host:'https://us.i.posthog.com',defaults:'2025-05-24'})};document.head.appendChild(s)})();</script>
+</head>
+<body>
+<nav class="lp-nav" aria-label="Primary">
+  <a class="lp-word" href="/"><svg class="lp-mark" viewBox="0 0 166 192" fill="currentColor" aria-hidden="true"><path d="M137.954 26.8921C133.611 24.0908 129.082 22.0243 124.451 20.6696C120.622 15.8133 116.032 11.5655 110.752 8.16724C84.6518 -8.64033 51.2852 1.32481 36.2178 30.4281C21.1606 59.5313 30.1043 96.7514 56.2048 113.559C61.4948 116.969 67.0937 119.265 72.7645 120.539C57.728 101.481 54.4757 73.1244 66.4864 49.9221C78.4972 26.7313 102.128 15.687 124.451 20.6811C141.412 39.8077 145.58 69.9098 132.942 94.329L158.033 110.494C173.183 81.2182 164.198 43.7915 137.954 26.8921Z"/><path d="M108.874 78.4409C103.584 75.0312 97.9952 72.7236 92.314 71.4492C107.351 90.5185 110.603 118.876 98.5921 142.078C86.5814 165.28 62.951 176.324 40.6278 171.33C23.7798 152.284 19.7042 122.239 32.3427 97.8201L7.39499 81.7473C-7.75478 111.023 1.1169 148.369 27.207 165.177H27.1967C31.5194 167.955 36.0272 169.999 40.6278 171.342C44.4564 176.187 49.0466 180.423 54.3264 183.833C80.4268 200.64 113.793 190.675 128.861 161.572C143.918 132.469 134.974 95.2485 108.874 78.4409Z"/></svg>superself</a>
+  <a href="/product" aria-current="page">제품</a>
+  <a href="/pricing">가격</a>
+  <a class="sub" href="/terms">이용약관</a>
+  <a class="sub" href="/refund">환불규정</a>
+  <a class="sub" href="/privacy">개인정보처리방침</a>
+  <span class="lp-right">
+    <span class="lp-themes" role="group" aria-label="Page theme">
+      <span class="lbl">Theme</span>
+      <button class="lp-theme" type="button" data-theme="a" aria-pressed="true" title="Product-native dark">A</button>
+      <button class="lp-theme" type="button" data-theme="b" aria-pressed="false" title="Terminal warm">B</button>
+      <button class="lp-theme" type="button" data-theme="c" aria-pressed="false" title="Editorial light">C</button>
+    </span>
+  </span>
+</nav>
+
+<main>
+  <header class="pg-hero">
+    <h1 class="pg-h1">AI 에이전트가 업무를 실행하는 플랫폼</h1>
+    <div class="pg-lead">
+      <p>Superself는 고객의 AI 에이전트가 API로 실제 업무를 실행할 수 있게 하는 플랫폼입니다. self CLI는 완전한 오픈소스로 단독으로도 동작하며, 업무 API는 그 CLI로 접속하는 클라우드 유료 서비스입니다. 에이전트는 이메일을 보내고, 이메일 링크가 열리는 랜딩 페이지를 배포하고, 결과와 비용을 확인할 수 있습니다.</p>
+      <p>사람은 하나의 계정에서 결제수단, 하나의 선불 지갑, 지출 한도와 권한을 정합니다. 에이전트는 <code>self</code> CLI를 시작점으로 사용해 허용된 API를 호출합니다. 각 API는 확인이 필요한 작업을 사람이 처리할 수 있는 웹 화면과 연결된 미니앱으로 제공됩니다. 이메일 전송과 랜딩+분석이 첫 미니앱입니다.</p>
+    </div>
+  </header>
+
+  <article class="doc">
+    <h2 id="products">제품군</h2>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">제품</th><th scope="col">제공 범위</th><th scope="col">시작 시점</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">이메일 API</th><td>에이전트가 이메일을 보내고 전송·열람·클릭 통계를 확인합니다.</td><td>8월</td></tr>
+          <tr><th scope="row">알림톡 API</th><td>알림톡을 에이전트 작업에 연결합니다.</td><td>9월</td></tr>
+          <tr><th scope="row">Landing Kit</th><td>이메일 링크가 열리는 랜딩 페이지를 호스팅하고 분석합니다.</td><td>호스팅 전용</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>알림톡은 9월에 추가하고, 더 많은 업무 API는 이후 로드맵에서 정합니다.</p>
+
+    <h3 id="email">이메일 API</h3>
+    <p>에이전트는 <code>self email send</code>로 수신자, 제목, 본문 또는 템플릿을 전달합니다. 발신 도메인을 확인한 뒤 사용할 수 있으며, 발송 목적도 함께 선언합니다.</p>
+    <p>발송 전에 콘텐츠와 링크를 검증합니다. 검증을 통과하지 못한 요청은 전송하지 않습니다. 전송이 수락된 수신자만 사용량으로 계산하며, 검증 거부·전송 실패·수신 거부 대상은 차감하지 않습니다.</p>
+    <p>이메일은 수신자 1명당 ₩1입니다. USD 계정은 수신자 1명당 $0.001입니다. 무료 사용량은 이메일 하루 100건, 매월 3,000건이며 발신 도메인 확인이 필요합니다. 무료 티어 발송은 고정 템플릿만 사용할 수 있습니다.</p>
+
+    <h3 id="alimtalk">알림톡 API</h3>
+    <p>알림톡 API는 9월 출시 범위입니다. 무료 티어는 제공하지 않으며, 가격과 온보딩 크레딧 제공 여부는 9월 출시 전에 확정합니다.</p>
+
+    <h3 id="landing">Landing Kit</h3>
+    <p>Landing Kit은 이메일 링크를 눌렀을 때 열리는 페이지를 호스팅하는 미니앱입니다. 광고 링크에도 사용할 수 있고, 페이지뷰, 클릭, 외부 링크, 폼 제출 등의 분석 기능이 함께 제공됩니다. 에이전트는 정적 HTML을 배포하고 사람은 웹 화면에서 사이트와 분석을 확인합니다.</p>
+    <p>당사 서브도메인에 호스팅 랜딩 사이트 1개를 무료로 제공하며, 무료 티어의 분석 데이터는 30일간 보존합니다.</p>
+
+    <h2 id="rail">하나의 운영 레일</h2>
+    <p>가입 후 카드 등록과 지갑 충전을 한 번 설정합니다. 이메일, 알림톡, Landing Kit은 같은 계정과 지갑을 사용합니다.</p>
+    <p>각 계정은 가입 시 KRW 또는 USD 중 하나를 기본 통화로 선택합니다. 통화는 혼합하거나 환전하지 않습니다. 지갑 잔액, 사용 내역, 자동 충전 상태는 <code>self wallet</code>과 사람용 웹 화면에서 확인할 수 있습니다.</p>
+    <p>자동 충전은 KRW 계정에서 빌링키로 설정할 수 있습니다. 기준 잔액, 충전 금액, 월 한도를 직접 정해야 합니다. USD 계정은 수동 충전 방식이며 잔액이 낮아지면 이메일과 CLI 응답으로 안내합니다. 무료 사용량 이후 유료 이메일은 KRW 계정은 ₩10,000 이상, USD 계정은 $10 이상 충전한 지갑 잔액으로만 사용할 수 있습니다.</p>
+
+    <h2 id="roles">사람과 에이전트의 역할</h2>
+    <p>사람은 다음을 결정합니다.</p>
+    <ul>
+      <li>카드 등록과 지갑 충전</li>
+      <li>자동 충전 기준과 월 한도</li>
+      <li>발신 도메인과 에이전트 권한</li>
+      <li>자격증명 폐기와 계정 종료</li>
+    </ul>
+    <p>에이전트는 승인된 범위에서 다음을 수행합니다.</p>
+    <ul>
+      <li><code>self email send</code>, <code>self email stats</code></li>
+      <li><code>self landing deploy</code>, <code>self landing stats</code></li>
+      <li><code>self wallet</code>를 통한 잔액·사용 내역 조회</li>
+    </ul>
+    <p>에이전트에는 장기 API 키를 전달하지 않습니다. 기기 코드 로그인으로 발급된 짧은 수명의 자격증명에 작업 범위를 붙이며, 사람은 이를 언제든 폐기할 수 있습니다. 에이전트가 지갑을 충전하거나 관리자 작업을 실행하는 권한은 제공하지 않습니다.</p>
+
+    <h2 id="safety">전송 전에 멈추는 안전장치</h2>
+    <p>모든 발송 콘텐츠와 랜딩 HTML은 검증 대상입니다.</p>
+    <ul>
+      <li>검증이 통과하지 않으면 전송하지 않는 fail-closed 검증</li>
+      <li>계정별 이메일 전송 환경 분리</li>
+      <li>반송과 불만이 기준을 넘을 때 자동 일시정지</li>
+      <li>계정별 지출 한도와 사용량 제한</li>
+      <li>에이전트별 짧은 수명과 범위 제한 자격증명</li>
+    </ul>
+    <p>발송이 실패하면 지갑을 차감하지 않습니다. 잔액이 부족하면 전송 전에 요청을 거절하거나, 설정된 충전 절차가 끝난 뒤 재시도할 수 있는 응답을 돌려줍니다.</p>
+
+    <h2 id="start">시작 순서</h2>
+    <ol>
+      <li>Superself 계정을 만들고 KRW 또는 USD를 선택합니다.</li>
+      <li>카드를 등록하고 지갑을 충전합니다.</li>
+      <li>이메일을 사용한다면 발신 도메인을 확인합니다.</li>
+      <li><code>self login</code>으로 에이전트 기기를 승인합니다.</li>
+      <li>에이전트가 CLI에서 발송 또는 랜딩 배포를 실행합니다.</li>
+      <li>사람과 에이전트가 잔액, 사용량, 통계를 확인합니다.</li>
+    </ol>
+    <p class="note">사람이 방향과 비용을 정하고, 에이전트가 승인된 업무를 실행합니다. 서비스 범위와 요금은 공개 페이지와 결제 화면에 표시한 출시 버전에 따릅니다.</p>
+  </article>
+</main>
+
+<!-- Seller disclosure — 전자상거래법 제10조. Values: site/business-facts.json -->
+<footer class="lp-foot">
+  <p class="biz">
+    <b>주식회사 에프엑스와이</b> (FXY Inc.) · 대표 임보훈 · 사업자등록번호 740-87-01715 · 통신판매업신고 2024-서울서초-3685<br>
+    서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩) · hello@fxy.global · 070-7954-8265
+  </p>
+  <p class="legal">
+    <a href="/terms">이용약관</a><span>·</span><a href="/privacy">개인정보처리방침</a><span>·</span><a href="/refund">환불규정</a>
+  </p>
+  <p class="copy">© 2026 FXY Inc. · <a href="https://github.com/fxylabs/superself">github.com/fxylabs/superself</a></p>
+</footer>
+<script>
+/* Theme switch — the one behaviour these pages carry, shared with the landing. */
+(function ()
+{
+    var buttons = document.querySelectorAll('.lp-theme');
+
+    /* The head script already picked the theme; mark which button owns it. */
+    function mark(key)
+    {
+        buttons.forEach(function (button)
+        {
+            button.setAttribute('aria-pressed', String(button.dataset.theme === key));
+        });
+    }
+
+    function apply(key)
+    {
+        document.documentElement.className = 't-' + key;
+        mark(key);
+        try { localStorage.setItem('sf-theme', key); } catch (error) { }
+
+        /* A chosen theme becomes shareable; an untouched page keeps a clean URL. */
+        var url = new URL(location.href);
+        url.searchParams.set('theme', key);
+        history.replaceState(null, '', url);
+    }
+
+    buttons.forEach(function (button)
+    {
+        button.addEventListener('click', function () { apply(button.dataset.theme); });
+    });
+    mark(document.documentElement.className.replace('t-', '') || 'a');
+})();
+</script>
+</body>
+</html>

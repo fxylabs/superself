@@ -1,0 +1,413 @@
+<!doctype html>
+<!--
+  Refund policy (Korean) — the prepaid wallet and account close.
+
+  Served verbatim by @spfn/pages, the same escape hatch the landing uses: this
+  document owns its own head, nav, footer, responsive behaviour and theme
+  switch, and shares the landing's three themes (t-a / t-b / t-c).
+
+  The copy is approved content, converted from
+  artifacts/2026-08-21-s1-sales-pages/refund.md. Markup is this page's choice;
+  wording is not. A clause changes in the artifact first.
+
+  The seller block in the footer is the 전자상거래법 제10조 disclosure. Its values
+  live in site/business-facts.json and are checked by
+  scripts/check-business-facts.mjs (`pnpm check:business-facts`).
+-->
+<html lang="ko" class="t-a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>환불규정 — Superself 업무 API</title>
+<meta name="description" content="Superself의 선불 지갑에 충전된 금액과 계정 종료에 따른 환불 기준입니다. 사용하지 않은 선불 충전 잔액이 환불 대상입니다.">
+<meta name="theme-color" content="#101014">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://superselfs.com/refund">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Superself">
+<meta property="og:title" content="환불규정 — Superself 업무 API">
+<meta property="og:description" content="사용하지 않은 선불 충전 잔액의 환불 기준, 원 결제수단 환불 순서와 수동 처리 절차입니다.">
+<meta property="og:url" content="https://superselfs.com/refund">
+<meta property="og:image" content="https://superselfs.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+/* Pick the theme before first paint: ?theme=a|b|c wins, then the stored choice. */
+(function ()
+{
+    var themes = ['a', 'b', 'c'];
+    var query = new URLSearchParams(location.search).get('theme');
+    var stored = null;
+    try { stored = localStorage.getItem('sf-theme'); } catch (error) { }
+    var key = themes.indexOf(query) >= 0 ? query : (themes.indexOf(stored) >= 0 ? stored : 'a');
+    document.documentElement.className = 't-' + key;
+})();
+</script>
+<style>
+/* =====================================================================
+   Superself sales pages — one shell, the landing's three themes.
+
+   This block is byte-identical across product / pricing / terms / refund /
+   privacy, and scripts/check-business-facts.mjs fails when the five drift
+   apart. Copy is per page; a theme (.t-a / .t-b / .t-c) sets tokens only.
+   ===================================================================== */
+
+/* ---------- theme A · product-native dark (viewer violet) ---------- */
+.t-a {
+  --bg: #101014; --bg-alt: #131319; --surface: #14141a; --surface-2: #17171f;
+  --border: #232330; --rule: #202029;
+  --text: #f2f2f7; --body: #d6d6de; --muted: #8f8fa3; --faint: #6e6e80;
+  --accent: #a78bfa; --accent-soft: #a78bfa1a; --accent-line: #a78bfa4d;
+  --btn-bg: #a78bfa; --btn-fg: #101014;
+  --h1-size: 38px; --h1-ls: -.02em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+/* ---------- theme B · terminal warm (viewer orange) ---------- */
+.t-b {
+  --bg: #0c0c10; --bg-alt: #101014; --surface: #101014; --surface-2: #17171d;
+  --border: #2a2a32; --rule: #26262e;
+  --text: #fff6ec; --body: #cfc8bd; --muted: #a39c92; --faint: #7d776e;
+  --accent: #ff6b35; --accent-soft: #ff6b351a; --accent-line: #ff6b354d;
+  --btn-bg: #ff6b35; --btn-fg: #0c0c10;
+  --h1-size: 32px; --h1-ls: 0; --h1-weight: 700;
+  --display: var(--mono);
+}
+
+/* ---------- theme C · editorial light ---------- */
+.t-c {
+  --bg: #fafafa; --bg-alt: #fafafa; --surface: #ffffff; --surface-2: #f0f0f2;
+  --border: #e4e4e8; --rule: #ececf0;
+  --text: #19171d; --body: #3a3a42; --muted: #6e6e78; --faint: #9a9aa4;
+  --accent: #7c5ce0; --accent-soft: #7c5ce014; --accent-line: #7c5ce04d;
+  --btn-bg: #19171d; --btn-fg: #fafafa;
+  --h1-size: 42px; --h1-ls: -.03em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+:root {
+  --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px;
+  --page: 1120px;
+  --doc: 780px;
+  --gutter: 40px;
+  color-scheme: dark;
+}
+.t-c { color-scheme: light; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--body);
+  font: 14px/1.72 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- nav — the landing's chrome, carrying every sales page ---------- */
+.lp-nav {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 18px max(var(--gutter), calc((100% - var(--page)) / 2));
+  background: var(--bg-alt); border-bottom: 1px solid var(--border);
+}
+.lp-word { display: flex; align-items: center; gap: 8px; font: 700 14px var(--mono); color: var(--accent); text-decoration: none; }
+/* the product's own logo symbol, verbatim from the CLI viewer; currentColor
+   takes the theme accent, so the mark needs no second color source */
+.lp-mark { width: 13px; height: 15px; flex: none; display: block; }
+.lp-nav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+.lp-nav a:hover { color: var(--text); }
+.lp-nav a[aria-current="page"] { color: var(--accent); }
+.lp-nav .sub { font-size: 12.5px; color: var(--faint); }
+.lp-nav .lp-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* theme switch — the same A/B/C comparison the landing keeps on the page */
+.lp-themes { display: flex; gap: 4px; align-items: center; }
+.lp-themes .lbl { font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+.lp-theme {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
+}
+.lp-theme[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- page head ---------- */
+.pg-hero { max-width: var(--doc); margin: 0 auto; padding: 72px var(--gutter) 4px; }
+.pg-h1 {
+  margin: 0 0 20px; font-family: var(--display);
+  font-size: var(--h1-size); letter-spacing: var(--h1-ls); font-weight: var(--h1-weight);
+  line-height: 1.24; color: var(--text);
+}
+.pg-lead p { margin: 0 0 16px; font-size: 15px; line-height: 1.88; color: var(--muted); }
+.pg-lead code { font: 13px var(--mono); color: var(--accent); }
+
+/* ---------- document body — the prose system every page shares ---------- */
+.doc { max-width: var(--doc); margin: 0 auto; padding: 4px var(--gutter) 96px; }
+.doc h2 {
+  margin: 54px 0 14px; font-size: 20px; font-weight: 650; letter-spacing: -.012em;
+  color: var(--text); line-height: 1.45; scroll-margin-top: 20px;
+}
+.doc h3 { margin: 34px 0 10px; font-size: 16px; font-weight: 650; color: var(--text); line-height: 1.5; }
+.doc p { margin: 0 0 15px; font-size: 14.5px; line-height: 1.95; color: var(--body); }
+.doc ul, .doc ol { margin: 0 0 16px; padding-left: 22px; }
+.doc li { margin: 8px 0; font-size: 14.5px; line-height: 1.9; color: var(--body); }
+.doc li::marker { color: var(--faint); }
+.doc code { font: 12.5px var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+.doc a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); }
+.doc a:hover { border-bottom-color: var(--accent); }
+
+/* a note the copy sets apart from the body around it */
+.doc .note {
+  margin: 0 0 18px; padding: 16px 20px;
+  border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  font-size: 14px; line-height: 1.9; color: var(--body);
+}
+
+/* tables scroll inside their own frame rather than widening the page */
+.doc-table { margin: 0 0 18px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.doc table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 13.5px; }
+.doc th, .doc td { padding: 12px 16px; text-align: left; vertical-align: top; line-height: 1.75; border-bottom: 1px solid var(--rule); }
+/* Korean column labels: no tracking, no uppercase — both only hurt 한글 */
+.doc thead th { font: 600 12px var(--sans); color: var(--muted); background: var(--surface-2); }
+.doc tbody th { font-weight: 600; color: var(--text); white-space: nowrap; }
+.doc tbody tr:last-child th, .doc tbody tr:last-child td { border-bottom: none; }
+.doc td.num { text-align: right; white-space: nowrap; color: var(--text); font-weight: 600; }
+
+/* the top-up packs the pricing copy states as one line */
+.doc .packs { font: 15px/1.9 var(--mono); color: var(--text); }
+
+/* ---------- table of contents — the legal pages' entry point ---------- */
+.toc { margin: 26px 0 8px; padding: 20px 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.toc h2 { margin: 0 0 12px; font: 600 12px var(--sans); color: var(--muted); }
+.toc ol { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 30px; }
+.toc li { margin: 0; padding: 5px 0; font-size: 13.5px; line-height: 1.6; break-inside: avoid; }
+.toc a { color: var(--muted); text-decoration: none; border-bottom: 0; }
+.toc a:hover { color: var(--accent); }
+
+/* ---------- effective date — the one value the deploy step fills in ---------- */
+.eff {
+  display: inline-block; margin: 0 0 6px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+  font: 12px var(--mono); color: var(--muted);
+}
+
+/* ---------- footer — seller disclosure on every page ---------- */
+.lp-foot {
+  padding: 36px max(var(--gutter), calc((100% - var(--page)) / 2)) 48px;
+  border-top: 1px solid var(--border); color: var(--faint);
+}
+.lp-foot .biz { margin: 0 0 14px; font-size: 12px; line-height: 2; color: var(--muted); }
+.lp-foot .biz b { color: var(--body); font-weight: 600; }
+.lp-foot .legal { margin: 0 0 14px; font-size: 12.5px; }
+.lp-foot .legal a { color: var(--body); text-decoration: none; }
+.lp-foot .legal a:hover { color: var(--accent); }
+.lp-foot .legal span { color: var(--faint); margin: 0 8px; }
+.lp-foot .copy { margin: 0; font: 11px var(--mono); color: var(--faint); }
+.lp-foot .copy a { color: var(--faint); text-decoration: none; }
+.lp-foot .copy a:hover { color: var(--muted); }
+
+/* ---------- narrow screens: one column, tables scroll rather than clip ---------- */
+@media (max-width: 900px) {
+  :root { --gutter: 22px; }
+  .pg-hero { padding-top: 48px; }
+  .lp-nav { gap: 12px; }
+  .lp-nav .lp-right { gap: 8px; margin-left: auto; }
+  .toc ol { columns: 1; }
+}
+@media (max-width: 560px) {
+  .pg-h1 { font-size: calc(var(--h1-size) * .8); }
+  .lp-themes .lbl { display: none; }
+  .doc h2 { margin-top: 42px; font-size: 18.5px; }
+}
+</style>
+<script>/* PostHog loader — same shape the site layouts inject into mounted pages; raw HTML pages are served verbatim so each one carries its own copy. */(function(){var s=document.createElement('script');s.async=true;s.crossOrigin='anonymous';s.src='https://us-assets.i.posthog.com/static/array.js';s.onload=function(){window.posthog&&window.posthog.init('phc_sg3X7M6CtErmTgKkAk5ajcJbJyCCZsFkmVhikdjr4SLt',{api_host:'https://us.i.posthog.com',defaults:'2025-05-24'})};document.head.appendChild(s)})();</script>
+</head>
+<body>
+<nav class="lp-nav" aria-label="Primary">
+  <a class="lp-word" href="/"><svg class="lp-mark" viewBox="0 0 166 192" fill="currentColor" aria-hidden="true"><path d="M137.954 26.8921C133.611 24.0908 129.082 22.0243 124.451 20.6696C120.622 15.8133 116.032 11.5655 110.752 8.16724C84.6518 -8.64033 51.2852 1.32481 36.2178 30.4281C21.1606 59.5313 30.1043 96.7514 56.2048 113.559C61.4948 116.969 67.0937 119.265 72.7645 120.539C57.728 101.481 54.4757 73.1244 66.4864 49.9221C78.4972 26.7313 102.128 15.687 124.451 20.6811C141.412 39.8077 145.58 69.9098 132.942 94.329L158.033 110.494C173.183 81.2182 164.198 43.7915 137.954 26.8921Z"/><path d="M108.874 78.4409C103.584 75.0312 97.9952 72.7236 92.314 71.4492C107.351 90.5185 110.603 118.876 98.5921 142.078C86.5814 165.28 62.951 176.324 40.6278 171.33C23.7798 152.284 19.7042 122.239 32.3427 97.8201L7.39499 81.7473C-7.75478 111.023 1.1169 148.369 27.207 165.177H27.1967C31.5194 167.955 36.0272 169.999 40.6278 171.342C44.4564 176.187 49.0466 180.423 54.3264 183.833C80.4268 200.64 113.793 190.675 128.861 161.572C143.918 132.469 134.974 95.2485 108.874 78.4409Z"/></svg>superself</a>
+  <a href="/product">제품</a>
+  <a href="/pricing">가격</a>
+  <a class="sub" href="/terms">이용약관</a>
+  <a class="sub" href="/refund" aria-current="page">환불규정</a>
+  <a class="sub" href="/privacy">개인정보처리방침</a>
+  <span class="lp-right">
+    <span class="lp-themes" role="group" aria-label="Page theme">
+      <span class="lbl">Theme</span>
+      <button class="lp-theme" type="button" data-theme="a" aria-pressed="true" title="Product-native dark">A</button>
+      <button class="lp-theme" type="button" data-theme="b" aria-pressed="false" title="Terminal warm">B</button>
+      <button class="lp-theme" type="button" data-theme="c" aria-pressed="false" title="Editorial light">C</button>
+    </span>
+  </span>
+</nav>
+
+<main>
+  <header class="pg-hero">
+    <h1 class="pg-h1">환불규정</h1>
+    <div class="pg-lead">
+      <p>이 규정은 Superself의 선불 지갑에 충전된 금액과 계정 종료에 따른 환불 기준을 정합니다.</p>
+    </div>
+  </header>
+
+  <article class="doc">
+    <h2 id="business">사업자 정보</h2>
+    <ul>
+      <li>상호: 주식회사 에프엑스와이 (영문 FXY Inc.)</li>
+      <li>대표자: 임보훈</li>
+      <li>사업자등록번호: 740-87-01715</li>
+      <li>주소: 서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩)</li>
+      <li>고객센터: hello@fxy.global · 070-7954-8265</li>
+      <li>환불 접수: hello@fxy.global</li>
+      <li>KRW 결제대행사: 나이스페이먼츠·토스페이먼츠</li>
+      <li>USD 결제사업자: Polar (판매자 기록상 판매자, Merchant of Record)</li>
+    </ul>
+
+    <nav class="toc" aria-label="환불규정 목차">
+      <h2>목차</h2>
+      <ol>
+        <li><a href="#s1">1. 기본 원칙</a></li>
+        <li><a href="#s2">2. 계정 종료와 환불 요청</a></li>
+        <li><a href="#s3">3. 환불 대상 금액 계산</a></li>
+        <li><a href="#s4">4. 원 결제수단 환불</a></li>
+        <li><a href="#s5">5. PG 수동 처리</a></li>
+        <li><a href="#s6">6. 사용량별 환불 기준</a></li>
+        <li><a href="#s7">7. 법령상 권리</a></li>
+        <li><a href="#s8">8. 처리 기록과 개인정보</a></li>
+        <li><a href="#s9">9. 문의</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="s1">1. 기본 원칙</h2>
+    <p>환불 대상은 계정 종료 시점의 사용하지 않은 선불 충전 잔액입니다.</p>
+    <p>다음 금액은 환불하지 않습니다.</p>
+    <ul>
+      <li>이미 이메일, 알림톡 또는 유료 기능에 사용한 금액</li>
+      <li>무료 사용량으로 제공된 금액</li>
+      <li>프로모션이나 온보딩 등으로 제공된 프로모션 크레딧</li>
+      <li>그 밖에 결제 화면에서 환불 불가로 명시하고 회원이 동의한 혜택성 잔액</li>
+    </ul>
+    <p>사용한 금액은 전송 결과를 나중에 열람하거나, 랜딩 페이지를 내린다고 해서 사용하지 않은 금액으로 바뀌지 않습니다.</p>
+
+    <h2 id="s2">2. 계정 종료와 환불 요청</h2>
+    <ol>
+      <li>소유자가 계정 종료를 요청하면 계정은 <code>closing</code> 상태가 됩니다.</li>
+      <li>종료 절차가 시작되면 유료 발송을 중지하고, 호스팅 랜딩 사이트를 내리며, 에이전트 자격증명과 갱신 경로를 폐기합니다.</li>
+      <li>잔액이 0이면 환불 요청을 만들지 않고 계정 종료 절차를 진행합니다.</li>
+      <li>환불 대상 잔액이 있으면 환불 요청을 만들고, 무료·프로모션 잔액과 사용 금액을 먼저 제외합니다.</li>
+      <li>같은 계정 종료를 다시 제출하거나 두 화면에서 동시에 제출해도 기존 환불 요청을 반환합니다. 동일한 계정 종료에 대해 환불을 두 번 실행하지 않습니다.</li>
+    </ol>
+
+    <h2 id="s3">3. 환불 대상 금액 계산</h2>
+    <p>환불 대상 금액은 다음 순서로 계산합니다.</p>
+    <ol>
+      <li>선불 충전으로 들어온 잔액 중 사용하지 않은 금액을 확인합니다.</li>
+      <li>무료·프로모션 크레딧을 제외합니다.</li>
+      <li>미결제 정산 부채가 있으면 환불 전에 잔액에서 먼저 차감합니다.</li>
+      <li>남은 금액만 환불합니다.</li>
+    </ol>
+    <p>미결제 정산 부채가 환불 대상 잔액보다 작으면 차액을 환불합니다. 미결제 정산 부채가 잔액과 같거나 크면 환불액은 0원입니다. 이 경우 잔여 부채는 기록 후 정리하며, 지갑을 마이너스로 만들거나 회원에게 추가 청구하지 않습니다.</p>
+
+    <h2 id="s4">4. 원 결제수단 환불</h2>
+    <p>카드 결제 중 PG가 취소 또는 부분취소를 지원하고 해당 처리 기간이 남아 있으면 원 결제수단의 결제 취소를 기본으로 하며, 환불 대상과 금액을 확인한 날부터 3영업일 이내 처리합니다.</p>
+    <ul>
+      <li>여러 번 충전한 경우 최초 결제부터 순서대로 배분합니다.</li>
+      <li>각 결제에 배분하는 금액은 해당 결제의 미환불 잔액을 넘지 않습니다.</li>
+      <li>이미 일부 환불된 결제는 남은 미환불 금액만 다시 환불 대상이 됩니다.</li>
+      <li>환불 대상 잔액이 두 결제에 걸치면 각 결제에 나누어 처리합니다.</li>
+    </ul>
+    <p>예를 들어 ₩10,000을 두 번 충전했고 사용하지 않은 잔액이 ₩15,000이면, 최초 결제에 ₩10,000, 다음 결제에 ₩5,000을 배분합니다. 어느 결제에도 실제 미환불 금액보다 많이 배분하지 않습니다.</p>
+
+    <h2 id="s5">5. PG 수동 처리</h2>
+    <p>다음 경우에는 자동 PG 환불 대신 수동 환불 요청으로 전환할 수 있습니다.</p>
+    <ul>
+      <li>PG의 취소 처리 기간이 지난 경우</li>
+      <li>PG가 부분취소를 지원하지 않는 경우</li>
+      <li>한 환불 건에 자동 처리와 수동 처리가 함께 필요한 경우</li>
+      <li>PG 환불 API가 실패하거나 응답하지 않는 경우</li>
+    </ul>
+    <p>원 결제수단의 취소 처리 기간이 지난 경우 은행 계좌 환불로 전환할 수 있으며, 계좌 환불은 계정 소유자 본인 명의로 확인된 계좌로만 처리합니다.</p>
+    <p>수동 환불 요청은 <code>pending</code> 상태로 남기고 운영자가 확인한 뒤 처리합니다. 수동 처리에 필요한 결제 확인 정보나 계좌 정보는 공식 환불 접수 채널을 통해서만 제출합니다. <code>self</code>, Git 저장소 또는 공개 문서에 계좌 정보를 입력하지 않습니다.</p>
+    <p>환불 API가 실패하거나 시간 초과된 경우에도 환불 완료로 표시하지 않습니다. 요청은 재시도되며, 같은 요청에 대해 중복 환불하지 않습니다.</p>
+
+    <h2 id="s6">6. 사용량별 환불 기준</h2>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">상황</th><th scope="col">환불</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">잔액이 0인 계정 종료</th><td>환불 없음</td></tr>
+          <tr><th scope="row">사용하지 않은 선불 충전 잔액</th><td>환불 대상</td></tr>
+          <tr><th scope="row">이미 수락된 이메일 수신자에 대한 금액</th><td>환불 없음</td></tr>
+          <tr><th scope="row">검증 거부·전송 실패·수신 거부 대상</th><td>사용량으로 차감하지 않음</td></tr>
+          <tr><th scope="row">무료 사용량</th><td>환불 없음</td></tr>
+          <tr><th scope="row">카드 등록·온보딩 프로모션 크레딧</th><td>환불 없음</td></tr>
+          <tr><th scope="row">미결제 정산 부채가 잔액보다 적음</th><td>부채 차감 후 잔액 환불</td></tr>
+          <tr><th scope="row">미결제 정산 부채가 잔액과 같거나 큼</th><td>환불 0원, 잔여 부채 기록 후 정리</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>검증 거부, 전송 실패, 수신 거부 대상은 애초에 사용량으로 차감하지 않습니다. 이미 차감된 수락된 사용량은 환불하지 않습니다.</p>
+
+    <h2 id="s7">7. 법령상 권리</h2>
+    <p>이 규정은 전자상거래 등에서의 소비자보호에 관한 법률 등 강행규정에 따른 청약철회, 환급과 손해배상 관련 권리를 제한하지 않습니다. 법령상 환불 또는 환급 조치가 필요한 경우 해당 법령과 결제 화면의 고지에 따릅니다.</p>
+    <p>API와 호스팅 서비스와 같은 디지털 용역은 이용 개시, 일부 사용 또는 소비 후 청약철회가 제한될 수 있습니다. 결제 화면에서 제공 개시와 청약철회 제한을 미리 고지하고, 회원이 “디지털 서비스 제공 개시 및 청약철회 제한에 동의합니다”라는 문구에 동의한 경우에만 제공을 개시합니다. 이 조항은 전자상거래 등에서의 소비자보호에 관한 법률 제17조제3항에 따른 강행규정을 제한하지 않습니다.</p>
+    <p>선불식 거래에서 사업자가 서비스를 제공하기 곤란해진 경우에는 그 사유를 지체 없이 회원에게 고지하고, 결제대금의 환급 등 필요한 조치를 3영업일 이내에 합니다.</p>
+
+    <h2 id="s8">8. 처리 기록과 개인정보</h2>
+    <p>환불 요청은 계정 종료 사건과 연결해 한 번만 처리합니다. 결제별 배분, 처리 방식, 상태와 처리 결과를 기록합니다.</p>
+    <p>계정 종료 시 수신자 개인정보를 파기하며, 법령상 보존 의무가 있는 정보만 그 기간 동안 보존한다. 환불 요청, 원장과 감사 기록은 환불·회계·분쟁 대응에 필요한 기간 동안 보존합니다.</p>
+
+    <h2 id="s9">9. 문의</h2>
+    <p>환불 관련 문의는 hello@fxy.global로 접수합니다. 접수 시 계정 식별 정보와 결제 확인에 필요한 최소 정보를 요청할 수 있습니다. 비밀번호, 에이전트 자격증명 전체 값과 카드 전체 번호는 보내지 않습니다.</p>
+    <p>처리 상태와 예상 일정은 PG의 처리 상태, 결제수단, 자동·수동 처리 여부에 따라 안내합니다. 카드 결제는 환불 대상과 금액을 확인한 날부터 3영업일 이내 처리합니다.</p>
+  </article>
+</main>
+
+<!-- Seller disclosure — 전자상거래법 제10조. Values: site/business-facts.json -->
+<footer class="lp-foot">
+  <p class="biz">
+    <b>주식회사 에프엑스와이</b> (FXY Inc.) · 대표 임보훈 · 사업자등록번호 740-87-01715 · 통신판매업신고 2024-서울서초-3685<br>
+    서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩) · hello@fxy.global · 070-7954-8265
+  </p>
+  <p class="legal">
+    <a href="/terms">이용약관</a><span>·</span><a href="/privacy">개인정보처리방침</a><span>·</span><a href="/refund">환불규정</a>
+  </p>
+  <p class="copy">© 2026 FXY Inc. · <a href="https://github.com/fxylabs/superself">github.com/fxylabs/superself</a></p>
+</footer>
+<script>
+/* Theme switch — the one behaviour these pages carry, shared with the landing. */
+(function ()
+{
+    var buttons = document.querySelectorAll('.lp-theme');
+
+    /* The head script already picked the theme; mark which button owns it. */
+    function mark(key)
+    {
+        buttons.forEach(function (button)
+        {
+            button.setAttribute('aria-pressed', String(button.dataset.theme === key));
+        });
+    }
+
+    function apply(key)
+    {
+        document.documentElement.className = 't-' + key;
+        mark(key);
+        try { localStorage.setItem('sf-theme', key); } catch (error) { }
+
+        /* A chosen theme becomes shareable; an untouched page keeps a clean URL. */
+        var url = new URL(location.href);
+        url.searchParams.set('theme', key);
+        history.replaceState(null, '', url);
+    }
+
+    buttons.forEach(function (button)
+    {
+        button.addEventListener('click', function () { apply(button.dataset.theme); });
+    });
+    mark(document.documentElement.className.replace('t-', '') || 'a');
+})();
+</script>
+</body>
+</html>

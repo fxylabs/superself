@@ -256,6 +256,8 @@ a { color: inherit; }
 .lp-foot a { color: var(--muted); text-decoration: none; }
 .lp-foot a:hover { color: var(--text); }
 .lp-foot .right { margin-left: auto; }
+/* the sales and legal pages sit on their own row, below the project line */
+.lp-legal { flex-basis: 100%; margin: 6px 0 0; line-height: 2; }
 
 /* ---------- narrow screens: one column, terminals scroll rather than clip ---------- */
 @media (max-width: 900px) {
@@ -515,10 +517,15 @@ a { color: inherit; }
     </div>
   </section>
 
+  <!-- The Korean sales pages carry the seller disclosure (전자상거래법 제10조);
+       the landing links to them so every page on the site reaches the terms. -->
   <footer class="lp-foot">
     <span>Apache-2.0 · built in the open</span>
     <a href="https://github.com/fxylabs/superself">github.com/fxylabs/superself</a>
     <span class="right">© 2026 FXY Inc.</span>
+    <p class="lp-legal">
+      <a href="/product">제품</a> · <a href="/pricing">가격</a> · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a> · <a href="/refund">환불규정</a>
+    </p>
   </footer>
 </main>
 <script>

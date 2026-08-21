@@ -1,0 +1,494 @@
+<!doctype html>
+<!--
+  Service terms (Korean) — the S1 Agent-Native business API family.
+
+  Served verbatim by @spfn/pages, the same escape hatch the landing uses: this
+  document owns its own head, nav, footer, responsive behaviour and theme
+  switch, and shares the landing's three themes (t-a / t-b / t-c).
+
+  The copy is approved content, converted from
+  artifacts/2026-08-21-s1-sales-pages/terms.md. Markup is this page's choice;
+  wording is not. A clause changes in the artifact first.
+
+  시행일 renders EFFECTIVE_DATE from site/business-facts.json. The deploy step
+  replaces the placeholder with the release date; scripts/check-business-facts.mjs
+  (`pnpm check:business-facts`) fails when it is missing, empty, or drifted.
+-->
+<html lang="ko" class="t-a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>이용약관 — Superself 업무 API</title>
+<meta name="description" content="Superself Agent-Native 비즈니스 API 및 관련 CLI·웹 서비스의 이용 조건, 절차, 회원의 권리와 의무를 정한 약관입니다.">
+<meta name="theme-color" content="#101014">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://superselfs.com/terms">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Superself">
+<meta property="og:title" content="이용약관 — Superself 업무 API">
+<meta property="og:description" content="선불 지갑, 사용량 계산, 에이전트 자격증명, 발송자 책임과 환불을 정한 이용약관입니다.">
+<meta property="og:url" content="https://superselfs.com/terms">
+<meta property="og:image" content="https://superselfs.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+/* Pick the theme before first paint: ?theme=a|b|c wins, then the stored choice. */
+(function ()
+{
+    var themes = ['a', 'b', 'c'];
+    var query = new URLSearchParams(location.search).get('theme');
+    var stored = null;
+    try { stored = localStorage.getItem('sf-theme'); } catch (error) { }
+    var key = themes.indexOf(query) >= 0 ? query : (themes.indexOf(stored) >= 0 ? stored : 'a');
+    document.documentElement.className = 't-' + key;
+})();
+</script>
+<style>
+/* =====================================================================
+   Superself sales pages — one shell, the landing's three themes.
+
+   This block is byte-identical across product / pricing / terms / refund /
+   privacy, and scripts/check-business-facts.mjs fails when the five drift
+   apart. Copy is per page; a theme (.t-a / .t-b / .t-c) sets tokens only.
+   ===================================================================== */
+
+/* ---------- theme A · product-native dark (viewer violet) ---------- */
+.t-a {
+  --bg: #101014; --bg-alt: #131319; --surface: #14141a; --surface-2: #17171f;
+  --border: #232330; --rule: #202029;
+  --text: #f2f2f7; --body: #d6d6de; --muted: #8f8fa3; --faint: #6e6e80;
+  --accent: #a78bfa; --accent-soft: #a78bfa1a; --accent-line: #a78bfa4d;
+  --btn-bg: #a78bfa; --btn-fg: #101014;
+  --h1-size: 38px; --h1-ls: -.02em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+/* ---------- theme B · terminal warm (viewer orange) ---------- */
+.t-b {
+  --bg: #0c0c10; --bg-alt: #101014; --surface: #101014; --surface-2: #17171d;
+  --border: #2a2a32; --rule: #26262e;
+  --text: #fff6ec; --body: #cfc8bd; --muted: #a39c92; --faint: #7d776e;
+  --accent: #ff6b35; --accent-soft: #ff6b351a; --accent-line: #ff6b354d;
+  --btn-bg: #ff6b35; --btn-fg: #0c0c10;
+  --h1-size: 32px; --h1-ls: 0; --h1-weight: 700;
+  --display: var(--mono);
+}
+
+/* ---------- theme C · editorial light ---------- */
+.t-c {
+  --bg: #fafafa; --bg-alt: #fafafa; --surface: #ffffff; --surface-2: #f0f0f2;
+  --border: #e4e4e8; --rule: #ececf0;
+  --text: #19171d; --body: #3a3a42; --muted: #6e6e78; --faint: #9a9aa4;
+  --accent: #7c5ce0; --accent-soft: #7c5ce014; --accent-line: #7c5ce04d;
+  --btn-bg: #19171d; --btn-fg: #fafafa;
+  --h1-size: 42px; --h1-ls: -.03em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+:root {
+  --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px;
+  --page: 1120px;
+  --doc: 780px;
+  --gutter: 40px;
+  color-scheme: dark;
+}
+.t-c { color-scheme: light; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--body);
+  font: 14px/1.72 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- nav — the landing's chrome, carrying every sales page ---------- */
+.lp-nav {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 18px max(var(--gutter), calc((100% - var(--page)) / 2));
+  background: var(--bg-alt); border-bottom: 1px solid var(--border);
+}
+.lp-word { display: flex; align-items: center; gap: 8px; font: 700 14px var(--mono); color: var(--accent); text-decoration: none; }
+/* the product's own logo symbol, verbatim from the CLI viewer; currentColor
+   takes the theme accent, so the mark needs no second color source */
+.lp-mark { width: 13px; height: 15px; flex: none; display: block; }
+.lp-nav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+.lp-nav a:hover { color: var(--text); }
+.lp-nav a[aria-current="page"] { color: var(--accent); }
+.lp-nav .sub { font-size: 12.5px; color: var(--faint); }
+.lp-nav .lp-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* theme switch — the same A/B/C comparison the landing keeps on the page */
+.lp-themes { display: flex; gap: 4px; align-items: center; }
+.lp-themes .lbl { font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+.lp-theme {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
+}
+.lp-theme[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- page head ---------- */
+.pg-hero { max-width: var(--doc); margin: 0 auto; padding: 72px var(--gutter) 4px; }
+.pg-h1 {
+  margin: 0 0 20px; font-family: var(--display);
+  font-size: var(--h1-size); letter-spacing: var(--h1-ls); font-weight: var(--h1-weight);
+  line-height: 1.24; color: var(--text);
+}
+.pg-lead p { margin: 0 0 16px; font-size: 15px; line-height: 1.88; color: var(--muted); }
+.pg-lead code { font: 13px var(--mono); color: var(--accent); }
+
+/* ---------- document body — the prose system every page shares ---------- */
+.doc { max-width: var(--doc); margin: 0 auto; padding: 4px var(--gutter) 96px; }
+.doc h2 {
+  margin: 54px 0 14px; font-size: 20px; font-weight: 650; letter-spacing: -.012em;
+  color: var(--text); line-height: 1.45; scroll-margin-top: 20px;
+}
+.doc h3 { margin: 34px 0 10px; font-size: 16px; font-weight: 650; color: var(--text); line-height: 1.5; }
+.doc p { margin: 0 0 15px; font-size: 14.5px; line-height: 1.95; color: var(--body); }
+.doc ul, .doc ol { margin: 0 0 16px; padding-left: 22px; }
+.doc li { margin: 8px 0; font-size: 14.5px; line-height: 1.9; color: var(--body); }
+.doc li::marker { color: var(--faint); }
+.doc code { font: 12.5px var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+.doc a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); }
+.doc a:hover { border-bottom-color: var(--accent); }
+
+/* a note the copy sets apart from the body around it */
+.doc .note {
+  margin: 0 0 18px; padding: 16px 20px;
+  border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  font-size: 14px; line-height: 1.9; color: var(--body);
+}
+
+/* tables scroll inside their own frame rather than widening the page */
+.doc-table { margin: 0 0 18px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.doc table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 13.5px; }
+.doc th, .doc td { padding: 12px 16px; text-align: left; vertical-align: top; line-height: 1.75; border-bottom: 1px solid var(--rule); }
+/* Korean column labels: no tracking, no uppercase — both only hurt 한글 */
+.doc thead th { font: 600 12px var(--sans); color: var(--muted); background: var(--surface-2); }
+.doc tbody th { font-weight: 600; color: var(--text); white-space: nowrap; }
+.doc tbody tr:last-child th, .doc tbody tr:last-child td { border-bottom: none; }
+.doc td.num { text-align: right; white-space: nowrap; color: var(--text); font-weight: 600; }
+
+/* the top-up packs the pricing copy states as one line */
+.doc .packs { font: 15px/1.9 var(--mono); color: var(--text); }
+
+/* ---------- table of contents — the legal pages' entry point ---------- */
+.toc { margin: 26px 0 8px; padding: 20px 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.toc h2 { margin: 0 0 12px; font: 600 12px var(--sans); color: var(--muted); }
+.toc ol { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 30px; }
+.toc li { margin: 0; padding: 5px 0; font-size: 13.5px; line-height: 1.6; break-inside: avoid; }
+.toc a { color: var(--muted); text-decoration: none; border-bottom: 0; }
+.toc a:hover { color: var(--accent); }
+
+/* ---------- effective date — the one value the deploy step fills in ---------- */
+.eff {
+  display: inline-block; margin: 0 0 6px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+  font: 12px var(--mono); color: var(--muted);
+}
+
+/* ---------- footer — seller disclosure on every page ---------- */
+.lp-foot {
+  padding: 36px max(var(--gutter), calc((100% - var(--page)) / 2)) 48px;
+  border-top: 1px solid var(--border); color: var(--faint);
+}
+.lp-foot .biz { margin: 0 0 14px; font-size: 12px; line-height: 2; color: var(--muted); }
+.lp-foot .biz b { color: var(--body); font-weight: 600; }
+.lp-foot .legal { margin: 0 0 14px; font-size: 12.5px; }
+.lp-foot .legal a { color: var(--body); text-decoration: none; }
+.lp-foot .legal a:hover { color: var(--accent); }
+.lp-foot .legal span { color: var(--faint); margin: 0 8px; }
+.lp-foot .copy { margin: 0; font: 11px var(--mono); color: var(--faint); }
+.lp-foot .copy a { color: var(--faint); text-decoration: none; }
+.lp-foot .copy a:hover { color: var(--muted); }
+
+/* ---------- narrow screens: one column, tables scroll rather than clip ---------- */
+@media (max-width: 900px) {
+  :root { --gutter: 22px; }
+  .pg-hero { padding-top: 48px; }
+  .lp-nav { gap: 12px; }
+  .lp-nav .lp-right { gap: 8px; margin-left: auto; }
+  .toc ol { columns: 1; }
+}
+@media (max-width: 560px) {
+  .pg-h1 { font-size: calc(var(--h1-size) * .8); }
+  .lp-themes .lbl { display: none; }
+  .doc h2 { margin-top: 42px; font-size: 18.5px; }
+}
+</style>
+<script>/* PostHog loader — same shape the site layouts inject into mounted pages; raw HTML pages are served verbatim so each one carries its own copy. */(function(){var s=document.createElement('script');s.async=true;s.crossOrigin='anonymous';s.src='https://us-assets.i.posthog.com/static/array.js';s.onload=function(){window.posthog&&window.posthog.init('phc_sg3X7M6CtErmTgKkAk5ajcJbJyCCZsFkmVhikdjr4SLt',{api_host:'https://us.i.posthog.com',defaults:'2025-05-24'})};document.head.appendChild(s)})();</script>
+</head>
+<body>
+<nav class="lp-nav" aria-label="Primary">
+  <a class="lp-word" href="/"><svg class="lp-mark" viewBox="0 0 166 192" fill="currentColor" aria-hidden="true"><path d="M137.954 26.8921C133.611 24.0908 129.082 22.0243 124.451 20.6696C120.622 15.8133 116.032 11.5655 110.752 8.16724C84.6518 -8.64033 51.2852 1.32481 36.2178 30.4281C21.1606 59.5313 30.1043 96.7514 56.2048 113.559C61.4948 116.969 67.0937 119.265 72.7645 120.539C57.728 101.481 54.4757 73.1244 66.4864 49.9221C78.4972 26.7313 102.128 15.687 124.451 20.6811C141.412 39.8077 145.58 69.9098 132.942 94.329L158.033 110.494C173.183 81.2182 164.198 43.7915 137.954 26.8921Z"/><path d="M108.874 78.4409C103.584 75.0312 97.9952 72.7236 92.314 71.4492C107.351 90.5185 110.603 118.876 98.5921 142.078C86.5814 165.28 62.951 176.324 40.6278 171.33C23.7798 152.284 19.7042 122.239 32.3427 97.8201L7.39499 81.7473C-7.75478 111.023 1.1169 148.369 27.207 165.177H27.1967C31.5194 167.955 36.0272 169.999 40.6278 171.342C44.4564 176.187 49.0466 180.423 54.3264 183.833C80.4268 200.64 113.793 190.675 128.861 161.572C143.918 132.469 134.974 95.2485 108.874 78.4409Z"/></svg>superself</a>
+  <a href="/product">제품</a>
+  <a href="/pricing">가격</a>
+  <a class="sub" href="/terms" aria-current="page">이용약관</a>
+  <a class="sub" href="/refund">환불규정</a>
+  <a class="sub" href="/privacy">개인정보처리방침</a>
+  <span class="lp-right">
+    <span class="lp-themes" role="group" aria-label="Page theme">
+      <span class="lbl">Theme</span>
+      <button class="lp-theme" type="button" data-theme="a" aria-pressed="true" title="Product-native dark">A</button>
+      <button class="lp-theme" type="button" data-theme="b" aria-pressed="false" title="Terminal warm">B</button>
+      <button class="lp-theme" type="button" data-theme="c" aria-pressed="false" title="Editorial light">C</button>
+    </span>
+  </span>
+</nav>
+
+<main>
+  <header class="pg-hero">
+    <h1 class="pg-h1">Superself Agent-Native 비즈니스 API 이용약관</h1>
+    <div class="pg-lead">
+      <p>최종 게시 전 전자상거래 관련 법령, 결제대행사 심사 기준, 개인정보 처리 문서와 함께 검토합니다.</p>
+    </div>
+    <p class="eff">시행일: DEPLOY_DATE_PLACEHOLDER</p>
+  </header>
+
+  <article class="doc">
+    <h2 id="business">사업자 정보</h2>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">항목</th><th scope="col">내용</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">상호</th><td>주식회사 에프엑스와이 (영문 FXY Inc.)</td></tr>
+          <tr><th scope="row">대표자</th><td>임보훈</td></tr>
+          <tr><th scope="row">사업자등록번호</th><td>740-87-01715</td></tr>
+          <tr><th scope="row">통신판매업 신고번호</th><td>2024-서울서초-3685</td></tr>
+          <tr><th scope="row">사업장 주소</th><td>서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩)</td></tr>
+          <tr><th scope="row">전화번호</th><td>070-7954-8265</td></tr>
+          <tr><th scope="row">전자우편주소</th><td>hello@fxy.global</td></tr>
+          <tr><th scope="row">환불 접수 방법</th><td>hello@fxy.global</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <nav class="toc" aria-label="약관 목차">
+      <h2>목차</h2>
+      <ol>
+        <li><a href="#a1">제1조 목적</a></li>
+        <li><a href="#a2">제2조 정의</a></li>
+        <li><a href="#a3">제3조 약관의 게시와 변경</a></li>
+        <li><a href="#a4">제4조 가입과 계정</a></li>
+        <li><a href="#a5">제5조 서비스의 범위와 출시</a></li>
+        <li><a href="#a6">제6조 카드 등록과 선불 지갑</a></li>
+        <li><a href="#a7">제7조 요금과 사용량 계산</a></li>
+        <li><a href="#a8">제8조 무료 사용량</a></li>
+        <li><a href="#a9">제9조 에이전트 로그인과 자격증명</a></li>
+        <li><a href="#a10">제10조 이메일 발송자의 책임</a></li>
+        <li><a href="#a11">제11조 검증, 보류와 발송 제한</a></li>
+        <li><a href="#a12">제12조 Landing Kit 이용</a></li>
+        <li><a href="#a13">제13조 금지행위</a></li>
+        <li><a href="#a14">제14조 개인정보와 기록</a></li>
+        <li><a href="#a15">제15조 지식재산권</a></li>
+        <li><a href="#a15-2">제15조의2 권리·의무의 양도 금지</a></li>
+        <li><a href="#a16">제16조 서비스 중단과 계정 제한</a></li>
+        <li><a href="#a17">제17조 회원 탈퇴와 환불</a></li>
+        <li><a href="#a18">제18조 환불 외의 책임 제한</a></li>
+        <li><a href="#a19">제19조 분쟁 해결</a></li>
+        <li><a href="#addendum">부칙</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="a1">제1조 목적</h2>
+    <p>이 약관은 주식회사 에프엑스와이(영문 FXY Inc.)가 제공하는 Superself Agent-Native 비즈니스 API 및 관련 CLI·웹 서비스의 이용 조건, 절차, 회원의 권리와 의무를 정합니다.</p>
+
+    <h2 id="a2">제2조 정의</h2>
+    <ol>
+      <li>“서비스”란 <code>self</code> CLI, 사람용 웹 화면, 이메일 API, 알림톡 API, 호스팅형 Landing Kit과 이를 운영하기 위한 계정·지갑·사용량 기록을 말합니다.</li>
+      <li>“회원”이란 이 약관에 동의하고 계정을 만든 사람 또는 사업자를 말합니다.</li>
+      <li>“소유자”란 계정의 카드, 충전, 자동 충전, 도메인, 자격증명과 계정 종료를 관리하는 회원을 말합니다.</li>
+      <li>“에이전트”란 소유자가 승인한 기기와 단기 자격증명을 사용해 CLI에서 서비스 작업을 실행하는 AI 에이전트를 말합니다.</li>
+      <li>“지갑”이란 회원이 미리 충전한 사용 금액을 기록하는 선불 잔액입니다. 지갑은 계정별 KRW 또는 USD 한 통화만 사용합니다.</li>
+      <li>“프로모션 크레딧”이란 프로모션이나 온보딩 등 조건에 따라 제공되는 무료·혜택성 잔액을 말하며, 선불 충전 잔액과 구분합니다.</li>
+      <li>“수락된 수신자”란 이메일 전송 요청에 대해 전송 사업자가 수락한 수신자를 말합니다.</li>
+    </ol>
+
+    <h2 id="a3">제3조 약관의 게시와 변경</h2>
+    <p>사업자는 회원이 약관의 내용을 확인할 수 있도록 서비스 화면에 게시합니다. 사업자는 관련 법령을 위반하지 않는 범위에서 약관을 변경할 수 있으며, 변경 내용과 시행일을 시행일 7일 전까지 공지합니다. 회원에게 불리한 변경은 시행일 30일 전부터 공지하고, 이메일 등으로 회원에게 개별 통지합니다.</p>
+    <p>회원은 변경 약관에 동의하지 않을 경우 시행일 전후에 계정을 종료할 수 있습니다. 변경 시행 후 서비스를 계속 사용하면 변경 약관에 동의한 것으로 볼 수 있다는 안내를 하며, 법령상 별도 동의가 필요한 경우에는 별도 동의를 받습니다.</p>
+
+    <h2 id="a4">제4조 가입과 계정</h2>
+    <ol>
+      <li>회원은 실제 정보를 제공하고 계정의 로그인 수단과 연락처를 최신 상태로 유지해야 합니다.</li>
+      <li>가입 시 KRW 또는 USD 중 하나를 기본 통화로 선택합니다. 첫 확정 충전 이후 기본 통화를 변경하거나 통화를 섞거나 환전할 수 없습니다.</li>
+      <li>계정은 원칙적으로 한 소유자가 관리합니다. 팀 계정, 역할 편집 기능과 조직 계정은 별도 제공 범위가 아닙니다.</li>
+      <li>회원은 자신의 계정과 에이전트가 실행한 작업에 책임을 집니다. 에이전트에게 허용하는 명령과 자격증명의 범위를 직접 관리해야 합니다.</li>
+    </ol>
+
+    <h2 id="a5">제5조 서비스의 범위와 출시</h2>
+    <ol>
+      <li>이메일 API는 8월 출시 범위입니다.</li>
+      <li>알림톡 API는 9월 출시 예정이며, 출시 전에는 이용할 수 없습니다.</li>
+      <li>Landing Kit은 사업자가 제공하는 호스팅 환경에 정적 HTML을 배포하는 서비스입니다. 서버 코드를 실행하거나 커스텀 도메인을 연결하는 기능은 현재 출시 범위에 포함되지 않습니다.</li>
+      <li>각 기능의 제공 여부, 입력 제한, 요금과 무료 사용량은 주문 화면과 서비스 안내에 표시합니다. 제3자 전송·결제 사업자의 장애, 정책 변경 또는 승인 결과에 따라 전송이나 결제가 지연되거나 제한될 수 있습니다.</li>
+      <li>사업자가 기능, 제공 범위, 요금, 무료 사용량 또는 이용 한도를 변경할 때에는 변경 내용과 적용일을 7일 전에 공지합니다. 회원에게 불리한 변경은 30일 전에 개별 통지하며, 회원은 이에 동의하지 않을 경우 계정을 종료할 수 있습니다. 보안, 법령 준수 또는 제3자 정책 변경으로 미리 알리기 어려운 경우에는 변경 후 지체 없이 알립니다.</li>
+    </ol>
+
+    <h2 id="a6">제6조 카드 등록과 선불 지갑</h2>
+    <ol>
+      <li>서비스는 선불 지갑 방식으로 운영합니다. 회원은 카드 등록 후 지갑을 충전하고, 사용량이 발생하면 해당 잔액에서 차감합니다.</li>
+      <li>KRW 충전 팩은 ₩10,000, ₩50,000, ₩100,000, ₩300,000입니다. USD 충전 팩은 $10, $50, $100, $300입니다.</li>
+      <li>KRW 1회 최소 충전액은 ₩10,000이며 USD 1회 최소 충전액은 $10입니다.</li>
+      <li>KRW 결제대행사는 나이스페이먼츠·토스페이먼츠를 병기하고, USD 결제는 Polar를 사용합니다. Polar는 판매자 기록상 판매자(Merchant of Record, MoR)입니다. 통화별 판매자와 결제사업자 표시는 결제 화면에 표시합니다.</li>
+      <li>KRW 회원은 빌링키를 이용한 자동 충전을 선택할 수 있습니다. 자동 충전에는 기준 잔액, 충전 금액, 월별 최대 한도를 모두 설정해야 합니다. USD 회원은 수동 충전 방식이며 잔액이 낮을 때 이메일과 CLI로 안내합니다.</li>
+      <li>무료 또는 프로모션 크레딧은 환불하지 않습니다. 선불 충전 잔액의 환불은 제17조와 별도 <a href="/refund">환불규정</a>에 따릅니다.</li>
+    </ol>
+
+    <h2 id="a7">제7조 요금과 사용량 계산</h2>
+    <ol>
+      <li>KRW 계정의 이메일 요금은 수락된 수신자 1명당 ₩1입니다. USD 계정의 이메일 요금은 수락된 수신자 1명당 $0.001입니다.</li>
+      <li>검증 거부, 전송 실패, 수신 거부 목록에 따른 제외, 수신 거부 또는 전송 사업자가 수락하지 않은 수신자는 이메일 요금에 포함하지 않습니다.</li>
+      <li>서비스는 검증을 통과한 후 사용 금액을 예약할 수 있습니다. 전송 사업자가 수락하면 예약 금액을 확정 차감하고, 실패하면 예약을 해제합니다. 잔액은 음수가 되지 않습니다.</li>
+      <li>Landing Kit은 당사 서브도메인에 사이트 1개를 무료로 제공하며, 무료 티어의 분석 데이터는 30일간 보존합니다. 유료 계정의 사이트 수와 유료 랜딩 기능은 결제 화면에 표시합니다.</li>
+      <li>알림톡 요금은 이용 전에 결제 화면에 표시합니다. 알림톡에는 무료 티어가 없으며, 가격과 온보딩 크레딧 제공 여부는 9월 출시 전에 확정합니다.</li>
+      <li>표시 가격은 부가가치세 별도이며, 결제 화면에서 카드 청구액을 함께 표시합니다. USD 결제 총액에는 결제사업자가 처리하는 적용 가능한 세금이 포함될 수 있습니다.</li>
+    </ol>
+
+    <h2 id="a8">제8조 무료 사용량</h2>
+    <ol>
+      <li>이메일 무료 사용량은 하루 100건, 매월 3,000건입니다.</li>
+      <li>무료 사용량은 발신 도메인 확인을 완료한 계정에 적용합니다. 도메인 확인 전에는 계정 소유자가 확인한 주소로만 데모 발송할 수 있습니다.</li>
+      <li>무료 사용량은 Asia/Seoul 기준 날짜와 월 단위로 다시 계산합니다.</li>
+      <li>무료 티어 발송은 고정 템플릿만 사용할 수 있습니다.</li>
+      <li>무료 사용량을 초과한 요청은 남은 수량을 포함해 거절할 수 있습니다. 무료 사용량은 지갑 잔액을 차감하지 않으며, 이후 유료 이메일은 KRW 계정은 ₩10,000 이상, USD 계정은 $10 이상 충전한 지갑 잔액으로만 사용할 수 있습니다.</li>
+    </ol>
+
+    <h2 id="a9">제9조 에이전트 로그인과 자격증명</h2>
+    <ol>
+      <li>에이전트는 <code>self login</code>의 기기 코드 절차로 소유자의 승인을 받아야 합니다.</li>
+      <li>발급되는 자격증명은 에이전트별 작업 범위를 가지며 단기간만 유효합니다. 장기 API 키를 에이전트에게 제공하지 않습니다.</li>
+      <li>소유자는 웹 화면에서 자격증명을 폐기할 수 있습니다. 폐기된 자격증명과 그 갱신 경로는 사용할 수 없습니다.</li>
+      <li>에이전트에는 지갑 충전, 카드 조작, 계정 종료 또는 관리자 권한을 부여하지 않습니다.</li>
+      <li>소유자는 기기 코드, 자격증명, 카드 정보와 로그인 수단을 안전하게 보관해야 하며 유출이 의심되면 즉시 폐기해야 합니다.</li>
+    </ol>
+
+    <h2 id="a10">제10조 이메일 발송자의 책임</h2>
+    <ol>
+      <li>회원은 발신 도메인을 확인하고, 수신자에게 전송할 법적 권한과 동의 근거를 보유해야 합니다. 사업자는 회원이 제공한 동의 근거를 대신 수집하거나 검증하지 않습니다.</li>
+      <li>모든 이메일은 <code>transactional</code>, <code>informational</code>, <code>advertising</code> 중 하나의 목적을 선언해야 합니다. 목적을 선언하지 않은 발송은 거절합니다.</li>
+      <li>광고성 이메일을 보내는 회원은 관련 법령에 따른 광고 표시, 발신자 정보, 연락처와 무료 수신 거부 방법을 준비해야 합니다. 시스템은 필요한 경우 발송을 거절하거나 준수용 문구를 적용할 수 있습니다.</li>
+      <li>광고성 발송은 21:00부터 다음 날 08:00까지 거절됩니다. 야간 전송에 대한 별도 동의 장부를 서비스가 대신 보관하지 않습니다.</li>
+      <li>회원은 수신동의와 2년 주기 수신동의 확인 등 발신자에게 적용되는 의무를 직접 이행하고 증빙을 보관해야 합니다.</li>
+      <li>회원은 피싱, 스팸, 사칭, 악성 링크, 불법 상품·서비스, 타인의 권리를 침해하는 콘텐츠를 보내서는 안 됩니다. 회원은 발송자로서 콘텐츠와 수신자에 대한 책임을 집니다. 사업자는 전송 대행자이며, 회원이 이 조항을 위반하면 발송을 제한하거나 계정을 정지할 수 있습니다.</li>
+    </ol>
+
+    <h2 id="a11">제11조 검증, 보류와 발송 제한</h2>
+    <ol>
+      <li>이메일 본문·링크와 랜딩 HTML은 전송 전에 검증합니다. 검증 시스템에 문제가 있거나 기준을 판단할 수 없으면 안전을 위해 거절할 수 있습니다.</li>
+      <li>추가 확인이 필요한 요청은 사람 검토 상태가 될 수 있습니다. 검토되지 않은 요청은 정해진 시간 후 거절될 수 있으며, 검토 상태 자체는 전송 완료를 의미하지 않습니다.</li>
+      <li>반송률 또는 불만률이 기준을 넘으면 계정의 발송을 자동 일시정지할 수 있습니다. 사업자는 계정 소유자에게 상태와 재개 절차를 안내합니다.</li>
+      <li>사업자는 법령, 제3자 정책, 보안, 서비스 안정성 또는 회원의 약관 위반을 위해 발송·배포를 거절하거나 사이트를 내리거나 계정을 제한할 수 있습니다.</li>
+    </ol>
+
+    <h2 id="a12">제12조 Landing Kit 이용</h2>
+    <ol>
+      <li>회원은 정적 HTML 번들을 CLI로 배포합니다. 번들 크기는 10MB 이하이며 서버 코드 실행은 허용하지 않습니다.</li>
+      <li>사업자는 보안·법령·권리침해·사칭·악성 링크 여부를 검증하고, 사유를 안내하며 배포를 거절할 수 있습니다.</li>
+      <li>신고나 위반 사실이 확인되면 해당 사이트를 내리고 계정을 제한할 수 있습니다. 사이트가 내려간 동안에는 재배포가 제한될 수 있습니다.</li>
+      <li>회원은 배포한 페이지의 콘텐츠, 링크, 수집 방식과 법적 고지에 책임을 집니다.</li>
+    </ol>
+
+    <h2 id="a13">제13조 금지행위</h2>
+    <p>회원은 다음 행위를 해서는 안 됩니다.</p>
+    <ul>
+      <li>타인의 계정, 도메인, 결제수단 또는 자격증명을 무단 사용</li>
+      <li>검증·한도·인증 절차를 우회하거나 자동화된 공격 수행</li>
+      <li>스팸, 피싱, 사칭, 악성코드, 불법 콘텐츠 또는 권리침해 콘텐츠 전송</li>
+      <li>서비스에 과도한 부하를 주거나 제3자 시스템을 공격</li>
+      <li>법령이나 제3자 계약에 위반되는 방식으로 서비스 사용</li>
+    </ul>
+    <p>API 호출량은 서비스 화면이나 별도 안내에 표시한 계정별·기능별 한도를 따릅니다. 회원이 호출량을 초과하거나 한도를 우회하거나, 자동화된 남용으로 서비스 안정성을 해치면 사업자는 호출을 지연·거절하거나 해당 기능과 계정을 제한할 수 있습니다.</p>
+
+    <h2 id="a14">제14조 개인정보와 기록</h2>
+    <p>수신자 정보는 서비스 운영에 필요한 범위에서 제품 데이터베이스에 보관합니다. 수신자 개인정보를 로그, 원장 또는 에이전트 작업 기록에 넣지 않도록 하며, 계정 종료 후 법령과 분쟁 대응에 필요한 보존을 제외하고 삭제합니다.</p>
+    <p>회원이 이메일 전송을 위해 제공하는 수신자 개인정보에 대해 회원은 위탁자이자 개인정보처리자이고, 사업자는 수탁자입니다. 사업자는 회원의 지시에 따라 서비스 제공에 필요한 범위에서만 처리하고, 목적 외 처리를 하지 않으며, 기술적·관리적 안전조치와 접근권한 제한을 적용합니다. 사업자는 회원의 사전 서면 동의 없이 재위탁하지 않습니다. 재위탁이 필요한 경우 업무 범위와 보호조치를 알리고 재수탁자를 관리·감독합니다. 사업자는 수탁 업무를 수행하는 인력을 교육·감독하고, 사고를 알게 되면 지체 없이 회원에게 알립니다.</p>
+    <p>회원은 수신자에 대한 적법한 수집·고지·동의와 권리 대응을 담당하고, 사업자는 법령이 허용하는 범위에서 관련 요청에 협조합니다. 수탁자의 귀책으로 발생한 손해는 법령과 이 약관에 따라 각자의 귀책 범위에서 부담합니다.</p>
+    <p>개인정보의 수집·이용·보관·파기는 별도 <a href="/privacy">개인정보 처리방침</a>에 따릅니다.</p>
+
+    <h2 id="a15">제15조 지식재산권</h2>
+    <p>회원이 제공한 콘텐츠와 회원이 적법하게 사용하도록 허가받은 자료의 권리는 회원 또는 정당한 권리자에게 있습니다. 회원은 서비스 제공에 필요한 범위에서 해당 콘텐츠를 처리·전송·호스팅할 권한을 보유해야 합니다.</p>
+    <p>서비스의 상표, CLI, 웹 화면, 소프트웨어, 문서와 운영 자료의 권리는 사업자 또는 정당한 권리자에게 있습니다. 이 약관은 별도 표시가 없는 한 이를 양도하거나 재사용할 권리를 부여하지 않습니다.</p>
+
+    <h2 id="a15-2">제15조의2 권리·의무의 양도 금지</h2>
+    <p>회원은 사업자의 사전 서면 동의 없이 계정, 지갑 잔액, 이 약관에 따른 계약상 지위나 권리·의무를 제3자에게 양도하거나 담보로 제공할 수 없습니다. 사업자는 합병, 분할 또는 서비스 양도 등 정당한 사유가 있는 경우 관련 법령에 따라 계약상 지위를 이전할 수 있으며, 필요한 경우 회원에게 알립니다.</p>
+
+    <h2 id="a16">제16조 서비스 중단과 계정 제한</h2>
+    <p>사업자는 예정된 점검이나 변경으로 서비스 일부 또는 전부를 중단하는 경우 가능한 한 사전에 사유, 범위와 예상 영향을 공지합니다. 긴급한 보안 위협, 장애, 결제사업자·전송사업자 장애, 법령 준수 또는 약관 위반 조사로 미리 알리기 어려운 경우에는 우선 중단하거나 계정을 제한한 뒤 지체 없이 사후 공지합니다.</p>
+    <p>계정이 일시정지된 동안에는 자동 충전을 실행하지 않습니다. 계정이 종료 절차에 들어가면 발송을 멈추고, 호스팅 사이트를 내리고, 에이전트 자격증명과 갱신 경로를 폐기합니다.</p>
+
+    <h2 id="a17">제17조 회원 탈퇴와 환불</h2>
+    <p>회원은 웹 화면에서 계정 종료를 요청할 수 있습니다. 계정 종료가 접수되면 종료 절차는 한 번만 생성되며, 같은 요청을 다시 제출해도 환불을 중복 실행하지 않습니다.</p>
+    <p>사용하지 않은 선불 충전 잔액은 환불 대상입니다. 무료·프로모션 크레딧과 이미 사용한 금액은 환불하지 않습니다. 미결제 정산 부채가 있으면 먼저 잔액에서 차감합니다. 자세한 기준, 원 결제수단 환불, 수동 환불과 PG 장애 처리는 별도 <a href="/refund">환불규정</a>에 따릅니다.</p>
+    <p>이 약관은 전자상거래 등에서의 소비자보호에 관한 법률 등 강행규정에 따른 회원의 권리를 제한하지 않습니다. 법령상 청약철회나 환급이 인정되는 경우에는 해당 법령과 결제 화면의 고지에 따릅니다.</p>
+    <p>API·호스팅 서비스와 같은 디지털 용역은 제공이 개시된 후에는 청약철회가 제한될 수 있습니다. 사업자는 결제 화면에서 제공 개시와 청약철회 제한을 미리 고지하고, 회원이 “디지털 서비스 제공 개시 및 청약철회 제한에 동의합니다”라는 문구에 동의한 경우에만 제공을 개시합니다. 이 조항은 전자상거래 등에서의 소비자보호에 관한 법률 제17조제3항에 따른 강행규정을 제한하지 않습니다.</p>
+
+    <h2 id="a18">제18조 환불 외의 책임 제한</h2>
+    <p>사업자는 고의 또는 중대한 과실이 없는 한 제3자 전송·결제사업자의 사유, 회원이 제공한 콘텐츠·수신자·도메인 정보, 회원의 자격증명 관리 소홀로 발생한 손해에 대해 법령이 허용하는 범위에서 책임을 부담하지 않습니다.</p>
+    <p>사업자는 서비스의 안전한 운영을 위해 노력하지만, 모든 전송의 도달·열람·클릭이나 외부 사이트의 이용을 보장하지 않습니다. 회원은 중요한 업무에 사람의 검토와 대체 절차를 마련해야 합니다.</p>
+    <p>천재지변, 전쟁, 감염병, 정부의 명령, 통신망 장애와 같은 불가항력, 회원의 귀책사유 또는 제3자 전송·결제·호스팅 서비스의 장애로 서비스를 제공하지 못한 경우에는 법령이 허용하는 범위에서 책임을 부담하지 않습니다.</p>
+    <p>사업자의 손해배상 책임은 법령이 허용하는 범위에서 손해가 발생한 날을 기준으로 최근 3개월 동안 회원이 실제 지급한 서비스 이용대금을 한도로 합니다. 다만 사업자의 고의 또는 중대한 과실, 생명·신체 손해, 개인정보 보호에 관한 법령상 책임 또는 강행규정에 따른 환불·배상에는 이 한도를 적용하지 않습니다.</p>
+
+    <h2 id="a19">제19조 분쟁 해결</h2>
+    <p>사업자와 회원은 문의 접수와 협의를 통해 분쟁을 해결하도록 노력합니다. 문의처는 사업자 정보에 표시한 채널로 하며, 사업자는 접수 순서와 내용에 따라 처리하고 처리에 시간이 걸리는 경우 사유와 예상 일정을 안내합니다.</p>
+    <p>협의로 해결되지 않는 분쟁의 관할은 민사소송법에 따르며, 대한민국 법령을 준거법으로 합니다. 회원은 전자문서·전자거래분쟁조정위원회 또는 소비자분쟁조정위원회에 조정을 신청할 수 있습니다.</p>
+
+    <h2 id="addendum">부칙</h2>
+    <p>이 약관은 DEPLOY_DATE_PLACEHOLDER부터 시행합니다.</p>
+  </article>
+</main>
+
+<!-- Seller disclosure — 전자상거래법 제10조. Values: site/business-facts.json -->
+<footer class="lp-foot">
+  <p class="biz">
+    <b>주식회사 에프엑스와이</b> (FXY Inc.) · 대표 임보훈 · 사업자등록번호 740-87-01715 · 통신판매업신고 2024-서울서초-3685<br>
+    서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩) · hello@fxy.global · 070-7954-8265
+  </p>
+  <p class="legal">
+    <a href="/terms">이용약관</a><span>·</span><a href="/privacy">개인정보처리방침</a><span>·</span><a href="/refund">환불규정</a>
+  </p>
+  <p class="copy">© 2026 FXY Inc. · <a href="https://github.com/fxylabs/superself">github.com/fxylabs/superself</a></p>
+</footer>
+<script>
+/* Theme switch — the one behaviour these pages carry, shared with the landing. */
+(function ()
+{
+    var buttons = document.querySelectorAll('.lp-theme');
+
+    /* The head script already picked the theme; mark which button owns it. */
+    function mark(key)
+    {
+        buttons.forEach(function (button)
+        {
+            button.setAttribute('aria-pressed', String(button.dataset.theme === key));
+        });
+    }
+
+    function apply(key)
+    {
+        document.documentElement.className = 't-' + key;
+        mark(key);
+        try { localStorage.setItem('sf-theme', key); } catch (error) { }
+
+        /* A chosen theme becomes shareable; an untouched page keeps a clean URL. */
+        var url = new URL(location.href);
+        url.searchParams.set('theme', key);
+        history.replaceState(null, '', url);
+    }
+
+    buttons.forEach(function (button)
+    {
+        button.addEventListener('click', function () { apply(button.dataset.theme); });
+    });
+    mark(document.documentElement.className.replace('t-', '') || 'a');
+})();
+</script>
+</body>
+</html>

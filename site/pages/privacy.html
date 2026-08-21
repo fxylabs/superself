@@ -1,0 +1,492 @@
+<!doctype html>
+<!--
+  Privacy policy (Korean) — account data the company controls, and
+  recipient data it processes for the member.
+
+  Served verbatim by @spfn/pages, the same escape hatch the landing uses: this
+  document owns its own head, nav, footer, responsive behaviour and theme
+  switch, and shares the landing's three themes (t-a / t-b / t-c).
+
+  The copy is approved content, converted from
+  artifacts/2026-08-21-s1-sales-pages/privacy.md. Markup is this page's choice;
+  wording is not. A clause changes in the artifact first.
+
+  시행일 renders EFFECTIVE_DATE from site/business-facts.json. The deploy step
+  replaces the placeholder with the release date; scripts/check-business-facts.mjs
+  (`pnpm check:business-facts`) fails when it is missing, empty, or drifted.
+-->
+<html lang="ko" class="t-a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>개인정보처리방침 — Superself 업무 API</title>
+<meta name="description" content="Superself Agent-Native 비즈니스 API 제품군의 개인정보 처리 목적, 항목, 보유 기간, 위탁과 국외 이전을 공개합니다.">
+<meta name="theme-color" content="#101014">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://superselfs.com/privacy">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Superself">
+<meta property="og:title" content="개인정보처리방침 — Superself 업무 API">
+<meta property="og:description" content="처리 목적, 수집 항목, 보유 기간, 위탁과 국외 이전, 정보주체의 권리 행사 방법입니다.">
+<meta property="og:url" content="https://superselfs.com/privacy">
+<meta property="og:image" content="https://superselfs.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+/* Pick the theme before first paint: ?theme=a|b|c wins, then the stored choice. */
+(function ()
+{
+    var themes = ['a', 'b', 'c'];
+    var query = new URLSearchParams(location.search).get('theme');
+    var stored = null;
+    try { stored = localStorage.getItem('sf-theme'); } catch (error) { }
+    var key = themes.indexOf(query) >= 0 ? query : (themes.indexOf(stored) >= 0 ? stored : 'a');
+    document.documentElement.className = 't-' + key;
+})();
+</script>
+<style>
+/* =====================================================================
+   Superself sales pages — one shell, the landing's three themes.
+
+   This block is byte-identical across product / pricing / terms / refund /
+   privacy, and scripts/check-business-facts.mjs fails when the five drift
+   apart. Copy is per page; a theme (.t-a / .t-b / .t-c) sets tokens only.
+   ===================================================================== */
+
+/* ---------- theme A · product-native dark (viewer violet) ---------- */
+.t-a {
+  --bg: #101014; --bg-alt: #131319; --surface: #14141a; --surface-2: #17171f;
+  --border: #232330; --rule: #202029;
+  --text: #f2f2f7; --body: #d6d6de; --muted: #8f8fa3; --faint: #6e6e80;
+  --accent: #a78bfa; --accent-soft: #a78bfa1a; --accent-line: #a78bfa4d;
+  --btn-bg: #a78bfa; --btn-fg: #101014;
+  --h1-size: 38px; --h1-ls: -.02em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+/* ---------- theme B · terminal warm (viewer orange) ---------- */
+.t-b {
+  --bg: #0c0c10; --bg-alt: #101014; --surface: #101014; --surface-2: #17171d;
+  --border: #2a2a32; --rule: #26262e;
+  --text: #fff6ec; --body: #cfc8bd; --muted: #a39c92; --faint: #7d776e;
+  --accent: #ff6b35; --accent-soft: #ff6b351a; --accent-line: #ff6b354d;
+  --btn-bg: #ff6b35; --btn-fg: #0c0c10;
+  --h1-size: 32px; --h1-ls: 0; --h1-weight: 700;
+  --display: var(--mono);
+}
+
+/* ---------- theme C · editorial light ---------- */
+.t-c {
+  --bg: #fafafa; --bg-alt: #fafafa; --surface: #ffffff; --surface-2: #f0f0f2;
+  --border: #e4e4e8; --rule: #ececf0;
+  --text: #19171d; --body: #3a3a42; --muted: #6e6e78; --faint: #9a9aa4;
+  --accent: #7c5ce0; --accent-soft: #7c5ce014; --accent-line: #7c5ce04d;
+  --btn-bg: #19171d; --btn-fg: #fafafa;
+  --h1-size: 42px; --h1-ls: -.03em; --h1-weight: 650;
+  --display: var(--sans);
+}
+
+:root {
+  --sans: "Inter", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px;
+  --page: 1120px;
+  --doc: 780px;
+  --gutter: 40px;
+  color-scheme: dark;
+}
+.t-c { color-scheme: light; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--body);
+  font: 14px/1.72 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- nav — the landing's chrome, carrying every sales page ---------- */
+.lp-nav {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 18px max(var(--gutter), calc((100% - var(--page)) / 2));
+  background: var(--bg-alt); border-bottom: 1px solid var(--border);
+}
+.lp-word { display: flex; align-items: center; gap: 8px; font: 700 14px var(--mono); color: var(--accent); text-decoration: none; }
+/* the product's own logo symbol, verbatim from the CLI viewer; currentColor
+   takes the theme accent, so the mark needs no second color source */
+.lp-mark { width: 13px; height: 15px; flex: none; display: block; }
+.lp-nav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+.lp-nav a:hover { color: var(--text); }
+.lp-nav a[aria-current="page"] { color: var(--accent); }
+.lp-nav .sub { font-size: 12.5px; color: var(--faint); }
+.lp-nav .lp-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* theme switch — the same A/B/C comparison the landing keeps on the page */
+.lp-themes { display: flex; gap: 4px; align-items: center; }
+.lp-themes .lbl { font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+.lp-theme {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
+}
+.lp-theme[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- page head ---------- */
+.pg-hero { max-width: var(--doc); margin: 0 auto; padding: 72px var(--gutter) 4px; }
+.pg-h1 {
+  margin: 0 0 20px; font-family: var(--display);
+  font-size: var(--h1-size); letter-spacing: var(--h1-ls); font-weight: var(--h1-weight);
+  line-height: 1.24; color: var(--text);
+}
+.pg-lead p { margin: 0 0 16px; font-size: 15px; line-height: 1.88; color: var(--muted); }
+.pg-lead code { font: 13px var(--mono); color: var(--accent); }
+
+/* ---------- document body — the prose system every page shares ---------- */
+.doc { max-width: var(--doc); margin: 0 auto; padding: 4px var(--gutter) 96px; }
+.doc h2 {
+  margin: 54px 0 14px; font-size: 20px; font-weight: 650; letter-spacing: -.012em;
+  color: var(--text); line-height: 1.45; scroll-margin-top: 20px;
+}
+.doc h3 { margin: 34px 0 10px; font-size: 16px; font-weight: 650; color: var(--text); line-height: 1.5; }
+.doc p { margin: 0 0 15px; font-size: 14.5px; line-height: 1.95; color: var(--body); }
+.doc ul, .doc ol { margin: 0 0 16px; padding-left: 22px; }
+.doc li { margin: 8px 0; font-size: 14.5px; line-height: 1.9; color: var(--body); }
+.doc li::marker { color: var(--faint); }
+.doc code { font: 12.5px var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+.doc a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); }
+.doc a:hover { border-bottom-color: var(--accent); }
+
+/* a note the copy sets apart from the body around it */
+.doc .note {
+  margin: 0 0 18px; padding: 16px 20px;
+  border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  font-size: 14px; line-height: 1.9; color: var(--body);
+}
+
+/* tables scroll inside their own frame rather than widening the page */
+.doc-table { margin: 0 0 18px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.doc table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 13.5px; }
+.doc th, .doc td { padding: 12px 16px; text-align: left; vertical-align: top; line-height: 1.75; border-bottom: 1px solid var(--rule); }
+/* Korean column labels: no tracking, no uppercase — both only hurt 한글 */
+.doc thead th { font: 600 12px var(--sans); color: var(--muted); background: var(--surface-2); }
+.doc tbody th { font-weight: 600; color: var(--text); white-space: nowrap; }
+.doc tbody tr:last-child th, .doc tbody tr:last-child td { border-bottom: none; }
+.doc td.num { text-align: right; white-space: nowrap; color: var(--text); font-weight: 600; }
+
+/* the top-up packs the pricing copy states as one line */
+.doc .packs { font: 15px/1.9 var(--mono); color: var(--text); }
+
+/* ---------- table of contents — the legal pages' entry point ---------- */
+.toc { margin: 26px 0 8px; padding: 20px 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.toc h2 { margin: 0 0 12px; font: 600 12px var(--sans); color: var(--muted); }
+.toc ol { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 30px; }
+.toc li { margin: 0; padding: 5px 0; font-size: 13.5px; line-height: 1.6; break-inside: avoid; }
+.toc a { color: var(--muted); text-decoration: none; border-bottom: 0; }
+.toc a:hover { color: var(--accent); }
+
+/* ---------- effective date — the one value the deploy step fills in ---------- */
+.eff {
+  display: inline-block; margin: 0 0 6px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+  font: 12px var(--mono); color: var(--muted);
+}
+
+/* ---------- footer — seller disclosure on every page ---------- */
+.lp-foot {
+  padding: 36px max(var(--gutter), calc((100% - var(--page)) / 2)) 48px;
+  border-top: 1px solid var(--border); color: var(--faint);
+}
+.lp-foot .biz { margin: 0 0 14px; font-size: 12px; line-height: 2; color: var(--muted); }
+.lp-foot .biz b { color: var(--body); font-weight: 600; }
+.lp-foot .legal { margin: 0 0 14px; font-size: 12.5px; }
+.lp-foot .legal a { color: var(--body); text-decoration: none; }
+.lp-foot .legal a:hover { color: var(--accent); }
+.lp-foot .legal span { color: var(--faint); margin: 0 8px; }
+.lp-foot .copy { margin: 0; font: 11px var(--mono); color: var(--faint); }
+.lp-foot .copy a { color: var(--faint); text-decoration: none; }
+.lp-foot .copy a:hover { color: var(--muted); }
+
+/* ---------- narrow screens: one column, tables scroll rather than clip ---------- */
+@media (max-width: 900px) {
+  :root { --gutter: 22px; }
+  .pg-hero { padding-top: 48px; }
+  .lp-nav { gap: 12px; }
+  .lp-nav .lp-right { gap: 8px; margin-left: auto; }
+  .toc ol { columns: 1; }
+}
+@media (max-width: 560px) {
+  .pg-h1 { font-size: calc(var(--h1-size) * .8); }
+  .lp-themes .lbl { display: none; }
+  .doc h2 { margin-top: 42px; font-size: 18.5px; }
+}
+</style>
+<script>/* PostHog loader — same shape the site layouts inject into mounted pages; raw HTML pages are served verbatim so each one carries its own copy. */(function(){var s=document.createElement('script');s.async=true;s.crossOrigin='anonymous';s.src='https://us-assets.i.posthog.com/static/array.js';s.onload=function(){window.posthog&&window.posthog.init('phc_sg3X7M6CtErmTgKkAk5ajcJbJyCCZsFkmVhikdjr4SLt',{api_host:'https://us.i.posthog.com',defaults:'2025-05-24'})};document.head.appendChild(s)})();</script>
+</head>
+<body>
+<nav class="lp-nav" aria-label="Primary">
+  <a class="lp-word" href="/"><svg class="lp-mark" viewBox="0 0 166 192" fill="currentColor" aria-hidden="true"><path d="M137.954 26.8921C133.611 24.0908 129.082 22.0243 124.451 20.6696C120.622 15.8133 116.032 11.5655 110.752 8.16724C84.6518 -8.64033 51.2852 1.32481 36.2178 30.4281C21.1606 59.5313 30.1043 96.7514 56.2048 113.559C61.4948 116.969 67.0937 119.265 72.7645 120.539C57.728 101.481 54.4757 73.1244 66.4864 49.9221C78.4972 26.7313 102.128 15.687 124.451 20.6811C141.412 39.8077 145.58 69.9098 132.942 94.329L158.033 110.494C173.183 81.2182 164.198 43.7915 137.954 26.8921Z"/><path d="M108.874 78.4409C103.584 75.0312 97.9952 72.7236 92.314 71.4492C107.351 90.5185 110.603 118.876 98.5921 142.078C86.5814 165.28 62.951 176.324 40.6278 171.33C23.7798 152.284 19.7042 122.239 32.3427 97.8201L7.39499 81.7473C-7.75478 111.023 1.1169 148.369 27.207 165.177H27.1967C31.5194 167.955 36.0272 169.999 40.6278 171.342C44.4564 176.187 49.0466 180.423 54.3264 183.833C80.4268 200.64 113.793 190.675 128.861 161.572C143.918 132.469 134.974 95.2485 108.874 78.4409Z"/></svg>superself</a>
+  <a href="/product">제품</a>
+  <a href="/pricing">가격</a>
+  <a class="sub" href="/terms">이용약관</a>
+  <a class="sub" href="/refund">환불규정</a>
+  <a class="sub" href="/privacy" aria-current="page">개인정보처리방침</a>
+  <span class="lp-right">
+    <span class="lp-themes" role="group" aria-label="Page theme">
+      <span class="lbl">Theme</span>
+      <button class="lp-theme" type="button" data-theme="a" aria-pressed="true" title="Product-native dark">A</button>
+      <button class="lp-theme" type="button" data-theme="b" aria-pressed="false" title="Terminal warm">B</button>
+      <button class="lp-theme" type="button" data-theme="c" aria-pressed="false" title="Editorial light">C</button>
+    </span>
+  </span>
+</nav>
+
+<main>
+  <header class="pg-hero">
+    <h1 class="pg-h1">개인정보처리방침</h1>
+    <div class="pg-lead">
+      <p>주식회사 에프엑스와이(영문 FXY Inc., 이하 “회사”)는 Superself Agent-Native 비즈니스 API 제품군의 개인정보를 보호하고 관련 법령을 지키기 위해 이 개인정보처리방침을 공개합니다. 이 방침은 <code>self</code> CLI, 사람용 웹 콘솔, 이메일 API, 알림톡 API와 Landing Kit에 적용됩니다.</p>
+    </div>
+    <p class="eff">시행일: DEPLOY_DATE_PLACEHOLDER</p>
+  </header>
+
+  <article class="doc">
+    <nav class="toc" aria-label="개인정보처리방침 목차">
+      <h2>목차</h2>
+      <ol>
+        <li><a href="#s1">1. 총칙 및 개인정보처리자</a></li>
+        <li><a href="#s2">2. 개인정보의 처리 목적</a></li>
+        <li><a href="#s3">3. 처리하는 개인정보의 항목 및 수집 방법</a></li>
+        <li><a href="#s4">4. 보유 및 이용 기간</a></li>
+        <li><a href="#s5">5. 개인정보의 제3자 제공</a></li>
+        <li><a href="#s6">6. 개인정보 처리 위탁</a></li>
+        <li><a href="#s7">7. 개인정보의 국외 이전</a></li>
+        <li><a href="#s8">8. 고객을 대신한 수신자 정보의 수탁 처리</a></li>
+        <li><a href="#s9">9. 개인정보의 파기 절차 및 방법</a></li>
+        <li><a href="#s10">10. 정보주체와 법정대리인의 권리 및 행사 방법</a></li>
+        <li><a href="#s11">11. 민감정보 및 가명정보</a></li>
+        <li><a href="#s12">12. 만 14세 미만 아동의 개인정보</a></li>
+        <li><a href="#s13">13. 쿠키 및 자동 수집 장치</a></li>
+        <li><a href="#s14">14. 안전성 확보조치</a></li>
+        <li><a href="#s15">15. 개인정보 보호책임자 및 고충 처리</a></li>
+        <li><a href="#s16">16. 권익침해 구제 방법</a></li>
+        <li><a href="#s17">17. 개인정보처리방침의 변경 및 고지</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="s1">1. 총칙 및 개인정보처리자</h2>
+    <p>회사는 회원(계정) 정보에 대한 개인정보처리자입니다. 회사의 사업자 정보는 다음과 같습니다.</p>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">항목</th><th scope="col">내용</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">상호</th><td>주식회사 에프엑스와이 (영문 FXY Inc.)</td></tr>
+          <tr><th scope="row">대표자</th><td>임보훈</td></tr>
+          <tr><th scope="row">사업자등록번호</th><td>740-87-01715</td></tr>
+          <tr><th scope="row">통신판매업 신고번호</th><td>2024-서울서초-3685</td></tr>
+          <tr><th scope="row">사업장 주소</th><td>서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩)</td></tr>
+          <tr><th scope="row">전화번호</th><td>070-7954-8265</td></tr>
+          <tr><th scope="row">전자우편주소</th><td>hello@fxy.global</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>회원이 이메일 전송을 위해 입력하는 수신자 정보는 회원이 개인정보처리자이고, 회사는 회원의 지시에 따라 처리하는 수탁자입니다. 이 구분은 제8조에서 따로 설명합니다.</p>
+
+    <h2 id="s2">2. 개인정보의 처리 목적</h2>
+    <p>회사는 다음 목적으로 개인정보를 처리합니다.</p>
+    <ul>
+      <li>회원 가입, 로그인, 계정·에이전트 권한 관리와 고객지원</li>
+      <li>카드 등록, 선불 지갑 충전, 자동 충전, 사용량 계산, 환불과 회계 처리</li>
+      <li>이메일·알림톡 발송, Landing Kit 호스팅과 분석 제공</li>
+      <li>발신 도메인 확인, 스팸·피싱·악성 링크 방지, 콘텐츠 검사와 서비스 안정성 확보</li>
+      <li>보안 사고 조사, 부정 이용 방지, 법령 준수와 분쟁 대응</li>
+    </ul>
+    <p>회사는 위 목적을 벗어나 회원 정보를 이용하지 않습니다.</p>
+
+    <h2 id="s3">3. 처리하는 개인정보의 항목 및 수집 방법</h2>
+
+    <h3 id="s3-member">회원(계정) 정보 — 회사가 개인정보처리자</h3>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">구분</th><th scope="col">항목</th><th scope="col">수집 방법</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">가입·연락</th><td>이름, 전자우편주소, 로그인 정보, 계정 식별자, 사업자 정보</td><td>회원 가입·계정 설정</td></tr>
+          <tr><th scope="row">서비스 이용</th><td>선택한 통화, 발신 도메인, 에이전트·기기 식별자, API 호출·사용량, 접속 IP, 접속·오류·감사 기록</td><td>웹 콘솔, <code>self</code> CLI와 API 이용</td></tr>
+          <tr><th scope="row">결제·환불</th><td>결제수단 식별자, 빌링키 참조값, 충전·사용·환불 내역, 결제 금액·통화</td><td>결제·환불 요청과 PG 연동</td></tr>
+          <tr><th scope="row">자동수집</th><td>콘솔 로그인 세션 쿠키, 보안과 서비스 운영에 필요한 로그</td><td>웹 콘솔과 서비스 운영</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>카드 전체 번호(PAN)는 회사가 보관하지 않습니다. 결제사업자가 처리하는 정보와 회사가 받는 결제 참조값은 구분됩니다.</p>
+
+    <h3 id="s3-recipient">수신자 정보 — 회원이 개인정보처리자, 회사가 수탁자</h3>
+    <p>회원이 이메일 발송을 위해 제공하는 수신자의 전자우편주소, 이름 등 발송에 필요한 정보와 발송 콘텐츠·링크, 전송·반송·수신 거부 상태를 처리할 수 있습니다. 회원은 수신자에게 필요한 고지와 동의를 직접 확보해야 합니다.</p>
+    <p>회원은 웹 콘솔, <code>self</code> CLI와 이메일 API를 통해 정보를 입력합니다. 회사는 서비스 이용 과정에서 생성되는 전송·검사·감사 기록을 자동으로 수집할 수 있습니다.</p>
+
+    <h2 id="s4">4. 보유 및 이용 기간</h2>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">구분</th><th scope="col">보유 기간</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">회원(계정) 정보</th><td>회원 탈퇴 또는 계정 종료 시 지체 없이 파기. 다만 아래 법령상 보존 예외는 해당 기간 동안 보관</td></tr>
+          <tr><th scope="row">수신자 정보</th><td>계정 종료 시 파기. 법적 방어에 필요한 최소한의 콘텐츠 검사 기록은 1년 이상 보관할 수 있음</td></tr>
+          <tr><th scope="row">계약·청약철회 기록</th><td>전자상거래법상 5년</td></tr>
+          <tr><th scope="row">대금 결제·공급 기록</th><td>전자상거래법상 5년</td></tr>
+          <tr><th scope="row">소비자 불만·분쟁 처리 기록</th><td>전자상거래법상 3년</td></tr>
+          <tr><th scope="row">접속·통신 사실 확인 기록</th><td>통신비밀보호법 등 관련 법령에서 정한 기간(통상 3개월)</td></tr>
+          <tr><th scope="row">무료 Landing Kit 분석 데이터</th><td>제공 안내에 따라 30일</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>법령상 보존 기간이 끝나거나 처리 목적이 달성되면 지체 없이 파기합니다. 법적 방어를 위한 콘텐츠 검사 기록은 필요한 범위에서만 보관하고, 가능한 경우 수신자 식별정보를 분리하거나 최소화합니다.</p>
+
+    <h2 id="s5">5. 개인정보의 제3자 제공</h2>
+    <p>회사는 회원 정보를 원칙적으로 제3자에게 제공하지 않습니다. 다음 경우에는 법령에 따라 제공할 수 있습니다.</p>
+    <ul>
+      <li>회원이 사전에 동의한 경우</li>
+      <li>법률에 특별한 규정이 있거나 수사·재판·감독기관의 적법한 요청이 있는 경우</li>
+      <li>생명·신체·재산을 보호하기 위해 긴급하게 필요한 경우</li>
+    </ul>
+    <p>서비스 제공을 위해 다른 사업자에게 업무를 맡기는 경우는 제6조의 처리 위탁으로 구분합니다. 수신자 정보는 회원의 위탁 지시에 따라 처리할 뿐 회사의 제3자 제공 목적으로 사용하지 않습니다.</p>
+
+    <h2 id="s6">6. 개인정보 처리 위탁</h2>
+    <p>회사는 원활한 서비스 제공을 위해 다음과 같이 개인정보 처리를 위탁합니다.</p>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">수탁자</th><th scope="col">위탁 업무</th><th scope="col">처리 항목·보유</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">AWS</th><td>서울 리전의 이메일 발송·보관 인프라와 서비스 운영</td><td>회원 정보, 수신자 정보, 콘텐츠, 로그. 계정 종료 또는 목적 달성 시까지, 법령상 보존 예외 적용</td></tr>
+          <tr><th scope="row">나이스페이먼츠</th><td>원화 결제대행</td><td>결제에 필요한 회원·결제 참조값·거래 내역. 결제·정산과 법령상 보존 기간까지</td></tr>
+          <tr><th scope="row">토스페이먼츠</th><td>원화 결제대행</td><td>결제에 필요한 회원·결제 참조값·거래 내역. 결제·정산과 법령상 보존 기간까지</td></tr>
+          <tr><th scope="row">Polar</th><td>달러 결제 및 판매자 기록상 판매자(Merchant of Record, MoR) 업무</td><td>결제에 필요한 회원·결제 참조값·거래 내역. 결제·정산과 법령상 보존 기간까지</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>회사는 위탁계약에 목적 외 처리 금지, 안전성 확보, 재위탁 제한, 접근권한 관리, 사고 통지와 관리·감독 의무를 포함합니다. 수탁자가 변경되면 이 방침을 통해 공개합니다.</p>
+
+    <h2 id="s7">7. 개인정보의 국외 이전</h2>
+    <p>회사는 USD 결제를 위해 Polar에 다음 정보를 미국으로 이전할 수 있습니다.</p>
+    <div class="doc-table">
+      <table>
+        <thead>
+          <tr><th scope="col">항목</th><th scope="col">내용</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">이전 국가·수령자</th><td>미국, Polar</td></tr>
+          <tr><th scope="row">이전 항목</th><td>이름, 전자우편주소, 계정 식별자, 결제 금액·통화, 거래 식별자와 결제에 필요한 참조값</td></tr>
+          <tr><th scope="row">이전 목적</th><td>USD 결제 처리, 정산, 환불과 판매자 기록상 판매자 업무</td></tr>
+          <tr><th scope="row">이전 시점·방법</th><td>USD 결제·환불 요청 시 네트워크를 통한 암호화 전송</td></tr>
+          <tr><th scope="row">보유 기간</th><td>결제·정산·환불과 법령상 보존에 필요한 기간</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>회원이 국외 이전에 동의하지 않으면 USD 결제를 이용할 수 없고, 가능한 경우 원화 결제 등 국내 결제수단을 이용할 수 있습니다. AWS는 서울 리전을 사용하며, 이 방침에서 확인한 AWS 처리에는 국외 이전을 포함하지 않습니다.</p>
+
+    <h2 id="s8">8. 고객을 대신한 수신자 정보의 수탁 처리</h2>
+    <p>수신자 정보에 대해 회원은 위탁자이자 개인정보처리자이고, 회사는 개인정보 보호법 제26조에 따른 수탁자입니다. 회사는 회원의 문서화된 지시에 따라 이메일 전송, 전송 전 검사, 전송 상태·반송·수신 거부 처리와 서비스 운영에 필요한 범위에서만 수신자 정보를 처리합니다.</p>
+    <p>회사는 수신자 정보를 자체 광고, 회원의 업무와 무관한 분석 또는 다른 회원을 위한 목적으로 이용하지 않습니다. 회사는 목적 외 처리 금지, 기술적·관리적 안전조치, 접근권한 제한, 재위탁 제한, 수탁자 교육과 관리·감독을 적용합니다. 재수탁이 필요한 경우 회원에게 알리고 동일한 보호 의무를 적용합니다.</p>
+    <p>회원은 수신자에 대한 적법한 수집·이용 근거, 광고성 발송의 고지와 수신 거부 방법을 준비할 책임이 있습니다. 수신자가 권리를 행사하면 회원을 통해 요청하는 것을 원칙으로 하되, 회사는 법령이 허용하는 범위에서 회원의 요청 처리와 자료 확인에 협조합니다. 수신자 정보는 계정 종료 시 파기합니다.</p>
+
+    <h2 id="s9">9. 개인정보의 파기 절차 및 방법</h2>
+    <p>회사는 처리 목적이 달성되거나 보유 기간이 끝나거나 회원이 계정을 종료하면 파기 대상 정보를 확인합니다. 법령상 보존하거나 분쟁 대응을 위해 필요한 정보는 별도로 분리해 보관하고, 보존 기간이 끝나면 파기합니다.</p>
+    <p>전자 파일은 복구할 수 없도록 삭제하고, 출력물 등 물리적 기록은 분쇄하거나 소각합니다. 백업에 남은 정보는 백업 보존 주기에 따라 덮어쓴 뒤 복구할 수 없도록 처리합니다.</p>
+
+    <h2 id="s10">10. 정보주체와 법정대리인의 권리 및 행사 방법</h2>
+    <p>회원과 법정대리인은 회사에 개인정보 열람, 정정·삭제, 처리정지와 동의 철회를 요청할 수 있습니다. 요청은 hello@fxy.global 또는 사업자 정보의 연락처로 접수하며, 회사는 본인 여부를 확인한 뒤 법정 기간 내 처리 결과를 회신합니다.</p>
+    <p>정정·삭제가 끝날 때까지 해당 정보를 이용하거나 제공하지 않습니다. 법령상 보존 의무가 있는 정보는 삭제 요청이 제한될 수 있으며, 그 사유와 보존 기간을 안내합니다. 수신자는 자신이 정보를 제공한 회원에게 먼저 권리를 행사할 수 있고, 회사는 회원과 함께 필요한 범위에서 처리합니다.</p>
+
+    <h2 id="s11">11. 민감정보 및 가명정보</h2>
+    <p>회사는 민감정보를 수집·처리하지 않습니다. 회사는 이 방침의 서비스 제공을 위해 가명정보를 처리하지 않습니다.</p>
+
+    <h2 id="s12">12. 만 14세 미만 아동의 개인정보</h2>
+    <p>서비스는 사업자와 업무용 회원을 대상으로 하며 만 14세 미만 아동을 대상으로 하지 않습니다. 회사는 만 14세 미만 아동의 개인정보를 고의로 수집하지 않습니다. 해당 사실을 알게 되면 보호자 확인과 삭제를 위해 hello@fxy.global로 알려 주시기 바랍니다.</p>
+
+    <h2 id="s13">13. 쿠키 및 자동 수집 장치</h2>
+    <p>웹 콘솔은 로그인 상태를 유지하기 위한 세션 쿠키만 사용합니다. 광고 쿠키는 사용하지 않습니다. 브라우저 설정에서 쿠키를 차단할 수 있지만, 세션 쿠키를 차단하면 로그인과 일부 서비스가 작동하지 않을 수 있습니다.</p>
+    <p>Landing Kit 방문 분석에는 개인을 식별할 수 없는 익명화 해시를 사용합니다. 해시로 개인을 식별하거나 광고 목적으로 사용하지 않습니다. <code>self</code> CLI와 API 이용에서는 보안·사용량·오류 확인을 위해 기기 식별자, IP와 접속 기록이 생성될 수 있습니다.</p>
+
+    <h2 id="s14">14. 안전성 확보조치</h2>
+    <p>회사는 개인정보의 안전성을 확보하기 위해 다음 조치를 적용합니다.</p>
+    <ul>
+      <li>전송 구간과 저장 구간의 암호화</li>
+      <li>업무상 필요한 사람과 시스템만 접근하도록 한 접근통제·권한 최소화</li>
+      <li>에이전트 자격증명의 짧은 유효기간과 작업 범위 제한</li>
+      <li>접근·변경·발송·검사 기록의 감사 로그와 모니터링</li>
+      <li>보안 사고 대응 절차와 정기적인 권한 검토</li>
+    </ul>
+    <p>회사는 개인정보가 포함된 로그와 에이전트 작업 기록을 최소화하고, 수신자 개인정보가 불필요하게 남지 않도록 관리합니다.</p>
+
+    <h2 id="s15">15. 개인정보 보호책임자 및 고충 처리</h2>
+    <p>개인정보 보호책임자는 다음과 같습니다.</p>
+    <ul>
+      <li>성명·직위: 임보훈 대표이사</li>
+      <li>전자우편: hello@fxy.global</li>
+      <li>전화번호: 070-7954-8265</li>
+    </ul>
+    <p>개인정보 열람·정정·삭제·처리정지 요청과 개인정보 관련 고충은 위 연락처로 접수합니다. 회사는 접수 내용을 확인하고 필요한 조치를 안내합니다.</p>
+
+    <h2 id="s16">16. 권익침해 구제 방법</h2>
+    <p>개인정보 침해에 대한 상담과 신고는 개인정보침해신고센터(국번 없이 118)를 이용할 수 있습니다. 회사와의 분쟁은 개인정보분쟁조정위원회에 조정을 신청할 수 있습니다. 개인정보분쟁조정위원회 연락처: [TBD: 최신 확인]</p>
+    <p>그 밖에 개인정보보호위원회에 신고하거나 관련 법령에 따른 행정·사법 절차를 이용할 수 있습니다.</p>
+
+    <h2 id="s17">17. 개인정보처리방침의 변경 및 고지</h2>
+    <p>회사는 이 방침을 변경하면 변경 내용과 시행일을 시행일 7일 전까지 공지합니다. 회원에게 중대한 불이익이 생기는 변경은 시행일 30일 전부터 공지하고, 이메일 등으로 개별 통지합니다. 변경 전후의 방침은 서비스 화면에서 확인할 수 있도록 보관합니다.</p>
+  </article>
+</main>
+
+<!-- Seller disclosure — 전자상거래법 제10조. Values: site/business-facts.json -->
+<footer class="lp-foot">
+  <p class="biz">
+    <b>주식회사 에프엑스와이</b> (FXY Inc.) · 대표 임보훈 · 사업자등록번호 740-87-01715 · 통신판매업신고 2024-서울서초-3685<br>
+    서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩) · hello@fxy.global · 070-7954-8265
+  </p>
+  <p class="legal">
+    <a href="/terms">이용약관</a><span>·</span><a href="/privacy">개인정보처리방침</a><span>·</span><a href="/refund">환불규정</a>
+  </p>
+  <p class="copy">© 2026 FXY Inc. · <a href="https://github.com/fxylabs/superself">github.com/fxylabs/superself</a></p>
+</footer>
+<script>
+/* Theme switch — the one behaviour these pages carry, shared with the landing. */
+(function ()
+{
+    var buttons = document.querySelectorAll('.lp-theme');
+
+    /* The head script already picked the theme; mark which button owns it. */
+    function mark(key)
+    {
+        buttons.forEach(function (button)
+        {
+            button.setAttribute('aria-pressed', String(button.dataset.theme === key));
+        });
+    }
+
+    function apply(key)
+    {
+        document.documentElement.className = 't-' + key;
+        mark(key);
+        try { localStorage.setItem('sf-theme', key); } catch (error) { }
+
+        /* A chosen theme becomes shareable; an untouched page keeps a clean URL. */
+        var url = new URL(location.href);
+        url.searchParams.set('theme', key);
+        history.replaceState(null, '', url);
+    }
+
+    buttons.forEach(function (button)
+    {
+        button.addEventListener('click', function () { apply(button.dataset.theme); });
+    });
+    mark(document.documentElement.className.replace('t-', '') || 'a');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "note": "Statutory seller disclosure for the sales pages (전자상거래법 제10조). The raw pages under site/pages/ are served verbatim, so each one inlines these values; scripts/check-business-facts.mjs fails the build when a rendered value drifts from this file. Change a value here and in every page in the same commit.",
+  "company": {
+    "legalName": "주식회사 에프엑스와이",
+    "legalNameEn": "FXY Inc.",
+    "representative": "임보훈",
+    "businessRegistrationNumber": "740-87-01715",
+    "mailOrderSalesNumber": "2024-서울서초-3685",
+    "address": "서울특별시 서초구 강남대로53길 8, 7-166호(스타크 강남빌딩)",
+    "email": "hello@fxy.global",
+    "phone": "070-7954-8265"
+  },
+  "EFFECTIVE_DATE": "DEPLOY_DATE_PLACEHOLDER",
+  "effectiveDateRequiredOn": ["terms.html", "privacy.html"],
+  "routes": {
+    "/": "index.html",
+    "/product": "product.html",
+    "/pricing": "pricing.html",
+    "/terms": "terms.html",
+    "/refund": "refund.html",
+    "/privacy": "privacy.html"
+  }
+}
