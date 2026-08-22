@@ -65,13 +65,18 @@ export function devKeyViolations(tree)
     }
     const source = tree.read(releaseKeysModule);
     const kids = [...source.matchAll(/kid:\s*"([^"]+)"/g)].map((found) => found[1]);
-    const shipped = kids.filter((kid) => !kid.startsWith("dev-"));
-    return shipped.length > 0 ? [] : kids.map((kid) => ({
+    // Every pinned `dev-` key is a violation, not only a set made of nothing but
+    // them. A real release key mixed with `dev-2026a` still ships a CLI that
+    // accepts a plugin anyone holding the fixture can sign — the presence of the
+    // real key does not withdraw the dev key's trust. The gate passes only when
+    // no `dev-` key is pinned at all.
+    const devKeys = kids.filter((kid) => kid.startsWith("dev-"));
+    return devKeys.map((kid) => ({
         file: releaseKeysModule,
         line: 1,
         rule: "development-trust-anchor",
-        detail: `"${kid}" is the only kind of key pinned, and its private half is a test fixture — `
-            + "pin a release key before publishing, or set SUPERSELF_DEV_KEYS=1 for a development build"
+        detail: `"${kid}" is a development key whose private half is a test fixture — `
+            + "remove it before publishing, or set SUPERSELF_DEV_KEYS=1 for a development build"
     }));
 }
 
