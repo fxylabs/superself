@@ -693,10 +693,17 @@ test("cell 156(b): a login waits out a live, unstealable owner and commits — t
         // one way for it to end without writing them, which is SIGINT.
         const committing = withCredentialLock("default", { onWait: () => { announced += 1; } },
             async () => "committed");
+        // The waiter polls every 100ms of real time and announces only on a
+        // poll that lands while the lock is past its lease and still
+        // unstealable — between 45s and 600s of clock age. At 30s per 5ms the
+        // clock crossed that whole window inside one poll gap on the ubuntu
+        // runner (#322): the first poll after the lease already saw a stealable
+        // lock, took it, and never announced. 25ms a step keeps the window
+        // several polls wide on any host.
         for (let step = 0; step < 40 && at - Date.now() < LOCK_ABSOLUTE_STEAL_MS + 60_000; step += 1)
         {
             at += 30_000;
-            await new Promise((resolve) => setTimeout(resolve, 5));
+            await new Promise((resolve) => setTimeout(resolve, 25));
         }
         assert.equal(await committing, "committed", "a login was blocked forever by a live, unstealable lock");
         assert.equal(announced, 1, "the wait was announced more or fewer than once");
