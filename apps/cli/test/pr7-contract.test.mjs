@@ -665,18 +665,42 @@ test("§8.8 login: the one command that answers in JSON Lines, and its refusal s
 // owner web-session middleware, so an agent credential is refused by
 // `@spfn/auth` before any scope check. The client half is written; it cannot be
 // gated against a route that will not accept the principal it is built for.
+// Skipped, not deleted, and carrying the same success-plus-exit-3 pair the
+// three live families assert — so the two blocked families are already a real
+// gate the moment the Q1 server rebase (fix/server-rulings-batch) lets an agent
+// credential reach these routes and the `.skip` comes off.
 test.skip("§8.8 wallet: success and exit-3 shapes — blocked on Q1 (fix/server-rulings-batch)", async () =>
 {
-    const result = await probe({ status: 200, body: { balance: { amount: 10000, currency: "USD" } } },
+    const ok = await probe({ status: 200, body: { balance: { amount: 10000, currency: "USD" } } },
         ["probe", "--json"], familyPlugin(WALLET));
-    assert.equal(result.code, 0);
+    assert.equal(ok.code, 0, ok.all);
+    assert.deepEqual(jsonOf(ok.out).balance, { amount: 10000, currency: "USD" });
+
+    const pending = await probe(
+        { status: 409, body: { details: { code: "call_in_progress", message: "not yet", retryAfterS: 2 } } },
+        ["probe", "--json"], familyPlugin(WALLET));
+    assert.equal(pending.code, 3, pending.all);
+    // Its exit-3 answer is the one §2.6 envelope; wallet carries no call key, so
+    // no idempotency_key is echoed.
+    const error = assertEnvelope(pending.out, { code: "call_in_progress", retry_after_s: 2 });
+    assert.equal(error.idempotency_key, undefined, "wallet echoed a call key it does not send");
 });
 
 test.skip("§8.8 landing deploy: success and exit-3 shapes — blocked on Q1 (fix/server-rulings-batch)", async () =>
 {
-    const result = await probe({ status: 409, body: { details: { code: "deploy_superseded", message: "superseded" } } },
+    const ok = await probe({ status: 200, body: { url: "https://demo.example", deploymentId: "dep_1" } },
         ["probe", "--json"], familyPlugin(DEPLOY));
-    assert.equal(result.code, 3);
+    assert.equal(ok.code, 0, ok.all);
+    assert.equal(jsonOf(ok.out).deployment_id, "dep_1");
+
+    const pending = await probe(
+        { status: 409, body: { details: { code: "deploy_superseded", message: "superseded", retryAfterS: 3 } } },
+        ["probe", "--json"], familyPlugin(DEPLOY));
+    assert.equal(pending.code, 3, pending.all);
+    // The retry rests on the server's own `deploy_superseded`, so the deploy
+    // sends no call key and the envelope echoes none.
+    const error = assertEnvelope(pending.out, { code: "deploy_superseded", retry_after_s: 3 });
+    assert.equal(error.idempotency_key, undefined, "landing deploy echoed a call key it does not send");
 });
 
 test("§8.8: four families are gated today and two are skipped against a named blocker", () =>
