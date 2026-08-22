@@ -237,7 +237,12 @@ for (const code of ["credential_invalid", "credential_required"])
             "the request was replayed");
         assert.equal(JSON.parse(readFileSync(credentialsFile(it), "utf8")).profiles.default, undefined,
             "the terminal profile was left on disk");
-        assert.equal(jsonOf(result.out).error.code, "login_required");
+        const error = jsonOf(result.out).error;
+        assert.equal(error.code, "login_required");
+        // The reason is what an agent branches on, and the two codes are not
+        // the same event: one credential was never known, the other was taken
+        // away.
+        assert.equal(error.reason, code === "credential_invalid" ? "revoked" : "credential_required");
     });
 }
 
@@ -268,10 +273,19 @@ test("cell 138: a 401 during a keyless multipart deploy replays exactly once", a
 
 /* ── cells 43–45: the terminal refresh outcomes ────────────────────── */
 
+// Cells 43 and 44 are refresh-token refusals: the credential expired past its
+// absolute deadline, and the family self-detected a reuse.
+//
+// Cell 45 is NOT one of those, and testing it as `refresh_revoked` was the
+// mismatch both reviewers found. The approved scenario is "credential revoked
+// in P3" — an owner revoking a credential on the console — and §3.3 maps that
+// to the 401 the *call* gets, `credential_invalid` ("credential is unknown or
+// revoked"), whose reason the CLI renames to `revoked`. A refresh-token refusal
+// is a different event with a different cause, so it is asserted separately
+// below rather than standing in for this one.
 const TERMINAL = [
     { code: "refresh_expired", reason: "refresh_expired", cell: 43 },
-    { code: "refresh_reuse_detected", reason: "reuse_detected", cell: 44 },
-    { code: "refresh_revoked", reason: "refresh_revoked", cell: 45 }
+    { code: "refresh_reuse_detected", reason: "reuse_detected", cell: 44 }
 ];
 
 for (const outcome of TERMINAL)
@@ -294,6 +308,40 @@ for (const outcome of TERMINAL)
         assert.equal(existsSync(markerPath(it)), false, "a proven no-rotation outcome left the marker behind");
     });
 }
+
+test("cell 45: a credential the owner revoked is login_required reason revoked, profile deleted", async () =>
+{
+    const it = box();
+    installFixture(it, { key: "paid", verbs: ["paid"], entry: keyedPlugin() });
+    // The owner revoked this credential on the console (design P3). The next
+    // call — not a refresh — is answered 401 `credential_invalid`, and §3.3
+    // makes that terminal: no refresh, no replay, the local profile deleted.
+    const result = await run(it, ["paid", "--json"], (call) => (call.path === "/api/email/send"
+        ? { status: 401, body: { code: "credential_invalid", message: "this credential is not usable" } }
+        : { status: 200, body: {} }));
+    assert.equal(result.code, 1, result.all);
+    const error = jsonOf(result.out).error;
+    assert.equal(error.code, "login_required");
+    assert.equal(error.reason, "revoked");
+    assert.equal(result.calls.filter((call) => call.path === "/api/auth/refresh").length, 0,
+        "a refresh was burned on a credential the owner had already taken away");
+    assert.equal(JSON.parse(readFileSync(credentialsFile(it), "utf8")).profiles.default, undefined,
+        "the revoked profile was left on disk");
+});
+
+test("a refresh-token revocation is its own event, and keeps its own reason", async () =>
+{
+    const it = box();
+    installFixture(it, { key: "paid", verbs: ["paid"], entry: keyedPlugin() });
+    const result = await run(it, ["paid", "--json"],
+        (call) => (call.path === "/api/auth/refresh"
+            ? { status: 401, body: { code: "refresh_revoked", message: "the refresh token was revoked" } }
+            : { status: 200, body: {} }),
+        { expiresAt: new Date(Date.now() - 60_000).toISOString() });
+    assert.equal(result.code, 1);
+    assert.equal(jsonOf(result.out).error.reason, "refresh_revoked");
+    assert.equal(existsSync(markerPath(it)), false);
+});
 
 test("cell 44: a reuse detection says what already happened, not just what to do", async () =>
 {

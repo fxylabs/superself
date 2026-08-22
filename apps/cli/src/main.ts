@@ -78,6 +78,7 @@ import {
     loadDevPlugin, loadPlugin, pluginVerbs, resolveRailMajor
 } from "./plugins.js";
 import { jsonMode, renderFailure, selectJsonMode } from "./output.js";
+import { suppressJournal } from "./rail.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
@@ -90,15 +91,21 @@ async function main(argv: string[]): Promise<void>
     {
         return;
     }
-    const resolved = resolveCommand(COMMANDS, argv);
+    // Host flags are consumed once, here, for every command. `self app install
+    // email --no-journal` is as reasonable a request as the same flag on a
+    // mini-app verb, and neither leaf should have to declare an option about
+    // whether this machine keeps a record of its own calls.
+    suppressJournal(argv.includes("--no-journal"));
+    const args = hostFlagsRemoved(argv);
+    const resolved = resolveCommand(COMMANDS, args);
     if (resolved !== null)
     {
         await runLeaf(resolved);
         return;
     }
-    if (!await runPlugin(argv))
+    if (!await runPlugin(args))
     {
-        await runAlias(argv);
+        await runAlias(args);
     }
 }
 
@@ -179,6 +186,40 @@ async function runPlugin(argv: string[]): Promise<boolean>
     return true;
 }
 
+// `--no-journal` belongs to the host, not to any leaf: whether this machine
+// keeps a local record of its own calls is not a question a mini-app should
+// have to declare an option for. So the host reads it and removes it, and the
+// leaf parses an argv that never contained it. After `--` it is a positional
+// the caller meant literally and is left alone.
+// The resolved verb path and nothing else — `email send`, never
+// `email send --json`.
+//
+// This feeds the derived call key, so a flag leaking into it would make
+// `self email send` and `self email send --json` two different calls against
+// the same account: the second is a fresh key, and a fresh key is a second
+// charge. Render flags are excluded from the derivation by §4.1 precisely so a
+// retry that adds `--json` is still the same call.
+function verbPath(argv: string[]): string
+{
+    const words: string[] = [];
+    for (const argument of argv)
+    {
+        if (argument.startsWith("-") || words.length === 2)
+        {
+            break;
+        }
+        words.push(argument);
+    }
+    return words.join(" ");
+}
+
+function hostFlagsRemoved(argv: string[]): string[]
+{
+    const end = argv.indexOf("--");
+    return argv.filter((argument, at) =>
+        argument !== "--no-journal" || (end !== -1 && at > end));
+}
+
 // `--timeout <s>` replaces the derived per-command deadline outright, in both
 // directions (§4.2). It is the one flag the host reads out of argv before the
 // leaf parses, and it has to be: the session it configures is built before the
@@ -205,7 +246,7 @@ async function pluginCommands(argv: string[], plugin: InstalledPlugin | undefine
     // call: an incompatible plugin must not get to issue one live, chargeable
     // request before the check that exists to stop it has run.
     const railApi = plugin === undefined ? undefined : await resolveRailMajor(plugin.key, session);
-    const context: LoadContext = { cliVersion: cliVersion(), session, railApi, commandPath: () => argv.slice(0, 2).join(" ") };
+    const context: LoadContext = { cliVersion: cliVersion(), session, railApi, commandPath: () => verbPath(argv) };
     return development === null ? loadPlugin(plugin as InstalledPlugin, context) : loadDevPlugin(development, context);
 }
 
@@ -262,6 +303,12 @@ function wantsJson(resolved: Resolved): boolean
     {
         if (asksJson(resolved.args))
         {
+            // Machine mode is selected before the refusal is thrown, so the
+            // caller gets the envelope on stdout. An agent that asked for JSON
+            // and was handed a human sentence on stderr has to parse prose to
+            // find out that it cannot parse anything — the one shape it is
+            // guaranteed to understand is the one this refusal owes it.
+            selectJsonMode(true);
             throw new CliError(`\`self ${resolved.path}\` has no --json contract yet`, "json_unsupported",
                 { hint: "read the human output, or use a command that declares --json" });
         }

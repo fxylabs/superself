@@ -142,7 +142,7 @@ async function installOne(profile: string, key: string, pin: string | undefined,
     const fetched = await fetchRelease(profile, key, pin);
     checkPin(fetched.document, pin);
     checkVerbs(fetched.document.manifest);
-    installRelease(fetched.document, allowDowngrade, fetched.railApi);
+    installRelease(fetched.document, key, allowDowngrade, fetched.railApi);
     const manifest = fetched.document.manifest;
     return { key: manifest.key, version: manifest.version, verbs: manifest.verbs, scopes: manifest.scopes };
 }

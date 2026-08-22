@@ -42,6 +42,39 @@ export const renderGate = "src/output.ts";
 // `sanitize.ts` catching a token is a backstop, not the guarantee.
 export const credentialModules = ["src/credentials.ts", "src/rail.ts"];
 
+// The pinned trust anchors, and the one thing that must never be true of a
+// published build: that the only key it will accept is one whose private half
+// is committed in this repository.
+//
+// The comment beside `dev-2026a` says to rotate it, and `notAfter` bounds it,
+// but neither is a gate — a release cut without reading the comment ships a CLI
+// that accepts a plugin anyone on earth can sign. `SUPERSELF_DEV_KEYS=1` is the
+// deliberate opt-out for a development build, so the check fails closed.
+export const releaseKeysModule = "src/releasekeys.ts";
+
+// Deliberately NOT part of `runStructure`. This branch legitimately pins only
+// the development key while the release pipeline is being built, so folding it
+// into the everyday gate would mean a red build for a state that is correct
+// today. It gates the one act that would actually ship it — `npm publish`,
+// through `prepublishOnly` — which is where the mistake it prevents is made.
+export function devKeyViolations(tree)
+{
+    if (!tree.paths.includes(releaseKeysModule) || process.env.SUPERSELF_DEV_KEYS === "1")
+    {
+        return [];
+    }
+    const source = tree.read(releaseKeysModule);
+    const kids = [...source.matchAll(/kid:\s*"([^"]+)"/g)].map((found) => found[1]);
+    const shipped = kids.filter((kid) => !kid.startsWith("dev-"));
+    return shipped.length > 0 ? [] : kids.map((kid) => ({
+        file: releaseKeysModule,
+        line: 1,
+        rule: "development-trust-anchor",
+        detail: `"${kid}" is the only kind of key pinned, and its private half is a test fixture — `
+            + "pin a release key before publishing, or set SUPERSELF_DEV_KEYS=1 for a development build"
+    }));
+}
+
 export const stateWritingModules = [
     "src/ledger.ts", "src/pipeline.ts", "src/sanitize.ts", "src/logfile.ts",
     "src/fold.ts", "src/model.ts", "src/connect.ts", "src/sync.ts", "src/artifact.ts"

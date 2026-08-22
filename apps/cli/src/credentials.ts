@@ -460,7 +460,7 @@ interface LockOptions
     // 3; a login that already holds an approved grant waits to the absolute
     // bound instead, because dropping the grant on a timeout would throw away
     // the one thing a human just approved.
-    waitMs: number;
+    waitMs?: number;
     // Announced once, on stderr, when the wait passes the lease. Never on
     // stdout, and never in `--json`.
     onWait?: () => void;
@@ -505,7 +505,7 @@ async function waitForLock(path: string, nonce: string, options: LockOptions): P
             return;
         }
         const waited = now().getTime() - started;
-        if (waited > options.waitMs)
+        if (options.waitMs !== undefined && waited > options.waitMs)
         {
             throw pending("refresh_lock_timeout",
                 `another self process is holding the credential for profile "${profileOf(path)}"`, { retry_after_s: 5 });

@@ -472,3 +472,23 @@ test("--timeout takes seconds, and says so rather than waiting forever on nonsen
         await rail.close();
     }
 });
+
+test("a 429 on poll is the IP limiter, not a refusal — the login backs off and keeps waiting", async () =>
+{
+    const it = box();
+    const result = await login(it, ["--json", "--no-open", "--timeout", "40"], {
+        interval: 1,
+        // The rate limiter answers with no `code` at all. Terminating here
+        // throws away a grant a person may be about to approve, over a limit
+        // that clears on its own.
+        poll: (n) => (n < 3 ? { status: 429, body: {} } : approved())
+    });
+    assert.equal(result.code, 0, result.all);
+    assert.equal(result.device.polls, 3, "the login gave up instead of backing off");
+    // Each 429 widens the interval by the same increment `slow_down` uses, so
+    // the client never answers a rate limit by polling harder.
+    const gaps = result.device.at.slice(1).map((at, index) => at - result.device.at[index]);
+    gaps.forEach((gap) => assert.ok(gap >= 5900, `polled again after ${gap}ms, without widening`));
+    assert.equal(jsonLines(result.out).length, 2, "the rate limit reached stdout");
+    assert.match(result.err, /rate-limiting/);
+});

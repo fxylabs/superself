@@ -396,12 +396,46 @@ export function journalPath(): string
 // No request bodies, no recipients, no tokens. The call key is an irreversible
 // hash, so the journal carries no PII — which is what lets it be the mechanism
 // an agent that crashed mid-send recovers through.
-export function journalCall(entry: { profile: string; command: string; call_key?: string; exit: number; code?: string }): void
+interface JournalEntry
 {
-    if (process.env.SUPERSELF_NO_JOURNAL === "1")
+    profile: string;
+    command: string;
+    call_key?: string;
+    exit: number;
+    code?: string;
+}
+
+// Off by flag or by environment. The flag is a per-command request and the
+// variable is an ambient preference, exactly as with `--json`; here they mean
+// the same thing, because a journal is either wanted for this machine or not.
+let journalOff = false;
+
+export function suppressJournal(off: boolean): void
+{
+    journalOff = off;
+}
+
+export function journalCall(entry: JournalEntry): void
+{
+    if (journalOff || process.env.SUPERSELF_NO_JOURNAL === "1")
     {
         return;
     }
+    try
+    {
+        writeJournalLine(entry);
+    }
+    catch
+    {
+        // A journal is how an agent recovers a call key after a crash — it is
+        // not what makes the call correct. A read-only or full state directory
+        // must not turn a send that the server accepted, and charged for, into
+        // a failure the agent reads as "it did not happen".
+    }
+}
+
+function writeJournalLine(entry: JournalEntry): void
+{
     const path = journalPath();
     ensurePrivateDir(stateDir());
     const line = `${JSON.stringify({ at: now().toISOString(), ...entry })}\n`;
@@ -917,6 +951,23 @@ function deadline(budget: number, callKey: string | undefined): Promise<never>
 
 async function attemptWithin(call: RailCall, profile: Profile, callKey: string | undefined): Promise<RailResponse>
 {
+    // A call interrupted by a signal has an unknown outcome, and `exit: -1` is
+    // how the journal says so: the key is recorded, so the retry is the same
+    // call rather than a second charge (§4.5).
+    const onInterrupt = (): void => journalCall(entryFor(call, callKey, -1, "interrupted"));
+    process.once("SIGINT", onInterrupt);
+    try
+    {
+        return await sendAndReplay(call, profile, callKey);
+    }
+    finally
+    {
+        process.removeListener("SIGINT", onInterrupt);
+    }
+}
+
+async function sendAndReplay(call: RailCall, profile: Profile, callKey: string | undefined): Promise<RailResponse>
+{
     const first = await sendOnce(call, profile, callKey);
     if (first.status !== 401)
     {
@@ -988,8 +1039,11 @@ function finish(call: RailCall, answer: HttpAnswer, callKey: string | undefined)
     noticeSkew(call.session, answer.headers);
     if (answer.status >= 400)
     {
-        throw railFailure(answer, callKey);
+        const refusal = railFailure(answer, callKey);
+        journalCall(entryFor(call, callKey, refusal.exit, refusal.code));
+        throw refusal;
     }
+    journalCall(entryFor(call, callKey, 0));
     return {
         status: answer.status,
         headers: answer.headers,
@@ -1001,6 +1055,22 @@ function finish(call: RailCall, answer: HttpAnswer, callKey: string | undefined)
 // The exit code comes from the table, never from `details.exitCode`. Where the
 // server sends one and it disagrees, the table wins — and the disagreement is a
 // contract-test failure rather than a runtime branch.
+// One journal line per call, whatever the outcome. This is the mechanism an
+// agent that crashed mid-send recovers through: it reads back the call key and
+// retries the same call, which is idempotent by construction. Written after the
+// answer is known rather than before it, so a line always carries a real
+// outcome — a journal of intentions would be worse than none.
+function entryFor(call: RailCall, callKey: string | undefined, exit: number, code?: string): JournalEntry
+{
+    return {
+        profile: call.session.profile,
+        command: call.commandPath ?? call.spec.path,
+        ...(callKey === undefined ? {} : { call_key: callKey }),
+        exit,
+        ...(code === undefined ? {} : { code })
+    };
+}
+
 function railFailure(answer: HttpAnswer, callKey: string | undefined): CliError
 {
     const { code, message, fields } = normalizeError(answer.body as RawBody);
@@ -1019,9 +1089,21 @@ function mapStatus(answer: HttpAnswer, code: string): string
     {
         return "rate_limited";
     }
-    if (answer.status >= 500)
+    // §2.5 names 502, 503 and 504 — the statuses that mean "ask again shortly"
+    // — and deliberately not 500. A 500 is this server failing on this request,
+    // which retrying unchanged does not fix, and calling it exit 3 would tell an
+    // agent to loop on it. It falls to `bad_request`'s exit-1 catch-all below.
+    if (RETRYABLE_STATUS.has(answer.status) && answer.status !== 429)
     {
         return "server_unavailable";
+    }
+    // A 500 is this server failing on this request. Naming it `bad_request`
+    // would blame the caller for a fault that is not theirs, and naming it
+    // `server_unavailable` would put it in the exit-3 set and tell an agent to
+    // retry something retrying does not fix.
+    if (answer.status >= 500)
+    {
+        return "server_error";
     }
     if (code === "unknown_error" || /Error$/.test(code))
     {

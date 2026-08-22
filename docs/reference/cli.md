@@ -69,6 +69,14 @@ unchanged. `SUPERSELF_JSON=1` selects the same mode for a whole session and is
 ignored by commands that have no machine contract, so exporting it never
 changes what an existing verb prints.
 
+Every rail call is recorded in a local journal at
+`$XDG_STATE_HOME/superself/calls.jsonl`, mode `0600`, capped at 1000 lines. It
+holds the time, the profile, the command, the call key, the exit code and the
+refusal code — no request bodies, no recipients, no tokens. This is how an agent
+that crashed mid-send recovers: it reads back the call key and retries the same
+call, which is idempotent by construction. `--no-journal`, or
+`SUPERSELF_NO_JOURNAL=1`, turns it off; the journal never travels anywhere.
+
 **The CLI sends no telemetry.** The one thing a rail request carries beyond the
 call itself is a client header naming versions — `self/0.7.0 plugin/email@0.1.0
 contract/0` — and nothing else: no hostname, no path, no account beyond the

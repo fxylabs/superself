@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { demoWorkspace, machine, must, selfIn } from "./harness.mjs";
 import {
     installFixture, jsonOf, pluginSource, pluginsRoot, railEnv, railServer,
@@ -647,4 +647,105 @@ test("a plugin verb's help page is the plugin's own, in both spellings of the qu
     const unknown = await selfAsync(it, it.demo, ["nosuch", "--help"]);
     assert.equal(unknown.code, 0);
     assert.match(unknown.out, /^usage: self <command>/);
+});
+
+/* ── the version and key are path segments before they are anything ── */
+
+test("a version carrying a path escape is refused before it reaches the filesystem", async () =>
+{
+    const it = box();
+    // The exact exploit shape the review found: `(?:[-+].*)?` accepted `/` and
+    // `..` inside the prerelease, and a version is a DIRECTORY NAME here — so a
+    // signed release document carrying this reached `mkdirSync` and
+    // `writeFileSync` outside the plugin tree. A signature gates execution; it
+    // does not gate where a verified document is written.
+    const escaping = releaseDocument({ key: "email", version: "1.0.0-../../../../tmp/evil" });
+    const rail = await railServer(() => ({ status: 200, body: escaping }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const result = await selfAsync(it, it.demo, ["app", "install", "email"], railEnv(rail));
+        assert.equal(result.code, 1);
+        assert.match(result.all, /is not a semantic version/);
+        assert.equal(existsSync(join(pluginsRoot(it), "email")), false, "a directory was created for it");
+        assert.equal(existsSync("/tmp/evil"), false, "the install escaped the plugin tree");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("a `current` file naming an escaping version cannot reach a plugin outside the tree", () =>
+{
+    const it = box();
+    const { document } = installFixture(it, { key: "email" });
+    // A decoy the traversal would genuinely land on. Asserting that an escape
+    // merely "fails to resolve" proves nothing — a path that does not exist
+    // behaves exactly like a version that is not installed, so the test passes
+    // against the vulnerable code. This one is reachable, so only the fix stops
+    // it.
+    const decoy = join(it.root, "decoy");
+    mkdirSync(decoy, { recursive: true });
+    writeFileSync(join(decoy, "manifest.json"), JSON.stringify(document.manifest));
+    writeFileSync(join(decoy, "signature.json"), JSON.stringify(document.signature));
+    writeFileSync(join(decoy, "index.js"), readFileSync(join(pluginsRoot(it), "email", "0.1.0", "index.js")));
+
+    // Built from the real paths rather than a counted string. `1.0.0-..` is a
+    // single directory NAME, not a step up, so a version needs a separator of
+    // its own before its `..` counts — which is exactly the kind of off-by-one
+    // that makes a security test quietly prove nothing.
+    const escape = `1.0.0-x/${relative(join(pluginsRoot(it), "email", "1.0.0-x"), decoy)}`;
+    assert.equal(existsSync(join(pluginsRoot(it), "email", escape, "manifest.json")), true,
+        "the decoy is not actually reachable, so this test would prove nothing");
+
+    writeFileSync(join(pluginsRoot(it), "email", "current"), JSON.stringify({ version: escape }));
+    const result = selfIn(it, it.demo, ["email"]);
+    assert.equal(result.code, 1);
+    assert.match(result.out, /is not a semantic version/,
+        "a version that climbs out of the plugin tree was accepted as one");
+});
+
+test("valid SemVer with a prerelease or build part still installs", async () =>
+{
+    const it = box();
+    const rc = releaseDocument({ key: "email", version: "1.0.0-rc.1" });
+    const rail = await railServer(() => ({ status: 200, body: rc }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const result = await selfAsync(it, it.demo, ["app", "install", "email@1.0.0-rc.1"], railEnv(rail));
+        assert.equal(result.code, 0, result.all);
+        assert.ok(existsSync(join(pluginsRoot(it), "email", "1.0.0-rc.1", "index.js")),
+            "the traversal fix broke a legitimate prerelease version");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("a release answering for a different key than the one asked for is refused before any write", async () =>
+{
+    const it = box();
+    // Correctly signed, and for the wrong key. Deriving the install target from
+    // the answer instead of the request would install `wallet` under the
+    // operator's `email` command, over another key's high-water mark.
+    const wrong = releaseDocument({ key: "wallet", verbs: ["wallet"] });
+    const rail = await railServer(() => ({ status: 200, body: wrong }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const result = await selfAsync(it, it.demo, ["app", "install", "email"], railEnv(rail));
+        assert.equal(result.code, 1);
+        assert.match(result.all, /asked for "email" and the rail answered with a release for "wallet"/);
+        assert.equal(existsSync(join(pluginsRoot(it), "wallet")), false, "the wrong key was installed");
+        assert.equal(existsSync(join(pluginsRoot(it), "email")), false);
+        assert.equal(existsSync(statePath(it)) && readState(it).plugins.wallet !== undefined, false,
+            "a high-water mark was written for a key nobody asked for");
+    }
+    finally
+    {
+        await rail.close();
+    }
 });

@@ -19,10 +19,10 @@ import { checkContract, commandLeaves } from "../dist/contract.js";
 import {
     EXIT_2_ACCOUNT_AUTHORIZE, EXIT_2_ACCOUNT_GATE, EXIT_2_CODES, EXIT_2_EMAIL, EXIT_2_LANDING,
     EXIT_2_OTHER, EXIT_2_WALLET, EXIT_3_CODES, UNREACHABLE_CODES,
-    commandDeadlineMs, errorCode, exitFor, normalizeError, sanitizeText, toSnake
+    commandDeadlineMs, deriveCallKey, errorCode, exitFor, normalizeError, sanitizeText, toSnake
 } from "../dist/rail.js";
 import { DEFAULT_AGENT_SCOPES } from "../dist/login.js";
-import { installFixture, jsonOf, railEnv, railServer, selfAsync, selfSplit, writeCredential } from "./pr7-lib.mjs";
+import { installFixture, jsonLines, jsonOf, railEnv, railServer, selfAsync, selfSplit, writeCredential } from "./pr7-lib.mjs";
 
 function box()
 {
@@ -504,27 +504,186 @@ test("cell 118: 0.6.x ignores the plugin directory and the credential file", () 
 
 /* ── §8.8: the six schema contract families ────────────────────────── */
 
-// Each family validates its errors against the single envelope above, and its
-// exit-3 shape, rather than restating a shape of its own.
-const FAMILIES = ["login", "wallet", "email send", "email stats", "email domains", "landing deploy"];
+// One test per family, each asserting its own success shape and its own exit-3
+// shape, both against the single §2.6 envelope.
+//
+// The previous version of this asserted `FAMILIES.length === 6` over a local
+// array — which is a statement about the array, not about the CLI, and would
+// have stayed green through any contract break. A gate that cannot fail is not
+// a gate.
+//
+// Every family is driven against the fixture rail rather than the live one,
+// which is what makes the client half testable before the server half lands.
+// The two families whose routes reject an agent credential today are skipped
+// with their named reference rather than quietly passing against a fixture the
+// real route would never produce.
 
-test("§8.8: six families, each with an exit-3 shape, all against one envelope", async () =>
+// A leaf that issues the family's own request shape and hands the answer back.
+function familyPlugin(spec)
 {
-    assert.equal(FAMILIES.length, 6);
-    // The two families whose routes reject an agent credential today (Q1) are
-    // driven here against the contract rather than the server, which is the
-    // whole point of the envelope being one shape: the client half is testable
-    // before the server half lands.
-    for (const code of ["recharging", "call_in_progress", "deploy_superseded"])
+    return `export default function register(host)
+{
+    return [{
+        name: "probe",
+        usage: [{ syntax: "probe [--json]", description: ["fixture"], verbs: [""] }],
+        detail: ["fixture", "", "  --json                machine-readable output"],
+        node: host.contract.leaf("", { json: { type: "boolean" } }, 0, async () =>
+        {
+            const answer = await host.rail.request(${JSON.stringify(spec)});
+            return [host.output.payload(answer.body, () => ["ok"])];
+        })
+    }];
+}
+`;
+}
+
+const SEND = { method: "POST", path: "/api/email/send", body: { campaignName: "c" }, scopes: ["email.send"], callKey: "derive" };
+const STATS = { method: "GET", path: "/api/email/campaigns/cmp_1/stats", scopes: ["email.read"] };
+const DOMAINS = { method: "GET", path: "/api/email/domains", scopes: ["email.read"] };
+const WALLET = { method: "GET", path: "/api/wallet", scopes: ["wallet.read"] };
+const DEPLOY = { method: "POST", path: "/api/landing/deploy", form: [{ name: "slug", value: "demo" }], scopes: ["landing.deploy"] };
+
+// success: what a 200 must look like · pending: the family's own exit-3
+const FAMILIES = [
     {
-        const result = await probe({ status: 409, body: { details: { code, message: code, retryAfterS: 9 } } });
-        assert.equal(result.code, 3);
-        assertEnvelope(result.out, { code, retry_after_s: 9 });
+        name: "email send",
+        spec: SEND,
+        success: { status: "sent", campaignId: "cmp_1", tier: "paid", debited: { amount: 12, currency: "USD" } },
+        shape: (payload) =>
+        {
+            assert.equal(payload.campaign_id, "cmp_1");
+            assert.deepEqual(payload.debited, { amount: 12, currency: "USD" });
+        },
+        pending: { code: "recharging", retry_after_s: 20, keyed: true }
+    },
+    {
+        name: "email stats",
+        spec: STATS,
+        // CampaignStats arrives unwrapped, which is the shape a naive mapping
+        // would wrap and get wrong.
+        success: { delivered: 10, opened: 4, clicked: 1, bounced: 0 },
+        shape: (payload) => assert.deepEqual(payload, { delivered: 10, opened: 4, clicked: 1, bounced: 0 }),
+        pending: { code: "call_in_progress", retry_after_s: 2, keyed: false }
+    },
+    {
+        name: "email domains",
+        spec: DOMAINS,
+        success: { domains: [{ domain: "example.com", status: "pending", dkimTokens: ["a", "b"] }] },
+        shape: (payload) => assert.deepEqual(payload.domains[0].dkim_tokens, ["a", "b"]),
+        pending: { code: "rate_limited", retry_after_s: 7, keyed: false }
     }
-    // And a success in every family is the payload verbatim, with no `error`.
-    const success = await probe({ status: 200, body: { status: "sent", campaignId: "cmp_1" } });
-    assert.equal(success.code, 0);
-    assert.equal(jsonOf(success.out).error, undefined);
+];
+
+for (const family of FAMILIES)
+{
+    test(`§8.8 ${family.name}: a success is the payload verbatim, snake_cased, with no error key`, async () =>
+    {
+        const result = await probe({ status: 200, body: family.success }, ["probe", "--json"], familyPlugin(family.spec));
+        assert.equal(result.code, 0, result.all);
+        const payload = jsonOf(result.out);
+        assert.equal(payload.error, undefined, "a success carried an error key");
+        family.shape(payload);
+    });
+
+    test(`§8.8 ${family.name}: its exit-3 answer is the one envelope`, async () =>
+    {
+        const answer = family.pending.code === "rate_limited"
+            ? { status: 429, body: {}, headers: { "retry-after": String(family.pending.retry_after_s) } }
+            : { status: 409, body: { details: { code: family.pending.code, message: "not yet", retryAfterS: family.pending.retry_after_s } } };
+        const result = await probe(answer, ["probe", "--json"], familyPlugin(family.spec));
+        assert.equal(result.code, 3, result.all);
+        const error = assertEnvelope(result.out, { code: family.pending.code, retry_after_s: family.pending.retry_after_s });
+        // The call key is echoed only where the command carries one — the
+        // retry has to be the same call, and a family that sends no key must
+        // not pretend otherwise.
+        assert.equal(error.idempotency_key !== undefined, family.pending.keyed,
+            `${family.name} echoed the wrong thing for a command that ${family.pending.keyed ? "carries" : "sends no"} call key`);
+    });
+}
+
+test("§8.8 login: the one command that answers in JSON Lines, and its refusal shape", async () =>
+{
+    const it = box();
+    const rail = await railServer((call) => (call.path === "/api/device/start"
+        ? {
+            status: 200,
+            body: {
+                device_code: "dc_x", user_code: "AAAA-BBBB",
+                verification_url: "https://console.example/device/approve", expires_in: 30, interval: 1
+            }
+        }
+        : {
+            status: 200,
+            body: {
+                status: "approved", account: "acct_01J8TEST", grant_id: "g",
+                access_token: "sa_a", refresh_token: "sr_a", scopes: ["wallet.read"],
+                expires_at: "2026-08-22T04:11:09.000Z"
+            }
+        }));
+    try
+    {
+        const ok = await selfAsync(it, it.demo, ["login", "--json", "--no-open", "--api-base", rail.url], railEnv(rail));
+        assert.equal(ok.code, 0, ok.all);
+        // Two objects, not one — the asymmetry the contract test exists to pin.
+        const lines = jsonLines(ok.out);
+        assert.equal(lines.length, 2);
+        assert.deepEqual(Object.keys(lines[0]).sort(),
+            ["expires_in", "interval", "status", "user_code", "verification_url"]);
+        assert.deepEqual(Object.keys(lines[1]).sort(), ["account", "expires_at", "scopes", "status"]);
+        assert.match(lines[1].expires_at, /Z$/);
+    }
+    finally
+    {
+        await rail.close();
+    }
+
+    // And its refusal is the same envelope every other family answers with.
+    const denied = await railServer((call) => (call.path === "/api/device/start"
+        ? {
+            status: 200,
+            body: {
+                device_code: "dc_x", user_code: "AAAA-BBBB",
+                verification_url: "https://console.example/device/approve", expires_in: 30, interval: 1
+            }
+        }
+        : { status: 400, body: { code: "access_denied", message: "the owner denied this device" } }));
+    try
+    {
+        const box2 = box();
+        const refused = await selfAsync(box2, box2.demo, ["login", "--json", "--no-open", "--api-base", denied.url], railEnv(denied));
+        assert.equal(refused.code, 2, refused.all);
+        // The pending line came first, so the envelope is the last object.
+        assertEnvelope(refused.out, { code: "access_denied" });
+    }
+    finally
+    {
+        await denied.close();
+    }
+});
+
+// Blocked on Q1: `GET /api/wallet` and all four landing API routes use the
+// owner web-session middleware, so an agent credential is refused by
+// `@spfn/auth` before any scope check. The client half is written; it cannot be
+// gated against a route that will not accept the principal it is built for.
+test.skip("§8.8 wallet: success and exit-3 shapes — blocked on Q1 (fix/server-rulings-batch)", async () =>
+{
+    const result = await probe({ status: 200, body: { balance: { amount: 10000, currency: "USD" } } },
+        ["probe", "--json"], familyPlugin(WALLET));
+    assert.equal(result.code, 0);
+});
+
+test.skip("§8.8 landing deploy: success and exit-3 shapes — blocked on Q1 (fix/server-rulings-batch)", async () =>
+{
+    const result = await probe({ status: 409, body: { details: { code: "deploy_superseded", message: "superseded" } } },
+        ["probe", "--json"], familyPlugin(DEPLOY));
+    assert.equal(result.code, 3);
+});
+
+test("§8.8: four families are gated today and two are skipped against a named blocker", () =>
+{
+    // The count is asserted here rather than standing in for the families
+    // themselves, so it can never again be the whole of the gate.
+    assert.equal(FAMILIES.length + 1, 4, "the gated families are email send, email stats, email domains and login");
 });
 
 test("§8.8: the envelope has exactly the declared fields, and optional means omitted", async () =>
@@ -632,4 +791,41 @@ test("§4.2: a command that passes its deadline is exit 3, echoing the call key 
     {
         await rail.close();
     }
+});
+
+test("a 500 is exit 1 server_error — §2.5 names only 502/503/504 as worth retrying", async () =>
+{
+    const result = await probe({ status: 500, body: { error: { code: "InternalServerError", message: "boom" } } });
+    // Calling it `server_unavailable` would put it in the exit-3 set and tell
+    // an agent to retry a fault that retrying does not fix; calling it
+    // `bad_request` would blame the caller for it.
+    assert.equal(result.code, 1, result.all);
+    assertEnvelope(result.out, { code: "server_error" });
+});
+
+test("the call-key material is NUL-separated, so two different calls cannot collide into one key", () =>
+{
+    // A space appears inside the parts being joined — a command path is
+    // `email send` — so a space separator lets different inputs produce one
+    // material string, and one material string is one key. That is a
+    // double-charge waiting to happen, and NUL cannot occur in any part.
+    const account = "acct_01J8TEST";
+    const left = deriveCallKey(account, "email send", { a: 1 });
+    const right = deriveCallKey(account, "email", { a: 1 });
+    assert.notEqual(left, right);
+    // The specific collision a space separator admits: moving a word across
+    // the boundary between two fields.
+    assert.notEqual(deriveCallKey("acct_a", "b send", { x: 1 }), deriveCallKey("acct_a b", "send", { x: 1 }));
+});
+
+test("an explicit --json on a leaf with no machine contract is refused IN JSON, on stdout", () =>
+{
+    const created = machine();
+    const it = { ...created, ...demoWorkspace(created) };
+    const result = selfSplit(it, it.demo, ["work", "add", "x", "--json"]);
+    assert.equal(result.code, 1);
+    // An agent that asked for JSON and was handed a sentence on stderr has to
+    // parse prose to learn that it cannot parse anything.
+    assert.equal(result.err.trim(), "", "the refusal went to stderr for a caller that asked for JSON");
+    assertEnvelope(result.out, { code: "json_unsupported" });
 });

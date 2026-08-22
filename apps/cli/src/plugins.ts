@@ -38,7 +38,19 @@ export const PLUGIN_ENTRY_CAP_BYTES = 4 * 1024 * 1024;
 // anything else is refused rather than loaded and hoped for.
 export const SUPPORTED_CONTRACTS = [0];
 export const PLUGIN_KEY_PATTERN = /^[a-z][a-z0-9-]{1,30}$/;
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/;
+// SemVer 2.0, with the prerelease and build parts anchored to the characters
+// SemVer actually allows. `(?:[-+].*)?` was wrong in a way that mattered: a
+// version is a **directory name** here, and `.*` accepts `/` and `..`, so a
+// release document — or an attacker-writable `current` file — carrying
+// `1.0.0-../../../../tmp/x` reached `mkdirSync` and `writeFileSync` outside the
+// plugin tree. A signature check gates execution; it does not gate the path a
+// verified document is written to.
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+// The same statement a second way. The regex is one reading of what a version
+// may contain; this is an explicit reading of what a path segment may never
+// contain, and a value that reaches the filesystem is worth both.
+const PATH_ESCAPE = /[/\\]|\.\./;
 // A private copy older than this belonged to a process that was killed before
 // it could clean up. Reaped by age on the next load.
 const LOADED_REAP_MS = 60 * 60 * 1000;
@@ -57,9 +69,9 @@ export function pluginStatePath(): string
 
 export function pluginKey(key: string): string
 {
-    if (!PLUGIN_KEY_PATTERN.test(key))
+    if (!PLUGIN_KEY_PATTERN.test(key) || PATH_ESCAPE.test(key))
     {
-        throw fail("invalid_plugin_key", `"${key}" is not a plugin key`);
+        throw fail("invalid_plugin_key", `"${sanitizeText(key)}" is not a plugin key`);
     }
     return key;
 }
@@ -68,9 +80,9 @@ export function pluginKey(key: string): string
 // before it is a path.
 export function pluginVersion(version: string): string
 {
-    if (!SEMVER.test(version))
+    if (!SEMVER.test(version) || PATH_ESCAPE.test(version))
     {
-        throw fail("invalid_plugin_version", `"${version}" is not a semantic version`);
+        throw fail("invalid_plugin_version", `"${sanitizeText(version)}" is not a semantic version`);
     }
     return version;
 }
@@ -512,11 +524,7 @@ async function importPrivateCopy(bytes: Buffer): Promise<PluginRegister>
 {
     reapLoaded();
     const dir = join(stateDir(), "loaded", randomBytes(64).toString("hex"));
-    // `recursive: false` is the O_EXCL of directories: a name that already
-    // exists throws rather than being adopted.
-    mkdirSync(dir, { recursive: false, mode: 0o700 });
-    const copy = join(dir, "index.mjs");
-    writeFileSync(copy, bytes, { mode: 0o600 });
+    const copy = stageVerifiedCopy(dir, bytes);
     try
     {
         const module = await import(pathToFileURL(copy).href) as { default?: PluginRegister };
@@ -532,7 +540,47 @@ async function importPrivateCopy(bytes: Buffer): Promise<PluginRegister>
     }
 }
 
+// Housekeeping, and never a reason to fail a load: a leftover copy from a
+// killed process costs disk, and refusing to run because one could not be
+// removed would turn a full or read-only state directory into a CLI that
+// cannot dispatch a plugin at all.
+// The verified copy is load-bearing — the whole point of it is that the bytes
+// imported are the bytes whose digest was checked — so a failure here cannot be
+// skipped. It can at least say what went wrong by name instead of surfacing a
+// filesystem stack trace.
+function stageVerifiedCopy(dir: string, bytes: Buffer): string
+{
+    const copy = join(dir, "index.mjs");
+    try
+    {
+        ensurePrivateDir(join(dir, ".."));
+        // `recursive: false` is the O_EXCL of directories: a name that already
+        // exists throws rather than being adopted.
+        mkdirSync(dir, { recursive: false, mode: 0o700 });
+        writeFileSync(copy, bytes, { mode: 0o600 });
+    }
+    catch
+    {
+        throw fail("plugin_load_failed", `could not stage the verified copy of a plugin under ${stateDir()}`,
+            { hint: "check the permissions and free space on the state directory" });
+    }
+    return copy;
+}
+
 function reapLoaded(): void
+{
+    try
+    {
+        reapLoadedCopies();
+    }
+    catch
+    {
+        // Nothing here is load-bearing; the import below reports its own
+        // failure by name if the directory is genuinely unusable.
+    }
+}
+
+function reapLoadedCopies(): void
 {
     const root = join(stateDir(), "loaded");
     ensurePrivateDir(root);
@@ -651,9 +699,21 @@ export interface ReleaseDocument
 // the mark is lowered **first**: the upgrade order there would leave `current`
 // at the older version while `highest` still named the newer one, which is
 // `selected < highest` — a key bricked with no command that clears it.
-export function installRelease(document: ReleaseDocument, allowDowngrade: boolean, railApi?: string): void
+export function installRelease(document: ReleaseDocument, requested: string,
+    allowDowngrade: boolean, railApi?: string): void
 {
-    const key = pluginKey(document.manifest.key);
+    // The key the operator asked for, not the key the answer claims. Deriving
+    // it from the document instead would let a rail answering
+    // `GET /api/plugins/email/release` install something else entirely — under
+    // another key's directory, over another key's high-water mark — while the
+    // operator's command line said `email`. The signature proves we published
+    // the document; it says nothing about which request it was an answer to.
+    const key = pluginKey(requested);
+    if (document.manifest.key !== key)
+    {
+        throw fail("plugin_identity_mismatch",
+            `asked for "${key}" and the rail answered with a release for "${sanitizeText(String(document.manifest.key))}"`);
+    }
     const version = pluginVersion(document.manifest.version);
     verifyManifest(document.manifest, document.signature);
     const entry = readPluginState().plugins[key];

@@ -666,3 +666,94 @@ test("a refresh whose connection was refused removes the marker — nothing was 
     assert.equal(jsonOf(result.out).error.reason, "refresh_unavailable");
     assert.equal(existsSync(markerPath(it)), false, "a marker was kept for a request that never left the machine");
 });
+
+/* ── cell 156(b): a login against a live, unstealable lock ─────────── */
+
+test("cell 156(b): a login waits out a live, unstealable owner and commits — the grant is never dropped", async () =>
+{
+    const it = box();
+    const previous = { ...process.env };
+    let at = Date.now();
+    const restore = useClock(() => new Date(at));
+    try
+    {
+        Object.assign(process.env, it.env);
+        ensurePrivateDir(configRoot(it));
+        // The state cell 154(b) names: past the lease, owned by a pid that is
+        // alive and whose start time matches, so `kill(pid, 0)` proves nothing
+        // and the ordinary steal rule refuses.
+        writeFileSync(lockFile(it), JSON.stringify({
+            pid: process.pid, pid_start: processStart(process.pid), nonce: "1".repeat(32),
+            at: new Date(at - STALE_LOCK_MS - 1000).toISOString()
+        }), { mode: 0o600 });
+
+        let announced = 0;
+        // The login's own options: no `waitMs` at all. That is the whole fix —
+        // a login holds tokens a person just approved, and §1.5 permits exactly
+        // one way for it to end without writing them, which is SIGINT.
+        const committing = withCredentialLock("default", { onWait: () => { announced += 1; } },
+            async () => "committed");
+        for (let step = 0; step < 40 && at - Date.now() < LOCK_ABSOLUTE_STEAL_MS + 60_000; step += 1)
+        {
+            at += 30_000;
+            await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.equal(await committing, "committed", "a login was blocked forever by a live, unstealable lock");
+        assert.equal(announced, 1, "the wait was announced more or fewer than once");
+    }
+    finally
+    {
+        restore(useClock(restore));
+        Object.keys(process.env).forEach((key) => delete process.env[key]);
+        Object.assign(process.env, previous);
+    }
+});
+
+test("cell 156(b): lock churn cannot make a login give up — the regression the fix closes", async () =>
+{
+    const it = box();
+    const previous = { ...process.env };
+    let at = Date.now();
+    const restore = useClock(() => new Date(at));
+    try
+    {
+        Object.assign(process.env, it.env);
+        ensurePrivateDir(configRoot(it));
+        const write = (nonce) => writeFileSync(lockFile(it), JSON.stringify({
+            pid: process.pid, pid_start: processStart(process.pid), nonce,
+            at: new Date(at).toISOString()
+        }), { mode: 0o600 });
+        write("2".repeat(32));
+
+        let refused = null;
+        const committing = withCredentialLock("default", { onWait: () => undefined }, async () => "committed")
+            .catch((error) => { refused = error; return "refused"; });
+
+        // A succession of short-lived holders. Each writes a fresh `at`, so the
+        // *lock's* age keeps restarting while the waiter's own elapsed time
+        // keeps growing — which is exactly how a login measuring its own wait
+        // reached the absolute bound and exited 3 with the tokens still in
+        // hand. The waiter must not care how long it has personally waited.
+        for (let step = 0; step < 60; step += 1)
+        {
+            at += 30_000;
+            write(String(step % 10).repeat(32));
+            await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        // Now let one lock actually age out, so the wait can end.
+        for (let step = 0; step < 40; step += 1)
+        {
+            at += 30_000;
+            await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.equal(await committing, "committed",
+            `login gave up under lock churn: ${refused === null ? "" : refused.message}`);
+        assert.equal(refused, null, "an approved grant was dropped by a timeout");
+    }
+    finally
+    {
+        restore(useClock(restore));
+        Object.keys(process.env).forEach((key) => delete process.env[key]);
+        Object.assign(process.env, previous);
+    }
+});

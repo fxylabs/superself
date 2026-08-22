@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { hostname, userInfo } from "node:os";
 import { Command, CommandInput, leaf } from "./contract.js";
 import {
-    LOCK_ABSOLUTE_STEAL_MS, Profile, now, profileName, readCredentialFile, readProfile,
+    Profile, now, profileName, readCredentialFile, readProfile,
     removeMarker, removeProfile, resolveProfileName, withCredentialLock, writeProfile
 } from "./credentials.js";
 import { cliVersion } from "./help.js";
@@ -230,6 +230,10 @@ async function pollOnce(base: string, session: RailSession, deviceCode: string, 
 function readPoll(answer: PublicAnswer, state: PollState): Approved | null
 {
     const body = asRecord(answer.body);
+    if (answer.status === 429)
+    {
+        return rateLimited(state);
+    }
     if (answer.status !== 200)
     {
         throw deviceRefusal(answer, body);
@@ -245,6 +249,22 @@ function readPoll(answer: PublicAnswer, state: PollState): Approved | null
         return null;
     }
     return approvedFrom(body);
+}
+
+// A 429 on poll is the IP rate limiter, not a refusal of this grant — it
+// carries no `code` at all. Terminating the login there throws away a grant a
+// person may be about to approve, over a limit that clears on its own. So it
+// is a consumed slot, widened by the same increment `slow_down` uses, and the
+// loop continues to its own deadline (§1.5).
+function rateLimited(state: PollState): null
+{
+    state.intervalMs += SLOW_DOWN_INCREMENT_MS;
+    if (!state.warned)
+    {
+        state.warned = true;
+        console.error("notice: the rail is rate-limiting this address; still waiting");
+    }
+    return null;
 }
 
 function approvedFrom(body: Record<string, JsonValue>): Approved
@@ -315,8 +335,12 @@ function profileFrom(base: string, start: DeviceStart, approved: Approved, label
 // login ends without writing is SIGINT.
 async function commitLogin(profile: string, next: Profile): Promise<void>
 {
+    // No timeout. The tokens in hand were approved by a person moments ago, and
+    // §1.5 permits exactly one way for a login to end without writing them:
+    // SIGINT. A bounded wait here would add a second way — and it would fire
+    // precisely when the machine is busiest, which is when losing the grant
+    // costs the most.
     await withCredentialLock(profile, {
-        waitMs: LOCK_ABSOLUTE_STEAL_MS,
         onWait: () => console.error(`notice: waiting for another process to release profile "${profile}"`)
     }, async () =>
     {

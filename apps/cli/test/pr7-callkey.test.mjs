@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { machine } from "./harness.mjs";
@@ -145,7 +145,7 @@ function keyedPlugin()
 `;
 }
 
-test("cell 89: the key is echoed in the answer and written to the journal", async () =>
+test("cell 89: the key is echoed in the answer AND written to the journal", async () =>
 {
     const it = machine();
     installFixture(it, { key: "keyed", entry: keyedPlugin() });
@@ -153,9 +153,76 @@ test("cell 89: the key is echoed in the answer and written to the journal", asyn
     try
     {
         writeCredential(it, { apiBase: rail.url });
-        const result = await selfAsync(it, it.root, ["keyed", "--json"], railEnv(rail));
-        assert.equal(result.code, 0, result.out + result.err);
-        assert.match(jsonOf(result.out).idempotency_key, /^ck_[0-9a-f]{32}$/);
+        // The journal is the point of this cell, so it is not suppressed here
+        // the way it is everywhere else in the suite.
+        const result = await selfAsync(it, it.root, ["keyed", "--json"],
+            { ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" });
+        assert.equal(result.code, 0, result.all);
+        const echoed = jsonOf(result.out).idempotency_key;
+        assert.match(echoed, /^ck_[0-9a-f]{32}$/);
+
+        const path = join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl");
+        assert.equal(existsSync(path), true, "the call was never journaled");
+        const line = JSON.parse(readFileSync(path, "utf8").trim());
+        assert.equal(line.call_key, echoed, "the journal recorded a different key than the answer echoed");
+        assert.equal(line.command, "keyed");
+        assert.equal(line.profile, "default");
+        assert.equal(line.exit, 0);
+        assert.match(line.at, /Z$/);
+        // No recipient, no body, no token — the call key is an irreversible
+        // hash, so the journal carries no PII.
+        const text = JSON.stringify(line);
+        assert.equal(text.includes("sa_"), false, "a token reached the journal");
+        assert.equal(text.includes("sr_"), false);
+        assert.equal(text.includes("@"), false, "an address reached the journal");
+        assert.equal(statSync(path).mode & 0o077, 0);
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("a refusal is journaled with its exit and code, so a crashed agent can see what happened", async () =>
+{
+    const it = machine();
+    installFixture(it, { key: "keyed", entry: keyedPlugin() });
+    const rail = await railServer(() => ({ status: 409, body: { details: { code: "recharging", message: "topping up" } } }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const result = await selfAsync(it, it.root, ["keyed", "--json"],
+            { ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" });
+        assert.equal(result.code, 3, result.all);
+        const line = JSON.parse(readFileSync(join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl"), "utf8").trim());
+        assert.equal(line.exit, 3);
+        assert.equal(line.code, "recharging");
+        assert.match(line.call_key, /^ck_[0-9a-f]{32}$/,
+            "an exit-3 line with no key is a line an agent cannot retry from");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("--no-journal writes nothing, and the command is otherwise identical", async () =>
+{
+    const it = machine();
+    installFixture(it, { key: "keyed", entry: keyedPlugin() });
+    const rail = await railServer(() => ({ status: 200, body: { ok: true } }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const env = { ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" };
+        const kept = await selfAsync(it, it.root, ["keyed", "--json"], env);
+        const path = join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl");
+        const before = readFileSync(path, "utf8");
+
+        const off = await selfAsync(it, it.root, ["keyed", "--json", "--no-journal"], env);
+        assert.equal(off.code, kept.code);
+        assert.deepEqual(jsonOf(off.out), jsonOf(kept.out), "--no-journal changed the answer");
+        assert.equal(readFileSync(path, "utf8"), before, "--no-journal still wrote a line");
     }
     finally
     {
@@ -239,4 +306,39 @@ test("jcs is RFC 8785 enough for what a manifest and a request body are made of"
     assert.equal(jcs([1, "a", null, true]), '[1,"a",null,true]');
     // NFC normalization, so the same text typed two ways derives one key.
     assert.equal(jcs("é"), jcs("é"));
+});
+
+test("a journal that cannot be written never turns a completed call into a failure", async () =>
+{
+    const it = machine();
+    installFixture(it, { key: "keyed", entry: keyedPlugin() });
+    const rail = await railServer(() => ({ status: 200, body: { ok: true } }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        // The journal file itself cannot be appended to. The server has
+        // accepted the call — and charged for it — so a bookkeeping failure
+        // here must not be reported to the agent as "it did not happen".
+        const env = { ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" };
+        const first = await selfAsync(it, it.root, ["keyed", "--json"], env);
+        assert.equal(first.code, 0, first.all);
+        const path = join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl");
+        const before = readFileSync(path, "utf8");
+        chmodSync(path, 0o400);
+        try
+        {
+            const result = await selfAsync(it, it.root, ["keyed", "--json"], env);
+            assert.equal(result.code, 0, result.all);
+            assert.deepEqual(jsonOf(result.out).ok, true);
+            assert.equal(readFileSync(path, "utf8"), before, "the unwritable journal was somehow written");
+        }
+        finally
+        {
+            chmodSync(path, 0o600);
+        }
+    }
+    finally
+    {
+        await rail.close();
+    }
 });
