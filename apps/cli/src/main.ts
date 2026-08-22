@@ -13,7 +13,7 @@ import { EntityState, Exposure, isEntityCreation, isLive, rendersIn, requireSupe
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
-import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity } from "./gitutil.js";
+import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
@@ -2446,7 +2446,8 @@ function cmdWorkDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>)
 function attachEvidence(ctx: ProjectContext, values: CommandInput<typeof REPORT_OPTIONS>["values"],
     refs: EventRefs, payload: Record<string, unknown>): void
 {
-    const { commits, notes } = classifyEvidence(ctx.projectDir, values.evidence ?? headEvidence(ctx));
+    const dir = reportingDir(ctx);
+    const { commits, notes } = classifyEvidence(dir, values.evidence ?? headEvidence(dir));
     if (commits.length > 0)
     {
         refs.commits = commits;
@@ -2454,6 +2455,14 @@ function attachEvidence(ctx: ProjectContext, values: CommandInput<typeof REPORT_
         // answer it. A reader of this event must take these as revisions rather
         // than guess at their shape a second time.
         payload.evidenceTyped = true;
+        // Which repository that was, beside the branch the pipeline stamps: a
+        // project spanning several judges the hash where the report made it
+        // (#331). A checkout with no commit has no identity to record.
+        const repository = repositoryIdentity(dir);
+        if (repository !== null)
+        {
+            refs.repository = repository;
+        }
     }
     if (notes.length > 0)
     {
@@ -2565,10 +2574,19 @@ function readReportFile(path: string): string
     return text;
 }
 
-function headEvidence(ctx: ProjectContext): string[]
+function headEvidence(dir: string): string[]
 {
-    const head = headCommit(ctx.projectDir);
+    const head = headCommit(dir);
     return head === null ? [] : [head];
+}
+
+// The repository a report is made from: the project directory where that is
+// a repository, else the checkout the command stands in. A project registered
+// at the folder holding its repositories has no HEAD of its own, and the
+// evidence a report attaches by default is the HEAD of wherever it ran (#331).
+function reportingDir(ctx: ProjectContext): string
+{
+    return topOf(ctx.projectDir) !== null || topOf(process.cwd()) === null ? ctx.projectDir : process.cwd();
 }
 
 function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void

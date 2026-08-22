@@ -34,7 +34,7 @@ import {
     WaitingRow,
     workspacePointer
 } from "./pretty.js";
-import { artifactSignals, verdictSignals } from "./reachability.js";
+import { artifactSignals, askedRepositories, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { CliError, CommandOutput, SelfEvent } from "./types.js";
 
@@ -64,7 +64,7 @@ function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 
 function withVerdicts(storeDir: string, model: ProjectModel): ProjectModel
 {
-    model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, model.slug)),
+    model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, model.slug), askedRepositories(storeDir, model.slug)),
         ...artifactSignals(storeDir, model.works));
     return model;
 }
@@ -573,7 +573,8 @@ function contextView(storeDir: string, models: ProjectModel[], model: ProjectMod
     return {
         ...model,
         works,
-        health: [...model.health, ...verdictSignals(works, readVerdicts(storeDir, model.slug)),
+        health: [...model.health,
+            ...verdictSignals(works, readVerdicts(storeDir, model.slug), askedRepositories(storeDir, model.slug)),
             ...artifactSignals(storeDir, works)]
     };
 }

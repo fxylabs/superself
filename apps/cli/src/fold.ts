@@ -5,8 +5,8 @@ import { refreshBlocks } from "./connect.js";
 import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
-import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, Verdict } from "./paths.js";
-import { artifactSignals, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
+import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
+import { artifactSignals, askedRepositories, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
 import { chromeStale, claimChrome, writeViews } from "./view.js";
 
@@ -32,8 +32,7 @@ export function foldProject(storeDir: string, slug: string): void
 {
     const model = buildModel(storeDir, slug, new Date());
     const projectDir = resolveProjectPath(storeDir, slug);
-    const verdicts = updateVerdicts(storeDir, slug, projectDir, evidenceOf(model.works));
-    model.health.push(...verdictSignals(model.works, verdicts), ...artifactSignals(storeDir, model.works));
+    const verdicts = judgeEvidence(storeDir, slug, model);
     const dir = ensureDir(projectStateDir(storeDir, slug));
     ensureDir(join(dir, "work"));
     const hashes = readHashes(dir);
@@ -57,6 +56,16 @@ export function foldProject(storeDir: string, slug: string): void
     {
         refreshBlocks(projectDir, model);
     }
+}
+
+// Verdicts across every repository the project is linked to here (#331), and
+// the health lines they raise, folded into the model the pages render from.
+function judgeEvidence(storeDir: string, slug: string, model: ProjectModel): Record<string, Verdict>
+{
+    const verdicts = updateVerdicts(storeDir, slug, resolveProjectPaths(storeDir, slug), evidenceOf(model.works));
+    model.health.push(...verdictSignals(model.works, verdicts, askedRepositories(storeDir, slug)),
+        ...artifactSignals(storeDir, model.works));
+    return verdicts;
 }
 
 // The workspace sweep. It owns the two jobs an append must not carry: bringing

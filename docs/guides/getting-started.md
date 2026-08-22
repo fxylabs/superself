@@ -258,6 +258,14 @@ project is recognized from the repository automatically on the current
 machine. A separate clone must be connected with `self project link
 <project-slug>`. Do not register either checkout as a duplicate project.
 
+A project that spans more than one repository links each of them: run
+`self project link <project-slug> <path>` once per repository, or register the
+project at the folder that holds the checkouts — a linked path that is not a
+repository stands for the repositories one level below it. Commit evidence is
+then judged in whichever linked repository knows the hash, and a hash is
+reported as no longer resolving only when none of them does; the health line
+names the repositories that were asked.
+
 ## Common setup problems
 
 ### No workspace is selected

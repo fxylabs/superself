@@ -26,6 +26,11 @@ export interface EventRefs
     // The branch the command ran on. History ("this happened here"), never a
     // live pointer: branches get renamed, deleted, and reused.
     branch?: string;
+    // The repository the commits were reported from, by identity — the commit
+    // its history starts from, as `repositoryIdentity` derives it. A project
+    // that spans more than one repository judges a hash in the one that knows
+    // it, and this says which one the report meant when two do (#331).
+    repository?: string;
     // The work units a proposed decision gates. Stated by `decide --blocks`,
     // never inferred, and inverted by the fold so a unit names what stands in
     // front of it without having to be started first.
