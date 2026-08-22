@@ -14,7 +14,14 @@ export interface RedactionScope
 // A name that says the value beside it is a credential, whatever the value
 // happens to look like. Written once and used by both encodings below, so the
 // two can never learn about a new name separately.
-const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|password|passwd|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]*`;
+// `device[_-]?code` joins the list for PR7: a device code is a 256-bit secret
+// that lives only in process memory for the length of a login, and by
+// construction nothing writes it anywhere this module reads. It is here as
+// defence in depth, alongside the `token` rule that already covers
+// `access_token` and `refresh_token` — a name that says the value beside it is
+// a credential is exactly what this list is for, whether or not any code path
+// currently produces it.
+const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|password|passwd|token|api[_-]?key|access[_-]?key|private[_-]?key|device[_-]?code|credential)[A-Za-z0-9_.-]*`;
 
 // Ordered from most specific to least: a bearer header must be caught as a
 // header before the generic high-entropy rule turns only its token into noise

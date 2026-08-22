@@ -881,3 +881,37 @@ export function renderWorkspace(models: ProjectModel[]): string[]
     }
     return tableLines(PROJECT_COLUMNS, rows, columns());
 }
+
+/* ── timestamps a person reads ─────────────────────────────────────── */
+
+// Decision `01m0j3ch` pairs UTC internals with human-facing localization, and
+// the half that exists for people is the half a bare `…Z` drops. So a human
+// render says the machine's own zone **with the offset spelled out** — a
+// timestamp with no offset is ambiguous the moment it is copied anywhere.
+//
+// `--json` is not this function's subject and never can be: there the contract
+// is ISO 8601 UTC ending `Z`, unconditionally, and no ruling changes it.
+export function localTimestamp(iso: string): string
+{
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime()))
+    {
+        return iso;
+    }
+    return `${civil(at)} (${offset(at)})`;
+}
+
+function civil(at: Date): string
+{
+    const pad = (value: number): string => String(value).padStart(2, "0");
+    return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} `
+        + `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+}
+
+function offset(at: Date): string
+{
+    const minutes = -at.getTimezoneOffset();
+    const sign = minutes < 0 ? "-" : "+";
+    const size = Math.abs(minutes);
+    return `${sign}${String(Math.floor(size / 60)).padStart(2, "0")}:${String(size % 60).padStart(2, "0")}`;
+}

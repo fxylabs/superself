@@ -13,17 +13,47 @@ import test from "node:test";
 import {
     changedLines,
     deadExports,
+    devKeyViolations,
     diskTree,
     functionLengthViolations,
     functionSpans,
     importDirectionViolations,
     interactionPrompt,
+    credentialIsolationViolations,
+    credentialModules,
     memoryTree,
     packageRoot,
     parseSource,
     printSiteViolations,
+    releaseKeysModule,
     resolveBase
 } from "./structure.mjs";
+
+// The gate reads `SUPERSELF_DEV_KEYS` as the opt-out, so a run that happens to
+// have it set would make every "must fire" case vacuous. Each case below runs
+// with the variable cleared and restores whatever the environment had.
+function withoutDevKeyOptOut(run)
+{
+    const had = process.env.SUPERSELF_DEV_KEYS;
+    delete process.env.SUPERSELF_DEV_KEYS;
+    try
+    {
+        run();
+    }
+    finally
+    {
+        if (had !== undefined)
+        {
+            process.env.SUPERSELF_DEV_KEYS = had;
+        }
+    }
+}
+
+function keyPins(...kids)
+{
+    const records = kids.map((kid) => `    { kid: "${kid}", publicKey: "x", notBefore: "a", notAfter: "b" }`).join(",\n");
+    return memoryTree({ [releaseKeysModule]: `export const RELEASE_KEYS = [\n${records}\n];\n` });
+}
 
 const everyLine = (path, count) => new Map([[path, Array.from({ length: count }, (_, index) => index + 1)]]);
 const noLines = new Map();
@@ -339,4 +369,96 @@ test("an added line is reported at its number in the head revision", () =>
     const base = run("rev-parse", "HEAD").trim();
     writeFileSync(join(root, "src/one.ts"), "export const zero = 0;\nexport const one = 1;\n");
     assert.deepEqual(changedLines(base, root).get("src/one.ts"), [1]);
+});
+
+/* ── cell 116: a state writer has no import path to a credential ───── */
+
+// The structural half of "a token never reaches the event log". The other half
+// — login writing no event — is a property of one command and a future command
+// could undo it; this cannot, because there is no import path for a future
+// command to reach through.
+
+test("a state-writing module importing the credential layer is a named violation", () =>
+{
+    const tree = memoryTree({
+        "src/pipeline.ts": "import { readProfile } from \"./credentials.js\";\nexport const p = readProfile;\n",
+        "src/credentials.ts": "export function readProfile() {}\n"
+    });
+    const [violation] = credentialIsolationViolations(tree);
+    assert.equal(violation.file, "src/pipeline.ts");
+    assert.equal(violation.line, 1);
+    assert.equal(violation.rule, "credential-isolation");
+    assert.match(violation.detail, /no import path to a credential/);
+});
+
+test("the same rule fires for the rail layer, and for the ledger as well as the pipeline", () =>
+{
+    const tree = memoryTree({
+        "src/ledger.ts": "import { railRequest } from \"./rail.js\";\nexport const r = railRequest;\n",
+        "src/rail.ts": "export function railRequest() {}\n"
+    });
+    assert.equal(credentialIsolationViolations(tree).length, 1);
+});
+
+test("cell 116: the real tree has no such import, and both credential modules are covered", () =>
+{
+    assert.deepEqual(credentialIsolationViolations(diskTree(packageRoot)), []);
+    assert.deepEqual([...credentialModules].sort(), ["src/credentials.ts", "src/rail.ts"]);
+});
+
+// ---------------------------------------------------------------- publish trust anchor
+
+// The gate stands in front of `npm publish`. It must fire whenever any `dev-`
+// key is pinned — the point being that a real key mixed in does not launder the
+// dev key's committed private half.
+test("the publish gate fires when the only pinned key is the development key", () =>
+{
+    withoutDevKeyOptOut(() =>
+    {
+        const violations = devKeyViolations(keyPins("dev-2026a"));
+        assert.equal(violations.length, 1);
+        assert.equal(violations[0].rule, "development-trust-anchor");
+        assert.match(violations[0].detail, /dev-2026a/);
+    });
+});
+
+test("the publish gate still fires when a real release key is mixed with a dev- key", () =>
+{
+    withoutDevKeyOptOut(() =>
+    {
+        const violations = devKeyViolations(keyPins("rel-2026a", "dev-2026a"));
+        // Exactly the dev key is named; the real key is not a violation.
+        assert.equal(violations.length, 1);
+        assert.match(violations[0].detail, /dev-2026a/);
+        assert.doesNotMatch(violations[0].detail, /rel-2026a/);
+    });
+});
+
+test("the publish gate passes when no dev- key is pinned", () =>
+{
+    withoutDevKeyOptOut(() =>
+    {
+        assert.deepEqual(devKeyViolations(keyPins("rel-2026a", "rel-2026b")), []);
+    });
+});
+
+test("the publish gate passes for any key set when SUPERSELF_DEV_KEYS=1 opts out", () =>
+{
+    const had = process.env.SUPERSELF_DEV_KEYS;
+    process.env.SUPERSELF_DEV_KEYS = "1";
+    try
+    {
+        assert.deepEqual(devKeyViolations(keyPins("dev-2026a")), []);
+    }
+    finally
+    {
+        if (had === undefined)
+        {
+            delete process.env.SUPERSELF_DEV_KEYS;
+        }
+        else
+        {
+            process.env.SUPERSELF_DEV_KEYS = had;
+        }
+    }
 });

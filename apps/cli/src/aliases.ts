@@ -54,6 +54,23 @@ export function registerReservedVerbs(names: string[]): void
     reservedVerbs = names.filter((name) => !BUILTIN_VERBS.includes(name));
 }
 
+// The other half of the plugin↔alias collision guard. `app install` refuses a
+// plugin whose verb is already an alias row; this refuses an alias row whose
+// verb a plugin already claims. Guarding both moments is what lets
+// `registerReservedVerbs` keep its module-load snapshot: the collision cannot
+// be *created* from either side, so resolution order never has to break a tie
+// that should not exist.
+//
+// Supplied by the dispatcher, for the same reason the reserved list is: this
+// module cannot import the loader without the alias table depending on the
+// plugin tree.
+let pluginClaims: (verb: string) => boolean = () => false;
+
+export function registerPluginClaims(claims: (verb: string) => boolean): void
+{
+    pluginClaims = claims;
+}
+
 /* ── reading the table ─────────────────────────────────────────────── */
 
 // A hand-edited row is validated field by field (#207 A7): a malformed value
@@ -236,7 +253,13 @@ function requireEditable(config: StoreConfig, verb: string, mode: "add" | "set")
 {
     if (reservedVerbs.includes(verb))
     {
-        throw new CliError(`"${verb}" is a built-in command, not an alias — reserved words cannot carry alias rows`);
+        throw new CliError(`"${verb}" is a built-in command, not an alias — reserved words cannot carry alias rows`,
+            "verb_reserved");
+    }
+    if (mode === "add" && pluginClaims(verb))
+    {
+        throw new CliError(`"${verb}" is claimed by an installed mini-app — remove it with \`self app remove\` first`,
+            "verb_reserved");
     }
     const hasRow = BUILTIN_ROWS[verb] !== undefined || config.aliases?.[verb] !== undefined;
     if (mode === "add" && hasRow)

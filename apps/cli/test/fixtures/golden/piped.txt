@@ -118,6 +118,7 @@ error: unknown option '--plain' — run `self lang --help` for the syntax
 
 $ self nope   (in project, exit 1)
 error: unknown command 'nope' — run `self --help` for the syntax
+    if it is a mini-app, install it with `self app install nope`
 
 $ self lang --help   (in project, exit 0)
 usage: self lang [<code>]
@@ -252,6 +253,18 @@ usage: self <command>
   search [query] [--type <kind>] [--exposure <tier>|--all] [--project p]
                                              find live records context does not show (query optional with a narrowing flag)
   fold                                       re-derive canonical files from the log
+  login [--label text] [--scopes csv] [--no-open] [--timeout s] [--profile name] [--api-base url] [--json]
+                                             obtain an agent credential through a device approval a person confirms
+  logout [--profile name] [--all] [--json]   delete the local credential; the server-side credential stays valid until it expires
+  whoami [--profile name] [--verify] [--json]
+                                             what credential this machine holds, and what it can reach
+  app install <key>[@version] [--force] [--allow-downgrade] [--profile name] [--json]
+                                             download, verify and install a mini-app from the rail
+  app list [--check] [--profile name] [--json]
+                                             what is installed, and with --check what the rail would serve
+  app update [key] [--all] [--profile name] [--json]
+                                             install the latest compatible release
+  app remove <key> [--json]                  delete an installed mini-app; its rollback mark is kept
 
   --version                                  print the version of the package this binary was built from
 
@@ -429,7 +442,7 @@ managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent 
 $ self connect --global   (in project, exit 0)
 no agent instruction files found on this machine — paste this into yours:
 
-<!-- superself:machine:begin v0.6.1 -->
+<!-- superself:machine:begin v0.7.0 -->
 ## Project state (superself)
 
 The `self` CLI version-controls project state — goals, decisions, work
