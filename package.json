@@ -8,9 +8,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "pnpm --filter superself build",
-    "test": "pnpm --filter superself test",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
     "structure": "pnpm --filter superself structure",
-    "typecheck": "pnpm --filter superself typecheck"
+    "typecheck": "pnpm -r typecheck"
   }
 }

@@ -25,3 +25,6 @@ artifacts/
 /docs/progress.md
 /handoff.md
 /project-manifest.json
+
+# built output of the dsh plugin (apps/cli builds to dist/, already ignored)
+/apps/dsh-plugin/lib/
