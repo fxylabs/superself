@@ -32,6 +32,21 @@ export const sanctionedEdges = [];
 // The render gate: the one module that may put a command's answer on stdout.
 export const renderGate = "src/output.ts";
 
+// The two modules that hold a live credential, and the modules that write,
+// fold or sync a record. No import may cross from the second set to the first.
+//
+// This is the structural half of "a token never reaches the event log". The
+// other half — login writing no event at all — is a property of one command and
+// could be undone by a future one; this cannot, because there is no import path
+// from a state writer to a credential for a future command to reach through.
+// `sanitize.ts` catching a token is a backstop, not the guarantee.
+export const credentialModules = ["src/credentials.ts", "src/rail.ts"];
+
+export const stateWritingModules = [
+    "src/ledger.ts", "src/pipeline.ts", "src/sanitize.ts", "src/logfile.ts",
+    "src/fold.ts", "src/model.ts", "src/connect.ts", "src/sync.ts", "src/artifact.ts"
+];
+
 // The modules that still print for themselves. It was a ratchet through the
 // five stages of the render-gate migration — a stage took a module off it, and
 // taking one off was a single deleted line — and stage 5 emptied it. Nothing
@@ -313,6 +328,21 @@ export function importDirectionViolations(tree)
     }));
 }
 
+export function credentialIsolationViolations(tree)
+{
+    return stateWritingModules.filter((path) => tree.paths.includes(path)).flatMap((path) =>
+        moduleReferences(parseSource(tree, path)).flatMap((reference) =>
+        {
+            const target = resolveSpecifier(tree, path, reference.specifier);
+            return credentialModules.includes(target) ? [{
+                file: path,
+                line: reference.line,
+                rule: "credential-isolation",
+                detail: `${path} imports ${target} — a state writer must have no import path to a credential`
+            }] : [];
+        }));
+}
+
 export function functionLengthViolations(tree, changed, limit)
 {
     return sourcesOf(tree).flatMap((path) =>
@@ -494,6 +524,7 @@ export function runStructure(options = {})
         limit,
         violations: [
             ...importDirectionViolations(head),
+            ...credentialIsolationViolations(head),
             ...functionLengthViolations(head, changed, limit),
             ...printSiteViolations(head)
         ],

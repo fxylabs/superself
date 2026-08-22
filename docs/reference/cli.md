@@ -30,6 +30,7 @@ prints them during the same run.
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
 | Agent instructions | `connect [--global]` |
+| Paid work APIs | `login`, `logout`, `whoami [--verify]`, `app install\|list\|update\|remove` |
 
 The command catalogue currently includes these top-level verbs:
 
@@ -39,7 +40,41 @@ goal objective milestone decide work report artifact convention state alias
 undo
 connect view context status setup
 log search fold
+login logout whoami app
 ```
+
+### Reaching the paid work APIs
+
+The `self` CLI is complete on its own and stays free; the work APIs behind
+`app.superselfs.com` are paid cloud services this CLI can reach once a person
+has approved a credential for it.
+
+- `self login` runs a device approval: it prints a URL and a code, a person
+  opens the page and confirms the exact scopes, and the credential is written
+  to the config directory at mode `0600`. No event is appended to the project
+  log — a credential is machine state, not project state.
+- `self whoami` says what this machine holds, offline and free. `--verify`
+  spends one unmetered probe against the rail.
+- `self logout` deletes the local credential and names what is still live
+  server-side, because an agent cannot revoke its own credential.
+- `self app install <key>` downloads a signed mini-app release and verifies it
+  against public keys compiled into this CLI. There is no flag that skips the
+  check and no way to install an unsigned one.
+
+Commands that reach the rail accept `--json`: one object on stdout, snake_case
+keys, and — on a failure — the error envelope on **stdout** as well, so an
+agent capturing stdout gets parseable output on every path. Exit codes are
+`0` ok, `1` error, `2` refused by policy, `3` pending and worth retrying
+unchanged. `SUPERSELF_JSON=1` selects the same mode for a whole session and is
+ignored by commands that have no machine contract, so exporting it never
+changes what an existing verb prints.
+
+**The CLI sends no telemetry.** The one thing a rail request carries beyond the
+call itself is a client header naming versions — `self/0.7.0 plugin/email@0.1.0
+contract/0` — and nothing else: no hostname, no path, no account beyond the
+credential the request already authenticates with. Nothing is reported anywhere
+for a command that makes no rail call, which is every command this CLI shipped
+with.
 
 Beyond that list, the alias table dispatches its own verbs: `self idea add`
 and `self roadmap add` ship as built-in rows with no dedicated command, and

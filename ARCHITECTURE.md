@@ -24,6 +24,9 @@ it. The layers, lowest first:
 | Types | `types.ts` | the event and context shapes, and the blocks a command answers with — `CommandOutput` and the `Pointer` brand a receipt's next command carries; imports nothing local |
 | CLI surface | `args.ts`, `contract.ts`, `help.ts`, `guide.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, explains itself, and confirms a human; `human.ts` and `guide.ts` import nothing local, `contract.ts` imports only `args.ts` and `types.ts` — a leaf declares what its handler answers with by naming a shape from the bottom layer, so nothing here reaches up into the render gate — and `help.ts` renders the contract rather than keeping a list of its own. `guide.ts` holds the concept pages `self help <topic>` prints — prose the contract cannot state, which is why it is data rather than a render |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
+| Foundation | `releasekeys.ts` | the public keys a plugin release is verified against — data only, imports nothing |
+| Credential | `credentials.ts` | the credential file: read, atomic write, mode enforcement, the per-profile lock and pending marker, profile selection. Imports `types.ts` only |
+| Rail | `rail.ts` | HTTP: TLS policy, the bearer header, refresh under the lock, retry classification, timeouts, error normalization, the call key and the call journal. Imports `credentials.ts` and `types.ts` |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`) |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
@@ -31,7 +34,7 @@ it. The layers, lowest first:
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
-| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, and the `--archived` listing |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `search.ts`, `setup.ts`, `sync.ts`, `plugins.ts`, `login.ts`, `app.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, and the `--archived` listing |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
@@ -43,6 +46,11 @@ ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
   `entities.ts`) imports `types.ts`, lower layers, and its own peers only —
   never `model.ts`, so a reducer can never depend on the fold that calls it.
 - `model.ts` imports domain modules, never commands.
+- **Nothing in the ledger, pipeline or fold layers may import `credentials.ts`
+  or `rail.ts`.** This is the structural reason a token cannot reach the event
+  log: there is no import path from a credential to anything that appends,
+  folds, or syncs a record — so the guarantee does not rest on `sanitize.ts`
+  catching one. `pnpm structure` asserts it rather than leaving it to review.
 - Enforcement: review. `tsc` catches a cycle only when it becomes a type error,
   so the import direction is a reading check on every pull request.
 
@@ -65,6 +73,9 @@ rule stands for whatever comes next:
   decision `01kz2nczhtde554qx5tqpqzrt3` deleted. There are no subsystem
   directories today, so the section passes vacuously — its first subject is
   whatever directory appears next, caught at its first wrong import.
+- The same check also runs the credential-isolation rule above: a state-writing
+  module that imports `credentials.ts` or `rail.ts` fails the build with the
+  file, line and rule.
 - The same check counts exports no importer reads, and fails a pull request
   that raises that count above its merge base. A test is an importer, and it
   reaches this package through `dist/`, which the check resolves back to

@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { ALIAS_COMMAND, presetRow, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
+import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
@@ -66,26 +66,28 @@ import {
     tierOf
 } from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
-import { countCharacters, dim, errRed, markdownHeadings, styled } from "./style.js";
+import { countCharacters, dim, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS } from "./pretty.js";
 import { contextOutput, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
+import { APP_COMMAND, registerHostVerbs } from "./app.js";
+import { LOGIN_COMMAND, LOGOUT_COMMAND, WHOAMI_COMMAND, clientTag } from "./login.js";
+import { resolveProfileName } from "./credentials.js";
+import {
+    InstalledPlugin, LoadContext, assertDevPluginMode, devPluginDir, installedPlugins,
+    loadDevPlugin, loadPlugin, pluginVerbs, resolveRailMajor
+} from "./plugins.js";
+import { jsonMode, renderFailure, selectJsonMode } from "./output.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
 {
-    // Asked of the binary itself, so it stands where a verb would rather than
-    // inside one: `self work --version` is a flag `work` never declared, and
-    // naming it there is the answer that surface owes.
-    if (argv[0] === "--version" || argv[0] === "-V")
+    // Env-only, and first: a development plugin configured without development
+    // mode is a mistake worth refusing on any invocation, and asking costs two
+    // environment reads rather than a look at the plugin directory.
+    assertDevPluginMode();
+    if (answeredWithoutACommand(argv))
     {
-        renderOutput([{ kind: "value", text: cliVersion() }]);
-        return;
-    }
-    const help = helpText(argv);
-    if (help !== null)
-    {
-        printUsage(help);
         return;
     }
     const resolved = resolveCommand(COMMANDS, argv);
@@ -94,7 +96,117 @@ async function main(argv: string[]): Promise<void>
         await runLeaf(resolved);
         return;
     }
-    await runAlias(argv);
+    if (!await runPlugin(argv))
+    {
+        await runAlias(argv);
+    }
+}
+
+// The two questions answered before any command is resolved. Both need no
+// workspace, write no event, and exit successfully — asking what the binary is,
+// and asking what it can do.
+function answeredWithoutACommand(argv: string[]): boolean
+{
+    // `--version` is asked of the binary itself, so it stands where a verb
+    // would rather than inside one: `self work --version` is a flag `work`
+    // never declared, and naming it there is the answer that surface owes.
+    if (argv[0] === "--version" || argv[0] === "-V")
+    {
+        renderOutput([{ kind: "value", text: cliVersion() }]);
+        return true;
+    }
+    // A help request for a verb an installed mini-app claims is declined here,
+    // so dispatch can load that plugin and render its own page. Answering it
+    // with the root list — which is what a name no built-in owns used to get —
+    // told a reader the verb did not exist while `self --help` listed it two
+    // lines above.
+    if (helpForPluginVerb(argv))
+    {
+        return false;
+    }
+    const help = helpText(argv);
+    if (help !== null)
+    {
+        printUsage(help);
+        return true;
+    }
+    return false;
+}
+
+function helpForPluginVerb(argv: string[]): boolean
+{
+    if (argv[0] !== "help" && !asksForHelp(argv))
+    {
+        return false;
+    }
+    const name = argv[0] === "help" ? argv[1] : argv[0];
+    return name !== undefined && findCommandByName(COMMANDS, name) === undefined && pluginVerbs().has(name);
+}
+
+// Resolution order, and the whole of it: a built-in always wins, then an
+// installed plugin's verb, then the alias table. Nothing above this line has
+// touched the plugin tree — a built-in verb resolves from `COMMANDS` and
+// returns, so `self work add` pays for no directory read, no signature check
+// and no import.
+//
+// The verb index built here is metadata only: one `readdir` plus one
+// `manifest.json` read per key. The signature check, the hash and the import
+// happen for the one plugin that claims the verb, and only then.
+async function runPlugin(argv: string[]): Promise<boolean>
+{
+    // `self help email` names its subject in the second position, exactly as
+    // `self email --help` names it in the first. Both are one question.
+    const asked = argv[0] === "help" ? argv[1] : argv[0];
+    const development = devPluginDir();
+    const plugin = asked === undefined ? undefined : pluginVerbs().get(asked);
+    if (asked === undefined || (development === null && plugin === undefined))
+    {
+        return false;
+    }
+    const commands = await pluginCommands(argv, plugin, development);
+    const named = commands.find((command) => command.name === asked);
+    if (named !== undefined && (argv[0] === "help" || asksForHelp(argv)))
+    {
+        printUsage(commandUsage(named));
+        return true;
+    }
+    const resolved = resolveCommand(commands, argv);
+    if (resolved === null)
+    {
+        return false;
+    }
+    await runLeaf(resolved);
+    return true;
+}
+
+// `--timeout <s>` replaces the derived per-command deadline outright, in both
+// directions (§4.2). It is the one flag the host reads out of argv before the
+// leaf parses, and it has to be: the session it configures is built before the
+// plugin exists to declare anything. The leaf still declares and parses it
+// normally, so nothing here bypasses the contract — this only reads it early.
+function deadlineFrom(argv: string[]): { deadlineMs?: number }
+{
+    const at = argv.indexOf("--timeout");
+    const seconds = at === -1 ? Number.NaN : Number(argv[at + 1]);
+    return Number.isFinite(seconds) && seconds > 0 ? { deadlineMs: seconds * 1000 } : {};
+}
+
+async function pluginCommands(argv: string[], plugin: InstalledPlugin | undefined, development: string | null): Promise<Command[]>
+{
+    const profile = resolveProfileName();
+    const tag = plugin === undefined ? undefined : `${plugin.key}@${plugin.version}`;
+    const session = {
+        profile,
+        client: clientTag(tag),
+        notice: (line: string) => console.error(line),
+        ...deadlineFrom(argv)
+    };
+    // Resolved before the import, never deferred to the plugin's own first
+    // call: an incompatible plugin must not get to issue one live, chargeable
+    // request before the check that exists to stop it has run.
+    const railApi = plugin === undefined ? undefined : await resolveRailMajor(plugin.key, session);
+    const context: LoadContext = { cliVersion: cliVersion(), session, railApi, commandPath: () => argv.slice(0, 2).join(" ") };
+    return development === null ? loadPlugin(plugin as InstalledPlugin, context) : loadDevPlugin(development, context);
 }
 
 // A first token no command owns resolves against the alias table (#207 A1):
@@ -126,6 +238,8 @@ async function runAlias(argv: string[]): Promise<void>
 // having something to print.
 async function runLeaf(resolved: Resolved): Promise<void>
 {
+    selectJsonMode(wantsJson(resolved));
+    refuseInteraction(resolved);
     const parsed = parseCommand(resolved.path, resolved.args, resolved.leaf.options,
         resolved.leaf.positionals, resolved.leaf.requires);
     const output = await resolved.leaf.run(parsed);
@@ -133,6 +247,59 @@ async function runLeaf(resolved: Resolved): Promise<void>
     {
         renderOutput(output, parsed.values);
     }
+}
+
+// Which selector asked for machine mode, and what each one may do — the
+// asymmetry is deliberate and is the whole point. A flag is a per-command
+// request, so an explicit `--json` on a leaf that promises no machine shape is
+// refused **by name**. An environment variable is an ambient preference an
+// agent exports once for a session, so it is simply ignored there: one export
+// must not break every command that predates the flag.
+function wantsJson(resolved: Resolved): boolean
+{
+    const promises = Object.prototype.hasOwnProperty.call(resolved.leaf.options, "json");
+    if (!promises)
+    {
+        if (asksJson(resolved.args))
+        {
+            throw new CliError(`\`self ${resolved.path}\` has no --json contract yet`, "json_unsupported",
+                { hint: "read the human output, or use a command that declares --json" });
+        }
+        return false;
+    }
+    return asksJson(resolved.args) || process.env.SUPERSELF_JSON === "1";
+}
+
+// Machine mode implies non-interactive, and the refusal has to arrive *before*
+// the handler runs — a command that reaches its confirmation gate and then
+// discovers nobody is there has already done the work it was asking about. A
+// leaf declaring `--yes` is a leaf that needs confirmation, which is the one
+// place that fact is stated.
+function refuseInteraction(resolved: Resolved): void
+{
+    const needsConfirmation = Object.prototype.hasOwnProperty.call(resolved.leaf.options, "yes");
+    if (jsonMode() && needsConfirmation && !resolved.args.includes("--yes"))
+    {
+        throw new CliError(`\`self ${resolved.path}\` destroys something, and machine mode never prompts`,
+            "confirmation_required", { hint: "pass --yes if that is what you mean" });
+    }
+}
+
+// After `--` a flag is a positional the user meant literally.
+function asksJson(args: string[]): boolean
+{
+    for (const arg of args)
+    {
+        if (arg === "--")
+        {
+            return false;
+        }
+        if (arg === "--json")
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Bare `self` is a request for the verb list; anything else that reached no
@@ -143,14 +310,28 @@ function cmdUnknown(cmd: string): void
 {
     if (cmd === "")
     {
-        printUsage(rootUsage(COMMANDS));
+        printUsage(rootUsage(withPluginVerbs()));
         return;
     }
     if (cmd.startsWith("-"))
     {
         throw new CliError(unknownOption(cmd, undefined));
     }
-    throw new CliError(`unknown command '${cmd}' — ${helpHint(undefined)}`);
+    throw new CliError(`unknown command '${cmd}' — ${helpHint(undefined)}`, "unknown_command",
+        { hint: `if it is a mini-app, install it with \`self app install ${cmd}\`` });
+}
+
+// The root page shows installed mini-app verbs, marked as what they are, so a
+// reader is never told a verb that works does not exist. Metadata only: this
+// reads manifests, never a signature and never plugin code.
+function withPluginVerbs(): Command[]
+{
+    return COMMANDS.concat(installedPlugins().flatMap((plugin) => plugin.manifest.verbs.map((verb) => ({
+        name: verb,
+        usage: [{ syntax: verb, description: [`from the installed mini-app ${plugin.key}@${plugin.version}`], verbs: [""] }],
+        detail: [],
+        node: leaf("", {}, 0, () => undefined)
+    }))));
 }
 
 // Help is answered before any command runs, so asking for it needs no
@@ -178,7 +359,7 @@ function helpText(argv: string[]): string | null
     // resolved last, so a name a command or an alias verb owns is never taken
     // by a topic.
     const topic = findTopic(name);
-    return topic === undefined ? rootUsage(COMMANDS) : topicPage(topic);
+    return topic === undefined ? rootUsage(withPluginVerbs()) : topicPage(topic);
 }
 
 // After `--` a flag is a positional the user meant literally, not a request.
@@ -991,12 +1172,29 @@ export const COMMANDS: Command[] = [
         usage: [{ syntax: "fold", description: ["re-derive canonical files from the log"], verbs: [""] }],
         detail: ["rebuild state files, work briefs, and HTML views from the event log."],
         node: leaf("", {}, 0, cmdFold)
-    }
+    },
+    LOGIN_COMMAND,
+    LOGOUT_COMMAND,
+    WHOAMI_COMMAND,
+    APP_COMMAND
 ];
 
 // The composed names are what `alias add` refuses as reserved (#207 A5); the
 // preset verbs among them are table rows, which the registration filters out.
 registerReservedVerbs(COMMANDS.map((command) => command.name));
+
+// The same handover, for the other surface that can create a verb collision:
+// `self app install` refuses a plugin whose verb is a built-in or already an
+// alias row. `registerReservedVerbs` keeps its module-load snapshot untouched —
+// teaching it about plugin verbs would mean reading the plugin directory on
+// every invocation, which is exactly what cell 1 forbids.
+registerHostVerbs(COMMANDS.map((command) => command.name),
+    (verb) => resolveAliasCommand(process.cwd(), verb) !== null);
+
+// And the mirror of it: an alias row may not shadow a verb a plugin claims.
+// This reads the verb index, so it runs only when `alias add` actually asks —
+// never on the path a built-in verb takes.
+registerPluginClaims((verb) => pluginVerbs().has(verb));
 
 /* ── the workspace and project verbs this module implements ────────── */
 
@@ -2589,7 +2787,12 @@ export async function runCli(argv: string[]): Promise<void>
         {
             throw error;
         }
-        console.error(`${errRed("error:")} ${message}`);
-        process.exitCode = 1;
+        // The exit vocabulary lives on the error, so a command that constructs
+        // none of 2 or 3 keeps exactly the behaviour it had. Under `--json` the
+        // envelope goes to stdout, so an agent capturing stdout gets parseable
+        // JSON on every path rather than on the successful ones only.
+        const refusal = error instanceof CliError ? error : null;
+        renderFailure(refusal?.code ?? "parse_error", message, refusal?.fields ?? {});
+        process.exitCode = refusal?.exit ?? 1;
     }
 }

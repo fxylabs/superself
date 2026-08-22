@@ -138,8 +138,14 @@ test("stage 5 cell 8: an unknown verb is refused on stderr, with nothing on stdo
     const answer = spawned(demo, ["nosuch"]);
     assert.equal(answer.code, 1);
     assert.equal(answer.out, "");
+    // The refusal line itself is unchanged. PR7 adds the hint under it, in the
+    // same shape every other refusal's hint takes, because a first token this
+    // CLI does not own may now be a mini-app verb that is simply not installed
+    // — and "unknown command" with no way forward is the answer that sends an
+    // agent looking in the wrong place.
     assert.equal(answer.err.replace(/\x1b\[[0-9;]*m/g, ""),
-        "error: unknown command 'nosuch' — run `self --help` for the syntax\n");
+        "error: unknown command 'nosuch' — run `self --help` for the syntax\n"
+        + "    if it is a mini-app, install it with `self app install nosuch`\n");
 });
 
 /* ── cell 9: the brief, under the lines that were said before it ───── */

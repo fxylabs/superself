@@ -74,8 +74,83 @@ export interface RegistryEntry
     added: string;
 }
 
+/* ── the machine-readable half of a refusal ────────────────────────── */
+
+// What a `--json` run may carry. Declared here because both the payload block
+// and the error envelope are made of it, and this layer imports nothing.
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+// The one authoritative `--json` error envelope, field for field (design
+// §2.6). Every optional field is **omitted** rather than sent as null, and a
+// field may be added only by adding a line here — a plugin cannot introduce
+// one of its own, which is what lets one schema validate every command's
+// errors.
+export interface ErrorFields
+{
+    // Server free text, the only in-band guidance an error carries.
+    hint?: string;
+    // Synthesized by the CLI from the profile's console base; omitted, never
+    // guessed, when there is no base to build it from.
+    console_url?: string;
+    // On an exit 3 that has a pace the server declared.
+    retry_after_s?: number;
+    // On an exit 3 from a command that carries a call key, so the retry is the
+    // same call rather than a second charge.
+    idempotency_key?: string;
+    request_id?: string;
+    rule_hits?: JsonValue;
+    refusals?: JsonValue;
+    review_id?: string;
+    min_version?: string;
+    // The CLI-attached sub-cause on `login_required`. The server sends no such
+    // field; it is how one exit-1 code stays branchable.
+    reason?: string;
+}
+
+// The exit vocabulary of design §11, and the whole of it:
+//   0 ok · 1 error · 2 refused by policy · 3 pending and retryable
+//
+// Every command that predates this declaration constructs neither 2 nor 3, so
+// its exit behaviour is unchanged — `runCli` assigns `error.exit`, which
+// defaults to 1.
+type ExitCode = 1 | 2 | 3;
+
+// A refusal, with the machine half beside the sentence. Everything written
+// before this change constructs it with a message alone and behaves exactly as
+// it did: no code, no fields, exit 1.
 export class CliError extends Error
 {
+    readonly exit: ExitCode;
+    readonly code?: string;
+    readonly fields: ErrorFields;
+
+    constructor(message: string, code?: string, fields: ErrorFields = {}, exit: ExitCode = 1)
+    {
+        super(message);
+        this.exit = exit;
+        this.code = code;
+        this.fields = fields;
+    }
+}
+
+// Exit 1 — something is wrong that retrying will not fix by itself.
+export function fail(code: string, message: string, fields: ErrorFields = {}): CliError
+{
+    return new CliError(message, code, fields, 1);
+}
+
+// Exit 2 — refused by policy. The answer will not change, so an agent must
+// never retry it.
+export function refuse(code: string, message: string, fields: ErrorFields = {}): CliError
+{
+    return new CliError(message, code, fields, 2);
+}
+
+// Exit 3 — not finished, and not the caller's fault. The identical call,
+// retried after `retry_after_s`, is the right next move.
+export function pending(code: string, message: string, fields: ErrorFields = {}): CliError
+{
+    return new CliError(message, code, fields, 3);
 }
 
 /* ── what a command answers with ───────────────────────────────────── */
@@ -166,6 +241,24 @@ interface DocumentBlock
     pretty?: Render;
 }
 
-export type OutputBlock = ValueBlock | ReceiptBlock | ListingBlock | DocumentBlock;
+// The machine shape a leaf promises, with the human renders beside it. A leaf
+// that carries one of these is a leaf that has a `--json` contract, and that
+// equivalence is load-bearing in two directions: an explicit `--json` on a leaf
+// without one is refused by name rather than answered with a shape the command
+// never promised, and `SUPERSELF_JSON=1` — an ambient preference an agent
+// exports once for a whole session — is simply ignored there, so one export
+// cannot break a command that predates the flag.
+//
+// Under `--json` the gate prints `data` and nothing else. Otherwise it calls
+// exactly one of the thunks, like every other block.
+export interface PayloadBlock
+{
+    kind: "payload";
+    data: JsonValue;
+    plain: Render;
+    pretty?: Render;
+}
+
+export type OutputBlock = ValueBlock | ReceiptBlock | ListingBlock | DocumentBlock | PayloadBlock;
 
 export type CommandOutput = OutputBlock[];

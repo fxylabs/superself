@@ -27,8 +27,31 @@
 
 import { ParsedArguments } from "./args.js";
 import { RenderMode, resolveRender } from "./pretty.js";
-import { bold, plural } from "./style.js";
-import { CommandOutput, ListingBlock, OutputBlock, Pointer } from "./types.js";
+import { bold, errRed, plural } from "./style.js";
+import { CommandOutput, ErrorFields, JsonValue, ListingBlock, OutputBlock, PayloadBlock, Pointer } from "./types.js";
+
+/* ── machine mode ──────────────────────────────────────────────────── */
+
+// Whether this run answers a machine. Resolved once, by the dispatcher, from
+// the flag the leaf declared and the environment — never asked again, so two
+// blocks of one command can no more disagree about JSON than they can about
+// `--pretty`.
+//
+// It lives here because the consequence is entirely about printing, and one of
+// those consequences is easy to miss: under `--json` an **error** goes to
+// stdout, not stderr, so an agent capturing stdout gets parseable JSON on every
+// path rather than on the successful ones only.
+let machineMode = false;
+
+export function selectJsonMode(on: boolean): void
+{
+    machineMode = on;
+}
+
+export function jsonMode(): boolean
+{
+    return machineMode;
+}
 
 /* ── the gate ──────────────────────────────────────────────────────── */
 
@@ -53,6 +76,11 @@ export function renderOutput(output: CommandOutput, values: ParsedArguments["val
 
 function printBlock(block: OutputBlock, mode: RenderMode): void
 {
+    if (block.kind === "payload")
+    {
+        printPayload(block, mode);
+        return;
+    }
     if (block.kind === "value")
     {
         console.log(block.text);
@@ -70,6 +98,46 @@ function printBlock(block: OutputBlock, mode: RenderMode): void
         return;
     }
     printLines(mode === "pretty" && block.pretty !== undefined ? block.pretty() : block.plain());
+}
+
+// Under `--json` the data is the whole answer: one object, nothing around it,
+// and no value shortened — the 2 KB cap is a human-readability measure and a
+// truncated DKIM record published to DNS fails silently forever. Otherwise the
+// block behaves like every other two-render block.
+function printPayload(block: PayloadBlock, mode: RenderMode): void
+{
+    if (machineMode)
+    {
+        console.log(JSON.stringify(block.data));
+        return;
+    }
+    printLines(mode === "pretty" && block.pretty !== undefined ? block.pretty() : block.plain());
+}
+
+// The one command that emits JSON Lines rather than one object: `self login`
+// has to hand the agent a code before approval happens and a result after.
+// Printed through the gate like everything else, so this module stays the only
+// module that writes to stdout.
+export function jsonLine(data: JsonValue): void
+{
+    console.log(JSON.stringify(data));
+}
+
+// A refusal, in whichever form this run reads. In JSON mode it is the one
+// envelope of design §2.6 on **stdout**; otherwise it is today's `error:` line
+// on stderr, with the hint under it.
+export function renderFailure(code: string | undefined, message: string, fields: ErrorFields): void
+{
+    if (machineMode)
+    {
+        console.log(JSON.stringify({ error: { code: code ?? "error", message, ...fields } }));
+        return;
+    }
+    console.error(`${errRed("error:")} ${message}`);
+    if (fields.hint !== undefined)
+    {
+        console.error(`    ${fields.hint}`);
+    }
 }
 
 // Exactly one of a block's two renders runs. A handler no longer asks which

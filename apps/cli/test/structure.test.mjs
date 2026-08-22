@@ -18,6 +18,8 @@ import {
     functionSpans,
     importDirectionViolations,
     interactionPrompt,
+    credentialIsolationViolations,
+    credentialModules,
     memoryTree,
     packageRoot,
     parseSource,
@@ -339,4 +341,39 @@ test("an added line is reported at its number in the head revision", () =>
     const base = run("rev-parse", "HEAD").trim();
     writeFileSync(join(root, "src/one.ts"), "export const zero = 0;\nexport const one = 1;\n");
     assert.deepEqual(changedLines(base, root).get("src/one.ts"), [1]);
+});
+
+/* ── cell 116: a state writer has no import path to a credential ───── */
+
+// The structural half of "a token never reaches the event log". The other half
+// — login writing no event — is a property of one command and a future command
+// could undo it; this cannot, because there is no import path for a future
+// command to reach through.
+
+test("a state-writing module importing the credential layer is a named violation", () =>
+{
+    const tree = memoryTree({
+        "src/pipeline.ts": "import { readProfile } from \"./credentials.js\";\nexport const p = readProfile;\n",
+        "src/credentials.ts": "export function readProfile() {}\n"
+    });
+    const [violation] = credentialIsolationViolations(tree);
+    assert.equal(violation.file, "src/pipeline.ts");
+    assert.equal(violation.line, 1);
+    assert.equal(violation.rule, "credential-isolation");
+    assert.match(violation.detail, /no import path to a credential/);
+});
+
+test("the same rule fires for the rail layer, and for the ledger as well as the pipeline", () =>
+{
+    const tree = memoryTree({
+        "src/ledger.ts": "import { railRequest } from \"./rail.js\";\nexport const r = railRequest;\n",
+        "src/rail.ts": "export function railRequest() {}\n"
+    });
+    assert.equal(credentialIsolationViolations(tree).length, 1);
+});
+
+test("cell 116: the real tree has no such import, and both credential modules are covered", () =>
+{
+    assert.deepEqual(credentialIsolationViolations(diskTree(packageRoot)), []);
+    assert.deepEqual([...credentialModules].sort(), ["src/credentials.ts", "src/rail.ts"]);
 });
