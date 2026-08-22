@@ -1,0 +1,41 @@
+=== superself tools in the registry: ["superself_context","superself_work","superself_report","superself_decide"]
+
+=== superself_context (isError=false)
+# scratch
+
+## Work in progress
+
+- 1 more open work item; run `self work --project 'scratch'`
+
+## Index
+
+- [decision] --looks like an option — because
+
+=== superself_work list (isError=false)
+w-g877x  next  smoke outcome  — 1 report(s), see `self work show w-g877x --project 'scratch'`
+1 open work unit
+
+=== superself_work show bad id (isError=false)
+superself_work show needs a work id like `w-abc12` (got "w-../x"). Run superself_work with action "list" to see the open ids.
+
+=== superself_report empty text (isError=false)
+superself_report needs a non-empty `text`; nothing was recorded.
+
+=== superself_decide (isError=false)
+entity.confirmed recorded [01m0n290ajgh0hx97yeg7fpf1t]
+
+=== superself_context after decide (isError=false)
+# scratch
+
+## Work in progress
+
+- 1 more open work item; run `self work --project 'scratch'`
+
+## Index
+
+- [decision] smoke: dsh plugin called self decide — smoke test
+- [decision] --looks like an option — because
+
+=== command: /self registered: print the project's current state from Superself (self context)
+
+=== PROBE DONE

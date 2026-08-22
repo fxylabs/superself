@@ -1,0 +1,6 @@
+# Installed into a dsh profile by `dsh plugin add dsh-plugin-superself`; the
+# loader resolves the plugin by package name. Override the config here or in
+# the profile's own patch layer — see README.md for the fields.
+- insert:
+    - id: superself
+      name: dsh-plugin-superself

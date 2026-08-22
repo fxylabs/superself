@@ -1,0 +1,9 @@
+# Copy of the entry for awesome-dsh-plugin, filed as
+#   data/plugins/fxylabs__superself--apps-dsh-plugin.yml
+# per https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md
+# (monorepo subpackage: url points at the subdirectory, name is owner/repo#subname).
+url: https://github.com/fxylabs/superself/tree/main/apps/dsh-plugin
+name: fxylabs/superself#dsh-plugin
+category: workflow
+description:
+  en: Superself's self CLI as model-facing tools (project context, work units, reports, decisions) plus a /self command — cross-session, cross-project project state kept outside the code repo.
