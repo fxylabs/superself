@@ -431,6 +431,7 @@ docs/
 ├─ examples/              end-to-end operating scenarios
 ├─ reference/             current CLI command and record reference
 ├─ viewer-theming.md      supported viewer tokens and accent themes
+├─ content-guide.md       tutorial form, visual rules, and pre-publish checklist (ko/en)
 ├─ maintainers/           branch, version, and release policy
 ├─ roadmap.md             current capability, next outcomes, and exit evidence
 └─ strategy/              problem definition and positioning decisions
