@@ -247,13 +247,27 @@ test("a terminal 401 refusal is journaled with its exit and code", async () =>
 // left the send running, so a first Ctrl-C was swallowed and the completed send
 // wrote a contradictory `exit: 0` behind the `exit: -1`. Run as a real child so
 // a real signal is delivered, exactly as cell 28 does for login.
-test("SIGINT during a charged send aborts it, writes one exit:-1 line, and exits non-zero", async () =>
+//
+// The test is written to BITE the journal-only version: the rail holds its
+// answer until AFTER the interrupt is delivered, then returns a 200. A correct
+// client has already aborted the request and exited 1 by then, so exactly one
+// exit:-1 line exists; a journal-only client is still waiting, so the released
+// answer completes its send and writes a SECOND exit:0 line and exits 0. A rail
+// that never answered could not tell the two apart — the send never completes in
+// either version — which was the vacuity this replaces. Verified against a
+// scratch build of the journal-only rail.ts (57f752e): it FAILS there and passes
+// on the fixed rail (8e64f2e).
+test("SIGINT during a charged send aborts it: one exit:-1 line, exit 1, no completed send", async () =>
 {
     const it = machine();
     installFixture(it, { key: "keyed", entry: keyedPlugin() });
-    // The rail receives the send and never answers, so the client is genuinely
-    // mid-flight when the signal arrives.
-    const rail = await railServer(() => new Promise(() => undefined));
+    let release = () => undefined;
+    const answered = new Promise((resolve) => { release = resolve; });
+    const rail = await railServer(async () =>
+    {
+        await answered;
+        return { status: 200, body: { status: "sent", campaignId: "cmp_1" } };
+    });
     try
     {
         writeCredential(it, { apiBase: rail.url });
@@ -263,6 +277,8 @@ test("SIGINT during a charged send aborts it, writes one exit:-1 line, and exits
         let err = "";
         child.stdout.on("data", (chunk) => { out += chunk; });
         child.stderr.on("data", (chunk) => { err += chunk; });
+        // Attached before any wait, so a fast exit cannot be missed.
+        const closed = new Promise((resolve) => child.on("close", (code) => resolve(code)));
         // Interrupt once the send is genuinely in flight — judged by the rail
         // having received the request, not by a sleep.
         while (rail.calls.length < 1)
@@ -270,24 +286,34 @@ test("SIGINT during a charged send aborts it, writes one exit:-1 line, and exits
             await new Promise((resolve) => setTimeout(resolve, 20));
         }
         child.kill("SIGINT");
-        const code = await new Promise((resolve) => child.on("close", resolve));
-        assert.notEqual(code, 0, `an interrupted send exited 0: ${out}${err}`);
+        // Give the signal time to be delivered and handled, THEN let the rail
+        // answer — the answer a journal-only client would complete its send on.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        release();
+        const guard = setTimeout(() => child.kill("SIGKILL"), 8000);
+        const code = await closed;
+        clearTimeout(guard);
+
+        // Exact code: the fix exits 1 via `interrupted`. A journal-only client
+        // exits 0 (the released send completes) — or 3 via the deadline if the
+        // rail never answered — so an exact 1 is what tells the fix apart.
+        assert.equal(code, 1, `an interrupted send exited ${code}: ${out}${err}`);
 
         const path = join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl");
         assert.equal(existsSync(path), true, "an interrupted send wrote no journal line");
         const lines = readFileSync(path, "utf8").trim().split("\n").filter((line) => line !== "");
-        // Exactly one line, and it is the interruption — never a second exit:0
-        // from a send that completed behind the interrupt.
-        assert.equal(lines.length, 1, `an interrupted send wrote ${lines.length} journal lines`);
+        // Exactly one line: the interruption. A journal-only client writes a
+        // second exit:0 line here when its released send completes.
+        assert.equal(lines.length, 1, `an interrupted send wrote ${lines.length} journal lines: ${lines.join(" | ")}`);
         const line = JSON.parse(lines[0]);
         assert.equal(line.exit, -1);
         assert.equal(line.code, "interrupted");
-        // The send did not complete: the rail was never allowed to answer, so no
-        // success payload can have been printed.
+        // The send did not complete: a completed send prints its success payload.
         assert.equal(out.includes("\"status\":\"sent\""), false, "a completed send printed a success payload");
     }
     finally
     {
+        release();
         await rail.close();
     }
 });

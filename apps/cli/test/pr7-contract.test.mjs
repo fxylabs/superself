@@ -601,7 +601,17 @@ for (const family of FAMILIES)
     });
 }
 
-test("§8.8 login: the one command that answers in JSON Lines, and its refusal shape", async () =>
+// §8.8 login is exit-3-EXEMPT by design: the device flow has no
+// pending-retryable outcome. §7.2 fixes login's only outcomes as exit 0
+// (approved), exit 2 (access_denied), and exit 1 (device_code_expired /
+// login_timeout / login_cancelled / the passed-through device codes); §2.5's
+// complete exit-3 set contains no login-command code (refresh_lock_timeout and
+// command_deadline_exceeded are authenticated-rail-call-only, and login waits
+// or steals the credential lock rather than emitting refresh_lock_timeout —
+// opus F4). So login asserts success + its exit-2 refusal, not an exit-3 shape;
+// the six-family gate's exit-3 coverage comes from the families that DO have one
+// (email send / stats / domains live above, wallet / landing skipped below).
+test("§8.8 login: the one command that answers in JSON Lines, and its refusal shape (exit-3-exempt by design)", async () =>
 {
     const it = box();
     const rail = await railServer((call) => (call.path === "/api/device/start"
