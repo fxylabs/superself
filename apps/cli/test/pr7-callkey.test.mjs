@@ -4,11 +4,15 @@
 // belong to the private `email` and `landing` plugins and are gated there.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { machine } from "./harness.mjs";
+
+const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 import {
     CALL_KEY_PATTERN, checkCallKey, deriveCallKey, jcs, journalCall, journalPath, newCallKey
 } from "../dist/rail.js";
@@ -199,6 +203,88 @@ test("a refusal is journaled with its exit and code, so a crashed agent can see 
         assert.equal(line.code, "recharging");
         assert.match(line.call_key, /^ck_[0-9a-f]{32}$/,
             "an exit-3 line with no key is a line an agent cannot retry from");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+// A direct 401 terminal refusal (credential_invalid / login_required and the
+// refresh refusals) throws through `terminal401`, a path that used to bypass the
+// journal entirely — so an agent replaying the journal after a crash could not
+// see that the last attempt was refused. It is journaled now, exit and code
+// only, no token.
+test("a terminal 401 refusal is journaled with its exit and code", async () =>
+{
+    const it = machine();
+    installFixture(it, { key: "keyed", entry: keyedPlugin() });
+    const rail = await railServer(() => ({ status: 401, body: { code: "credential_invalid", message: "not a valid credential" } }));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const result = await selfAsync(it, it.root, ["keyed", "--json"],
+            { ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" });
+        assert.equal(result.code, 1, result.all);
+        const path = join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl");
+        assert.equal(existsSync(path), true, "a terminal 401 refusal was never journaled");
+        const line = JSON.parse(readFileSync(path, "utf8").trim());
+        assert.equal(line.exit, 1);
+        assert.equal(line.code, "login_required");
+        // The refused credential never reaches the journal.
+        const text = JSON.stringify(line);
+        assert.equal(text.includes("sa_"), false, "a token reached the journal");
+        assert.equal(text.includes("sr_"), false);
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+// §4.5 — SIGINT during a rail call aborts the in-flight request and writes one
+// `exit: -1` line, no more. The bug this pins: a handler that only journaled
+// left the send running, so a first Ctrl-C was swallowed and the completed send
+// wrote a contradictory `exit: 0` behind the `exit: -1`. Run as a real child so
+// a real signal is delivered, exactly as cell 28 does for login.
+test("SIGINT during a charged send aborts it, writes one exit:-1 line, and exits non-zero", async () =>
+{
+    const it = machine();
+    installFixture(it, { key: "keyed", entry: keyedPlugin() });
+    // The rail receives the send and never answers, so the client is genuinely
+    // mid-flight when the signal arrives.
+    const rail = await railServer(() => new Promise(() => undefined));
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const child = spawn(process.execPath, [bin, "keyed", "--json"],
+            { cwd: it.root, env: { ...it.env, ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" }, stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        let err = "";
+        child.stdout.on("data", (chunk) => { out += chunk; });
+        child.stderr.on("data", (chunk) => { err += chunk; });
+        // Interrupt once the send is genuinely in flight — judged by the rail
+        // having received the request, not by a sleep.
+        while (rail.calls.length < 1)
+        {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        child.kill("SIGINT");
+        const code = await new Promise((resolve) => child.on("close", resolve));
+        assert.notEqual(code, 0, `an interrupted send exited 0: ${out}${err}`);
+
+        const path = join(it.env.XDG_STATE_HOME, "superself", "calls.jsonl");
+        assert.equal(existsSync(path), true, "an interrupted send wrote no journal line");
+        const lines = readFileSync(path, "utf8").trim().split("\n").filter((line) => line !== "");
+        // Exactly one line, and it is the interruption — never a second exit:0
+        // from a send that completed behind the interrupt.
+        assert.equal(lines.length, 1, `an interrupted send wrote ${lines.length} journal lines`);
+        const line = JSON.parse(lines[0]);
+        assert.equal(line.exit, -1);
+        assert.equal(line.code, "interrupted");
+        // The send did not complete: the rail was never allowed to answer, so no
+        // success payload can have been printed.
+        assert.equal(out.includes("\"status\":\"sent\""), false, "a completed send printed a success payload");
     }
     finally
     {

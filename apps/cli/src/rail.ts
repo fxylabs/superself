@@ -704,12 +704,16 @@ interface HttpOptions
     headers: Record<string, string>;
     body?: string | Uint8Array;
     timeoutMs: number;
+    // The caller's cancellation, distinct from this request's own timeout. A
+    // SIGINT aborts it (§4.5); the fetch below is aborted when either fires.
+    signal?: AbortSignal;
 }
 
 async function httpOnce(url: string, options: HttpOptions): Promise<HttpAnswer>
 {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), options.timeoutMs);
+    const unlink = linkAbort(abort, options.signal);
     try
     {
         const response = await fetch(url, {
@@ -723,7 +727,28 @@ async function httpOnce(url: string, options: HttpOptions): Promise<HttpAnswer>
     finally
     {
         clearTimeout(timer);
+        unlink();
     }
+}
+
+// The caller's cancellation and this request's own timeout share one controller:
+// whichever fires aborts the fetch. An interrupt therefore actually stops the
+// send rather than leaving it to complete in the background. Returns the
+// listener cleanup, a no-op when there is nothing to cancel from outside.
+function linkAbort(local: AbortController, external: AbortSignal | undefined): () => void
+{
+    if (external === undefined)
+    {
+        return () => undefined;
+    }
+    if (external.aborted)
+    {
+        local.abort();
+        return () => undefined;
+    }
+    const relay = (): void => local.abort();
+    external.addEventListener("abort", relay, { once: true });
+    return () => external.removeEventListener("abort", relay);
 }
 
 async function readAnswer(response: Response): Promise<HttpAnswer>
@@ -954,21 +979,53 @@ async function attemptWithin(call: RailCall, profile: Profile, callKey: string |
     // A call interrupted by a signal has an unknown outcome, and `exit: -1` is
     // how the journal says so: the key is recorded, so the retry is the same
     // call rather than a second charge (§4.5).
-    const onInterrupt = (): void => journalCall(entryFor(call, callKey, -1, "interrupted"));
-    process.once("SIGINT", onInterrupt);
+    //
+    // Three things have to be true together, and journaling alone was none of
+    // them: the in-flight request is **aborted**, so the send cannot go on to
+    // complete and write a contradictory `exit: 0` line behind the `exit: -1`
+    // one; the `exit: -1` line is the **only** line written for the call; and
+    // the process **terminates** with a non-zero code. This is the login path's
+    // shape (login.ts) ported to a charged call — abort, reject, propagate — the
+    // rejection being what carries the exit. `once` is what keeps a second
+    // signal, or a SIGTERM, on Node's default termination: attaching a listener
+    // that stays would be the very thing that swallows the next signal.
+    const abort = new AbortController();
+    const armed = armInterrupt(call, callKey, abort);
     try
     {
-        return await sendAndReplay(call, profile, callKey);
+        return await Promise.race([sendAndReplay(call, profile, callKey, abort.signal), armed.interrupted]);
     }
     finally
     {
-        process.removeListener("SIGINT", onInterrupt);
+        armed.disarm();
     }
 }
 
-async function sendAndReplay(call: RailCall, profile: Profile, callKey: string | undefined): Promise<RailResponse>
+// The SIGINT arm for one rail call: on the signal it aborts the request, writes
+// the single `exit: -1` line, and rejects so the interruption propagates as the
+// process's non-zero exit. `disarm` removes the listener the moment the call
+// settles, so nothing outlives the call it belongs to.
+function armInterrupt(call: RailCall, callKey: string | undefined, abort: AbortController):
+    { interrupted: Promise<RailResponse>; disarm: () => void }
 {
-    const first = await sendOnce(call, profile, callKey);
+    let onInterrupt = (): void => undefined;
+    const interrupted = new Promise<RailResponse>((resolve, reject) =>
+    {
+        onInterrupt = (): void =>
+        {
+            abort.abort();
+            journalCall(entryFor(call, callKey, -1, "interrupted"));
+            reject(fail("interrupted", "the rail call was interrupted before it answered",
+                { hint: "the call key is journaled; the same call retries without a second charge" }));
+        };
+        process.once("SIGINT", onInterrupt);
+    });
+    return { interrupted, disarm: (): void => { process.removeListener("SIGINT", onInterrupt); } };
+}
+
+async function sendAndReplay(call: RailCall, profile: Profile, callKey: string | undefined, signal?: AbortSignal): Promise<RailResponse>
+{
+    const first = await sendOnce(call, profile, callKey, signal);
     if (first.status !== 401)
     {
         return finish(call, first, callKey);
@@ -979,10 +1036,17 @@ async function sendAndReplay(call: RailCall, profile: Profile, callKey: string |
     // rotation on a credential the server has already disowned.
     if (code !== "credential_expired")
     {
-        throw terminal401(call.session.profile, first, code);
+        // A terminal 401 is still the outcome of a real attempt, so it earns a
+        // journal line exactly as every other refusal does through `finish`.
+        // Without it, an agent replaying the journal cannot see that the last
+        // call was refused. The line carries the exit and the mapped code and
+        // nothing else — no token, no message body (§4.1).
+        const refusal = terminal401(call.session.profile, first, code);
+        journalCall(entryFor(call, callKey, refusal.exit, refusal.code));
+        throw refusal;
     }
     const refreshed = await refreshUnderLock(call.session, profile, "rejected");
-    const second = await sendOnce(call, refreshed.profile, callKey);
+    const second = await sendOnce(call, refreshed.profile, callKey, signal);
     return finish(call, second, callKey);
 }
 
@@ -1127,7 +1191,7 @@ function paceFor(code: string, fields: ErrorFields, headers: Record<string, stri
     return declared === undefined ? {} : { retry_after_s: declared };
 }
 
-async function sendOnce(call: RailCall, profile: Profile, callKey: string | undefined): Promise<HttpAnswer>
+async function sendOnce(call: RailCall, profile: Profile, callKey: string | undefined, signal?: AbortSignal): Promise<HttpAnswer>
 {
     const base = assertApiBase(profile.api_base);
     const url = `${base}${call.spec.path}${queryString(call.spec.query)}`;
@@ -1139,7 +1203,7 @@ async function sendOnce(call: RailCall, profile: Profile, callKey: string | unde
     const options = call.spec.form === undefined
         ? jsonRequest(call, callKey, headers, timeoutMs)
         : multipartRequest(call.spec.form, headers, timeoutMs);
-    return attempt(url, options);
+    return attempt(url, { ...options, signal });
 }
 
 // The bearer scheme is the literal `Bearer ` followed by a token that must
@@ -1227,7 +1291,10 @@ async function attempt(url: string, options: HttpOptions): Promise<HttpAnswer>
         catch (error)
         {
             last = error;
-            if (!retryableError(error) || n === TRANSPORT_ATTEMPTS)
+            // A caller-aborted request is not a transport hiccup to retry: the
+            // interrupt has already decided the outcome, so stop rather than
+            // spin the backoff loop on a signal that will not change.
+            if (options.signal?.aborted || !retryableError(error) || n === TRANSPORT_ATTEMPTS)
             {
                 throw offline(error);
             }
