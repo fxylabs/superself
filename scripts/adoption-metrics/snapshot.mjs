@@ -4,7 +4,7 @@
 // rows side by side so a weekly review is one command.
 //
 //   node scripts/adoption-metrics/snapshot.mjs            fetch, append, show
-//   node scripts/adoption-metrics/snapshot.mjs --dry      fetch and show, no append
+//   node scripts/adoption-metrics/snapshot.mjs --dry-run  fetch and show, no append (--dry also works)
 //   node scripts/adoption-metrics/snapshot.mjs --view     show the record only
 //
 // PostHog, Search Console and dev.to views need credentials from the macOS
@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { createSign } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { devtoCounters, isDryRun, reachVerdictLines } from './lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RECORD = join(HERE, 'snapshots.jsonl');
@@ -212,6 +213,10 @@ function devtoKey()
     }
 }
 
+// Answers { articles, authenticated }. The flag is what makes the fallback
+// explicit: when the key is absent or the authenticated call fails, the public
+// listing still answers for reactions and comments, and views read null —
+// never 0, which would look like a measured "nobody came".
 async function devtoArticles(username)
 {
     const key = devtoKey();
@@ -220,9 +225,23 @@ async function devtoArticles(username)
         const res = await fetch('https://dev.to/api/articles/me/published', {
             headers: { 'api-key': key, 'User-Agent': 'superself-adoption-metrics' },
         }).catch(() => null);
-        if (res?.ok) return res.json();
+        if (res?.ok) return { articles: await res.json(), authenticated: true };
+        console.error('devto: authenticated listing failed, falling back to the public listing (views read null)');
     }
-    return getJson(`https://dev.to/api/articles?username=${username}`).catch(() => null);
+    const articles = await getJson(`https://dev.to/api/articles?username=${username}`).catch(() => null);
+    return { articles, authenticated: false };
+}
+
+// Follower count for the reach verdict; needs the author key, null without it.
+async function devtoFollowers()
+{
+    const key = devtoKey();
+    if (!key) return null;
+    const res = await fetch('https://dev.to/api/followers/users?per_page=1000', {
+        headers: { 'api-key': key, 'User-Agent': 'superself-adoption-metrics' },
+    }).catch(() => null);
+    if (!res?.ok) return null;
+    return (await res.json()).length;
 }
 
 function commentTexts(node, out)
@@ -244,17 +263,11 @@ async function fetchChannels()
     const config = JSON.parse(readFileSync(CHANNELS, 'utf8'));
 
     const devto = {};
-    const articles = await devtoArticles(config.devtoUsername);
+    const { articles, authenticated } = await devtoArticles(config.devtoUsername);
     for (const piece of config.pieces)
     {
         const article = articles?.find((a) => a.canonical_url?.endsWith(`/${piece.slug}`));
-        devto[piece.slug] = article
-            ? {
-                reactions: article.public_reactions_count,
-                comments: article.comments_count,
-                views: article.page_views_count ?? null,
-            }
-            : null;
+        devto[piece.slug] = devtoCounters(article, authenticated);
     }
 
     const reddit = {};
@@ -267,7 +280,7 @@ async function fetchChannels()
             reddit[url] = ours?.score ?? null;
         }
     }
-    return { devto, reddit };
+    return { devto, devtoFollowers: await devtoFollowers(), reddit };
 }
 
 // Search Console: the shared service account authenticates via a self-signed
@@ -304,12 +317,14 @@ async function gscAccessToken(sa)
         exp: now + 600,
     })}`;
     const signature = createSign('RSA-SHA256').update(unsigned).sign(sa.private_key, 'base64url');
+    // A network failure here (2026-08-19: DNS could not resolve the token host)
+    // must degrade this field to null, not kill the run and lose the day's row.
     const res = await fetch(sa.token_uri, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${unsigned}.${signature}`,
-    });
-    if (!res.ok) return null;
+    }).catch(() => null);
+    if (!res || !res.ok) return null;
     return (await res.json()).access_token ?? null;
 }
 
@@ -434,6 +449,8 @@ function printView(rows)
         }
     }
     console.log('');
+    for (const l of reachVerdictLines(curr)) console.log(`  ${l}`);
+    console.log('');
 }
 
 if (has('--view'))
@@ -445,7 +462,8 @@ if (has('--view'))
 // One row per date: a rerun on a day that already has its row (manual run after
 // the scheduled one, or vice versa) must not duplicate it.
 const today = new Date().toISOString().slice(0, 10);
-if (!has('--dry') && readRecord().some((r) => r.date === today))
+const dry = isDryRun(args);
+if (!dry && readRecord().some((r) => r.date === today))
 {
     console.log(`snapshot for ${today} already recorded; skipping`);
     process.exit(0);
@@ -478,7 +496,7 @@ const row = {
     channels: await fetchChannels(),
 };
 
-if (has('--dry'))
+if (dry)
 {
     printView([...readRecord(), row]);
     process.exit(0);
