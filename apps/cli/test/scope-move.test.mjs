@@ -502,7 +502,7 @@ test("self project refuses a subcommand it does not have, with the usage it does
     const refused = selfIn(t.box, t.alpha, ["project", "remove", "beta"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /usage: self project \| init \[--name <slug>\]/);
-    assert.match(refused.out, /link \[slug\] \[path\]/);
+    assert.match(refused.out, /link \[slug\] \[path\|--here\] \[--force\]/);
 });
 
 /* ── T4 — writes after a move ──────────────────────────────────────── */

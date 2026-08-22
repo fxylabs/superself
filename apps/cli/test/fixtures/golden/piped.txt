@@ -140,7 +140,9 @@ usage: self <command>
                                              (--archived lists the projects that are set aside instead)
   project init [--name s] [--desc d] [--no-connect]
                                              register the directory this runs in, and render its agent block
-  project link [slug] [path]                 attach a registered project's directory on this machine
+  project link [slug] [path|--here] [--force]
+                                             attach a registered project's directory on this machine, or — with neither
+                                             a path nor --here — show where it is linked (--force adds a second repository)
   project from <parent-slug> --why "<reason>" [--supersedes <id>]
                                              record that this project came from another registered one
   project archive <slug> --why "<reason>"    set a project aside, with its open work as it stands
@@ -430,12 +432,14 @@ $ self tokens   (in project, exit 0)
 $ self project init --name second --desc the relinked checkout --no-connect   (in second, exit 0)
 project "second" registered
 
-$ self project link second   (in second, exit 0)
+$ self project link second --here   (in second, exit 0)
 replacing the repository previously linked at <root>/ws/second
 project "second" linked to <root>/ws/second
 
-$ self project link demo   (in project, exit 0)
-project "demo" linked to <root>/ws/demo
+$ self project link   (in project, exit 0)
+project "demo" is linked on this machine to:
+  <root>/ws/demo  (this directory)
+1 linked path
 
 $ self connect   (in project, exit 0)
 managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent tool loads it
@@ -528,16 +532,16 @@ report.added recorded [<event-id>]
 entity.done recorded [<event-id>]
 
 $ self work add a unit recorded from nowhere   (in outside, exit 1)
-error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug> --here` if it is a checkout of a project registered on another machine
 
 $ self objective add an outcome recorded from nowhere   (in outside, exit 1)
-error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug> --here` if it is a checkout of a project registered on another machine
 
 $ self connect   (in outside, exit 1)
-error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug> --here` if it is a checkout of a project registered on another machine
 
 $ self fold   (in outside, exit 1)
-error: not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine
+error: not inside a registered project — run `self project init` here to register it, or `self project link <slug> --here` if it is a checkout of a project registered on another machine
 
 $ self remote add <root>/remote.git   (in project, exit 0)
 workspace store now syncs with <root>/remote.git — run `self sync` to push
@@ -548,7 +552,7 @@ synced with <root>/remote.git
 $ self clone <root>/remote.git <root>/clone   (in outside, exit 0)
 workspace cloned into <root>/clone
 registered projects: demo, second
-run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout
+run `self project link <slug> --here` from each project to reconnect it — once per repository, not once per checkout
 
 $ self workspace <root>/ws   (in workspace, exit 0)
 this machine now uses the workspace at <root>/ws

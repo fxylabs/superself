@@ -65,7 +65,8 @@ function oneLink()
 function twoLinks()
 {
     const t = oneLink();
-    must(t.box, t.ws, ["project", "link", "demo", t.b]);
+    // A second repository is the change `--force` exists for (#332).
+    must(t.box, t.ws, ["project", "link", "demo", t.b, "--force"]);
     return t;
 }
 
@@ -310,7 +311,7 @@ test("E19: a hash judged unverifiable before its repository was linked settles o
     report(t, t.a, hash);
     assert.equal(verdicts(t)[hash], "unverifiable");
     assert.ok(health(t).includes(GONE1));
-    must(t.box, t.ws, ["project", "link", "demo", t.b]);
+    must(t.box, t.ws, ["project", "link", "demo", t.b, "--force"]);
     assert.equal(verdicts(t)[hash], "settled");
     assertQuiet(t);
 });

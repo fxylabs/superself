@@ -71,8 +71,9 @@ disagree, the implementation-owned `--help` output wins.
   pulls, refolds, and pushes it, and `self clone` brings a store onto a new
   machine — `self clone` also points the new machine at what it cloned,
   concurrent appends from different machines merge cleanly, and
-  `self project link` reconnects each project to the cloned store, once per
-  repository rather than once per checkout of it;
+  `self project link <slug> --here` reconnects each project to the cloned
+  store, once per repository rather than once per checkout of it (`self
+  project link` alone only shows where a project is linked);
 - `self view` opens a live, read-only HTML dashboard — a workspace overview,
   one project in detail, any work unit's full report history, and a full page
   of decisions, events, and artifacts each — rendered at fold time as

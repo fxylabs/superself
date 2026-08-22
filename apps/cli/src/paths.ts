@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { checkoutTops, commonDir, excludeLocally, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
@@ -127,7 +127,7 @@ function unregisteredMessage(storeDir: string, cwd: string): string
     {
         return `this repository's registered project "${elsewhere.slug}" is at ${elsewhere.dir} — run self from there (\`self project init\` here would register a duplicate)`;
     }
-    return "not inside a registered project — run `self project init` here to register it, or `self project link <slug>` if it is a checkout of a project registered on another machine";
+    return "not inside a registered project — run `self project init` here to register it, or `self project link <slug> --here` if it is a checkout of a project registered on another machine";
 }
 
 /* ── read scope ────────────────────────────────────────────────────── */
@@ -698,6 +698,15 @@ function evidenceHead(parsed: EvidenceHead & { repositories?: unknown; asked?: u
 // there rather than trusting this.
 const excluded = new Set<string>();
 
+// Forgetting what the verdicts were judged against is how they are marked
+// stale: the next fold finds no head, treats every repository as moved, and
+// walks every unsettled hash again. Asked for after a link changes (#332), so
+// health never carries a judgment made against the previous repository.
+export function dropEvidenceHead(storeDir: string, slug: string): void
+{
+    rmSync(join(projectStateDir(storeDir, slug), EVIDENCE_HEAD_FILE), { force: true });
+}
+
 export function writeEvidenceHead(storeDir: string, slug: string, head: EvidenceHead): void
 {
     if (!excluded.has(storeDir))
@@ -841,7 +850,12 @@ function replaceLinkIdentity(file: string, entries: Record<string, unknown>[], e
     invalidateResolution();
 }
 
-export function recordLink(storeDir: string, slug: string, at: string, repository: string | null): boolean
+// What a link wrote: a new path, a replaced claim at a known path, or nothing.
+// The caller that marks verdicts stale needs to know the ledger moved (#332),
+// and the one that discloses a replacement needs to know it was that.
+export type LinkChange = "added" | "replaced" | "unchanged";
+
+export function recordLink(storeDir: string, slug: string, at: string, repository: string | null): LinkChange
 {
     const path = realPath(at);
     const file = join(storeDir, LINKS_FILE);
@@ -859,14 +873,23 @@ export function recordLink(storeDir: string, slug: string, at: string, repositor
     if (stale.length > 0)
     {
         replaceLinkIdentity(file, entries, entry, here);
-        return true;
+        return "replaced";
     }
-    if (!linked)
+    if (linked)
     {
-        appendFileSync(file, JSON.stringify(entry) + "\n");
-        invalidateResolution();
+        return "unchanged";
     }
-    return false;
+    appendFileSync(file, JSON.stringify(entry) + "\n");
+    invalidateResolution();
+    return "added";
+}
+
+// The paths this machine has linked for a slug and still has, resolved the
+// way every read of the ledger resolves them. What `project link` prints when
+// asked to read, and what it compares a write against (#332).
+export function linkedPaths(storeDir: string, slug: string): string[]
+{
+    return (readLinks(storeDir)[slug] ?? []).map((link) => realPath(link.path)).filter((path) => existsSync(path));
 }
 
 // Warned about once per process, and deliberately not per tick: the resolution
@@ -897,7 +920,7 @@ function sameRepository(link: LinkedCheckout, path: string, identity: () => stri
     {
         reported.add(path);
         console.error(`warning: ${path} is no longer the repository linked there — ignoring the link; ` +
-            `run \`self project link <slug>\` in that checkout to link it to what stands there now`);
+            `run \`self project link <slug> --here\` in that checkout to link it to what stands there now`);
     }
     return false;
 }
@@ -1237,7 +1260,7 @@ export function siblingSlug(storeDir: string, dir: string): string | null
         .find((link) => link.top !== here && join(here, relative(link.top, link.path)) === target)?.slug ?? null;
 }
 
-function contains(parent: string, child: string): boolean
+export function contains(parent: string, child: string): boolean
 {
     const base = resolve(parent);
     const target = resolve(child);

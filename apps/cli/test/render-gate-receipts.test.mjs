@@ -63,7 +63,7 @@ test("stage 2 cell 4: a piped `self clone` answers with its three lines, in orde
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, `workspace cloned into ${target}\n`
         + "registered projects: app\n"
-        + "run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout\n");
+        + "run `self project link <slug> --here` from each project to reconnect it — once per repository, not once per checkout\n");
 });
 
 // The disclosure is read and printed before the link is replaced; the recorded
@@ -78,7 +78,7 @@ test("stage 2 cell 5: a piped `self project link` prints its disclosure before t
     rootedRepository(moved, "the repository that was linked");
     must(box, moved, ["project", "init", "--name", "moved", "--no-connect"]);
     rootedRepository(moved, "the repository standing there now");
-    const answer = selfIn(box, moved, ["project", "link", "moved"]);
+    const answer = selfIn(box, moved, ["project", "link", "moved", "--here"]);
     assert.equal(answer.code, 0, answer.out);
     // The CLI answers about the directory it resolved, so the expectation is
     // the resolved path: a scratch root on macOS is reached through a symlink.
@@ -124,7 +124,7 @@ test("stage 2 cell 8: outside the project checkout, a migrated write verb refuse
     const outside = selfIn(box, box.root, ["work", "add", "a unit recorded from nowhere"]);
     assert.equal(outside.code, 1, outside.out);
     assert.equal(outside.out, "error: not inside a registered project — run `self project init` here to register it, "
-        + "or `self project link <slug>` if it is a checkout of a project registered on another machine\n");
+        + "or `self project link <slug> --here` if it is a checkout of a project registered on another machine\n");
 });
 
 /* ── cell 9: the CLI surface stopped reaching into the render layer ── */
