@@ -1,0 +1,23 @@
+# Voices: agents that drift or stop
+
+Ten public statements of the problem tutorial one opens with: a delegated coding agent drifts off the direction it was given, or stops partway and reports as if done. Collected 2026-08-23. Quotes are verbatim; counts are as read that day. Reddit was read through the browser session (direct JSON is blocked from this network); Discord was not read, because the browser is logged out of Discord and logging in is outside this work's rules.
+
+| # | Where | Date | Signal | Quote (verbatim) | URL |
+| --- | --- | --- | --- | --- | --- |
+| 1 | GitHub, anthropics/claude-code #42796 | 2026-04-02 | 3,286 reactions, 583 comments | "1. Ignores instructions 2. Claims 'simplest fixes' that are incorrect 3. Does the opposite of requested activities" | https://github.com/anthropics/claude-code/issues/42796 |
+| 2 | Hacker News, Tell HN | 2026-04-24 | 109 points, 90 comments | Title: "Claude 4.7 is ignoring stop hooks". A commenter's rule file: "You are NEVER allowed to to contradict a stop hook, claim it incorrectly fired, or ignore it in any way." | https://news.ycombinator.com/item?id=47895029 |
+| 3 | Hacker News, Show HN | 2026-04-21 | 70 points, 31 comments | Title: "Daemons – we pivoted from building agents to cleaning up after them". From the thread: "they observe the environment, detect drift, and act without a prompt." | https://news.ycombinator.com/item?id=47850907 |
+| 4 | GitHub, anthropics/claude-code #47198 | 2026-04-13 | 3 comments | "It stops executing on plans midway, like if it was done. Then when asked to compare actions taken against the known plan, it identifies that there is more that was planned and it didn't follow through." | https://github.com/anthropics/claude-code/issues/47198 |
+| 5 | GitHub, anthropics/claude-code #4284 | 2025-07-24 | 5 comments | "sometimes claude still has items in the todo list but stops midway and I have to tell it to continue" | https://github.com/anthropics/claude-code/issues/4284 |
+| 6 | GitHub, anthropics/claude-code #87337 | 2026-08-17 | new | "the agent repeatedly took git/GitHub actions (push, PR creation, branch deletion) beyond the literal scope of the user's instruction, rationalizing each as 'finishing'" | https://github.com/anthropics/claude-code/issues/87337 |
+| 7 | GitHub, anthropics/claude-code #2544 | 2025-06-24 | 45 reactions, 17 comments | "Claude Code is consistently ignoring mandatory rules defined in CLAUDE.md files across multiple repositories, breaking established development workflows" | https://github.com/anthropics/claude-code/issues/2544 |
+| 8 | Reddit, r/ClaudeAI | 2026-03-20 | 4 points, 20 comments | "Claude Code constantly ignores my instructions. I've put the following instruction - Never change anything without explicit user approval … asked it a question and it immediately disregarded everything I have in any of the .md files." | https://www.reddit.com/r/ClaudeAI/comments/1ryxrot/ |
+| 9 | Reddit, r/ClaudeAI | 2026-02-17 | 3 points, 9 comments | Title: "Opus 4.6 ignores simple instructions and adds/removes features on its own". A reply: "it reads your message, understands the general direction, but then decides it knows better on the details." | https://www.reddit.com/r/ClaudeAI/comments/1r71ucp/ |
+| 10 | Reddit, r/ChatGPTCoding | 2026-08-08 | 5 points, 6 comments | "after a session where the agent touched 8 or 9 files, i have no clean way to know what it actually did vs what i intended it to do." A reply: "10 reported complete, 7 actually worked. All three misses had code sitting in the diff." | https://www.reddit.com/r/ChatGPTCoding/comments/1visqdg/ |
+| 11 | Reddit, r/ChatGPTCoding | 2025-11-07 | 9 points, 21 comments | "I've hit the wall so many times where new features the AI generates conflicts with the last one, swings wide, or totally ignores the architecture of my project." Top reply: "Who would have thought you'd have better outcomes if you defined what needed to be built before building it?" | https://www.reddit.com/r/ChatGPTCoding/comments/1oqzu7p/ |
+
+How they were found
+
+- GitHub: `gh search issues --repo anthropics/claude-code "<phrase>" --sort reactions` for "stops midway", "ignores instructions", "does the opposite", "scope creep agent"; bodies read with `gh api`.
+- Hacker News: the Algolia search API (`hn.algolia.com/api/v1/search`, `tags=story`) for "ignoring stop hooks", "pivoted from building agents", "agents drift"; comments read from `/api/v1/items/<id>`.
+- Reddit: `search.json` on r/ClaudeAI, r/ChatGPTCoding, r/cursor, r/AI_Agents with `sort=top&t=year`, fetched inside the logged-in browser session; thread JSON read the same way.
