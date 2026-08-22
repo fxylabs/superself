@@ -46,6 +46,12 @@ export interface Reached
     evidence: string[];
 }
 
+interface CarriedMilestone
+{
+    milestone: string;
+    to: string;
+}
+
 export interface MilestoneState
 {
     id: string;
@@ -63,6 +69,10 @@ export interface MilestoneState
     // Why this checkpoint was given up on. Set only by `milestone drop`: the
     // withdrawal every other statement type had and this one did not.
     droppedWhy?: string;
+    // The objectives this checkpoint hung under before a revision carried it
+    // to its current one (#333), oldest first. Read off the milestone's own
+    // member-of edges, so the page it renders on can say where it came from.
+    carriedFrom: string[];
     state: TargetState;
     reason: string;
     met: string[];
@@ -99,6 +109,12 @@ export interface ObjectiveState
     closedWhy?: string;
     history: ObjectiveRevision[];
     milestones: MilestoneState[];
+    // Milestones a revision carried away from this objective (#333): each still
+    // names this objective on an older member-of edge and now hangs under `to`.
+    // They are not in `milestones` — they are the successor's — but the page of
+    // a superseded objective lists them, so a reader sees the plan moved rather
+    // than closed.
+    carried: CarriedMilestone[];
     state: TargetState;
     reason: string;
     met: number;
@@ -244,6 +260,7 @@ function newObjective(event: SelfEvent): ObjectiveState
         supersedes: event.refs?.supersedes ?? [],
         history: [],
         milestones: [],
+        carried: [],
         state: "on-track",
         reason: "",
         met: 0,
@@ -413,6 +430,7 @@ function newMilestone(event: SelfEvent): MilestoneState
         exit: criteria(event.payload.exit),
         after: list(event.payload.after),
         coverage: [],
+        carriedFrom: [],
         state: "on-track",
         reason: "",
         met: [],

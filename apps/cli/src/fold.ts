@@ -288,7 +288,21 @@ function objectiveHeadLines(objective: ObjectiveState): string[]
     {
         lines.push(`- Superseded by: ${objective.supersededBy}`);
     }
+    lines.push(...carriedLines(objective));
     return lines;
+}
+
+// What a revision carried away (#333), grouped by where it went: the plan
+// moved to the successor, and this page says so rather than reading as an
+// objective whose checkpoints all closed.
+function carriedLines(objective: ObjectiveState): string[]
+{
+    const byTarget = new Map<string, string[]>();
+    for (const item of objective.carried)
+    {
+        byTarget.set(item.to, [...byTarget.get(item.to) ?? [], item.milestone]);
+    }
+    return [...byTarget.entries()].map(([to, milestones]) => `- Milestones carried to ${to}: ${milestones.join(", ")}`);
 }
 
 // `linked` is the read-time merge of the objective's open units across every
@@ -322,12 +336,22 @@ function milestoneHeadLines(milestone: MilestoneState): string[]
     {
         lines.push(`- After: ${milestone.after.join(", ")}`);
     }
+    if (milestone.carriedFrom.length > 0)
+    {
+        lines.push(`- Carried from: ${milestone.carriedFrom.join(", ")}`);
+    }
     lines.push(`- Critical path: ${milestone.criticalPath ? "yes" : "no"}`);
     lines.push(`- Work: ${milestone.works.length === 0 ? "none linked" : milestone.works.join(", ")}`);
     if (milestone.evidence.length > 0)
     {
         lines.push(`- Evidence: ${milestone.evidence.join(", ")}`);
     }
+    return [...lines, ...reachLines(milestone)];
+}
+
+function reachLines(milestone: MilestoneState): string[]
+{
+    const lines: string[] = [];
     if (milestone.reached !== undefined)
     {
         lines.push(`- Reached: ${reachedLine(milestone.reached)}`);

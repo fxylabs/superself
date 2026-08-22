@@ -28,8 +28,8 @@ import {
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
-import { countCharacters, dim, errYellow, markdownHeadings, styled } from "./style.js";
-import { CliError, CommandOutput, ListingBlock } from "./types.js";
+import { countCharacters, dim, errYellow, markdownHeadings, plural, styled } from "./style.js";
+import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
 
@@ -145,6 +145,7 @@ export const OBJECTIVE_COMMAND: Command = {
             syntax: "objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]",
             description: [
                 "a revision supersedes: a new objective id carries the revised fields",
+                "and every live milestone, with its coverage and work, moves under it",
                 "(an empty --target/--horizon/--priority withdraws that field)"
             ],
             verbs: ["revise"]
@@ -406,11 +407,34 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
         stop: values.stop ?? objective.stop,
         why
     };
+    const carried = liveMilestones(objective);
     recordRetirement(ctx, retirementIntent(model, "supersede", [objective.id]), model,
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
+            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
+        ...carryEvents(ctx, carried, id)],
         `${id} ${why}`);
-    return [{ kind: "receipt", text: id }];
+    return [{ kind: "receipt", text: `${id} — carried ${plural(carried.length, "milestone")} from ${objective.id}` }];
+}
+
+// The checkpoints a revision carries to the successor (#333): every one not
+// dropped and not already replaced. A reached one carries too — its evidence
+// belongs to the plan, not to the wording that just changed — and a dropped
+// or superseded one stays where it ended, because the successor owes nothing
+// on it.
+function liveMilestones(objective: ObjectiveState): MilestoneState[]
+{
+    return objective.milestones.filter((milestone) => milestone.droppedWhy === undefined && milestone.supersededBy === undefined);
+}
+
+// The carry is one grouping edge per milestone in the shared grammar, the
+// same `entity.linked` a `work link` records, written in the successor's own
+// append so no reader finds the objective without its checkpoints. The edge to
+// the predecessor is left standing: the fold reads the newest edge as the
+// current objective and every older one as where the milestone came from.
+function carryEvents(ctx: ProjectContext, milestones: MilestoneState[], successor: string): SelfEvent[]
+{
+    return milestones.map((milestone) => makeEvent(ctx.project, "entity.linked",
+        { entity: milestone.id, link: { type: "member-of", target: successor } }, undefined, true));
 }
 
 // What a revision does to one field: absent keeps the predecessor's value, a
