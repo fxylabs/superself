@@ -361,19 +361,21 @@ function verifiedRecord(text: string, roots: readonly RootKey[]): TrustState | n
 // is re-read and re-verified inside a dedicated `trust.lock`, and the write
 // happens only when what this process holds is at least as new.
 //
-// A lock this process cannot take is never a reason to fail. The fresh document
-// is already in memory for this run, and the next run refreshes.
-//
 // What comes back is the document **this run is judged under**, which is not
 // always the one that went in. When disk already holds a newer document, the
 // write is skipped — and returning the older one anyway would let this process
 // install or load under keys the newer document revoked, which is precisely the
 // state monotonicity exists to make unreachable. So the newer document wins the
 // comparison and the caller's answer both.
-async function writeTrustCache(state: TrustState, roots: readonly RootKey[]): Promise<TrustState>
+//
+// A lock this process cannot take is therefore not a free pass. The comparison
+// is the whole guarantee, and a timed-out lock is the one case where it did not
+// happen — so `unserialized` re-establishes it from disk, or refuses.
+async function writeTrustCache(state: TrustState, roots: readonly RootKey[],
+    mode: "install" | "load"): Promise<TrustState>
 {
     let authoritative = state;
-    await withTrustLock(() =>
+    const ran = await withTrustLock(() =>
     {
         const onDisk = readTrustCache(roots);
         if (onDisk !== null && Date.parse(state.document.issued_at) < Date.parse(onDisk.document.issued_at))
@@ -389,10 +391,39 @@ async function writeTrustCache(state: TrustState, roots: readonly RootKey[]): Pr
         };
         replacePrivateFile(trustCachePath(), `${JSON.stringify(record, null, 2)}\n`);
     });
-    return authoritative;
+    return ran ? authoritative : unserialized(state, roots, mode);
 }
 
-async function withTrustLock(work: () => void): Promise<void>
+// The lock timed out: another process is writing, and what this run holds is no
+// longer known to be the newest document this machine has. Reading the cache
+// outside the lock is a weaker statement than reading it inside one — the file
+// may be replaced a moment later — but it is the same root verification, and a
+// **newer** document found there still revokes what it revokes, so it governs.
+//
+// When even that is unavailable, the two modes part as they do everywhere else.
+// Install has no serialization and no document to fall back on, so it refuses
+// and says to retry. Load keeps the valid state it already has, because
+// refusing to run an installed plugin over a lock file is the availability
+// failure §1.3 spends the whole fail-open rule avoiding.
+function unserialized(state: TrustState, roots: readonly RootKey[], mode: "install" | "load"): TrustState
+{
+    const onDisk = readTrustCache(roots);
+    if (onDisk !== null && Date.parse(state.document.issued_at) < Date.parse(onDisk.document.issued_at))
+    {
+        return onDisk;
+    }
+    if (mode === "install" && onDisk === null)
+    {
+        throw unavailable("another process holds the plugin key list while this machine has none to compare against",
+            "trust_lock_held");
+    }
+    return state;
+}
+
+// `true` when `work` ran under the lock, `false` when the wait timed out. The
+// answer is the caller's, not this function's: whether an unserialized write is
+// survivable depends on what the caller is about to do with the document.
+async function withTrustLock(work: () => void): Promise<boolean>
 {
     const path = trustLockPath();
     const deadline = Date.now() + LOCK_WAIT_MS;
@@ -400,7 +431,7 @@ async function withTrustLock(work: () => void): Promise<void>
     {
         if (Date.now() > deadline)
         {
-            return;
+            return false;
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -412,6 +443,7 @@ async function withTrustLock(work: () => void): Promise<void>
     {
         releaseTrustLock(path);
     }
+    return true;
 }
 
 function takeTrustLock(path: string): boolean
@@ -571,7 +603,7 @@ async function installDocument(options: TrustOptions, roots: readonly RootKey[],
     // this one was fetching, and that document — not the one in hand — is what
     // this install is judged under. It may revoke a key this one still calls
     // active, and it is checked for expiry on its own terms.
-    const stored = await writeTrustCache({ ...state, fetched_at: at().toISOString() }, roots);
+    const stored = await writeTrustCache({ ...state, fetched_at: at().toISOString() }, roots, options.mode);
     assertCurrent(stored, at);
     return stored;
 }
@@ -634,7 +666,7 @@ async function firstDocument(options: TrustOptions, roots: readonly RootKey[], a
     {
         throw unavailable("this machine has no plugin key list and could not obtain one", codeOf(error));
     }
-    return writeTrustCache({ ...(fetched as TrustState), fetched_at: at().toISOString() }, roots);
+    return writeTrustCache({ ...(fetched as TrustState), fetched_at: at().toISOString() }, roots, options.mode);
 }
 
 interface Refreshed
@@ -666,7 +698,7 @@ async function refreshOrKeep(options: TrustOptions, roots: readonly RootKey[],
     }
     // Again the write decides: a document another process cached in the meantime
     // is newer than this one and governs the load that follows it.
-    return { state: await writeTrustCache({ ...(fetched ?? cached), fetched_at: at().toISOString() }, roots) };
+    return { state: await writeTrustCache({ ...(fetched ?? cached), fetched_at: at().toISOString() }, roots, options.mode) };
 }
 
 function keptNote(code: string): string

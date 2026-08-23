@@ -14,8 +14,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { machine } from "./harness.mjs";
@@ -92,6 +92,48 @@ function errorOf(result)
 function witnessed(path, verb)
 {
     return `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(path)}, "x");\n${pluginSource(verb)}`;
+}
+
+// Every file under `dir`, by package-relative name, with its content hashed. A
+// refusal that "writes nothing" is a statement about the whole directory — a
+// half-written temp file and a bumped `fetched_at` are both writes — so the
+// assertion compares trees rather than checking a handful of paths.
+function fileTree(dir, prefix = "")
+{
+    const found = {};
+    if (!existsSync(dir))
+    {
+        return found;
+    }
+    for (const entry of readdirSync(dir, { withFileTypes: true }))
+    {
+        const name = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+        if (entry.isDirectory())
+        {
+            Object.assign(found, fileTree(join(dir, entry.name), name));
+            continue;
+        }
+        found[name] = createHash("sha256").update(readFileSync(join(dir, entry.name))).digest("hex");
+    }
+    return found;
+}
+
+// The two trees an install can touch: the config directory that holds the
+// document cache and the plugin state, and the plugin tree itself.
+function machineFiles(it)
+{
+    return { config: fileTree(configRoot(it)), plugins: fileTree(pluginsRoot(it)) };
+}
+
+// The lock another process would be holding: a live pid and an mtime from a
+// moment ago, so the 30 s staleness rule does not fire and the CLI genuinely
+// waits its bounded wait out and gives up.
+function holdTrustLock(it)
+{
+    mkdirSync(configRoot(it), { recursive: true, mode: 0o700 });
+    const path = join(configRoot(it), "trust.lock");
+    writeFileSync(path, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`, { mode: 0o600 });
+    return path;
 }
 
 /* ── in-process cells run against a scratch machine ────────────────── */
@@ -206,10 +248,14 @@ test("cell 160: an expired document refuses an install and still loads an instal
     {
         installFixture(it, { key: "email", trustCache: { trust: expired } });
         writeCredential(it, { apiBase: rail.url });
+        // Everything the install could have touched, hashed before it runs. A
+        // refusal that is terminal leaves the machine byte-for-byte as it was.
+        const before = machineFiles(it);
         const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
         assert.equal(install.code, 1, install.all);
         assert.equal(errorOf(install).code, "trust_document_expired");
         assert.equal(rail.calls.length, 0, "a release was fetched against an expired key list");
+        assert.deepEqual(machineFiles(it), before, "the refused install wrote to the config directory or the plugin tree");
 
         const load = await selfAsync(it, it.demo, ["email"], railEnv(rail));
         assert.equal(load.code, 0, load.all);
@@ -324,6 +370,143 @@ test("cell 161: a newer document cached mid-run governs the load that follows it
     {
         await rail.close();
     }
+});
+
+// The same race with the lock **held**, which is the case the comparison above
+// never runs in: the write times out, so nothing inside the lock decides
+// anything. What must not follow is this run proceeding under T1 while T2 — the
+// document that revokes the key — sits on disk. Re-reading the cache after the
+// timeout is the whole of the fix, and the revocation is how it is visible.
+test("cell 161: a write that cannot take the lock still answers with the newer document on disk (install)", async () =>
+{
+    const it = box();
+    const newer = signedTrust({ keys: [trustKey({ status: "revoked", revokedAt: "2026-08-22T00:00:00Z" })] });
+    const older = signedTrust({ at: Date.now() - 48 * HOUR_MS });
+    const rail = await railServer(racingRail(it, older, newer), { trust: null });
+    try
+    {
+        installFixture(it, { key: "email", trustCache: seededCache(1) });
+        writeCredential(it, { apiBase: rail.url });
+        holdTrustLock(it);
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
+        assert.equal(install.code, 1, install.all);
+        assert.equal(errorOf(install).code, "plugin_key_revoked", "T1 governed an install the lock stopped serializing");
+        const cached = JSON.parse(readFileSync(trustCacheFile(it), "utf8"));
+        assert.equal(cached.trust.document.issued_at, newer.document.issued_at, "the write went ahead without the lock");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("cell 161: a write that cannot take the lock still answers with the newer document on disk (load)", async () =>
+{
+    const it = box();
+    const witness = join(it.root, "imported");
+    const newer = signedTrust({ keys: [trustKey({ status: "revoked", revokedAt: "2026-08-22T00:00:00Z" })] });
+    const older = signedTrust({ at: Date.now() - 48 * HOUR_MS });
+    const rail = await railServer(racingRail(it, older, newer), { trust: null });
+    try
+    {
+        installFixture(it, { key: "email", entry: witnessed(witness, "email"), trustCache: seededCache(25) });
+        writeCredential(it, { apiBase: rail.url });
+        holdTrustLock(it);
+        const load = await selfAsync(it, it.demo, ["email"], railEnv(rail));
+        assert.equal(load.code, 1, load.all);
+        assert.match(load.all, /release key "dev-2026a" has been revoked/);
+        assert.equal(existsSync(witness), false, "the revoked plugin's module was imported");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+// Neither half of the guarantee is available: the lock is held, so the
+// comparison cannot happen, and there is no cache to fall back on, so it cannot
+// be re-established from disk either. Install is fail-closed, so it says so —
+// exit 3, retryable — rather than judging new code under a document it cannot
+// place in order against what another process is writing right now.
+test("cell 161: an install that can neither serialize nor read a document is trust_unavailable", async () =>
+{
+    const it = box();
+    const rail = await railServer(() => ({ status: 500, body: {} }), { trust: signedTrust() });
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        holdTrustLock(it);
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
+        assert.equal(install.code, 3, install.all);
+        assert.equal(errorOf(install).code, "trust_unavailable");
+        assert.equal(errorOf(install).retry_after_s, 5);
+        assert.equal(existsSync(trustCacheFile(it)), false, "a document was cached outside the lock");
+        assert.equal(rail.calls.length, 0, "a release was requested anyway");
+        assert.equal(existsSync(pluginsRoot(it)), false, "a plugin tree was written");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+// T1 and T2 name the **same kid** and carry different key material, so which
+// document governed is not readable from a policy field at all — only from
+// whether the release verifies. T1 keeps the dev release key; T2 replaces it.
+function rekeyed(publicKey)
+{
+    return {
+        older: signedTrust({ at: Date.now() - 48 * HOUR_MS }),
+        newer: signedTrust({ keys: [trustKey({ publicKey })] })
+    };
+}
+
+// One load under the race: T2 is cached while the run is fetching, and the rail
+// answers T1.
+async function racedLoad(it, documents, options)
+{
+    const rail = await railServer(racingRail(it, documents.older, documents.newer), { trust: null });
+    try
+    {
+        installFixture(it, { ...options, trustCache: seededCache(25) });
+        writeCredential(it, { apiBase: rail.url });
+        return await selfAsync(it, it.demo, ["email"], railEnv(rail));
+    }
+    finally
+    {
+        await rail.close();
+    }
+}
+
+test("cell 161: the newer document's key material verifies the release, not only its policy", async () =>
+{
+    const pair = generateKeyPairSync("ed25519");
+    const publicKey = pair.publicKey.export({ type: "spki", format: "der" }).subarray(12).toString("base64");
+    const documents = rekeyed(publicKey);
+
+    // Signed by T2's key alone: under T1's record for the same kid it does not
+    // verify, so a load that succeeds succeeded on T2's key bytes.
+    const accepted = box();
+    const witness = join(accepted.root, "imported");
+    const entry = witnessed(witness, "email");
+    const manifest = releaseDocument({ key: "email", entry }).manifest;
+    const signature = {
+        kid: DEV_KID,
+        alg: "ed25519",
+        sig: sign(null, Buffer.from(jcs(manifest)), pair.privateKey).toString("base64")
+    };
+    const load = await racedLoad(accepted, documents, { key: "email", entry, signature });
+    assert.equal(load.code, 0, load.all);
+    assert.equal(existsSync(witness), true, "the release only T2's key verifies was refused");
+
+    // And the mirror: the same race over a release signed by T1's key, which T2
+    // no longer names. Policy is identical in both runs — only the key differs.
+    const refusedBox = box();
+    const other = join(refusedBox.root, "imported");
+    const refused = await racedLoad(refusedBox, documents, { key: "email", entry: witnessed(other, "email") });
+    assert.equal(refused.code, 1, refused.all);
+    assert.match(refused.all, /is not signed by a pinned key/);
+    assert.equal(existsSync(other), false, "a release only T1's key verifies was loaded under T2");
 });
 
 /* ── 162: revocation reaches an installed plugin ───────────────────── */
@@ -585,6 +768,61 @@ test("cell 164: a prerelease is below the release it precedes, so it cannot pass
     assert.equal(compareVersions("0.1.2-1", "0.1.2-alpha"), -1);
     assert.equal(compareVersions("0.1.2-alpha", "0.1.2-alpha"), 0);
     assert.equal(compareVersions("0.1.2+build.9", "0.1.2"), 0);
+});
+
+// 2^53 + 1 and 2^53, which are the same IEEE double. A comparison that reads a
+// numeric identifier as a JavaScript number calls them equal, and "equal to the
+// floor" is "at the floor" — so the version the floor withdrew passes it.
+const BIG = "9007199254740993";
+const BIG_BELOW = "9007199254740992";
+
+test("cell 164: numeric identifiers above 2^53 keep their order", () =>
+{
+    assert.equal(compareVersions(`1.0.0-${BIG}`, `1.0.0-${BIG_BELOW}`), 1);
+    assert.equal(compareVersions(`1.0.0-${BIG_BELOW}`, `1.0.0-${BIG}`), -1);
+    assert.equal(compareVersions(`1.0.0-alpha.${BIG}`, `1.0.0-alpha.${BIG_BELOW}`), 1);
+    assert.equal(compareVersions(`1.0.0-alpha.${BIG_BELOW}`, `1.0.0-alpha.${BIG}`), -1);
+    assert.equal(compareVersions(`1.0.0-${BIG}`, `1.0.0-${BIG}`), 0);
+    // The core parts read the same way, and a longer decimal string is the
+    // larger number whatever a double would have said about it.
+    assert.equal(compareVersions(`${BIG}.0.0`, `${BIG_BELOW}.0.0`), 1);
+    assert.equal(compareVersions(`1.${BIG}.0`, `1.${BIG_BELOW}.0`), 1);
+    assert.equal(compareVersions(`1.0.${BIG}`, `1.0.${BIG_BELOW}`), 1);
+    assert.equal(compareVersions("1.0.10", "1.0.9"), 1);
+    // SemVer §9 forbids a leading zero in a numeric identifier, so `01` is
+    // alphanumeric and outranks any number; the looser core still orders.
+    assert.equal(compareVersions("1.0.0-01", "1.0.0-2"), 1);
+    assert.equal(compareVersions("01.0.0", "2.0.0"), -1);
+});
+
+test("cell 164: a floor with a numeric identifier above 2^53 is refused at load and at install", async () =>
+{
+    const it = box();
+    const version = `1.0.0-${BIG_BELOW}`;
+    const witness = join(it.root, "imported");
+    const rail = await floorRail(version, `1.0.0-${BIG}`);
+    try
+    {
+        installFixture(it, {
+            key: "email",
+            version,
+            entry: witnessed(witness, "email"),
+            trustCache: { at: Date.now() - 6 * HOUR_MS, floors: { email: `1.0.0-${BIG}` } }
+        });
+        writeCredential(it, { apiBase: rail.url });
+        const load = await selfAsync(it, it.demo, ["email"], railEnv(rail));
+        assert.equal(load.code, 1, load.all);
+        assert.match(load.all, new RegExp(`"email" 1\\.0\\.0-${BIG_BELOW} is below 1\\.0\\.0-${BIG}`));
+        assert.equal(existsSync(witness), false, "a version below a floor a double cannot tell apart was imported");
+
+        const install = await selfAsync(it, it.demo, ["app", "install", `email@${version}`, "--json"], railEnv(rail));
+        assert.equal(install.code, 1, install.all);
+        assert.equal(errorOf(install).code, "plugin_version_below_minimum");
+    }
+    finally
+    {
+        await rail.close();
+    }
 });
 
 test("cell 164: a prerelease of the floor's own version is refused at load and at install", async () =>

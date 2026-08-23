@@ -153,13 +153,39 @@ export function compareVersions(left: string, right: string): number
     }
     for (let n = 1; n <= 3; n += 1)
     {
-        const diff = Number(a[n]) - Number(b[n]);
+        const diff = compareNumeric(a[n], b[n]);
         if (diff !== 0)
         {
-            return diff < 0 ? -1 : 1;
+            return diff;
         }
     }
     return comparePrerelease(a[4], b[4]);
+}
+
+// Version numbers are decimal strings, and reading them as JavaScript numbers
+// loses them above 2^53: `Number("9007199254740993")` is 9007199254740992, so a
+// floor at …993 and a release at …992 compared **equal** and the release
+// passed. Nothing here needs arithmetic — only order — and decimal strings of
+// equal length already compare in numeric order by code unit, so the comparison
+// is length first, then lexicographic, and no value is ever converted.
+//
+// Leading zeros are stripped before the length is measured. SemVer forbids them
+// in a numeric identifier, and `compareIdentifier` below reads one that carries
+// them as alphanumeric per §11; the core `major.minor.patch` is looser here, so
+// `01.0.0` still has to compare below `2.0.0` rather than above it.
+function compareNumeric(left: string, right: string): number
+{
+    const a = left.replace(/^0+(?=\d)/, "");
+    const b = right.replace(/^0+(?=\d)/, "");
+    if (a.length !== b.length)
+    {
+        return a.length < b.length ? -1 : 1;
+    }
+    if (a === b)
+    {
+        return 0;
+    }
+    return a < b ? -1 : 1;
 }
 
 // SemVer 2.0 §11, and the reason the floor needs it: a version carrying a
@@ -190,7 +216,10 @@ function comparePrerelease(left: string | undefined, right: string | undefined):
     return 0;
 }
 
-const NUMERIC_IDENTIFIER = /^\d+$/;
+// SemVer §9: a numeric identifier is digits with no leading zero. `01` is
+// therefore alphanumeric and compares by ASCII, which is the spec's own reading
+// and keeps `compareNumeric` looking only at identifiers that are numbers.
+const NUMERIC_IDENTIFIER = /^(?:0|[1-9]\d*)$/;
 
 // A prerelease that runs out of identifiers first is the lower one
 // (`alpha` < `alpha.1`); numeric identifiers compare as numbers and rank below
@@ -206,7 +235,7 @@ function compareIdentifier(left: string | undefined, right: string | undefined):
     const rightIsNumber = NUMERIC_IDENTIFIER.test(right);
     if (leftIsNumber && rightIsNumber)
     {
-        return sign(Number(left) - Number(right));
+        return compareNumeric(left, right);
     }
     if (leftIsNumber !== rightIsNumber)
     {
@@ -219,15 +248,6 @@ function compareIdentifier(left: string | undefined, right: string | undefined):
         return 0;
     }
     return left < right ? -1 : 1;
-}
-
-function sign(diff: number): number
-{
-    if (diff === 0)
-    {
-        return 0;
-    }
-    return diff < 0 ? -1 : 1;
 }
 
 // The range forms a manifest actually uses: `*`, `^1`, `^1.2.3`, `>=1.2.3`,
@@ -250,7 +270,9 @@ function satisfiesOne(version: string, comparator: string): boolean
     if (caret !== null)
     {
         const lower = `${caret[1]}.${caret[2] ?? 0}.${caret[3] ?? 0}`;
-        return compareVersions(version, lower) >= 0 && compareVersions(version, `${Number(caret[1]) + 1}.0.0`) < 0;
+        // `BigInt`, not `Number`: the next major of a major above 2^53 has to be
+        // the next one, and `Number(x) + 1` stops moving up there.
+        return compareVersions(version, lower) >= 0 && compareVersions(version, `${BigInt(caret[1]) + 1n}.0.0`) < 0;
     }
     const bound = /^(>=|<=|>|<|=)?(\d+\.\d+\.\d+(?:[-+].*)?)$/.exec(comparator);
     if (bound === null)
