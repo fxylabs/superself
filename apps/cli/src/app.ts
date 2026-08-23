@@ -20,8 +20,8 @@ import { resolveProfileName } from "./credentials.js";
 import { cliVersion } from "./help.js";
 import { clientTag } from "./login.js";
 import {
-    InstalledPlugin, PluginManifest, ReleaseDocument, SUPPORTED_CONTRACTS, installedPlugins,
-    installRelease, pluginKey, pluginVersion, removePlugin, satisfies
+    InstalledPlugin, PluginManifest, ReleaseDocument, SUPPORTED_CONTRACTS, assertInstalledTrusted,
+    installedPlugins, installRelease, pluginKey, pluginVersion, removePlugin, satisfies
 } from "./plugins.js";
 import { RailSession, railMajor, railRequest } from "./rail.js";
 import { TrustDocument, TrustState, loadTrustDocument, trustExpired } from "./trust.js";
@@ -150,6 +150,12 @@ async function installOne(request: InstallRequest): Promise<Installed>
     const already = installedPlugins().find((item) => item.key === key);
     if (request.force !== true && already !== undefined && (pin === undefined || already.version === pin))
     {
+        // Nothing to download is not nothing to check. `self app install email`
+        // answering "installed 0.1.1" is this CLI saying the key list allows
+        // that plugin to run, so the freshly fetched document rules on it here
+        // — a revoked signing key or a raised floor refuses instead of exiting
+        // 0 on a plugin the next load would refuse (cells 162, 164).
+        assertInstalledTrusted(already, request.trust);
         const manifest = already.manifest;
         return { key, version: already.version, verbs: manifest.verbs, scopes: manifest.scopes };
     }

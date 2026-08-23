@@ -55,6 +55,12 @@ const LOCK_STALE_MS = 30_000;
 
 /* ── the document ──────────────────────────────────────────────────── */
 
+// The document format this CLI knows how to read. A document announcing any
+// other version is refused rather than read leniently: a later format may mean
+// something different by a field this one believes it understands, and a
+// version number nobody checks is a version number nobody can change.
+const TRUST_VERSION = 1;
+
 type TrustKeyStatus = "active" | "revoked";
 
 export interface TrustKey
@@ -111,6 +117,10 @@ export interface TrustState
 // A `kid` lookup among the document's own keys. A lookup, never a
 // construction — the signature block cannot introduce a key any more than it
 // can introduce a root.
+//
+// The first match is the only match, because a document carrying the same `kid`
+// twice never gets this far: `signedTrustOf` refuses it. A kid has to name one
+// key or the document does not say what it appears to say.
 export function documentKey(trust: TrustDocument, kid: string): TrustKey | undefined
 {
     return trust.keys.find((key) => key.kid === kid);
@@ -143,10 +153,22 @@ export function trustExpired(state: TrustState, at: () => Date = systemNow): boo
 // SPKI header for ed25519 is a fixed 12-byte prefix.
 const SPKI_ED25519 = Buffer.from("302a300506032b6570032100", "hex");
 
-export function ed25519Key(publicKeyBase64: string): ReturnType<typeof createPublicKey>
+// The bytes are a document's, so they are an attacker's: the wrong length, not
+// base64, not a point on the curve. `createPublicKey` answers all three with a
+// raw OpenSSL error, which is not a refusal this CLI has a name for — so the
+// caller supplies the name, because a key the document could not describe and a
+// key a release was signed by are two different refusals.
+export function ed25519Key(publicKeyBase64: string, code: string): ReturnType<typeof createPublicKey>
 {
     const der = Buffer.concat([SPKI_ED25519, Buffer.from(publicKeyBase64, "base64")]);
-    return createPublicKey({ key: der, format: "der", type: "spki" });
+    try
+    {
+        return createPublicKey({ key: der, format: "der", type: "spki" });
+    }
+    catch
+    {
+        throw fail(code, "a public key this signature is checked against is not a valid ed25519 public key");
+    }
 }
 
 // The whole of what makes a document acceptable, in the order that closes the
@@ -179,7 +201,7 @@ function verifyTrust(signed: SignedTrust, roots: readonly RootKey[]): RootKey
         throw invalidTrust(`root "${root.kid}" was not valid when this document was issued`);
     }
     const body = Buffer.from(jcs(signed.document as unknown as JsonValue));
-    if (!verify(null, body, ed25519Key(root.publicKey), Buffer.from(signed.signature.sig, "base64")))
+    if (!verify(null, body, ed25519Key(root.publicKey, "trust_document_invalid"), Buffer.from(signed.signature.sig, "base64")))
     {
         throw invalidTrust("the trust document is not signed by a pinned root");
     }
@@ -215,19 +237,34 @@ function areFloors(value: unknown): boolean
     return floors !== null && Object.values(floors).every((floor) => typeof floor === "string");
 }
 
+// One `kid`, one key. Two records sharing a kid would leave which of them is in
+// force decided by the order the document happens to list them in — a revoked
+// key beside an active copy of itself is not a statement, it is two, and the
+// lookup would silently pick one. A document that ambiguous is refused whole.
+function distinctKids(keys: readonly unknown[]): boolean
+{
+    const kids = keys.map((key) => String((key as TrustKey).kid));
+    return new Set(kids).size === kids.length;
+}
+
 // The parsed document, checked into shape before anything reads a field off it.
 // A document that fails here never reaches the verifier, so nothing downstream
-// has to ask whether `keys` is an array.
+// has to ask whether `keys` is an array — or whether the format it is reading is
+// the format the document was written in.
 export function signedTrustOf(value: unknown): SignedTrust | null
 {
     const record = objectOf(value);
     const document = objectOf(record?.document);
     const signature = objectOf(record?.signature);
-    if (document === null || signature === null || !isTimestamp(document.issued_at) || !isTimestamp(document.expires_at))
+    if (document === null || signature === null || document.trust_version !== TRUST_VERSION)
     {
         return null;
     }
-    if (!Array.isArray(document.keys) || !document.keys.every(isTrustKey))
+    if (!isTimestamp(document.issued_at) || !isTimestamp(document.expires_at))
+    {
+        return null;
+    }
+    if (!Array.isArray(document.keys) || !document.keys.every(isTrustKey) || !distinctKids(document.keys))
     {
         return null;
     }

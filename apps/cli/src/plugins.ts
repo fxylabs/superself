@@ -259,7 +259,7 @@ export function verifyManifest(manifest: PluginManifest, signature: PluginSignat
         throw fail("plugin_signature_invalid", `release key "${key.kid}" declares an algorithm this CLI does not verify`);
     }
     assertWindow(key.not_before, key.not_after, manifest.released_at);
-    const keyObject = ed25519Key(key.public_key);
+    const keyObject = ed25519Key(key.public_key, "plugin_signature_invalid");
     if (!verify(null, Buffer.from(jcs(manifest as unknown as JsonValue)), keyObject, Buffer.from(signature.sig, "base64")))
     {
         throw fail("plugin_signature_invalid", `the release document for "${manifest.key}" is not signed by a pinned key`);
@@ -292,6 +292,28 @@ export function assertVersionFloor(trust: TrustDocument, key: string, version: s
             `"${key}" ${version} is below ${floor}, the lowest version the published key list allows`,
             { hint: `self app update ${key}` });
     }
+}
+
+// What `self app install <key>` owes a plugin it finds already at the asked-for
+// version. Reporting success there is a claim that the key list allows this
+// plugin to run, so the two statements the list can have changed since the
+// install are re-read: the floor it may have raised and the key it may have
+// revoked. In the design's order — floor first (§1.3 step 1a), then the key.
+//
+// The signature is not re-verified. The bytes on disk were verified when they
+// were written and the load path verifies them again before importing them;
+// what a new document can change is which keys and versions are allowed, not
+// whether these bytes were signed.
+export function assertInstalledTrusted(plugin: InstalledPlugin, trust: TrustDocument): void
+{
+    assertVersionFloor(trust, plugin.key, plugin.version);
+    releaseKeyOf(trust, installedSignature(plugin));
+}
+
+function installedSignature(plugin: InstalledPlugin): PluginSignature
+{
+    return readJson<PluginSignature>(join(plugin.dir, "signature.json"),
+        "plugin_signature_invalid", `${plugin.dir}/signature.json is unreadable`);
 }
 
 /* ── the host handed to a plugin ───────────────────────────────────── */
@@ -675,14 +697,18 @@ export interface LoadContext
 // the development path below has none and must not be given a shape that
 // implies it could. Step 0 — obtaining the document — happened before this
 // function was called; everything here reads it.
+//
+// The floor comes before the signature because §1.3 numbers it 1a and step 3
+// after it. The order is visible in what a plugin that fails both is told: a
+// withdrawn version signed by a revoked key is a version to update, and naming
+// the revocation instead would send its operator after the wrong thing.
 export async function loadPlugin(plugin: InstalledPlugin, context: LoadContext,
     trust: TrustDocument): Promise<Command[]>
 {
-    const signature = readJson<PluginSignature>(join(plugin.dir, "signature.json"),
-        "plugin_signature_invalid", `${plugin.dir}/signature.json is unreadable`);
+    assertVersionFloor(trust, plugin.key, plugin.version);
+    const signature = installedSignature(plugin);
     verifyManifest(plugin.manifest, signature, releaseKeyOf(trust, signature));
     checkSelection(plugin.key, plugin.version, plugin.manifest);
-    assertVersionFloor(trust, plugin.key, plugin.version);
     checkCompatibility(plugin.manifest, context.cliVersion, context.railApi);
     const register = await importVerified(plugin.dir, plugin.manifest);
     return checkCommands(plugin.manifest, register(pluginHost(context.session, context.commandPath)));

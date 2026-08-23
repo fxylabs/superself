@@ -58,9 +58,11 @@ function fixtureRoot(kid, window = {})
 // corrupted *after* signing — which is how "the verifier was never consulted"
 // is proved: the signature is genuinely valid, so an implementation that ran
 // the verifier and honoured its answer would have accepted.
+// `document` hands a cell the whole body, for the ones whose subject is a field
+// `trustBody` has no opinion about — a format version, a repeated key.
 function fixtureDocument(root, options = {})
 {
-    const document = trustBody(options);
+    const document = options.document ?? trustBody(options);
     const sig = sign(null, Buffer.from(jcs(document)), root.privateKey).toString("base64");
     return { document, signature: { kid: root.kid, alg: "ed25519", sig, ...(options.block ?? {}) } };
 }
@@ -191,7 +193,7 @@ test("cell 160: an expired document refuses an install and still loads an instal
     {
         installFixture(it, { key: "email", trustCache: { trust: expired } });
         writeCredential(it, { apiBase: rail.url });
-        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--force", "--json"], railEnv(rail));
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
         assert.equal(install.code, 1, install.all);
         assert.equal(errorOf(install).code, "trust_document_expired");
         assert.equal(rail.calls.length, 0, "a release was fetched against an expired key list");
@@ -222,7 +224,7 @@ test("cell 161: a document older than the cached one is trust_document_rollback 
     {
         installFixture(it, { key: "email", trustCache: { fetchedAt: new Date(Date.now() - 25 * HOUR_MS).toISOString() } });
         writeCredential(it, { apiBase: rail.url });
-        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--force", "--json"], railEnv(rail));
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
         assert.equal(install.code, 1, install.all);
         assert.equal(errorOf(install).code, "trust_document_rollback");
 
@@ -266,11 +268,15 @@ test("cell 162: a refreshed document that revokes the signing key refuses the lo
         assert.match(load.all, /self app install <key> --force/);
         assert.equal(existsSync(witness), false, "the revoked plugin's module was imported");
 
-        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--force", "--json"], railEnv(rail));
+        // The bare command, with no `--force`: `email` is already installed at
+        // the version being asked for, so this is the short-circuit that used
+        // to answer "installed" without consulting the document at all.
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
         assert.equal(install.code, 1, install.all);
         assert.equal(errorOf(install).code, "plugin_key_revoked");
         assert.equal(readdirSync(join(pluginsRoot(it), "email")).sort().join(","), "0.1.0,current",
             "the refused install wrote into the plugin tree");
+        assert.equal(rail.calls.length, 0, "a release was fetched for a revoked key");
     }
     finally
     {
@@ -329,10 +335,12 @@ test("cell 164: a version below min_plugin_versions refuses the load and every i
         assert.match(load.all, /self app update email/);
         assert.equal(existsSync(witness), false, "a plugin below the floor was imported");
 
+        // Bare, so the already-installed short-circuit is what the floor is
+        // being asked to gate — `0.1.1` is exactly what is on disk.
         for (const extra of [[], ["--allow-downgrade"]])
         {
             const install = await selfAsync(it, it.demo,
-                ["app", "install", "email@0.1.1", "--force", "--json", ...extra], railEnv(rail));
+                ["app", "install", "email@0.1.1", "--json", ...extra], railEnv(rail));
             assert.equal(install.code, 1, install.all);
             assert.equal(errorOf(install).code, "plugin_version_below_minimum",
                 "--allow-downgrade moved the published floor, not just the local mark");
@@ -342,6 +350,26 @@ test("cell 164: a version below min_plugin_versions refuses the load and every i
     {
         await rail.close();
     }
+});
+
+test("cell 164: below the floor and signed by a revoked key is refused by the floor, which §1.3 numbers first", async () =>
+{
+    const it = box();
+    // Both refusals are live at once, so which one is reported is the whole of
+    // what this asserts: step 1a runs before step 3, and the operator is sent
+    // to `self app update` rather than after a revocation they cannot act on.
+    installFixture(it, {
+        key: "email",
+        version: "0.1.1",
+        trustCache: {
+            floors: { email: "0.1.2" },
+            keys: [trustKey({ status: "revoked", revokedAt: "2026-08-20T00:00:00Z" })]
+        }
+    });
+    const load = await selfAsync(it, it.demo, ["email"], {});
+    assert.equal(load.code, 1, load.all);
+    assert.match(load.all, /"email" 0\.1\.1 is below 0\.1\.2/);
+    assert.doesNotMatch(load.all, /revoked/, "the revocation was reported ahead of the floor");
 });
 
 /* ── 165–166: what a load costs, online and off ────────────────────── */
@@ -421,11 +449,47 @@ test("cell 168: a root whose pinned window excludes issued_at cannot sign this d
     });
 });
 
+test("cell 168: the release verifier is never reached for a document signed outside a root's window", async () =>
+{
+    const it = box();
+    const witness = join(it.root, "imported");
+    // The same refusal as above, driven through the shipped binary against the
+    // **pinned** root — so "the verifier was never called for the release" can
+    // be asserted rather than argued: the release route is the only way a
+    // release reaches the verifier, and the run never asks it for one.
+    const early = signedTrust({ issuedAt: "2025-06-01T00:00:00Z" });
+    const rail = await railServer((call) => (call.path === TRUST_PATH
+        ? { status: 200, body: early }
+        : { status: 200, body: releaseDocument({ key: "email" }) }), { trust: null });
+    try
+    {
+        installFixture(it, { key: "email", entry: witnessed(witness, "email"), trustCache: null });
+        writeCredential(it, { apiBase: rail.url });
+        const result = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
+        assert.equal(result.code, 1, result.all);
+        assert.equal(errorOf(result).code, "trust_document_invalid");
+        assert.deepEqual(rail.calls.map((call) => call.path), [TRUST_PATH],
+            "a release was fetched, so the release verifier was reachable");
+        assert.equal(existsSync(witness), false, "the plugin's module was imported");
+        assert.equal(existsSync(trustCacheFile(it)), false, "a document signed outside the window was cached");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
 test("cell 169: alg equality and root lookup are decided before the verifier is consulted", async () =>
 {
     await inScratch(async () =>
     {
         const root = fixtureRoot("fixture-root-a");
+        // A document this machine already holds, so the load half is a refusal
+        // to **adopt** the bad one rather than a machine with nothing at all —
+        // which is the half of the load path a bare scratch never reaches.
+        const held = await loadTrustDocument({
+            mode: "install", session: SESSION, roots: [root.record], fetch: servesDocument(fixtureDocument(root))
+        });
         // Each block below carries a signature that verifies. Every one of them
         // must still be refused, which is only possible if `alg` and `kid` were
         // judged first and the verifier's answer was never reached for.
@@ -434,9 +498,58 @@ test("cell 169: alg equality and root lookup are decided before the verifier is 
         {
             const fetch = servesDocument(fixtureDocument(root, { block }));
             const error = await refusal(() => loadTrustDocument({ mode: "install", session: SESSION, roots: [root.record], fetch }));
-            assert.equal(error?.code, "trust_document_invalid", `accepted ${JSON.stringify(block)}`);
+            assert.equal(error?.code, "trust_document_invalid", `install accepted ${JSON.stringify(block)}`);
+            const kept = await loadTrustDocument({
+                mode: "load", session: SESSION, roots: [root.record], fetch, refresh: true
+            });
+            assert.equal(kept.signature.sig, held.signature.sig, `load adopted ${JSON.stringify(block)}`);
         }
     });
+});
+
+test("D11: a repeated kid, or a trust_version this CLI does not read, is refused before any field is trusted", async () =>
+{
+    await inScratch(async () =>
+    {
+        const root = fixtureRoot("fixture-root-a");
+        const other = generateKeyPairSync("ed25519").publicKey
+            .export({ type: "spki", format: "der" }).subarray(12).toString("base64");
+        // Two records under one kid: the lookup takes the first, so which key is
+        // in force would be decided by the order the document lists them in.
+        // And a version this CLI has never read: a later format may mean
+        // something else by a field this one believes it understands.
+        const bodies = [
+            { ...trustBody(), keys: [trustKey(), trustKey({ publicKey: other })] },
+            { ...trustBody(), trust_version: 2 }
+        ];
+        for (const document of bodies)
+        {
+            const fetch = servesDocument(fixtureDocument(root, { document }));
+            const error = await refusal(() => loadTrustDocument({ mode: "install", session: SESSION, roots: [root.record], fetch }));
+            assert.equal(error?.code, "trust_document_invalid", `accepted ${JSON.stringify(document.trust_version)}`);
+        }
+    });
+});
+
+test("D12: a public key that is not an ed25519 key is a named refusal, not a raw crypto error", async () =>
+{
+    await inScratch(async () =>
+    {
+        // The root's half, where the bytes belong to the document's own
+        // verification: `trust_document_invalid`, and nothing is cached.
+        const root = fixtureRoot("fixture-root-a");
+        const fetch = servesDocument(fixtureDocument(root));
+        const broken = { ...root.record, publicKey: "not-a-key" };
+        const error = await refusal(() => loadTrustDocument({ mode: "install", session: SESSION, roots: [broken], fetch }));
+        assert.equal(error?.code, "trust_document_invalid");
+    });
+    // And the release half, where the bytes are a **release** key the document
+    // names — the one an attacker who can get a document published chooses.
+    const it = box();
+    installFixture(it, { key: "email", trustCache: { keys: [trustKey({ publicKey: "not-a-key" })] } });
+    const load = await selfAsync(it, it.demo, ["email"], {});
+    assert.equal(load.code, 1, load.all);
+    assert.match(load.all, /not a valid ed25519 public key/);
 });
 
 test("D10: a build with no pinned root accepts no document at all", async () =>
