@@ -21,13 +21,17 @@ import {
 } from "../dist/rail.js";
 import {
     HOST_FILE_CAP_BYTES, PLUGIN_ENTRY_CAP_BYTES, PLUGIN_KEY_PATTERN, SUPPORTED_CONTRACTS,
-    compareVersions, pluginHost, pluginStatePath, pluginsDir, satisfies, setPluginState,
-    readPluginState, verifyManifest
+    assertVersionFloor, compareVersions, pluginHost, pluginStatePath, pluginsDir, releaseKeyOf,
+    satisfies, setPluginState, readPluginState, verifyManifest
 } from "../dist/plugins.js";
-import { RELEASE_KEYS } from "../dist/releasekeys.js";
-import { DEFAULT_API_BASE } from "../dist/login.js";
+import { ROOT_KEYS, findRootKey } from "../dist/rootkeys.js";
+import {
+    TRUST_DOCUMENT_CAP_BYTES, TRUST_PATH, TRUST_REFRESH_AGE_MS, TRUST_UNAVAILABLE_RETRY_S,
+    documentKey, minimumVersion, signedTrustOf
+} from "../dist/trust.js";
+import { DEFAULT_API_BASE } from "../dist/credentials.js";
 import { splitPin } from "../dist/app.js";
-import { manifestFor, signManifest } from "./pr7-lib.mjs";
+import { manifestFor, signManifest, trustBody, trustKey } from "./pr7-lib.mjs";
 
 /* ── §10, value by value ───────────────────────────────────────────── */
 
@@ -49,6 +53,10 @@ test("§10: every constant the design fixes has the value the design fixes", () 
     assert.equal(HUMAN_STRING_CAP, 2048, "server-string cap, human rendering only");
     assert.equal(CLOCK_SKEW_NOTICE_MS, 300_000, "clock-skew notice threshold");
     assert.deepEqual(SUPPORTED_CONTRACTS, [0], "the mini-app contract versions this host implements");
+    assert.equal(TRUST_REFRESH_AGE_MS, 24 * 60 * 60 * 1000, "load-time trust refresh age");
+    assert.equal(TRUST_DOCUMENT_CAP_BYTES, 64 * 1024, "trust document size cap");
+    assert.equal(TRUST_UNAVAILABLE_RETRY_S, 5, "trust_unavailable retry pace");
+    assert.equal(TRUST_PATH, "/api/plugins/trust", "where the trust document is served");
 });
 
 test("§10: the lease is longer than a whole legal refresh, and the absolute bound is longer than the lease", () =>
@@ -71,25 +79,70 @@ test("the default rail is the hosted one, and it is https", () =>
     assert.equal(new URL(DEFAULT_API_BASE).protocol, "https:");
 });
 
-/* ── the pinned keys ───────────────────────────────────────────────── */
+/* ── the pinned roots ──────────────────────────────────────────────── */
 
-test("every pinned release key is a 32-byte ed25519 public key with a validity window", () =>
+test("every pinned root is a 32-byte ed25519 public key with a three-year window", () =>
 {
-    assert.ok(RELEASE_KEYS.length >= 1);
-    for (const key of RELEASE_KEYS)
+    assert.ok(ROOT_KEYS.length >= 1);
+    for (const root of ROOT_KEYS)
     {
-        assert.equal(Buffer.from(key.publicKey, "base64").byteLength, 32, `${key.kid} is not a raw ed25519 key`);
-        assert.ok(Date.parse(key.notBefore) < Date.parse(key.notAfter), `${key.kid} has an empty window`);
+        assert.equal(Buffer.from(root.publicKey, "base64").byteLength, 32, `${root.kid} is not a raw ed25519 key`);
+        const window = Date.parse(root.notAfter) - Date.parse(root.notBefore);
+        assert.ok(window > 0, `${root.kid} has an empty window`);
+        assert.ok(window >= 3 * 365 * 24 * 60 * 60 * 1000, `${root.kid} is pinned for less than the three years §10 fixes`);
     }
 });
 
-test("the development key is marked as one, so nobody ships it as a trust anchor by accident", () =>
+test("a kid is a lookup among the pinned roots and can never introduce one", () =>
 {
-    // Its private half is a fixture in this repository, so a release it signs
-    // is signed by a key everybody has. The rotation before the first public
-    // release is a checklist item, and this is what makes it visible.
-    assert.ok(RELEASE_KEYS.every((key) => key.kid.startsWith("dev-")),
-        "a non-development key is pinned — update this assertion deliberately when one ships");
+    assert.equal(findRootKey(ROOT_KEYS[0].kid)?.kid, ROOT_KEYS[0].kid);
+    assert.equal(findRootKey("root-nobody-pinned"), undefined);
+    // The injected list is the only other answer, and no CLI path passes one.
+    assert.equal(findRootKey(ROOT_KEYS[0].kid, []), undefined);
+});
+
+test("the development root is marked as one, so nobody ships it as a trust anchor by accident", () =>
+{
+    // Its private half is a fixture in this repository, so a key list it signs
+    // is signed by a key everybody has — and a key list can name any release
+    // key at all. `npm run release-keys` is the gate; this is what makes the
+    // state visible in the suite.
+    assert.ok(ROOT_KEYS.every((root) => root.kid.startsWith("dev-")),
+        "a ceremony root is pinned — update this assertion deliberately when one ships");
+});
+
+/* ── reading a trust document ──────────────────────────────────────── */
+
+test("the document's own lookups are lookups: unknown kid, absent floor, prototype key", () =>
+{
+    const trust = trustBody({ floors: { email: "0.1.2" } });
+    assert.equal(documentKey(trust, trust.keys[0].kid)?.status, "active");
+    assert.equal(documentKey(trust, "rel-nobody-named"), undefined);
+    assert.equal(minimumVersion(trust, "email"), "0.1.2");
+    // A floor for a plugin that is not installed says nothing about anything.
+    assert.equal(minimumVersion(trust, "wallet"), undefined);
+    // `constructor` matches the plugin-key pattern, so an unguarded index here
+    // would hand the loader a function where it expects a version.
+    assert.equal(minimumVersion(trust, "constructor"), undefined);
+});
+
+test("a document that is not the shape of a document never reaches the verifier", () =>
+{
+    const good = { document: trustBody(), signature: { kid: "r", alg: "ed25519", sig: "x" } };
+    assert.ok(signedTrustOf(good) !== null);
+    assert.equal(signedTrustOf(null), null);
+    assert.equal(signedTrustOf({ ...good, document: { ...good.document, keys: "not an array" } }), null);
+    assert.equal(signedTrustOf({ ...good, document: { ...good.document, expires_at: "never" } }), null);
+    assert.equal(signedTrustOf({ ...good, document: { ...good.document, min_plugin_versions: { email: 1 } } }), null);
+    assert.equal(signedTrustOf({ ...good, signature: { kid: "r", alg: "ed25519" } }), null);
+});
+
+test("the version floor is enforced from the document and named as its own refusal", () =>
+{
+    const trust = trustBody({ floors: { email: "0.1.2" } });
+    assert.doesNotThrow(() => assertVersionFloor(trust, "email", "0.1.2"));
+    assert.doesNotThrow(() => assertVersionFloor(trust, "wallet", "0.0.1"));
+    assert.throws(() => assertVersionFloor(trust, "email", "0.1.1"), /plugin_version_below_minimum|below 0\.1\.2/);
 });
 
 /* ── TLS and base-URL policy ───────────────────────────────────────── */
@@ -217,20 +270,46 @@ test("SemVer ranges are read exactly, and an unreadable one never silently passe
 
 /* ── the verifier, driven directly ─────────────────────────────────── */
 
-test("verifyManifest refuses an unpinned key, a wrong algorithm, and a signature over other bytes", () =>
+test("the release key is resolved from the document, and a revoked kid is refused by name", () =>
+{
+    const trust = trustBody();
+    const signature = signManifest(manifestFor({ key: "email" }).manifest);
+    assert.equal(releaseKeyOf(trust, signature).kid, signature.kid);
+    assert.throws(() => releaseKeyOf(trust, { ...signature, alg: "none" }), /not accepted/);
+    assert.throws(() => releaseKeyOf(trust, { ...signature, kid: "rel-unknown" }), /names no release key/);
+    const withdrawn = trustBody({ keys: [trustKey({ status: "revoked" })] });
+    assert.throws(() => releaseKeyOf(withdrawn, signature), /has been revoked/);
+});
+
+test("verifyManifest takes the key record, and refuses a wrong window or a signature over other bytes", () =>
 {
     const { manifest } = manifestFor({ key: "email" });
     const signature = signManifest(manifest);
-    assert.doesNotThrow(() => verifyManifest(manifest, signature));
+    const key = releaseKeyOf(trustBody(), signature);
+    assert.doesNotThrow(() => verifyManifest(manifest, signature, key));
 
-    assert.throws(() => verifyManifest(manifest, { ...signature, alg: "none" }), /not accepted/);
-    assert.throws(() => verifyManifest(manifest, { ...signature, kid: "rel-unknown" }), /no pinned release key/);
     // The signature covers the manifest, so a manifest edited after signing
     // fails even though the signature itself is genuine.
-    assert.throws(() => verifyManifest({ ...manifest, version: "9.9.9" }, signature), /not signed by a pinned key/);
+    assert.throws(() => verifyManifest({ ...manifest, version: "9.9.9" }, signature, key), /not signed by a pinned key/);
     // A release dated outside the key's window is refused even when signed.
-    assert.throws(() => verifyManifest({ ...manifest, released_at: "2030-01-01T00:00:00Z" },
-        signManifest({ ...manifest, released_at: "2030-01-01T00:00:00Z" })), /validity window/);
+    const late = { ...manifest, released_at: "2030-01-01T00:00:00Z" };
+    assert.throws(() => verifyManifest(late, signManifest(late), key), /validity window/);
+    // The record's own algorithm is compared too — the verifier is hard-wired
+    // and never runs against a record that claims to be something else.
+    assert.throws(() => verifyManifest(manifest, signature, { ...key, alg: "hs256" }), /does not verify/);
+});
+
+test("a key whose window has closed still verifies what it signed inside it, and nothing newer", () =>
+{
+    // A retired key is not a revoked one. It keeps covering the releases it
+    // legitimately signed while it was valid — otherwise every rotation would
+    // break every plugin installed under the outgoing key — and it covers
+    // nothing published after the window closed.
+    const { manifest } = manifestFor({ key: "email", releasedAt: "2026-03-01T00:00:00Z" });
+    const retired = trustKey({ notBefore: "2026-01-01T00:00:00Z", notAfter: "2026-06-01T00:00:00Z" });
+    assert.doesNotThrow(() => verifyManifest(manifest, signManifest(manifest), retired));
+    const newer = { ...manifest, released_at: "2026-08-01T00:00:00Z" };
+    assert.throws(() => verifyManifest(newer, signManifest(newer), retired), /validity window/);
 });
 
 /* ── the host object a plugin is handed ────────────────────────────── */

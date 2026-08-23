@@ -4,10 +4,12 @@
 //
 // Two deliberate choices. The rail is a real HTTP server rather than a stubbed
 // `fetch`, so the spawned binary exercises the transport it actually ships —
-// timeouts, headers, status codes and all. And the signing key is the DEV
-// keypair whose public half is pinned in `src/releasekeys.ts`: it is public by
-// construction, which is exactly why a release signed with it must never be
-// treated as a production artifact.
+// timeouts, headers, status codes and all. And both signing keys are DEV
+// keypairs whose private halves are in this repository: the release key
+// `dev-2026a`, which the trust document names, and the root `dev-root-2026a`,
+// which is pinned in `src/rootkeys.ts` and signs that document. Both are public
+// by construction, which is exactly why `npm run release-keys` refuses to
+// publish while the root is pinned.
 import { createServer } from "node:http";
 import { createPrivateKey, createHash, sign } from "node:crypto";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
@@ -15,24 +17,105 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { jcs } from "../dist/rail.js";
+import { TRUST_PATH } from "../dist/trust.js";
 
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 
 /* ── signing ───────────────────────────────────────────────────────── */
 
-// ⚠ DEVELOPMENT KEY. Its public half is `dev-2026a` in src/releasekeys.ts and
-// its private half is in this repository, so anything it signs is signed by a
-// key everyone has. It exists so the loader can be driven end to end.
+// ⚠ DEVELOPMENT KEYS. The release key's public half is what the fixture trust
+// document names; the root's public half is `dev-root-2026a` in
+// `src/rootkeys.ts`. Both private halves are in this repository, so anything
+// they sign is signed by a key everyone has. They exist so the loader can be
+// driven end to end.
 export const DEV_KID = "dev-2026a";
+export const DEV_ROOT_KID = "dev-root-2026a";
+export const DEV_RELEASE_PUBLIC = "y/tV2B9W5IhPHM89i6r0aosTvc/fS5jaHy0xB3aikIo=";
 
 function devKey()
 {
     return createPrivateKey(readFileSync(new URL("./fixtures/dev-signing-key.pem", import.meta.url)));
 }
 
+function devRootKey()
+{
+    return createPrivateKey(readFileSync(new URL("./fixtures/dev-root-key.pem", import.meta.url)));
+}
+
 export function signManifest(manifest, kid = DEV_KID)
 {
     return { kid, alg: "ed25519", sig: sign(null, Buffer.from(jcs(manifest)), devKey()).toString("base64") };
+}
+
+/* ── the trust document (design §1.4a) ─────────────────────────────── */
+
+// One active release key, no floors, issued an hour ago and good for 30 days —
+// the state every cell that is not *about* the document wants.
+export function trustBody(options = {})
+{
+    const at = options.at ?? Date.now();
+    return {
+        trust_version: 1,
+        issued_at: options.issuedAt ?? new Date(at - 3600_000).toISOString(),
+        expires_at: options.expiresAt ?? new Date(at + 30 * 86_400_000).toISOString(),
+        keys: options.keys ?? [trustKey()],
+        min_plugin_versions: options.floors ?? {},
+        ...(options.minCli === undefined ? {} : { min_cli_version: options.minCli })
+    };
+}
+
+export function trustKey(options = {})
+{
+    return {
+        kid: options.kid ?? DEV_KID,
+        alg: options.alg ?? "ed25519",
+        public_key: options.publicKey ?? DEV_RELEASE_PUBLIC,
+        not_before: options.notBefore ?? "2026-01-01T00:00:00Z",
+        not_after: options.notAfter ?? "2027-01-01T00:00:00Z",
+        status: options.status ?? "active",
+        ...(options.revokedAt === undefined ? {} : { revoked_at: options.revokedAt })
+    };
+}
+
+// `key` lets a cell sign with something that is not the pinned root; `sig`
+// lets it keep a genuinely valid signature while corrupting the block around
+// it, which is how "the verifier was never consulted" is proved.
+export function signTrust(document, options = {})
+{
+    const key = options.key ?? devRootKey();
+    return {
+        kid: options.kid ?? DEV_ROOT_KID,
+        alg: options.alg ?? "ed25519",
+        sig: options.sig ?? sign(null, Buffer.from(jcs(document)), key).toString("base64")
+    };
+}
+
+export function signedTrust(options = {})
+{
+    const document = options.document ?? trustBody(options);
+    return { document, signature: signTrust(document, options.signature ?? {}) };
+}
+
+export function trustCacheFile(box)
+{
+    return join(configRoot(box), "trust.json");
+}
+
+// What a completed step 0 leaves behind: the signed document plus when this
+// machine last heard about it, at 0600 beside the credential file.
+export function writeTrustCache(box, options = {})
+{
+    mkdirSync(configRoot(box), { recursive: true, mode: 0o700 });
+    const path = trustCacheFile(box);
+    const record = {
+        version: 1,
+        fetched_at: options.fetchedAt ?? new Date().toISOString(),
+        ...(options.etag === undefined ? {} : { etag: options.etag }),
+        trust: options.trust ?? signedTrust(options)
+    };
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(path, 0o600);
+    return record;
 }
 
 // The minimal plugin that satisfies the contract: one root verb with one
@@ -103,11 +186,20 @@ export function statePath(box)
 }
 
 // Writes what a completed install leaves: the version directory, `current`,
-// and the state entry that lives outside the tree. `overrides` lets a test
-// produce the states an attacker produces — a manifest under the wrong
-// directory name, a `current` pointing below the high-water mark.
+// the state entry that lives outside the tree, and the trust document cache
+// step 0 consults. `overrides` lets a test produce the states an attacker
+// produces — a manifest under the wrong directory name, a `current` pointing
+// below the high-water mark.
+//
+// The cache is written unless a cell says `trustCache: null`, because a cell
+// whose subject is the loader wants step 0 already satisfied, and a cell whose
+// subject is step 0 says so.
 export function installFixture(box, options)
 {
+    if (options.trustCache !== null)
+    {
+        writeTrustCache(box, options.trustCache ?? {});
+    }
     const document = releaseDocument(options);
     const key = options.dirKey ?? options.key;
     const version = options.dirVersion ?? document.manifest.version;
@@ -215,9 +307,18 @@ export function writeMarkerFixture(box, options = {})
 // recorded, because most of these cells assert on what was *not* sent — a
 // refresh that must not have happened, a plugin call that must not have been
 // issued while the rail major was unknown.
-export async function railServer(handler)
+//
+// `GET /api/plugins/trust` is answered by this fixture rather than by the
+// handler, and recorded in `trustCalls` rather than in `calls`. Step 0 now
+// stands in front of every install, and a cell about the release route should
+// not have to describe the key list to get there — nor should its "no other
+// request was made" assertion have to know that step 0 exists. A cell whose
+// subject *is* the document passes `trust: null` and answers it itself.
+export async function railServer(handler, options = {})
 {
     const calls = [];
+    const trustCalls = [];
+    const served = options.trust === undefined ? signedTrust() : options.trust;
     const server = createServer((request, response) =>
     {
         const chunks = [];
@@ -234,6 +335,12 @@ export async function railServer(handler)
                 body: parse(raw),
                 raw
             };
+            if (url.pathname === TRUST_PATH && served !== null)
+            {
+                trustCalls.push(call);
+                reply(response, { status: 200, body: served });
+                return;
+            }
             calls.push(call);
             Promise.resolve(handler(call, calls.length)).then((given) => reply(response, given));
         });
@@ -264,6 +371,7 @@ export async function railServer(handler)
     return {
         url,
         calls,
+        trustCalls,
         close: () => new Promise((resolve) =>
         {
             server.closeAllConnections();

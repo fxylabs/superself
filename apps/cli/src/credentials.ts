@@ -27,6 +27,12 @@ import { fail, pending } from "./types.js";
 
 /* ── constants (design §10) ────────────────────────────────────────── */
 
+// Where a profile points when nothing says otherwise. It lives here rather
+// than beside `self login` because two things that are not login need it: the
+// profile a credential is written into, and the plugin trust document, which
+// has to be fetchable on a machine that has never logged in at all.
+export const DEFAULT_API_BASE = "https://app.superselfs.com";
+
 // How close to expiry an access token is refreshed before the call rather
 // than after a 401.
 export const REFRESH_MARGIN_MS = 60_000;

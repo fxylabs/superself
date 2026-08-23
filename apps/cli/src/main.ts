@@ -86,6 +86,7 @@ import {
     InstalledPlugin, LoadContext, assertDevPluginMode, devPluginDir, installedPlugins,
     loadDevPlugin, loadPlugin, pluginVerbs, resolveRailMajor
 } from "./plugins.js";
+import { loadTrustDocument } from "./trust.js";
 import { jsonMode, renderFailure, selectJsonMode } from "./output.js";
 import { suppressJournal } from "./rail.js";
 import { CliError, CommandOutput, EventRefs, OutputBlock, SelfEvent } from "./types.js";
@@ -251,12 +252,22 @@ async function pluginCommands(argv: string[], plugin: InstalledPlugin | undefine
         notice: (line: string) => console.error(line),
         ...deadlineFrom(argv)
     };
+    // Step 0, and first: the signed key list this load will be judged against.
+    // Fail-open on a valid cache, so an installed plugin keeps working offline;
+    // refreshed when the cache is older than 24 h, so a revocation reaches this
+    // machine within a day of it being published. The development path has no
+    // signature to judge and so has no document to fetch.
+    const trust = development === null
+        ? (await loadTrustDocument({ mode: "load", session })).document
+        : undefined;
     // Resolved before the import, never deferred to the plugin's own first
     // call: an incompatible plugin must not get to issue one live, chargeable
     // request before the check that exists to stop it has run.
     const railApi = plugin === undefined ? undefined : await resolveRailMajor(plugin.key, session);
     const context: LoadContext = { cliVersion: cliVersion(), session, railApi, commandPath: () => verbPath(argv) };
-    return development === null ? loadPlugin(plugin as InstalledPlugin, context) : loadDevPlugin(development, context);
+    return trust === undefined
+        ? loadDevPlugin(development as string, context)
+        : loadPlugin(plugin as InstalledPlugin, context, trust);
 }
 
 // A first token no command owns resolves against the alias table (#207 A1):

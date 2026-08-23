@@ -276,6 +276,8 @@ usage: self <command>
   app update [key] [--all] [--profile name] [--json]
                                              install the latest compatible release
   app remove <key> [--json]                  delete an installed mini-app; its rollback mark is kept
+  app trust [--refresh] [--profile name] [--json]
+                                             the signed key list this CLI is acting on
 
   --version                                  print the version of the package this binary was built from
 
