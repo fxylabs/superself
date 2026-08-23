@@ -32,12 +32,13 @@ const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|password|passwd|token|ap
 // credential straddling the cut. Separators are written [ \t] rather than \s
 // for that reason — and a header whose value sits on the next line is not a
 // header anyway.
-// A rule is eager when ordinary prose can match it: the first blanks whatever
-// word follows "token", which costs nothing in provider output and is not a
-// credential in a sentence. Redaction runs every rule the same way, but a
-// caller that refuses a payload instead of rewriting it has to tell the two
-// kinds apart — the rest of these are encodings nothing but a credential
-// produces, at whatever entropy the value happens to have.
+// A rule carries `refuseWhen` when ordinary prose can match it: the first
+// blanks whatever word follows "token", which costs nothing in provider output
+// and is not a credential in a sentence. Redaction runs every rule the same
+// way, but a caller that refuses a payload instead of rewriting it has to tell
+// the two kinds apart — the rules left unmarked are encodings nothing but a
+// credential produces, at whatever entropy the value happens to have, and the
+// rest name the second reading their own span has to pass before a refusal.
 //
 // The name is what a refusal says matched. It is the one part of a refusal an
 // operator can act on — the value cannot be printed — so it stays short,
@@ -51,12 +52,12 @@ interface Rule
     name: string;
     pattern: RegExp;
     replacement: string;
-    eager?: boolean;
+    refuseWhen?: (span: string) => boolean;
     lead?: RegExp;
 }
 
 const PATTERNS: Rule[] = [
-    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, eager: true },
+    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, refuseWhen: carriesKeyMaterial },
     { name: "auth-header", pattern: /\b(set-cookie|cookie|authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
     // JSON is the encoding the spool itself writes — the plan, the status, and
     // every structured line go through JSON.stringify — and the key's own
@@ -64,7 +65,39 @@ const PATTERNS: Rule[] = [
     // for `NAME=value` cannot reach it. The replacement stays a quoted string
     // because these files are read back with JSON.parse.
     { name: "secret-json-field", pattern: new RegExp(String.raw`("${SECRET_NAME}"[ \t]*:[ \t]*)"(?:[^"\\\r\n]|\\.)+"`, "gi"), replacement: `$1"${REDACTED}"` },
-    { name: "secret-assignment", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*[:=][ \t]*"?)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
+    // Two halves of what was one rule, split by what the separator says. An
+    // `=`, or a quoted value after either separator, is what a config file, an
+    // export line or a pasted snippet writes and what no sentence writes, so
+    // it stays refused at whatever entropy the value happens to have. That is
+    // where a hand-chosen `api_key=hunter2` lives.
+    { name: "secret-assignment", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*(?:=[ \t]*"?|:[ \t]*"))([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}` },
+    // A bare colon is the other half, and it splits again by how much of the
+    // line the value takes.
+    //
+    // The value running to the end of the line, with no space in it, is the
+    // shape a Kubernetes manifest, a compose file and a CI variable write a
+    // real secret in. So it is judged on shape rather than on what the value
+    // looks like: what records is a short note that reads as words, and
+    // everything else is refused. Reading the value instead is what let a
+    // letters-only password, a digits-only device code and a base64 secret
+    // access key through this rule at every length — no alphabet test can
+    // separate `correcthorsebatterystaple` from a sentence, and length can.
+    { name: "secret-line", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*:[ \t]*)([^\s"',;]{4,})[ \t]*(?=\r?\n|$)`, "gi"), replacement: `$1$2${REDACTED}`, refuseWhen: (span) => !readsAsWords(span) },
+    // When something follows the value on the line instead — another word, a
+    // comma, a parenthesised note — the line is a sentence, and a sentence
+    // about an auth system labels credential fields on every other line:
+    // `agent-scoped token: account_id, scopes[], expires_at` is a schema line
+    // in a design document, not an assignment. Documents about auth systems
+    // are exactly the artifacts a report attaches (#317), so this shape
+    // refuses only where its own match carries key material.
+    //
+    // The gap both shapes leave, stated plainly because it is real: a value
+    // under sixteen characters records unless it carries key material of its
+    // own. `client_secret: s3cr3t` is caught, because a digit inside a word is
+    // not prose; `password: hunter` is not. Nothing a generator produced is
+    // that short, and a person who writes a fifteen-character password into a
+    // design document is past what a record-time test can see.
+    { name: "secret-label", pattern: new RegExp(String.raw`\b(${SECRET_NAME})([ \t]*:[ \t]*)([^\s"',;]{4,})`, "gi"), replacement: `$1$2${REDACTED}`, refuseWhen: carriesKeyMaterial },
     { name: "provider-key", pattern: /\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED, lead: /^(?:sk|rk|pk)-/ },
     { name: "github-token", pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: REDACTED, lead: /^gh[pousr]_/ },
     { name: "aws-key-id", pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED, lead: /^AKIA/ },
@@ -268,14 +301,15 @@ export function findCredential(text: string): CredentialMatch | null
     {
         for (const [span] of text.matchAll(rule.pattern))
         {
-            if (rule.eager !== true || carriesKeyMaterial(span))
+            if (rule.refuseWhen === undefined || rule.refuseWhen(span))
             {
                 return { rule: rule.name, preview: preview(span, rule) };
             }
         }
     }
-    // The backstops are eager by construction, and hold themselves back the
-    // same way the redaction pass does.
+    // The backstops match ordinary output by construction — they are nothing
+    // but length and alphabet — so both hold back on the same reading the
+    // redaction pass uses.
     for (const rule of BACKSTOPS)
     {
         for (const [span] of text.matchAll(rule.pattern))
@@ -314,13 +348,69 @@ function preview(span: string, rule: Rule): string
 // credential however its runs measure.
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 
+// The value a `name: value` line carries, which is everything after the
+// separator. The name cannot hold a colon, so the first one is the separator;
+// the value can hold one, because a URL does. Sentence punctuation at the end
+// belongs to the sentence rather than to the value — a document writes
+// `api_key: quarterly.` and the period is not part of the word.
+function valueOf(span: string): string
+{
+    return span.slice(span.indexOf(":") + 1).trim().replace(/[.!?)\]}]+$/, "");
+}
+
+// The length at which an unbroken stretch of characters stops reading as
+// something a person typed. It is the one bar no alphabet escapes: a generated
+// key is long whether it is all letters, all digits or base64, and requiring a
+// mix of the two instead is what let an all-letters password and an all-digits
+// device code past every reading here at any length. Both places below measure
+// against it, because they are asking the same question of the same kind of
+// text — a value the name beside it already called a credential.
+//
+// The cost of the bar sitting here: a hyphenated note this long, written as the
+// whole value of a `name:` line, is refused with the keys. That is a rephrase
+// away, and the refusal names the rule and shows the span.
+const MIN_KEY_RUN = 16;
+
+// Whether a `name: value` line's value is a note somebody wrote rather than a
+// value a machine produced: short, and made of letters joined by the
+// separators a phrase uses. Both have to hold. Length alone would record
+// `client_secret: s3cr3t`, and a digit inside a word is not how people write
+// prose and is how people write passwords; the word shape alone would record
+// `password: correcthorsebatterystaple`.
+const WORDS = /^[A-Za-z]+(?:[._-][A-Za-z]+)*$/;
+
+function readsAsWords(span: string): boolean
+{
+    const value = valueOf(span);
+    return value.length < MIN_KEY_RUN && WORDS.test(value);
+}
+
+// The alphabet a key body is written in, split only where a key body never
+// breaks. '+' and '/' are base64's last two characters, and splitting a value
+// on them is what turned a forty-character secret access key into four short
+// words that no reading here counted. '_' and '-' still split, because a person
+// writes those into names and phrases — `idempotency_key`, `caller-supplied` —
+// so a base64url value leaning on them can still slip this reading; the
+// `secret-line` shape catches it on length, and in a sentence it is what the
+// mixed-run reading was already for.
+const KEY_RUN = /[A-Za-z0-9+/=]+/g;
+
 // Whether a matched span carries a run of characters that looks like generated
 // key material rather than like a word someone wrote. The UUID shape is asked
-// only here, inside a span an eager rule already matched: a UUID standing on
-// its own in prose is an identifier, and this product writes them.
+// only here, inside a span a prose-matching rule already matched: a UUID
+// standing on its own in prose is an identifier, and this product writes them.
+// An id this store minted is exempt for the same reason it is exempt from
+// `looksGenerated` (#133).
 function carriesKeyMaterial(text: string): boolean
 {
-    return UUID.test(text) || (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated);
+    return UUID.test(text)
+        || (text.match(/[A-Za-z0-9_-]+/g) ?? []).some(looksGenerated)
+        || (text.match(KEY_RUN) ?? []).some(unbrokenKeyRun);
+}
+
+function unbrokenKeyRun(run: string): boolean
+{
+    return run.length >= MIN_KEY_RUN && !isEventId(run);
 }
 
 // Raw provider output arrives in chunks whose boundaries fall wherever the
