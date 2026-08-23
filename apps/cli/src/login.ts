@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { hostname, userInfo } from "node:os";
 import { Command, CommandInput, leaf } from "./contract.js";
 import {
-    Profile, now, profileName, readCredentialFile, readProfile,
+    DEFAULT_API_BASE, Profile, now, profileName, readCredentialFile, readProfile,
     removeMarker, removeProfile, resolveProfileName, withCredentialLock, writeProfile
 } from "./credentials.js";
 import { cliVersion } from "./help.js";
@@ -32,8 +32,6 @@ import { PublicAnswer, RailSession, publicPost, railRequest, sanitizeText } from
 import { CommandOutput, JsonValue, fail, refuse } from "./types.js";
 
 /* ── constants ─────────────────────────────────────────────────────── */
-
-export const DEFAULT_API_BASE = "https://app.superselfs.com";
 
 // The whole August agent vocabulary, compiled in because there is no route
 // that offers it: `POST /api/device/start` **requires** the client to enumerate

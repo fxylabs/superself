@@ -1,9 +1,12 @@
 // Plugin discovery, verification and loading — the first dynamic import in
 // this codebase, and the only one.
 //
-// The order of the load sequence is the design. Every step before the import is
-// a cheap local check, and the import — the first moment plugin code can run —
-// is deliberately last, so a plugin that fails any check never executes a byte.
+// The order of the load sequence is the design. Step 0 is the trust document
+// (`trust.ts`) — the signed, expiring list of which keys may have signed a
+// release, and which have been revoked since. Every step after it and before
+// the import is a cheap local check, and the import — the first moment plugin
+// code can run — is deliberately last, so a plugin that fails any check never
+// executes a byte.
 // Two of those checks exist because a signature alone is not enough: everything
 // we have ever published is correctly signed forever, so a signed release of
 // one plugin, or a signed older release of this one, verifies happily in the
@@ -16,7 +19,7 @@
 // confinement, and saying so plainly is part of the design rather than an
 // omission from it.
 
-import { createPublicKey, verify } from "node:crypto";
+import { verify } from "node:crypto";
 import { createHash } from "node:crypto";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -25,7 +28,8 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, branch, checkContract, leaf } from "./contract.js";
 import { ensurePrivateDir, now, readProfile, replacePrivateFile, stateDir } from "./credentials.js";
-import { RELEASE_SIGNATURE_ALG, releaseKey } from "./releasekeys.js";
+import { SIGNATURE_ALG } from "./rootkeys.js";
+import { TrustDocument, TrustKey, documentKey, ed25519Key, minimumVersion } from "./trust.js";
 import {
     RailRequestSpec, RailResponse, RailSession, jcs, railMajor, railRequest, sanitizeText
 } from "./rail.js";
@@ -219,28 +223,43 @@ interface PluginSignature
     sig: string;
 }
 
-// ed25519 raw public keys are 32 bytes; `createPublicKey` wants DER, and the
-// SPKI header for ed25519 is a fixed 12-byte prefix.
-const SPKI_ED25519 = Buffer.from("302a300506032b6570032100", "hex");
-
-// The verifier is hard-wired. `signature.alg` never selects an algorithm — it
-// is compared for equality with the constant and anything else is refused
-// before a single byte of the entry is read, which is what closes the classic
-// algorithm-confusion surface by construction rather than by convention.
-export function verifyManifest(manifest: PluginManifest, signature: PluginSignature): void
+// Step 3 of the load sequence, and the whole of what `signature` is allowed to
+// decide: nothing. `alg` is an equality check against a constant, `kid` is a
+// lookup among the **cached trust document's** keys, and a kid the document
+// marks `revoked` is refused by name rather than quietly failing verification.
+// Neither field can introduce a key — only a document a pinned root signed can
+// do that (§1.1, §1.4).
+export function releaseKeyOf(trust: TrustDocument, signature: PluginSignature): TrustKey
 {
-    if (signature.alg !== RELEASE_SIGNATURE_ALG)
+    if (signature.alg !== SIGNATURE_ALG)
     {
         throw fail("plugin_signature_invalid", `signature algorithm "${String(signature.alg)}" is not accepted`);
     }
-    const key = releaseKey(String(signature.kid));
+    const key = documentKey(trust, String(signature.kid));
     if (key === undefined)
     {
-        throw fail("plugin_signature_invalid", `no pinned release key "${String(signature.kid)}"`);
+        throw fail("plugin_signature_invalid", `the trust document names no release key "${sanitizeText(String(signature.kid))}"`);
     }
-    assertWindow(key.notBefore, key.notAfter, manifest.released_at);
-    const der = Buffer.concat([SPKI_ED25519, Buffer.from(key.publicKey, "base64")]);
-    const keyObject = createPublicKey({ key: der, format: "der", type: "spki" });
+    if (key.status === "revoked")
+    {
+        throw fail("plugin_key_revoked", `release key "${key.kid}" has been revoked`,
+            { hint: "self app install <key> --force" });
+    }
+    return key;
+}
+
+// Step 4. The verifier is hard-wired to ed25519 and takes the key **record**,
+// not a table to look one up in — the resolution already happened, and a
+// function that could resolve a kid twice is a function that could resolve it
+// differently the second time.
+export function verifyManifest(manifest: PluginManifest, signature: PluginSignature, key: TrustKey): void
+{
+    if (key.alg !== SIGNATURE_ALG)
+    {
+        throw fail("plugin_signature_invalid", `release key "${key.kid}" declares an algorithm this CLI does not verify`);
+    }
+    assertWindow(key.not_before, key.not_after, manifest.released_at);
+    const keyObject = ed25519Key(key.public_key);
     if (!verify(null, Buffer.from(jcs(manifest as unknown as JsonValue)), keyObject, Buffer.from(signature.sig, "base64")))
     {
         throw fail("plugin_signature_invalid", `the release document for "${manifest.key}" is not signed by a pinned key`);
@@ -253,6 +272,25 @@ function assertWindow(notBefore: string, notAfter: string, releasedAt: string): 
     if (Number.isNaN(at) || at < Date.parse(notBefore) || at >= Date.parse(notAfter))
     {
         throw fail("plugin_signature_invalid", "the signing key's validity window does not cover this release");
+    }
+}
+
+// Step 1a. A rail-independent floor: the document says the lowest version of a
+// plugin this CLI may run, and it is enforced at install and at load alike.
+// `--allow-downgrade` moves the *local* high-water mark and has nothing to say
+// here — the floor is published, and only a later document a root signs lowers
+// it.
+//
+// A floor naming a plugin that is not installed says nothing about anything, so
+// it is ignored rather than reported.
+export function assertVersionFloor(trust: TrustDocument, key: string, version: string): void
+{
+    const floor = minimumVersion(trust, key);
+    if (floor !== undefined && compareVersions(version, floor) < 0)
+    {
+        throw fail("plugin_version_below_minimum",
+            `"${key}" ${version} is below ${floor}, the lowest version the published key list allows`,
+            { hint: `self app update ${key}` });
     }
 }
 
@@ -633,12 +671,18 @@ export interface LoadContext
     commandPath: () => string;
 }
 
-export async function loadPlugin(plugin: InstalledPlugin, context: LoadContext): Promise<Command[]>
+// `trust` is a separate parameter rather than a field of the context because
+// the development path below has none and must not be given a shape that
+// implies it could. Step 0 — obtaining the document — happened before this
+// function was called; everything here reads it.
+export async function loadPlugin(plugin: InstalledPlugin, context: LoadContext,
+    trust: TrustDocument): Promise<Command[]>
 {
     const signature = readJson<PluginSignature>(join(plugin.dir, "signature.json"),
         "plugin_signature_invalid", `${plugin.dir}/signature.json is unreadable`);
-    verifyManifest(plugin.manifest, signature);
+    verifyManifest(plugin.manifest, signature, releaseKeyOf(trust, signature));
     checkSelection(plugin.key, plugin.version, plugin.manifest);
+    assertVersionFloor(trust, plugin.key, plugin.version);
     checkCompatibility(plugin.manifest, context.cliVersion, context.railApi);
     const register = await importVerified(plugin.dir, plugin.manifest);
     return checkCommands(plugin.manifest, register(pluginHost(context.session, context.commandPath)));
@@ -699,23 +743,35 @@ export interface ReleaseDocument
 // the mark is lowered **first**: the upgrade order there would leave `current`
 // at the older version while `highest` still named the newer one, which is
 // `selected < highest` — a key bricked with no command that clears it.
-export function installRelease(document: ReleaseDocument, requested: string,
-    allowDowngrade: boolean, railApi?: string): void
+// Everything the served answer has to satisfy before a byte of it is written.
+//
+// The key compared is the one the **operator** asked for, not the one the
+// answer claims. Deriving it from the document instead would let a rail
+// answering `GET /api/plugins/email/release` install something else entirely —
+// under another key's directory, over another key's high-water mark — while the
+// operator's command line said `email`. The signature proves we published the
+// document; it says nothing about which request it was an answer to.
+//
+// The published floor comes last and before any state write. `--allow-downgrade`
+// moves the *local* mark and does not reach it: a version the key list withdrew
+// does not become installable because the operator asked twice.
+function assertServedRelease(document: ReleaseDocument, key: string, version: string, trust: TrustDocument): void
 {
-    // The key the operator asked for, not the key the answer claims. Deriving
-    // it from the document instead would let a rail answering
-    // `GET /api/plugins/email/release` install something else entirely — under
-    // another key's directory, over another key's high-water mark — while the
-    // operator's command line said `email`. The signature proves we published
-    // the document; it says nothing about which request it was an answer to.
-    const key = pluginKey(requested);
     if (document.manifest.key !== key)
     {
         throw fail("plugin_identity_mismatch",
             `asked for "${key}" and the rail answered with a release for "${sanitizeText(String(document.manifest.key))}"`);
     }
+    verifyManifest(document.manifest, document.signature, releaseKeyOf(trust, document.signature));
+    assertVersionFloor(trust, key, version);
+}
+
+export function installRelease(document: ReleaseDocument, requested: string,
+    allowDowngrade: boolean, trust: TrustDocument, railApi?: string): void
+{
+    const key = pluginKey(requested);
     const version = pluginVersion(document.manifest.version);
-    verifyManifest(document.manifest, document.signature);
+    assertServedRelease(document, key, version, trust);
     const entry = readPluginState().plugins[key];
     const lower = entry !== undefined && compareVersions(version, entry.highest) < 0;
     if (lower && !allowDowngrade)

@@ -14,7 +14,8 @@ import { localTimestamp } from "../dist/pretty.js";
 import { runStructure } from "./structure.mjs";
 import { installedPlugins, loadPlugin } from "../dist/plugins.js";
 import {
-    credentialsFile, installFixture, jsonLines, jsonOf, railEnv, railServer, selfAsync, writeCredential
+    credentialsFile, installFixture, jsonLines, jsonOf, railEnv, railServer, selfAsync, trustBody,
+    writeCredential
 } from "./pr7-lib.mjs";
 
 function box()
@@ -317,11 +318,15 @@ test("§1.3 budget: loading one plugin — signature, hash and import — stays 
             railApi: "1",
             commandPath: () => "probe"
         };
+        // Step 0 has already happened by the time the loader runs, so the
+        // document is handed in rather than fetched — the budget is the load's
+        // own cost, and one rail call would swamp it.
+        const trust = trustBody();
         const samples = [];
         for (let round = 0; round < 40; round += 1)
         {
             const started = process.hrtime.bigint();
-            await loadPlugin(plugin, context);
+            await loadPlugin(plugin, context, trust);
             samples.push(Number(process.hrtime.bigint() - started) / 1e6);
         }
         samples.sort((left, right) => left - right);

@@ -114,7 +114,7 @@ test("cell 7: a valid signature from an unknown key is plugin_signature_invalid"
     const { document } = installFixture(it, { key: "email" });
     writeFileSync(join(pluginsRoot(it), "email", "0.1.0", "signature.json"),
         JSON.stringify({ ...signManifest(document.manifest), kid: "rel-not-pinned" }));
-    assert.match(selfIn(it, it.demo, ["email"]).out, /no pinned release key/);
+    assert.match(selfIn(it, it.demo, ["email"]).out, /names no release key/);
 });
 
 test("cell 8: a plugin needing a newer CLI is plugin_requires_newer_cli", () =>
@@ -606,7 +606,7 @@ test("every `app` verb that declares --json answers with one JSON object", async
     const it = box();
     installFixture(it, { key: "email", version: "0.1.0" });
     writeCredential(it, {});
-    for (const argv of [["app", "list", "--json"], ["app", "remove", "email", "--json"]])
+    for (const argv of [["app", "list", "--json"], ["app", "trust", "--json"], ["app", "remove", "email", "--json"]])
     {
         const result = await selfAsync(it, it.demo, argv, { SUPERSELF_DEV: "1" });
         assert.equal(result.code, 0, `${argv.join(" ")}: ${result.all}`);

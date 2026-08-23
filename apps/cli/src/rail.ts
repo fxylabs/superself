@@ -82,7 +82,11 @@ export const EXIT_3_CODES: Record<string, number | undefined> = {
     server_unavailable: undefined,
     network_unavailable: undefined,
     refresh_lock_timeout: 5,
-    command_deadline_exceeded: 5
+    command_deadline_exceeded: 5,
+    // The plugin key list could not be obtained and there was no valid cache to
+    // fall back on (§1.4a). Retrying the identical command is exactly right —
+    // the rail being reachable is the only thing that has to change.
+    trust_unavailable: 5
 };
 
 // Exit 2 — refused by policy; the answer will not change. Grouped as the rail's
@@ -698,12 +702,26 @@ interface HttpAnswer
     text: string;
 }
 
+// How many bytes a caller will accept, and what to call it when the answer is
+// longer. Every ordinary call takes the default; the plugin trust document
+// takes a far smaller one, because 64 KB is the whole of what it may ever be
+// and a cap enforced at the caller's own size is a cap a hostile rail cannot
+// walk past (§1.4a).
+interface ResponseCap
+{
+    bytes: number;
+    code: string;
+}
+
+const DEFAULT_CAP: ResponseCap = { bytes: RESPONSE_CAP_BYTES, code: "response_too_large" };
+
 interface HttpOptions
 {
     method: string;
     headers: Record<string, string>;
     body?: string | Uint8Array;
     timeoutMs: number;
+    cap?: ResponseCap;
     // The caller's cancellation, distinct from this request's own timeout. A
     // SIGINT aborts it (§4.5); the fetch below is aborted when either fires.
     signal?: AbortSignal;
@@ -722,7 +740,7 @@ async function httpOnce(url: string, options: HttpOptions): Promise<HttpAnswer>
             body: options.body as BodyInit | undefined,
             signal: abort.signal
         });
-        return await readAnswer(response);
+        return await readAnswer(response, options.cap ?? DEFAULT_CAP);
     }
     finally
     {
@@ -751,9 +769,9 @@ function linkAbort(local: AbortController, external: AbortSignal | undefined): (
     return () => external.removeEventListener("abort", relay);
 }
 
-async function readAnswer(response: Response): Promise<HttpAnswer>
+async function readAnswer(response: Response, cap: ResponseCap): Promise<HttpAnswer>
 {
-    const text = await capped(response);
+    const text = await capped(response, cap);
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
     let body: JsonValue = null;
@@ -776,7 +794,7 @@ async function readAnswer(response: Response): Promise<HttpAnswer>
 // server defeats simply by answering: the memory is already gone by the time
 // the number is known. `content-length` is not consulted either, for the same
 // reason — the server controls it.
-async function capped(response: Response): Promise<string>
+async function capped(response: Response, cap: ResponseCap): Promise<string>
 {
     const body = response.body;
     if (body === null)
@@ -794,10 +812,10 @@ async function capped(response: Response): Promise<string>
             break;
         }
         size += step.value.byteLength;
-        if (size > RESPONSE_CAP_BYTES)
+        if (size > cap.bytes)
         {
             await reader.cancel();
-            throw fail("response_too_large", `the rail answered with more than ${RESPONSE_CAP_BYTES} bytes`);
+            throw fail(cap.code, `the rail answered with more than ${cap.bytes} bytes`);
         }
         chunks.push(step.value);
     }
@@ -1322,6 +1340,32 @@ export interface PublicAnswer
     status: number;
     headers: Record<string, string>;
     body: JsonValue;
+    // The bytes as they arrived. The trust document's caller verifies a
+    // signature over the **parsed** object, so it wants the text rather than
+    // this module's normalization of it.
+    text: string;
+}
+
+// An unauthenticated `GET`, for the one document that is public by
+// construction: the plugin trust document (§1.4a). It shares this module's TLS
+// policy, base-URL policy and `X-Superself-Client` header with every other
+// call, and carries no credential — the keys in it are public, and it must be
+// fetchable before one exists.
+//
+// Not retried. Its two callers each hold a better answer to a failure than a
+// backoff loop does: a load falls back to its cache, and an install exits 3
+// with a pace for the agent to retry at.
+export async function publicGet(base: string, path: string, session: RailSession,
+    options: { headers?: Record<string, string>; cap?: ResponseCap } = {}): Promise<PublicAnswer>
+{
+    assertTlsPolicy();
+    const answer = await httpOnce(`${assertApiBase(base)}${path}`, {
+        method: "GET",
+        headers: { ...clientHeaders(session), ...(options.headers ?? {}) },
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        ...(options.cap === undefined ? {} : { cap: options.cap })
+    });
+    return { status: answer.status, headers: answer.headers, body: answer.body, text: answer.text };
 }
 
 // The device endpoints carry no credential, so they cannot go through
@@ -1341,5 +1385,5 @@ export async function publicPost(base: string, path: string, body: JsonValue,
     };
     const url = `${assertApiBase(base)}${path}`;
     const answer = retry ? await attempt(url, options) : await httpOnce(url, options);
-    return { status: answer.status, headers: answer.headers, body: answer.body };
+    return { status: answer.status, headers: answer.headers, body: answer.body, text: answer.text };
 }

@@ -32,52 +32,67 @@ export const sanctionedEdges = [];
 // The render gate: the one module that may put a command's answer on stdout.
 export const renderGate = "src/output.ts";
 
-// The two modules that hold a live credential, and the modules that write,
-// fold or sync a record. No import may cross from the second set to the first.
+// The three modules that hold a live credential or the trust anchor's cache,
+// and the modules that write, fold or sync a record. No import may cross from
+// the second set to the first.
 //
 // This is the structural half of "a token never reaches the event log". The
 // other half — login writing no event at all — is a property of one command and
 // could be undone by a future one; this cannot, because there is no import path
 // from a state writer to a credential for a future command to reach through.
 // `sanitize.ts` catching a token is a backstop, not the guarantee.
-export const credentialModules = ["src/credentials.ts", "src/rail.ts"];
+export const credentialModules = ["src/credentials.ts", "src/rail.ts", "src/trust.ts"];
 
-// The pinned trust anchors, and the one thing that must never be true of a
-// published build: that the only key it will accept is one whose private half
-// is committed in this repository.
+// The pinned trust anchors, and the two things that must never be true of a
+// published build: that it pins **no** root at all, and that a root it pins is
+// one whose private half is committed in this repository.
 //
-// The comment beside `dev-2026a` says to rotate it, and `notAfter` bounds it,
-// but neither is a gate — a release cut without reading the comment ships a CLI
-// that accepts a plugin anyone on earth can sign. `SUPERSELF_DEV_KEYS=1` is the
-// deliberate opt-out for a development build, so the check fails closed.
-export const releaseKeysModule = "src/releasekeys.ts";
+// Both are the same defect seen from either side. With no pinned root a
+// published CLI can accept no key list and therefore no plugin — it is broken
+// rather than dangerous, but it is not shippable. With a `dev-` root pinned it
+// accepts a key list anyone holding the fixture can sign, and a key list can
+// name any release key it likes, so that CLI will run a plugin anyone on earth
+// signed.
+//
+// A comment saying "replace this" is not a gate; this is. `SUPERSELF_DEV_KEYS=1`
+// is the deliberate opt-out for a development build, so the check fails closed.
+export const rootKeysModule = "src/rootkeys.ts";
 
 // Deliberately NOT part of `runStructure`. This branch legitimately pins only
-// the development key while the release pipeline is being built, so folding it
-// into the everyday gate would mean a red build for a state that is correct
-// today. It gates the one act that would actually ship it — `npm publish`,
-// through `prepublishOnly` — which is where the mistake it prevents is made.
-export function devKeyViolations(tree)
+// the development root while the ceremony of design §1.4c has not been
+// performed, so folding it into the everyday gate would mean a red build for a
+// state that is correct today. It gates the one act that would actually ship it
+// — `npm publish`, through `prepublishOnly` — which is where the mistake it
+// prevents is made.
+export function rootKeyViolations(tree)
 {
-    if (!tree.paths.includes(releaseKeysModule) || process.env.SUPERSELF_DEV_KEYS === "1")
+    if (process.env.SUPERSELF_DEV_KEYS === "1")
     {
         return [];
     }
-    const source = tree.read(releaseKeysModule);
-    const kids = [...source.matchAll(/kid:\s*"([^"]+)"/g)].map((found) => found[1]);
-    // Every pinned `dev-` key is a violation, not only a set made of nothing but
-    // them. A real release key mixed with `dev-2026a` still ships a CLI that
-    // accepts a plugin anyone holding the fixture can sign — the presence of the
-    // real key does not withdraw the dev key's trust. The gate passes only when
-    // no `dev-` key is pinned at all.
-    const devKeys = kids.filter((kid) => kid.startsWith("dev-"));
-    return devKeys.map((kid) => ({
-        file: releaseKeysModule,
-        line: 1,
-        rule: "development-trust-anchor",
-        detail: `"${kid}" is a development key whose private half is a test fixture — `
-            + "remove it before publishing, or set SUPERSELF_DEV_KEYS=1 for a development build"
-    }));
+    if (!tree.paths.includes(rootKeysModule))
+    {
+        return [violation("missing-trust-anchor", "there is no pinned root key module to publish against")];
+    }
+    const kids = [...tree.read(rootKeysModule).matchAll(/kid:\s*"([^"]+)"/g)].map((found) => found[1]);
+    if (kids.length === 0)
+    {
+        return [violation("empty-trust-anchor",
+            "no root key is pinned, so this build can accept no plugin key list — "
+            + "run the root ceremony and pin root-2026a and root-2026b")];
+    }
+    // Every pinned `dev-` root is a violation, not only a set made of nothing
+    // but them. A real root mixed with a development one still ships a CLI that
+    // accepts a key list anyone holding the fixture can sign — the presence of
+    // the real root does not withdraw the development root's trust.
+    return kids.filter((kid) => kid.startsWith("dev-")).map((kid) => violation("development-trust-anchor",
+        `"${kid}" is a development root whose private half is a test fixture — `
+        + "replace it before publishing, or set SUPERSELF_DEV_KEYS=1 for a development build"));
+}
+
+function violation(rule, detail)
+{
+    return { file: rootKeysModule, line: 1, rule, detail };
 }
 
 export const stateWritingModules = [

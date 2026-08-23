@@ -13,7 +13,6 @@ import test from "node:test";
 import {
     changedLines,
     deadExports,
-    devKeyViolations,
     diskTree,
     functionLengthViolations,
     functionSpans,
@@ -25,7 +24,8 @@ import {
     packageRoot,
     parseSource,
     printSiteViolations,
-    releaseKeysModule,
+    rootKeyViolations,
+    rootKeysModule,
     resolveBase
 } from "./structure.mjs";
 
@@ -52,7 +52,7 @@ function withoutDevKeyOptOut(run)
 function keyPins(...kids)
 {
     const records = kids.map((kid) => `    { kid: "${kid}", publicKey: "x", notBefore: "a", notAfter: "b" }`).join(",\n");
-    return memoryTree({ [releaseKeysModule]: `export const RELEASE_KEYS = [\n${records}\n];\n` });
+    return memoryTree({ [rootKeysModule]: `export const ROOT_KEYS = [\n${records}\n];\n` });
 }
 
 const everyLine = (path, count) => new Map([[path, Array.from({ length: count }, (_, index) => index + 1)]]);
@@ -403,7 +403,7 @@ test("the same rule fires for the rail layer, and for the ledger as well as the 
 test("cell 116: the real tree has no such import, and both credential modules are covered", () =>
 {
     assert.deepEqual(credentialIsolationViolations(diskTree(packageRoot)), []);
-    assert.deepEqual([...credentialModules].sort(), ["src/credentials.ts", "src/rail.ts"]);
+    assert.deepEqual([...credentialModules].sort(), ["src/credentials.ts", "src/rail.ts", "src/trust.ts"]);
 });
 
 // ---------------------------------------------------------------- publish trust anchor
@@ -411,34 +411,49 @@ test("cell 116: the real tree has no such import, and both credential modules ar
 // The gate stands in front of `npm publish`. It must fire whenever any `dev-`
 // key is pinned — the point being that a real key mixed in does not launder the
 // dev key's committed private half.
-test("the publish gate fires when the only pinned key is the development key", () =>
+test("the publish gate fires when the only pinned root is the development root", () =>
 {
     withoutDevKeyOptOut(() =>
     {
-        const violations = devKeyViolations(keyPins("dev-2026a"));
+        const violations = rootKeyViolations(keyPins("dev-root-2026a"));
         assert.equal(violations.length, 1);
         assert.equal(violations[0].rule, "development-trust-anchor");
-        assert.match(violations[0].detail, /dev-2026a/);
+        assert.match(violations[0].detail, /dev-root-2026a/);
     });
 });
 
-test("the publish gate still fires when a real release key is mixed with a dev- key", () =>
+// The other half of the same gate, and the reason it is two rules rather than
+// one: a build that pins nothing accepts no key list, so it can install and
+// load no mini-app at all. It is broken rather than dangerous, and it is still
+// not shippable.
+test("the publish gate fires when no root is pinned at all", () =>
 {
     withoutDevKeyOptOut(() =>
     {
-        const violations = devKeyViolations(keyPins("rel-2026a", "dev-2026a"));
-        // Exactly the dev key is named; the real key is not a violation.
+        const violations = rootKeyViolations(keyPins());
         assert.equal(violations.length, 1);
-        assert.match(violations[0].detail, /dev-2026a/);
-        assert.doesNotMatch(violations[0].detail, /rel-2026a/);
+        assert.equal(violations[0].rule, "empty-trust-anchor");
+        assert.match(violations[0].detail, /root ceremony/);
     });
 });
 
-test("the publish gate passes when no dev- key is pinned", () =>
+test("the publish gate still fires when a real root is mixed with a dev- root", () =>
 {
     withoutDevKeyOptOut(() =>
     {
-        assert.deepEqual(devKeyViolations(keyPins("rel-2026a", "rel-2026b")), []);
+        const violations = rootKeyViolations(keyPins("root-2026a", "dev-root-2026a"));
+        // Exactly the development root is named; the real one is not a violation.
+        assert.equal(violations.length, 1);
+        assert.match(violations[0].detail, /dev-root-2026a/);
+        assert.doesNotMatch(violations[0].detail, /"root-2026a"/);
+    });
+});
+
+test("the publish gate passes when a real root is pinned and no dev- root is", () =>
+{
+    withoutDevKeyOptOut(() =>
+    {
+        assert.deepEqual(rootKeyViolations(keyPins("root-2026a", "root-2026b")), []);
     });
 });
 
@@ -448,7 +463,7 @@ test("the publish gate passes for any key set when SUPERSELF_DEV_KEYS=1 opts out
     process.env.SUPERSELF_DEV_KEYS = "1";
     try
     {
-        assert.deepEqual(devKeyViolations(keyPins("dev-2026a")), []);
+        assert.deepEqual(rootKeyViolations(keyPins("dev-root-2026a")), []);
     }
     finally
     {

@@ -24,9 +24,10 @@ it. The layers, lowest first:
 | Types | `types.ts` | the event and context shapes, and the blocks a command answers with — `CommandOutput` and the `Pointer` brand a receipt's next command carries; imports nothing local |
 | CLI surface | `args.ts`, `contract.ts`, `help.ts`, `guide.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, explains itself, and confirms a human; `human.ts` and `guide.ts` import nothing local, `contract.ts` imports only `args.ts` and `types.ts` — a leaf declares what its handler answers with by naming a shape from the bottom layer, so nothing here reaches up into the render gate — and `help.ts` renders the contract rather than keeping a list of its own. `guide.ts` holds the concept pages `self help <topic>` prints — prose the contract cannot state, which is why it is data rather than a render |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
-| Foundation | `releasekeys.ts` | the public keys a plugin release is verified against — data only, imports nothing |
-| Credential | `credentials.ts` | the credential file: read, atomic write, mode enforcement, the per-profile lock and pending marker, profile selection. Imports `types.ts` only |
-| Rail | `rail.ts` | HTTP: TLS policy, the bearer header, refresh under the lock, retry classification, timeouts, error normalization, the call key and the call journal. Imports `credentials.ts` and `types.ts` |
+| Foundation | `rootkeys.ts` | the pinned **root** public keys — the whole trust anchor, data only, imports nothing. It holds no plugin signing key: which keys may sign a release is a document the rail serves, so a leaked signing key is withdrawn by publishing a new document rather than by shipping a new CLI |
+| Credential | `credentials.ts` | the credential file: read, atomic write, mode enforcement, the per-profile lock and pending marker, profile selection, and the default rail a profile points at. Imports `types.ts` only |
+| Rail | `rail.ts` | HTTP: TLS policy, the bearer header, refresh under the lock, retry classification, timeouts, error normalization, the response cap, the call key and the call journal. Imports `credentials.ts` and `types.ts` |
+| Trust | `trust.ts` | the plugin trust document: one unauthenticated fetch, root-signature verification, expiry and monotonicity, and the `0600` cache beside the credential file. Imports `rail.ts`, `credentials.ts`, `rootkeys.ts` and `types.ts` |
 | Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`) |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
@@ -46,11 +47,14 @@ ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
   `entities.ts`) imports `types.ts`, lower layers, and its own peers only —
   never `model.ts`, so a reducer can never depend on the fold that calls it.
 - `model.ts` imports domain modules, never commands.
-- **Nothing in the ledger, pipeline or fold layers may import `credentials.ts`
-  or `rail.ts`.** This is the structural reason a token cannot reach the event
-  log: there is no import path from a credential to anything that appends,
-  folds, or syncs a record — so the guarantee does not rest on `sanitize.ts`
-  catching one. `pnpm structure` asserts it rather than leaving it to review.
+- **Nothing in the ledger, pipeline or fold layers may import `credentials.ts`,
+  `rail.ts` or `trust.ts`.** This is the structural reason a token cannot reach
+  the event log: there is no import path from a credential to anything that
+  appends, folds, or syncs a record — so the guarantee does not rest on
+  `sanitize.ts` catching one. `trust.ts` joins the rule because its cache is a
+  `0600` file in the credential directory and it reaches the network, so the
+  same argument applies to it unchanged. `pnpm structure` asserts it rather than
+  leaving it to review.
 - Enforcement: review. `tsc` catches a cycle only when it becomes a type error,
   so the import direction is a reading check on every pull request.
 

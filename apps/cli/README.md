@@ -72,6 +72,51 @@ self sync                    # commit pending, pull --rebase, refold, push
 self clone <url>             # onto a second machine
 ```
 
+## What this CLI will accept
+
+`self app install <key>` downloads a mini-app — one signed JSON document — from
+the rail and verifies it before a byte of it runs. Two things decide whether it
+is accepted, and both are readable here rather than taken on trust.
+
+**Pinned roots.** `src/rootkeys.ts` holds root public keys and nothing else.
+They change only when you install a new version of this CLI, and their
+fingerprints are published below. Nothing at runtime can add one: there is no
+`--trust-root`, no `--allow-unsigned`, and no environment variable that reaches
+the list.
+
+| Root | Fingerprint (sha256 of the raw public key) | Window |
+| --- | --- | --- |
+| `root-2026a` — active | *published with the first release* | 3 years |
+| `root-2026b` — spare | *published with the first release* | 3 years |
+
+**A key list a root signed.** Which keys may sign a mini-app is not compiled
+in. It is a short-lived JSON document the rail serves at
+`GET /api/plugins/trust`, signed by one of the pinned roots. It names each
+signing key with a validity window and a status, a minimum version per
+mini-app, and its own expiry. Run `self app trust` to print the one your
+machine is holding, and `self app trust --refresh` to fetch it now.
+
+This is what the split buys you. A signing key that leaks can be **withdrawn**:
+the operator publishes a document marking it revoked, and every CLI refuses it
+at its next install and its next load — within 24 hours for a machine that is
+online. A compiled-in signing key could not be taken back without shipping a new
+CLI to every machine on earth.
+
+And it is bounded in the other direction too. The rail can serve a stale
+document, or none at all, but it cannot invent one:
+
+| The rail can | The rail cannot |
+| --- | --- |
+| serve an old document, for at most its 30-day expiry | add a signing key, because it holds no root |
+| serve an older document than you already have — refused, `trust_document_rollback` | un-revoke a key you have already seen revoked |
+| stop serving anything, so new installs stop | stop a mini-app you already installed from loading |
+
+A machine that is offline keeps running what it already has, on the document it
+already cached; an install, which is the moment new code enters the machine,
+refuses unless it can fetch a current document. The cache is a `0600` file
+beside your credential, and a cache with a byte changed is treated as absent
+rather than trusted.
+
 ## The viewer
 
 Every fold renders self-contained HTML dashboards into the store — what

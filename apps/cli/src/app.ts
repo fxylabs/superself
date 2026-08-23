@@ -24,6 +24,7 @@ import {
     installRelease, pluginKey, pluginVersion, removePlugin, satisfies
 } from "./plugins.js";
 import { RailSession, railMajor, railRequest } from "./rail.js";
+import { TrustDocument, TrustState, loadTrustDocument, trustExpired } from "./trust.js";
 import { CommandOutput, JsonValue, fail } from "./types.js";
 
 /* ── who may claim a verb ──────────────────────────────────────────── */
@@ -62,7 +63,7 @@ function checkVerbs(manifest: PluginManifest): void
 
 function session(profile: string): RailSession
 {
-    return { profile, client: clientTag() };
+    return { profile, client: clientTag(), notice: (line: string) => console.error(line) };
 }
 
 interface Fetched
@@ -130,11 +131,24 @@ interface Installed
     scopes: string[];
 }
 
-async function installOne(profile: string, key: string, pin: string | undefined,
-    allowDowngrade: boolean, force = false): Promise<Installed>
+interface InstallRequest
 {
+    profile: string;
+    key: string;
+    pin?: string;
+    allowDowngrade?: boolean;
+    force?: boolean;
+    // Fetched once per command, before any release request. Install is
+    // fail-closed on it: new code entering the machine is judged against the
+    // key list the rail is serving now, not against a cached one.
+    trust: TrustDocument;
+}
+
+async function installOne(request: InstallRequest): Promise<Installed>
+{
+    const { profile, key, pin } = request;
     const already = installedPlugins().find((item) => item.key === key);
-    if (!force && already !== undefined && (pin === undefined || already.version === pin))
+    if (request.force !== true && already !== undefined && (pin === undefined || already.version === pin))
     {
         const manifest = already.manifest;
         return { key, version: already.version, verbs: manifest.verbs, scopes: manifest.scopes };
@@ -142,7 +156,7 @@ async function installOne(profile: string, key: string, pin: string | undefined,
     const fetched = await fetchRelease(profile, key, pin);
     checkPin(fetched.document, pin);
     checkVerbs(fetched.document.manifest);
-    installRelease(fetched.document, key, allowDowngrade, fetched.railApi);
+    installRelease(fetched.document, key, request.allowDowngrade === true, request.trust, fetched.railApi);
     const manifest = fetched.document.manifest;
     return { key: manifest.key, version: manifest.version, verbs: manifest.verbs, scopes: manifest.scopes };
 }
@@ -166,11 +180,17 @@ async function runInstall(input: CommandInput<typeof INSTALL_OPTIONS>): Promise<
     }
     const profile = resolveProfileName(input.values.profile === undefined ? undefined : String(input.values.profile));
     const { key, pin } = splitPin(target);
-    const installed = [await installOne(profile, key, pin,
-        input.values["allow-downgrade"] === true, input.values.force === true)];
+    // The document first, and nothing written if it does not arrive: an
+    // install that cannot see a current key list must not happen at all, so
+    // the release is never even requested (cell 158).
+    const trust = (await loadTrustDocument({ mode: "install", session: session(profile) })).document;
+    const installed = [await installOne({
+        profile, key, trust, ...(pin === undefined ? {} : { pin }),
+        allowDowngrade: input.values["allow-downgrade"] === true, force: input.values.force === true
+    })];
     for (const dependency of dependenciesOf(key))
     {
-        installed.push(await installOne(profile, dependency, undefined, false));
+        installed.push(await installOne({ profile, key: dependency, trust }));
     }
     return [{ kind: "payload", data: installed as unknown as JsonValue, plain: () => installedLines(installed) }];
 }
@@ -254,13 +274,14 @@ async function runUpdate(input: CommandInput<typeof UPDATE_OPTIONS>): Promise<Co
     }
     const keys = named === undefined ? installedPlugins().map((plugin) => plugin.key) : [pluginKey(named)];
     const before = new Map(installedPlugins().map((plugin) => [plugin.key, plugin.version]));
+    const trust = (await loadTrustDocument({ mode: "install", session: session(profile) })).document;
     const updated: { key: string; from: string; to: string }[] = [];
     for (const key of keys)
     {
         // An update always fetches: the point of the verb is to find out
         // whether there is something newer, which a local short-circuit would
         // never discover.
-        const result = await installOne(profile, key, undefined, false, true);
+        const result = await installOne({ profile, key, trust, force: true });
         updated.push({ key, from: before.get(key) ?? "", to: result.version });
     }
     return [{
@@ -292,6 +313,59 @@ function runRemove(input: CommandInput<typeof REMOVE_OPTIONS>): CommandOutput
     }];
 }
 
+/* ── trust ─────────────────────────────────────────────────────────── */
+
+const TRUST_OPTIONS = { refresh: { type: "boolean" }, profile: { type: "string" }, json: { type: "boolean" } } as const;
+
+// Read-only, and the command behind the README's claim about what this CLI will
+// accept. Without it an operator cannot see which key list their CLI is acting
+// on — which key signed the plugin they are running, whether it is revoked, and
+// how stale the list is.
+//
+// It reads like a load rather than like an install: a valid cache answers even
+// when the rail is down, and an expired list is shown with its expiry rather
+// than refused, because an operator asking what the CLI holds is exactly the
+// person who needs to see a stale answer.
+async function runTrust(input: CommandInput<typeof TRUST_OPTIONS>): Promise<CommandOutput>
+{
+    const profile = resolveProfileName(input.values.profile === undefined ? undefined : String(input.values.profile));
+    const state = await loadTrustDocument({
+        mode: "load",
+        session: session(profile),
+        refresh: input.values.refresh === true
+    });
+    const data = trustPayload(state);
+    return [{ kind: "payload", data: data as unknown as JsonValue, plain: () => trustLines(state) }];
+}
+
+function trustPayload(state: TrustState): Record<string, JsonValue>
+{
+    return {
+        issued_at: state.document.issued_at,
+        expires_at: state.document.expires_at,
+        expired: trustExpired(state),
+        fetched_at: state.fetched_at,
+        signed_by: state.signature.kid,
+        keys: state.document.keys.map((key) => ({
+            kid: key.kid, status: key.status, not_before: key.not_before, not_after: key.not_after
+        })),
+        min_plugin_versions: (state.document.min_plugin_versions ?? {}) as JsonValue,
+        ...(state.document.min_cli_version === undefined ? {} : { min_cli_version: state.document.min_cli_version })
+    };
+}
+
+function trustLines(state: TrustState): string[]
+{
+    const floors = Object.entries(state.document.min_plugin_versions ?? {});
+    return [
+        `signed by root ${state.signature.kid}`,
+        `issued ${state.document.issued_at} · expires ${state.document.expires_at}${trustExpired(state) ? " (EXPIRED)" : ""}`,
+        `fetched ${state.fetched_at}`,
+        ...state.document.keys.map((key) => `${key.kid} — ${key.status}, valid ${key.not_before} to ${key.not_after}`),
+        floors.length === 0 ? "no minimum plugin versions" : `minimums: ${floors.map(([key, floor]) => `${key} ${floor}`).join(", ")}`
+    ];
+}
+
 export const APP_COMMAND: Command = {
     name: "app",
     usage: [
@@ -314,30 +388,39 @@ export const APP_COMMAND: Command = {
             syntax: "app remove <key> [--json]",
             description: ["delete an installed mini-app; its rollback mark is kept"],
             verbs: ["remove"]
+        },
+        {
+            syntax: "app trust [--refresh] [--profile name] [--json]",
+            description: ["the signed key list this CLI is acting on"],
+            verbs: ["trust"]
         }
     ],
     detail: [
-        "mini-apps are signed release documents served by the rail and verified",
-        "against keys compiled into this CLI. there is no way to install an",
-        "unsigned one and no flag that skips the check.",
+        "mini-apps are signed release documents served by the rail. this CLI pins",
+        "root keys only; which release keys may sign a plugin — and which have",
+        "been revoked — is a document the rail serves and a pinned root signs.",
+        "`self app trust` prints the one this machine holds. there is no way to",
+        "install an unsigned mini-app and no flag that skips the check.",
         "",
         "  --force               reinstall even when the version is already present",
         "  --allow-downgrade     lower the rollback high-water mark deliberately",
         "  --check               also ask the rail what the latest release is",
         "  --all                 every installed mini-app",
+        "  --refresh             fetch the key list now instead of using the cache",
         "  --profile <name>      use a named credential profile",
         "  --json                machine-readable output"
     ],
     node: branch({
         name: "app",
         unnamed: "options",
-        refusal: (verb) => `unknown app verb '${String(verb)}' — install, list, update or remove`,
+        refusal: (verb) => `unknown app verb '${String(verb)}' — install, list, update, remove or trust`,
         children: [
             leaf("", LIST_OPTIONS, 0, runList),
             leaf("list", LIST_OPTIONS, 0, runList),
             leaf("install", INSTALL_OPTIONS, 1, runInstall),
             leaf("update", UPDATE_OPTIONS, 1, runUpdate),
-            leaf("remove", REMOVE_OPTIONS, 1, runRemove)
+            leaf("remove", REMOVE_OPTIONS, 1, runRemove),
+            leaf("trust", TRUST_OPTIONS, 0, runTrust)
         ]
     })
 };

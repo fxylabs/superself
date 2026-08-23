@@ -30,7 +30,7 @@ prints them during the same run.
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
 | Agent instructions | `connect [--global]` |
-| Paid work APIs | `login`, `logout`, `whoami [--verify]`, `app install\|list\|update\|remove` |
+| Paid work APIs | `login`, `logout`, `whoami [--verify]`, `app install\|list\|update\|remove\|trust` |
 
 The command catalogue currently includes these top-level verbs:
 
@@ -58,8 +58,19 @@ has approved a credential for it.
 - `self logout` deletes the local credential and names what is still live
   server-side, because an agent cannot revoke its own credential.
 - `self app install <key>` downloads a signed mini-app release and verifies it
-  against public keys compiled into this CLI. There is no flag that skips the
-  check and no way to install an unsigned one.
+  before anything is written. There is no flag that skips the check and no way
+  to install an unsigned one.
+- What the CLI compiles in is a set of **root** public keys, not the keys that
+  sign a mini-app. Which keys may sign one — and which have been revoked — is a
+  short-lived document the rail serves at `GET /api/plugins/trust`, signed by a
+  pinned root. So a signing key that leaks is withdrawn by publishing a new
+  document, without shipping a new CLI, and a compromised rail can still serve
+  only what a root signed.
+- `self app trust` prints the document this machine is acting on: who signed it,
+  when it expires, every key with its status, and the minimum version per
+  mini-app. `--refresh` fetches it now. An install refuses unless it can fetch a
+  current document; a load falls back to a valid cache, so an installed mini-app
+  keeps working offline and a revocation reaches it within a day.
 
 Commands that reach the rail accept `--json`: one object on stdout, snake_case
 keys, and — on a failure — the error envelope on **stdout** as well, so an
