@@ -160,6 +160,7 @@ usage: self <command>
   objective decline <id> --why w             turn down a proposed objective; it leaves waiting at once
   objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]
                                              a revision supersedes: a new objective id carries the revised fields
+                                             and every live milestone, with its coverage and work, moves under it
                                              (an empty --target/--horizon/--priority withdraws that field)
   objective close <id> --as reached|dropped [--why w]
                                              --why is required when it is dropped

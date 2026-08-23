@@ -546,6 +546,7 @@ function reconcileEntityView(model: ProjectModel, entityFold: EntityFold, events
     syncLegacyRecords(model);
     const answered = answerLegacyProposals(model, entityFold);
     const nativeWorks = projectNativeRecords(model, creations);
+    carryLegacyMilestones(model);
     routeEntityWorkFacts(model, entityFold);
     replayDeferred(model, events, new Set([...nativeWorks, ...answered]));
 }
@@ -1192,6 +1193,7 @@ function projectObjective(entity: EntityState, creation: SelfEvent | undefined):
         closedWhy: objectiveClosedWhy(entity),
         history: [],
         milestones: [],
+        carried: [],
         state: "on-track",
         reason: "",
         met: 0,
@@ -1250,6 +1252,7 @@ function newMilestone(entity: EntityState, objective: ObjectiveState, creation: 
         coverage: [],
         supersededBy: entity.supersededBy,
         droppedWhy: milestoneDroppedWhy(entity),
+        carriedFrom: [],
         state: "on-track",
         reason: "",
         met: [],
@@ -1264,9 +1267,8 @@ function newMilestone(entity: EntityState, objective: ObjectiveState, creation: 
 
 function projectMilestone(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
 {
-    const parent = entity.links.find((link) => link.type === "member-of");
-    const objective = parent === undefined ? undefined
-        : model.goals.objectives.find((item) => item.id === parent.target);
+    const parents = memberObjectives(model, entity);
+    const objective = parents[parents.length - 1];
     if (objective === undefined)
     {
         return;
@@ -1278,6 +1280,61 @@ function projectMilestone(model: ProjectModel, entity: EntityState, creation: Se
         milestone.reached = reachedFromEntity(milestone, objective.revision, entity);
     }
     objective.milestones.push(milestone);
+    noteCarry(milestone, parents);
+}
+
+// Every edge but the newest is an objective a revision carried the milestone
+// away from (#333): that objective's page lists it as carried, and the
+// milestone's own page says where it came from. One hop per page — a second
+// revision writes a second edge, and each superseded objective names only its
+// own successor.
+function noteCarry(milestone: MilestoneState, parents: ObjectiveState[]): void
+{
+    for (let index = 0; index < parents.length - 1; index += 1)
+    {
+        milestone.carriedFrom.push(parents[index].id);
+        parents[index].carried.push({ milestone: milestone.id, to: parents[index + 1].id });
+    }
+}
+
+// A legacy milestone — folded from `milestone.created` rather than projected
+// from an entity — sits under the objective its creation named. A revision
+// carries it exactly as it carries a native one: the link lands on its derived
+// entity, and this pass moves the record to the newest objective the edges
+// name. It runs after the native records project, because the successor is
+// native and has to exist before the edge to it can resolve.
+function carryLegacyMilestones(model: ProjectModel): void
+{
+    for (const entity of model.entities)
+    {
+        if (entity.native === true || entity.source !== "milestone")
+        {
+            continue;
+        }
+        const found = findMilestone(model.goals, entity.id);
+        const parents = memberObjectives(model, entity);
+        const target = parents[parents.length - 1];
+        if (found === null || target === undefined || target === found.objective)
+        {
+            continue;
+        }
+        found.objective.milestones = found.objective.milestones.filter((item) => item.id !== entity.id);
+        found.milestone.objective = target.id;
+        target.milestones.push(found.milestone);
+        noteCarry(found.milestone, parents);
+    }
+}
+
+// The objectives a milestone's member-of edges resolve to, in edge order. The
+// newest edge is the objective it hangs under now: `objective revise` carries
+// a milestone by appending an edge to the successor, never by removing the one
+// to the predecessor, so undoing that one link returns the milestone to where
+// it was rather than leaving it under nothing.
+function memberObjectives(model: ProjectModel, entity: EntityState): ObjectiveState[]
+{
+    return entity.links.filter((link) => link.type === "member-of")
+        .map((link) => model.goals.objectives.find((item) => item.id === link.target))
+        .filter((item): item is ObjectiveState => item !== undefined);
 }
 
 function milestoneDroppedWhy(entity: EntityState): string | undefined
