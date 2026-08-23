@@ -5,11 +5,33 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { demoWorkspace, machine, must, selfIn } from "./harness.mjs";
+import { demoWorkspace, machine } from "./harness.mjs";
 import {
     installFixture, jsonOf, pluginSource, pluginsRoot, railEnv, railServer,
     readState, releaseDocument, selfAsync, selfSplit, signManifest, statePath, writeCredential, writeState
 } from "./pr7-lib.mjs";
+
+// Every spawn in this file runs the **test build** rather than the shipped
+// one. A plugin load stands behind step 0, and the documents these fixtures
+// carry are signed by the development root — which no shipped build pins, and
+// must not. `pr7-lib.mjs` builds the copy; these two are shaped exactly like
+// the shipped harness's `selfIn` and `must`, merged output and all, so every
+// cell's call and assertion below is the one it always was.
+function selfIn(box, cwd, args, extra = {})
+{
+    const result = selfSplit(box, cwd, args, extra);
+    return { code: result.code, out: result.all };
+}
+
+function must(box, cwd, args, extra = {})
+{
+    const result = selfIn(box, cwd, args, extra);
+    if (result.code !== 0)
+    {
+        throw new Error(`self ${args.join(" ")} failed:\n${result.out}`);
+    }
+    return result;
+}
 
 // Most cells here are about the plugin tree, which needs no workspace: a
 // scratch machine is a third of the cost of one. The three cells whose subject

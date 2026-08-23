@@ -86,8 +86,8 @@ the list.
 
 | Root | Fingerprint (sha256 of the raw public key) | Window |
 | --- | --- | --- |
-| `root-2026a` — active | *published with the first release* | 3 years |
-| `root-2026b` — spare | *published with the first release* | 3 years |
+| `root-2026a` — active | `sha256:20d4836e2cda50b7a27b021536b988a77b8baa1968ed49f95badd1221ba38da6` | 2026-08-23 → 2029-08-23 |
+| `root-2026b` — spare | `sha256:95fc5e6d21c793e372fabb8f6a868b4a0d186fecc379a5bb7702b0bbaa491e7b` | 2026-08-23 → 2029-08-23 |
 
 **A key list a root signed.** Which keys may sign a mini-app is not compiled
 in. It is a short-lived JSON document the rail serves at

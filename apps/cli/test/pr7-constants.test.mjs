@@ -101,14 +101,17 @@ test("a kid is a lookup among the pinned roots and can never introduce one", () 
     assert.equal(findRootKey(ROOT_KEYS[0].kid, []), undefined);
 });
 
-test("the development root is marked as one, so nobody ships it as a trust anchor by accident", () =>
+test("the pinned roots are the ceremony's, and no development root is among them", () =>
 {
-    // Its private half is a fixture in this repository, so a key list it signs
-    // is signed by a key everybody has — and a key list can name any release
-    // key at all. `npm run release-keys` is the gate; this is what makes the
-    // state visible in the suite.
-    assert.ok(ROOT_KEYS.every((root) => root.kid.startsWith("dev-")),
-        "a ceremony root is pinned — update this assertion deliberately when one ships");
+    // A `dev-` root's private half is a fixture in this repository, so a key
+    // list it signs is signed by a key everybody has — and a key list can name
+    // any release key at all. `npm run release-keys` is the gate in front of
+    // `npm publish`; this is what makes the state visible in the suite, read
+    // from the pinned records rather than from the module's text.
+    assert.deepEqual(ROOT_KEYS.map((root) => root.kid), ["root-2026a", "root-2026b"],
+        "the pinned set changed — update this assertion deliberately when a root rotates");
+    assert.ok(ROOT_KEYS.every((root) => !root.kid.startsWith("dev-")),
+        "a development root is pinned in a build that could be published");
 });
 
 /* ── reading a trust document ──────────────────────────────────────── */

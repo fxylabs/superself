@@ -44,27 +44,31 @@ export interface RootKey
 // document's own signature and for a plugin release's alike.
 export const SIGNATURE_ALG = "ed25519";
 
-// ⚠ DEVELOPMENT ROOT — REPLACED BY THE CEREMONY BEFORE THE FIRST RELEASE ⚠
+// The production roots, pinned by the operator's ceremony of 2026-08-23
+// (design v0.4 §1.4c: generated with the network off by superself-apps
+// `scripts/release/rootkey-generate.mts`, private halves age-encrypted and held
+// by the operator, never in CI, never in either repository).
 //
-// `dev-root-2026a` is the fixture root the plugin suites sign their trust
-// documents with. Its private half is a test fixture in this repository and is
-// therefore public: anyone holding it can sign a document that names any
-// release key they like, so a CLI published with this record pinned would
-// accept a plugin anyone can sign.
+// `root-2026a` signs trust documents; `root-2026b` is the spare, stored apart,
+// used only if A is lost or leaked. Either may sign a document this CLI accepts
+// (1-of-N). Fingerprints (sha256 of the raw public key) are published in the
+// README — a reader can check what this binary trusts without running it.
 //
-// The operator's ceremony (design §1.4c, run from superself-apps
-// `scripts/release/rootkey-generate.mts` with the network off) produces
-// `root-2026a` (active) and `root-2026b` (spare, stored in a different vault).
-// The commit that pins them here **replaces** this record — it does not add to
-// it — and is recorded as a decision, with both fingerprints published in the
-// README. Until that commit lands, `npm run release-keys` refuses to publish:
-// the gate fails on an empty list and on any kid beginning `dev-`.
+// Rotation ships a new root alongside these in a new CLI minor and drops the
+// old pin a release later. The plugin suites never use these records: they
+// sign their fixtures with a test root injected through the module parameter.
 export const ROOT_KEYS: RootKey[] = [
     {
-        kid: "dev-root-2026a",
-        publicKey: "a+GBIeMIsJ2zFicm7PY+iPakCwaViWObmPGtk/FpTGk=",
-        notBefore: "2026-01-01T00:00:00Z",
-        notAfter: "2029-01-01T00:00:00Z"
+        kid: "root-2026a",
+        publicKey: "Fz/D+fiP91yKKqb7Q5LJJn/9qFrhds1euTm9XJlr7rg=",
+        notBefore: "2026-08-23T13:30:13Z",
+        notAfter: "2029-08-23T13:30:13Z"
+    },
+    {
+        kid: "root-2026b",
+        publicKey: "6YjXS2NMvVNOuUGVIIVL087frOF2xT1zP0WOY+ODLK4=",
+        notBefore: "2026-08-23T13:30:13Z",
+        notAfter: "2029-08-23T13:30:13Z"
     }
 ];
 
