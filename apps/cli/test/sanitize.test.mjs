@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { assertSanitized } from "../dist/sanitize.js";
 import { CliError } from "../dist/types.js";
@@ -209,11 +208,16 @@ test("a cookie header is refused whatever follows the colon", () =>
 //   16+ unbroken run, letters only   20 letters              auth-scheme         auth-header
 //   16+ unbroken run, digits only    16 digits               auth-scheme         auth-header
 //   base64 with '/' and '+'          40 chars                auth-scheme         auth-header
-//   base64url with '-' and '_'       22 chars                auth-header         auth-header
+//   base64url with '-' and '_'       22 chars                auth-scheme         auth-header
 //   JWT, three segments              published example       auth-scheme         auth-header
 //   quoted placeholder               "Bearer <token>"        records             records
 //   quoted 16+ run                   "Bearer <20 letters>"   auth-scheme         auth-header
-//   generated value in brackets      <22 chars base64url>    auth-header         auth-header
+//   generated value in brackets      <22 chars base64url>    auth-scheme         auth-header
+//
+// Two rows moved from `auth-header` to `auth-scheme` in #347 and nothing else
+// changed: the scheme rule now reads its own value the way this one does, so
+// under a scheme name it knows it reaches the base64url and bracketed shapes
+// one rule earlier. Same refusal, earlier rule.
 //
 // Two rows carry the design. base64url puts '-' and '_' wherever the bytes
 // fall, and the reading every prose rule uses splits runs on both, so a
@@ -229,7 +233,6 @@ const AUTH_SCHEMES = ["Bearer", "Basic", "Token", "SharedKey"];
 
 const RECORDS = () => null;
 const BY_SCHEME = (scheme) => (scheme === "SharedKey" ? "auth-header" : "auth-scheme");
-const BY_HEADER = () => "auth-header";
 
 const AUTH_TABLE = [
     { shape: "angle-bracket placeholder", values: ["<token>", "<your-api-token-here>"], rule: RECORDS },
@@ -240,11 +243,11 @@ const AUTH_TABLE = [
     { shape: "16+ unbroken run, letters only", values: ["abcdefghijklmnopqrst"], rule: BY_SCHEME },
     { shape: "16+ unbroken run, digits only", values: ["1234567890123456"], rule: BY_SCHEME },
     { shape: "base64 with / and +", values: ["wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"], rule: BY_SCHEME },
-    { shape: "base64url with - and _", values: ["Zx-9Kq_mR4tVn2Bs7Lw1Yd"], rule: BY_HEADER },
+    { shape: "base64url with - and _", values: ["Zx-9Kq_mR4tVn2Bs7Lw1Yd"], rule: BY_SCHEME },
     { shape: "JWT three segments", values: ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"], rule: BY_SCHEME },
     { shape: "quoted placeholder", values: ["<token>"], quoted: true, rule: RECORDS },
     { shape: "quoted 16+ run", values: ["abcdefghijklmnopqrst"], quoted: true, rule: BY_SCHEME },
-    { shape: "generated value inside brackets", values: ["<Zx-9Kq_mR4tVn2Bs7Lw1Yd>", "${Zx-9Kq_mR4tVn2Bs7Lw1Yd}"], rule: BY_HEADER }
+    { shape: "generated value inside brackets", values: ["<Zx-9Kq_mR4tVn2Bs7Lw1Yd>", "${Zx-9Kq_mR4tVn2Bs7Lw1Yd}"], rule: BY_SCHEME }
 ];
 
 // The third axis. Prose after the value must not change any cell's outcome:
@@ -255,16 +258,19 @@ const POSITIONS = [
     { position: "prose follows", prose: " — replace this with the key your tenant was issued" }
 ];
 
-function headerLine(scheme, value, quoted, prose)
+// One line builder for both tables. A quoted cell quotes the scheme and its
+// value together, because that is how a transcript quotes the pair; the header
+// prefix is the only thing the two tables differ by.
+function authLine(prefix, scheme, value, quoted, prose)
 {
-    return `Authorization: ${quoted ? `"${scheme} ${value}"` : `${scheme} ${value}`}${prose}`;
+    return `${prefix}${quoted ? `"${scheme} ${value}"` : `${scheme} ${value}`}${prose}`;
 }
 
-test("the auth-header case table, one assertion per cell", async (t) =>
+async function runTable(t, table, schemes, prefix)
 {
-    for (const { shape, values, quoted, rule } of AUTH_TABLE)
+    for (const { shape, values, quoted, rule } of table)
     {
-        for (const scheme of AUTH_SCHEMES)
+        for (const scheme of schemes)
         {
             for (const { position, prose } of POSITIONS)
             {
@@ -272,7 +278,7 @@ test("the auth-header case table, one assertion per cell", async (t) =>
                 {
                     for (const value of values)
                     {
-                        const text = headerLine(scheme, value, quoted === true, prose);
+                        const text = authLine(prefix, scheme, value, quoted === true, prose);
                         const expected = rule(scheme);
                         if (expected === null)
                         {
@@ -287,6 +293,11 @@ test("the auth-header case table, one assertion per cell", async (t) =>
             }
         }
     }
+}
+
+test("the auth-header case table, one assertion per cell", async (t) =>
+{
+    await runTable(t, AUTH_TABLE, AUTH_SCHEMES, "Authorization: ");
 });
 
 // A Basic credential is base64 of `user:password`, and a short pair encodes
@@ -301,13 +312,157 @@ test("a basic credential below the run bar is refused, and a basic placeholder i
     }
 });
 
-// `bearer`, `basic` and `token` are English words as often as they are scheme
-// names, so a bare scheme keeps the prose reading. Nothing writes
-// `Authorization:` in a sentence, which is what licenses the harder reading
-// above and confines it to the header.
-test("a bare scheme word in a sentence keeps the prose reading", () =>
+// The case table for a bare scheme word — `bearer <value>` with no
+// `Authorization:` in front of it (#347). The same credential is written both
+// ways, so it is judged both ways: the value's token measured whole over the
+// base64url alphabet, a `basic` value decoded rather than measured. Reading it
+// as prose instead recorded a sixteen-character base64url token four times in
+// ten, which is the whole of #347.
+//
+// What licenses the harder reading without a header name in front of it is the
+// span, and that is the axis this table exists to hold down. `bearer`, `basic`
+// and `token` are English words as often as scheme names, so the rule's match
+// is the scheme word and the one token after it and never a character more:
+// prose past that token is outside the match, which is why the position column
+// changes no cell here any more than it does above.
+//
+//   scheme    bearer · basic · token — and digest · SharedKey, which the rule
+//             does not know, as the negative control
+//   value     the thirteen shapes of the header table, plus the two Basic
+//             shapes asserted beside it
+//   position  the value ends the line · prose follows it
+//
+//   value shape                      example                 bearer/basic/token  digest/SharedKey
+//   angle-bracket placeholder        <token>                 records             records
+//   $VAR                             $TOKEN                  records             records
+//   ${VAR}                           ${API_TOKEN}            records             records
+//   bare substitution name           YOUR_ACCESS_TOKEN_HERE  records             records
+//   elided                           eyJexample...           records             records
+//   short word                       placeholder             records             records
+//   16+ unbroken run, letters only   20 letters              auth-scheme         records
+//   16+ unbroken run, digits only    16 digits               auth-scheme         records
+//   base64 with '/' and '+'          40 chars                auth-scheme         records
+//   base64url with '-' and '_'       22 chars                auth-scheme         records
+//   JWT, three segments              published example       auth-scheme         jwt
+//   quoted placeholder               "bearer <token>"        records             records
+//   quoted 16+ run                   "bearer <20 letters>"   auth-scheme         records
+//   generated value in brackets      <22 chars base64url>    auth-scheme         records
+//   Basic valid base64 pair          dXNlcjpwYXNz            basic only          records
+//   Basic short or not base64        <base64>                records             records
+//
+// Only two cells differ from `main`: base64url, and a generated value inside
+// brackets. Every other cell is what `main` already did, asserted so this
+// change cannot take one with it.
+//
+// The right-hand column is the negative control and the scope line at once. A
+// bare line whose scheme word this rule does not know is prose, and records at
+// every shape but a JWT, which its own rule catches. Widening the scheme list
+// is a different question from this one.
+const BARE_SCHEMES = ["bearer", "basic", "token", "digest", "SharedKey"];
+const KNOWN_SCHEMES = ["bearer", "basic", "token"];
+
+const BY_BARE_SCHEME = (scheme) => (KNOWN_SCHEMES.includes(scheme) ? "auth-scheme" : null);
+const BY_BASIC = (scheme) => (scheme === "basic" ? "auth-scheme" : null);
+const BY_JWT = (scheme) => (KNOWN_SCHEMES.includes(scheme) ? "auth-scheme" : "jwt");
+
+const BARE_TABLE = [
+    { shape: "angle-bracket placeholder", values: ["<token>", "<your-api-token-here>"], rule: RECORDS },
+    { shape: "$VAR", values: ["$TOKEN"], rule: RECORDS },
+    { shape: "${VAR}", values: ["${API_TOKEN}"], rule: RECORDS },
+    { shape: "bare substitution name", values: ["YOUR_ACCESS_TOKEN_HERE", "your-token-goes-here"], rule: RECORDS },
+    { shape: "elided", values: ["eyJexample...", "eyJ…"], rule: RECORDS },
+    { shape: "short word", values: ["placeholder"], rule: RECORDS },
+    { shape: "16+ unbroken run, letters only", values: ["abcdefghijklmnopqrst"], rule: BY_BARE_SCHEME },
+    { shape: "16+ unbroken run, digits only", values: ["1234567890123456"], rule: BY_BARE_SCHEME },
+    { shape: "base64 with / and +", values: ["wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"], rule: BY_BARE_SCHEME },
+    { shape: "base64url with - and _", values: ["Zx-9Kq_mR4tVn2Bs7Lw1Yd"], rule: BY_BARE_SCHEME },
+    { shape: "JWT three segments", values: ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"], rule: BY_JWT },
+    { shape: "quoted placeholder", values: ["<token>"], quoted: true, rule: RECORDS },
+    { shape: "quoted 16+ run", values: ["abcdefghijklmnopqrst"], quoted: true, rule: BY_BARE_SCHEME },
+    { shape: "generated value inside brackets", values: ["<Zx-9Kq_mR4tVn2Bs7Lw1Yd>", "${Zx-9Kq_mR4tVn2Bs7Lw1Yd}"], rule: BY_BARE_SCHEME },
+    { shape: "Basic valid base64 pair", values: ["dXNlcjpwYXNz"], rule: BY_BASIC },
+    { shape: "Basic short or not base64", values: ["<base64>", "base64(user:password)"], rule: RECORDS }
+];
+
+test("the bare auth-scheme case table, one assertion per cell", async (t) =>
 {
-    for (const text of ["the bearer token-refresh-window is 30 days", "refresh token (30d, revocable)"])
+    await runTable(t, BARE_TABLE, BARE_SCHEMES, "");
+});
+
+// The sentences the table's reading has to leave alone. Each puts a scheme word
+// in front of ordinary English, and the word after it is what gets judged.
+test("a bare scheme word in a sentence still records", () =>
+{
+    for (const text of [
+        "the bearer token-refresh-window is 30 days",
+        "refresh token (30d, revocable)",
+        "we use basic authentication on the internal endpoints",
+        "the token introspection-endpoint returns the scopes",
+        "rotate the token_refresh_window every quarter",
+        "each token lives for thirty days and is revocable",
+        "token bucket refills at ten per second",
+        "reduced token counting overhead",
+        "bearer placeholder."
+    ])
+    {
+        assertSanitized(event({ text }));
+    }
+});
+
+// The cost of the reading, asserted rather than left to be discovered. An
+// unbroken sixteen-character run in the credential alphabet, written as the one
+// token after a scheme word, is refused whether it is a key or a note: a slash
+// and a leading date are both outside what a name reads as. A rephrase away,
+// and the refusal names the rule and shows the span.
+test("a long hyphenated note written as the token after a scheme word is refused", () =>
+{
+    for (const text of ["basic auth/token-exchange-flow", "token 2026-08-23-review-note"])
+    {
+        refuses(text, "auth-scheme");
+    }
+});
+
+// A trailing period belongs to the sentence, not to the value, and it does not
+// buy a credential a way past the run bar.
+test("sentence punctuation after a bare credential does not excuse it", () =>
+{
+    refuses("bearer abcdefghijklmnopqrst.", "auth-scheme");
+    refuses("the value is token Zx-9Kq_mR4tVn2Bs7Lw1Yd, rotated weekly", "auth-scheme");
+});
+
+// The shape the sampling caught that no hand-written cell had, and the reason
+// #346's probe went red once on a pull request that changed nothing here.
+//
+// A generated base64url value draws '-' and '_' as often as any other
+// character, so one in twenty thousand comes out single-case with a separator
+// in it and read as a substitution name — the reading that lets
+// `your-token-goes-here` record. Both values below did that. What separates
+// them from a name is inside the pieces: `0yjr9xyknif2p4` and `SSZEQU9` mix
+// letters and digits in one word, and a name's piece is a word or a number and
+// never both. Fixed cells, in both forms, because the probe that found them
+// draws from a seeded stream now and will not find them again.
+const NAME_SHAPED_KEYS = ["o-0yjr9xyknif2p4", "L-0883_SSZEQU9_2"];
+
+test("a generated value that reads like a name is refused, in both auth forms", () =>
+{
+    for (const value of NAME_SHAPED_KEYS)
+    {
+        refuses(`bearer ${value}`, "auth-scheme");
+        refuses(`Authorization: SharedKey ${value}`, "auth-header");
+    }
+});
+
+// The floor under that fix, asserted rather than left as a claim so nobody
+// reads the probe's 0% as more than it is. A generated value whose every piece
+// is a plain word is the same text as `your-token-goes-here`, and no reading
+// that records the one can refuse the other — this records, and a document
+// spelling its placeholder that way is why. What shrinks it is the draw, not
+// the reading: every character has to miss the other case and both digits, so
+// it happened five times in two million at sixteen characters and zero times at
+// twenty-four or forty.
+test("a generated value that spells a single-case phrase is the declared residual", () =>
+{
+    for (const text of ["bearer h-ohmqqnsm_y-khu", "bearer rbkvv-vwvnxiudtx", "bearer your-token-goes-here"])
     {
         assertSanitized(event({ text }));
     }
@@ -345,12 +500,36 @@ const ALPHABETS = {
 
 const SAMPLES = 2000;
 
-function generated(alphabet, length)
+// The draw is seeded, and that is the difference between a probe and a
+// lottery. A sampled test that draws from the system generator fails on some
+// runs of code that never changed: #346's probe did exactly that on an
+// unrelated pull request, and a rerun passed, which teaches nobody anything and
+// trains everyone to rerun. The seed makes every cell the same 2000 values on
+// every machine, so a red build is a defect somebody can reproduce by checking
+// out the branch — and the value that made it red is a shape to add to the
+// table above, not a draw to reroll.
+//
+// mulberry32, written out because a test that pins its own corpus cannot depend
+// on the corpus moving. Each cell gets its own stream, so adding a length or an
+// alphabet does not shift the values every other cell sees.
+function mulberry32(seed)
+{
+    let state = seed >>> 0;
+    return () =>
+    {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let mixed = Math.imul(state ^ (state >>> 15), state | 1);
+        mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+        return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function generated(alphabet, length, next)
 {
     let value = "";
-    for (const byte of randomBytes(length))
+    for (let at = 0; at < length; at += 1)
     {
-        value += alphabet[byte % alphabet.length];
+        value += alphabet[Math.floor(next() * alphabet.length)];
     }
     return value;
 }
@@ -368,22 +547,22 @@ function recorded(text)
     }
 }
 
-test("no generated value reaches the log through an auth header, at any alphabet", async (t) =>
+async function probe(t, seed, forms)
 {
+    let stream = 0;
     for (const [name, alphabet] of Object.entries(ALPHABETS))
     {
         for (const length of [16, 24, 40])
         {
+            stream += 1;
+            const cell = seed + stream;
             await t.test(`${name}, ${length} chars`, () =>
             {
+                const next = mulberry32(cell);
                 for (let sampled = 0; sampled < SAMPLES; sampled += 1)
                 {
-                    const value = generated(alphabet, length);
-                    for (const text of [
-                        `Authorization: Bearer ${value}`,
-                        `Authorization: SharedKey ${value}`,
-                        `Authorization: Bearer <${value}>`
-                    ])
+                    const value = generated(alphabet, length, next);
+                    for (const text of forms(value))
                     {
                         assert.equal(recorded(text), false, text);
                     }
@@ -391,6 +570,29 @@ test("no generated value reaches the log through an auth header, at any alphabet
             });
         }
     }
+}
+
+test("no generated value reaches the log through an auth header, at any alphabet", async (t) =>
+{
+    await probe(t, 0x51190319, (value) => [
+        `Authorization: Bearer ${value}`,
+        `Authorization: SharedKey ${value}`,
+        `Authorization: Bearer <${value}>`
+    ]);
+});
+
+// The same sampling with the header taken away, which is what #347 was: the
+// bare form recorded 39.9% of sixteen-character base64url values, 13.2% at
+// twenty-four and 0.8% at forty, and the bracketed form recorded every
+// generated value at every alphabet because nothing matched it at all.
+test("no generated value reaches the log through a bare scheme word, at any alphabet", async (t) =>
+{
+    await probe(t, 0x51190347, (value) => [
+        `bearer ${value}`,
+        `basic ${value}`,
+        `token ${value}`,
+        `bearer <${value}>`
+    ]);
 });
 
 test("a terminal control character is refused by code point", () =>
