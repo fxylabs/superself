@@ -91,6 +91,7 @@ of them is a review finding, not a refactor note.
 | Event append | `pipeline.ts` `recordEvent` / `recordEvents` / `recordCalls` | the only writer of `log.jsonl`; every event verb goes through it. Each event names the project whose log it belongs to, and the append is grouped by that name — one write per log — so a placement that moves a record between projects still cannot leave half a state change in either (#181). It is also the one answer to "may this project be written into": an archived project is refused here rather than on each verb, so a verb added later cannot miss the rule (#283). While a reviewed set is being collected for one confirmation it accepts nothing at all (#312) — the person has not been asked yet — so a line of a plan that records rather than destroys is refused here instead of writing state beside the calls the confirmation is about. `recordCalls` is the same writer over several verbs' calls at once: everything the whole set owes — sanitization, the archive refusal, the branch stamp — is checked before any of it is appended, because a reviewed set approved by one answer has to land as one write or not at all |
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from the event append above, before any byte reaches the log |
 | Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
+| Design citation | `design.ts` `judge`, reached through `requireCitations` and `dispatchRefusal` | the one answer to "does this design still stand on a decision that holds" (#316). `self report --design` reads it at submission, so a design citing a superseded, retracted or unreachable decision is never recorded; `self work start` reads it again at dispatch, because a decision can be superseded between the two and the approval said nothing about that. The override is the record, not a flag: supersede the decision, then cite the successor |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess`, `recordSession` / `judgeSession` | the one writer and the one reader of the machine-local pid ledger, for a work unit's process and for the agent session that claimed it; a pid never reaches a synced event, and the sentence a reader is given about liveness is minted here too (`claimNote`) rather than re-derived per surface |
 | Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Every command surface goes through it — `node:util` `parseArgs` is called from `parseCommand` and nowhere else |
 | Retirement approval | `retirement.ts` `requireHumanRetirement`, called from `recordRetirement` | the one answer to "may this call destroy a record": every verb that supersedes, withdraws or retires a confirmed record routes through it, and it discloses the target and reads a typed confirmation from a terminal before anything is written (#173). A call that displaces nothing passes straight through, so the trigger is what a call destroys rather than which flag was typed. It reads a list of calls, not one, which is what makes a person's judgment cost one action per decision rather than one per record (#312): `self apply` opens a collection, every gated call inside it queues instead of asking, and the same disclosure and the same prompt then cover the whole set. What the person types back is the ids while they are short enough to read and type, and what is being done and to how many past that — one rule, stated once, whether the set came from one command or from a reviewed file. A supersession gives no `--why` because its successor's text is the reason, so the disclosure states that text: one answer never writes words the person was not shown. The leaves that can reach this gate are marked here too (`retiring`, read back by `retires`), because holding the event log shut does not stop a verb whose write goes somewhere else (`remote add`, `theme`, `app install`) — a plan resolves a line against the marked leaves and refuses anything else before it runs. The approved set is handed to `pipeline.ts` `recordCalls` as one write, so a call the sanitizer or the archive gate refuses stops the set whole rather than after the calls before it were already committed |
@@ -121,7 +122,7 @@ concern.
 | `entity.*` | the shared entity record (#197); `entities.ts` owns the fold | `state.ts`, `main.ts`, `goals.ts` — every preset verb writes this grammar since the cutover (#207) |
 | `project.archived`, `project.restored` | the project's own two-state lifecycle (#283); `paths.ts` owns the fold, beside the store's other per-project state, because the scope resolver and the model enumeration both read it | `archive.ts` |
 | `work.run-started`, `work.run-exited` | the process transitions | `main.ts` |
-| `report.*` | work reports | `main.ts` |
+| `report.*` | work reports, and the ruling a person makes on one — `report.added`, `report.confirmed` (#316) | `main.ts` |
 | `goal.*`, `decision.*`, `convention.*`, `objective.*`, `milestone.*`, the rest of `work.*` | the pre-cutover record kinds — read forever (#197 §8), written by no verb | nothing |
 
 `project.*` is a namespace about a project rather than about a record, which
@@ -159,6 +160,15 @@ A *statement-type record* is one a person asserts and can later take back: a
 decision, a convention, an objective, a milestone, a work unit. Reports are
 the exception by design — they are append-only history, and nothing withdraws
 a report.
+
+A design approval (#316) is inside that exception rather than beside it. It is
+a fact about bytes at a moment — a person read this exact artifact and said
+yes — so it is never withdrawn; it is *outlived*. Superseding the decision the
+design cited is what stops it admitting a dispatch, because the gate re-reads
+the citation at `work start` rather than trusting the ruling. That is why the
+approval ships no supersede, withdraw or decline verb and carries no
+`STATEMENT_TYPES` entry: there is nothing about it a person could take back
+that superseding the decision does not already take back.
 
 Every statement type ships the same three transitions, inside its own
 namespace, before it is admitted (#166):

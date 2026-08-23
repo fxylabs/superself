@@ -88,7 +88,7 @@ export function currentConventions(conventions: ConventionState[]): ConventionSt
     return conventions.filter((convention) => convention.status === "current");
 }
 
-interface ReportEntry
+export interface ReportEntry
 {
     id: string;
     ts: string;
@@ -104,6 +104,16 @@ interface ReportEntry
     // The repository they were reported from, by identity (#331). Absent on a
     // report written before it was recorded, or from a checkout with no commit.
     repository?: string;
+    // A report submitted as a design or scope proposal (#316), and the
+    // decisions it says it implements. The citation is a ref on the report
+    // event rather than a record of its own: what a design implements is part
+    // of the report, not a second thing that could outlive it.
+    design?: boolean;
+    implements: string[];
+    // The person's ruling on it, and the artifact digest that ruling named —
+    // which is what makes the approval about one exact design rather than
+    // about a title. Absent until someone approves it.
+    approval?: { ts: string; digest?: string };
 }
 
 // What a runner attempt left in the synced log: the state it reached, why it
@@ -733,7 +743,8 @@ function applyReview(model: ProjectModel, event: SelfEvent): void
 const EXACT_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
     ["review.received", applyReview],
     ["goal.set", (model, event) => { model.goal = String(event.payload.text); }],
-    ["report.added", applyReport]
+    ["report.added", applyReport],
+    ["report.confirmed", applyReportConfirmed]
 ];
 
 const NAMESPACE_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
@@ -1670,7 +1681,7 @@ function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: S
 
 function attachedWorkOf(event: SelfEvent): string | undefined
 {
-    if (event.type === "report.added" || event.type === "review.received" || event.type.startsWith("run."))
+    if (event.type.startsWith("report.") || event.type === "review.received" || event.type.startsWith("run."))
     {
         return event.refs?.work === undefined ? undefined : String(event.refs.work);
     }
@@ -1978,7 +1989,8 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
     work.reports.push({
         id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts,
-        branch: branchRef(event), repository: repositoryRef(event)
+        branch: branchRef(event), repository: repositoryRef(event),
+        design: event.payload.design === true, implements: stringList(event.refs?.implements)
     });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
     work.notes.push(...notes.filter((note) => !work.notes.includes(note)));
@@ -1987,6 +1999,24 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     {
         work.next = String(event.payload.next);
     }
+}
+
+// A person's ruling on a design report (#316). It lands on the report rather
+// than becoming a record of its own: reports are the append-only exception in
+// the record lifecycle, and an approval bound to an immutable artifact digest
+// is the same kind of fact — never withdrawn, only outlived, which is what
+// happens the moment the decision it stood under is superseded.
+function applyReportConfirmed(model: ProjectModel, event: SelfEvent): void
+{
+    const work = model.works.find((item) => item.id === event.refs?.work);
+    const report = work?.reports.find((item) => item.id === event.refs?.confirms);
+    if (work === undefined || report === undefined)
+    {
+        return;
+    }
+    work.lastEventTs = event.ts;
+    const digest = event.payload.digest;
+    report.approval = { ts: event.ts, digest: typeof digest === "string" ? digest : undefined };
 }
 
 // A report that recorded its evidence as typed was split when it was written,

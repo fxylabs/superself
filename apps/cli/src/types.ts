@@ -43,6 +43,10 @@ export interface EventRefs
     // names a replacement, which is exactly what tells them from `supersedes`.
     retracts?: string;
     declines?: string;
+    // The decisions a design report says it implements (#316). A ref rather
+    // than payload text because these are record ids that have to resolve: the
+    // gate reads them back and refuses a design whose decision stopped holding.
+    implements?: string[];
     // On a paired demotion (#202): the record the demotion makes room for.
     // The confirm surface reads it back, so a cap-driven pair is one
     // confirmable unit rather than two halves that can deadlock.
