@@ -34,7 +34,7 @@ import {
     WaitingRow,
     workspacePointer
 } from "./pretty.js";
-import { artifactSignals, askedRepositories, verdictSignals } from "./reachability.js";
+import { archivedScopeSignals, artifactSignals, askedRepositories, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { CliError, CommandOutput, SelfEvent } from "./types.js";
 
@@ -62,10 +62,18 @@ function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
     return withVerdicts(storeDir, renderedModel(storeDir, slug));
 }
 
+// A record scoped into an archived project is rechecked here for the same
+// reason an artifact is, and for one more (#285). It is read from the store
+// rather than from git, so it costs nothing to ask; and it has to be asked at
+// read time, because archiving one project folds that project alone — the
+// record's own project is not refolded, and a signal persisted by its last
+// fold would say whatever was true then. Derived here, restoring the project
+// clears the line with no bookkeeping of its own.
 function withVerdicts(storeDir: string, model: ProjectModel): ProjectModel
 {
     model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, model.slug), askedRepositories(storeDir, model.slug)),
-        ...artifactSignals(storeDir, model.works));
+        ...artifactSignals(storeDir, model.works),
+        ...archivedScopeSignals(storeDir, model.slug, model.entities));
     return model;
 }
 
@@ -575,7 +583,8 @@ function contextView(storeDir: string, models: ProjectModel[], model: ProjectMod
         works,
         health: [...model.health,
             ...verdictSignals(works, readVerdicts(storeDir, model.slug), askedRepositories(storeDir, model.slug)),
-            ...artifactSignals(storeDir, works)]
+            ...artifactSignals(storeDir, works),
+            ...archivedScopeSignals(storeDir, model.slug, model.entities)]
     };
 }
 

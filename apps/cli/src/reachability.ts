@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { EntityState, isLive, scopeTarget } from "./entities.js";
 import { checkoutTops, git, realPath, refListing, repositoryIdentity, resolveCommits, revListExcept } from "./gitutil.js";
-import { EvidenceHead, ProjectRepositories, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
+import { EvidenceHead, ProjectRepositories, projectArchive, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
 import { WorkState } from "./model.js";
 import { digestFile } from "./repo.js";
 import { ArtifactMeta } from "./types.js";
@@ -558,4 +559,41 @@ function storedPath(storeDir: string, path: string): string | null
     const step = relative(root, file);
     const escapes = step === "" || step === ".." || step.startsWith(".." + sep) || isAbsolute(step);
     return escapes ? null : file;
+}
+
+// The third thing that can render nowhere, beside a vanished commit and a
+// missing artifact: a record whose scope names a project that was archived
+// after the record was placed (#285).
+//
+// Nothing is wrong with the record. Its scope is still valid data — the slug is
+// registered and comes back whole with `self project restore` — but every
+// workspace aggregate answers from `paths.ts` `activeProjects`, so the project
+// it renders in is out of every context until it is active again, and the
+// record goes quiet with it. Placing a new record there is refused from the
+// archive onward (#283), so only records placed before it reach this state, and
+// without a line naming them the person who archived the project never learns
+// what went silent with it.
+//
+// Read from the home project's own fold, which is where the record's events
+// live and where `self state place` moves it from. That is also why the line
+// names both ids a reader needs: the record, and the slug it points at.
+//
+// A scope naming a slug this workspace never registered is a different report
+// and `self project` already makes it — that record cannot be brought back by
+// restoring anything. This one is about a slug that is registered and set
+// aside, so the line offers the way back as well as the way out.
+export function archivedScopeSignals(storeDir: string, slug: string, entities: EntityState[]): string[]
+{
+    const signals: string[] = [];
+    for (const entity of entities.filter((item) => isLive(item)))
+    {
+        const target = scopeTarget(entity, slug);
+        if (target !== slug && target !== "workspace" && projectArchive(storeDir, target) !== undefined)
+        {
+            signals.push(`${entity.id} renders in "${target}", which is archived, so it renders nowhere — `
+                + `run \`self project restore ${target}\` to bring it back, `
+                + `or \`self state place ${entity.id} --scope <slug>\` to move it somewhere active`);
+        }
+    }
+    return signals;
 }
