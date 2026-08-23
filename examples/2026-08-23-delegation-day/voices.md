@@ -1,6 +1,6 @@
 # Voices: agents that drift or stop
 
-Ten public statements of the problem tutorial one opens with: a delegated coding agent drifts off the direction it was given, or stops partway and reports as if done. Collected 2026-08-23. Quotes are verbatim; counts are as read that day. Reddit was read through the browser session (direct JSON is blocked from this network); Discord was not read, because the browser is logged out of Discord and logging in is outside this work's rules.
+Eleven public statements of the problem tutorial one opens with: a delegated coding agent drifts off the direction it was given, or stops partway and reports as if done. Collected 2026-08-23. Quotes are verbatim; counts are as read that day. Reddit was read through the browser session (direct JSON is blocked from this network); Discord was not read, because the browser is logged out of Discord and logging in is outside this work's rules.
 
 | # | Where | Date | Signal | Quote (verbatim) | URL |
 | --- | --- | --- | --- | --- | --- |

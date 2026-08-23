@@ -1,22 +1,12 @@
 # Hand six units of a day's work to agents and read the result as state
 
-One project, six pieces of work, six agents running at the same time. Each piece is written down as a brief (one line stating the required outcome) before anyone starts, and each agent comes back with reports that carry evidence. At the end, one `self work` line tells you what got how far.
+This tutorial follows six pieces of work in one project, each assigned to a separate agent. The operator wrote the required outcomes first, read the agents' surveys before approving execution, and used `self work` to check where the work stopped that evening.
 
-Every scene in this tutorial is a real day, 2026-08-23. The agent records and state screens are copied from that day's `self` records and Orca terminals; the originals are in [`examples/2026-08-23-delegation-day/`](../../examples/2026-08-23-delegation-day/README.md). Only the operator scenes were re-recorded with the same commands in a throwaway workspace. The harness was one Claude Code session per Orca worktree.
-
-## Why this shape
-
-People who delegate to agents name two problems more than any other: the agent drifts off the direction it was given, and the agent stops partway and reports as if it were done. Eleven public voices with dates and links are in [`voices.md`](../../examples/2026-08-23-delegation-day/voices.md). Three of them:
-
-- "It stops executing on plans midway, like if it was done." (anthropics/claude-code #47198, 2026-04-13)
-- "it reads your message, understands the general direction, but then decides it knows better on the details." (r/ClaudeAI, 2026-02-17)
-- "10 reported complete, 7 actually worked. All three misses had code sitting in the diff." (r/ChatGPTCoding, 2026-08-08)
-
-Parallel delegation works without `self`. What `self` adds is an order: write the brief first, read whether it is enough, then execute, then come back with evidence attached. The work unit is the tool that makes that order routine.
+The commands and records come from 2026-08-23. Operator scenes were re-recorded with the same commands in an isolated workspace. Each agent ran in its own Claude Code session inside an Orca worktree.
 
 ## Destination
 
-This is the real project, read after the day ended. All six units are `active`, and each carries reports and evidence.
+Start with the screen from that evening. All six work units are `active`, and each has reports and evidence.
 
 ```text
 $ self work --project superself --plain | grep -E "w-(rwmxx|fd2dg|6h4es|qda0a|64t76|fvhq9)"
@@ -41,13 +31,13 @@ Two-minute intro: [`intro.mp4`](../../examples/2026-08-23-delegation-day/tapes/i
 
 ## Before you start
 
-- `self` 0.6.1 or newer (`npm install -g superself`), and a project where `self init` and `self project init` have run. First time: follow the [getting started guide](../guides/getting-started.md).
+- `self` 0.7.0 (`npm install -g superself`), and a project where `self init` and `self project init` have run. First time: follow the [getting started guide](../guides/getting-started.md).
 - One agent harness. On this day it was one Claude Code session per Orca worktree. `self` uses the same commands in any harness.
-- Time on the real day: from the first brief at 2026-08-22 14:57 (UTC) to the sixth unit starting at 16:42, 1 hour 45 minutes.
+- The recorded run took 1 hour 45 minutes. The first brief was written at 14:57 UTC, and the sixth unit started at 16:42.
 
 ## Step 1. Record the direction first
 
-**What the operator did.** Recorded five decisions in a strategy session. A decision an agent raises as a proposal shows up under `Waiting on you` and takes effect only when the operator confirms it.
+**Command.** The operator recorded five decisions during a strategy session. A proposed decision appears under `Waiting on you` until the operator confirms it.
 
 ```text
 $ self decide "M1 front-door strategy: Superself does not open its own curated repo now; …" --why "…" --proposed
@@ -60,13 +50,13 @@ $ self decide confirm 01m0n7…
 
 ![Waiting on you in self context](../../examples/2026-08-23-delegation-day/tapes/waiting-on-you.gif)
 
-**The record.** The full text of that day's decisions is in [`decisions.md`](../../examples/2026-08-23-delegation-day/decisions.md). The DSH wave decision, for one, reads "Superself ships a plugin, not a repo … within 7 days", and its `why` keeps the reason (list-of-record slot closed on launch day, plugin surface open).
+**Record.** The DSH wave decision reads, "Superself ships a plugin, not a repo … within 7 days." Its `why` records the reason: the list-of-record slot closed on launch day, while the plugin surface remained open.
 
-**Result.** `Waiting on you` in `self context` empties, and the decision sits at the top of the next session's `self context`. Check: the `waiting on you` count in `self status` reads 0.
+**State.** After confirmation, `Waiting on you` is empty and the decision appears in the next session's context. Run `self status` and check that `waiting on you` reads 0.
 
 ## Step 2. Write each brief as a work unit
 
-**What the operator did.** One `self work add "<required outcome>"` per piece of work. The outcome states what will be true when it is done, in one line. Two of the six lines from that day, verbatim:
+**Command.** Run `self work add "<required outcome>"` once for each piece of work. These are two of the six outcome lines from the recorded day.
 
 ```text
 $ self work add "dsh-plugin-superself is public: installable with dsh plugin add from npm (dsh-plugin keyword, dsh.bundle manifest), exposes self context/work/report/decide as tools plus a slash command, its entry is merged in awesome-dsh-plugin under workflow, and it is announced in the DSH Discord — by 2026-08-30"
@@ -77,11 +67,11 @@ w-fvhq9
 
 ![self work list](../../examples/2026-08-23-delegation-day/tapes/work-list.gif)
 
-**Result.** Six rows appear in `self work` as `next`. Check: reading one row alone, can you picture the finished state? If you cannot, it is not a brief yet.
+**State.** Six `next` rows appear in `self work`. Read each row by itself. If the finished state is unclear, rewrite the outcome before dispatching it.
 
 ## Step 3. Read the plan before anything runs
 
-**What the agent did.** The agent that took w-fd2dg surveyed first and reported, with nothing built yet. Its first report, in part:
+**Record.** The agent assigned to w-fd2dg surveyed six candidate lists before opening a pull request. Its first report includes this table:
 
 ```text
 w-fd2dg step 1 — survey of six front-door lists (data pulled 2026-08-23 via `gh api`; no PR opened yet)
@@ -91,13 +81,13 @@ w-fd2dg step 1 — survey of six front-door lists (data pulled 2026-08-23 via `g
 | hesreallyhim/awesome-claude-code | "… must be created by human beings" | issue form | … | the maintainer must file the web form by hand |
 ```
 
-**What the operator did.** Read the table and approved. The moment is kept in a w-rwmxx report: "User said proceed. The only blocker was CI verify on #321 …".
+**Command.** The operator read the table and approved execution. A w-rwmxx report records the handoff: "User said proceed. The only blocker was CI verify on #321 …".
 
-**Result.** Two of six targets (archived, off-topic) dropped out before any work ran, and one human-only form went to the operator. Check: in `self work show w-fd2dg`, the "no PR opened yet" report sits below (earlier than) the "step 3 complete: submissions opened" report.
+**State.** Two candidate lists were removed because one was archived and one was off-topic. A human-only form went back to the operator. In `self work show w-fd2dg`, check that "no PR opened yet" predates "step 3 complete: submissions opened."
 
 ## Step 4. Delegate
 
-**What the agent did.** The session in each worktree claimed its unit with `self work start <id>`. From then on, any other session that looks at the unit sees who holds it.
+**Command.** Each worktree session ran `self work start <id>`. Other sessions could then see who held the unit.
 
 ```text
 $ self work show w-6h4es
@@ -106,29 +96,29 @@ held by another session, running since 2026-08-22 16:05
 
 One line read from the w-6h4es Orca terminal, verbatim (Korean): "PR #1이 열렸습니다. 마무리로 최종 self report·Orca 카드 갱신·로컬 서버 정리·임시 worktree 삭제를 한 번에 처리합니다." ("PR #1 is open. To close out, I will do the final self report, the Orca card update, local server cleanup and temporary worktree removal in one pass.")
 
-**Result.** The six rows in `self work` move from `next` to `active`. Check: the last line of `self work show <id> --history` is `entity.started`.
+**State.** The six rows move from `next` to `active`. At the time these materials were collected, the last line of `self work show <id> --history` was `entity.started`.
 
 ## Step 5. Receive reports that carry evidence
 
-**What the agent did.** At every checkpoint, `self report <id> "<what verifiably happened>" --evidence <commit>`. One w-rwmxx report, in part:
+**Command.** At each checkpoint, the agent ran `self report <id> "<verifiable result>" --evidence <commit>`. This is part of a w-rwmxx report:
 
 ```text
 - 2026-08-22 — PR #321 open: https://github.com/fxylabs/superself/pull/321 … All four root gates green locally: pnpm typecheck, pnpm build, pnpm test (cli 976 tests/0 fail + plugin 23/0), pnpm structure. … Unit is NOT done until publish + list merge. Friction: root test tier took ~25 min on this Mac, not the ~12 min CONTRIBUTING states; dsh plugin add needs --profile (no default) … [8ad441b]
 ```
 
-Every report ends with one friction line. w-fvhq9: "Friction: expected a dead launchd job or a dirty tree; it was a swallowed non-fast-forward push that launchd reported as exit 0".
+The implementation reports also record what differed from the plan. One w-fvhq9 report says: "Friction: expected a dead launchd job or a dirty tree; it was a swallowed non-fast-forward push that launchd reported as exit 0".
 
 ![self report and self work show](../../examples/2026-08-23-delegation-day/tapes/intro.gif)
 
-**Result.** Commits accumulate on the `Evidence:` line of `self work show`, each with a verdict (`provisional` → `settled`; `abandoned` when it disappears from its branch). Check: the `[8ad441b]` at the end of the report matches a hash on the `Evidence:` line.
+**State.** `self work show` lists each evidence commit with a verdict. Check that `[8ad441b]` at the end of the report matches the hash on the `Evidence:` line.
 
 ## Step 6. Catch stops and drift in the record
 
-**What you see.** An agent cannot close a unit without evidence, and a stalled unit or an abandoned commit shows up on the status screen. Lines printed that day:
+**Command.** The operator tried to close a unit without evidence, then read the project status.
 
 ```text
-$ self work start w-t6vy1
-- Not done yet: w-t6vy1 has no evidence for done — attach a report first (`self report w-t6vy1 "<summary>" --evidence <commit>` …)
+$ self work done w-n21cx
+error: w-n21cx has no evidence for done — attach a report first (`self report w-n21cx "<summary>" --evidence <commit>` or `--artifact <path>`), or state what verifiably happened with `self work done w-n21cx --report "<what happened>"`
 
 $ self status --project superself
 health: w-1aedt looks stalled — no events for 12 days; … w-64t76 evidence aa22c28 was reset away on its branch — that direction reads as attempted and abandoned; …
@@ -136,11 +126,11 @@ health: w-1aedt looks stalled — no events for 12 days; … w-64t76 evidence aa
 
 The agents follow the same rule on their side. w-6h4es: "Not marked done — maintainer closes on merge." w-rwmxx: "Unit is NOT done until publish + list merge."
 
-**Result.** A unit that stopped partway reads as `looks stalled`; a commit that changed direction reads as `abandoned`. Check: the `health:` line of `self status`.
+**State.** The completion is refused. A unit that stopped partway reads as `looks stalled`, and a commit removed from its branch reads as `abandoned`. Both appear on the `health:` line of `self status`.
 
 ## Step 7. Let the next session pick it up
 
-**What the operator did.** Nothing. The next day, any session that reads `self context` finds the six units under `Work in progress`, each with its latest report (in part):
+**Command.** The next day, a fresh session ran `self context`. The six units were still under `Work in progress`, each with its latest report.
 
 ```text
 ## Work in progress
@@ -150,7 +140,7 @@ The agents follow the same rule on their side. w-6h4es: "Not marked done — mai
 
 ![self context](../../examples/2026-08-23-delegation-day/tapes/self-context.gif)
 
-**Result.** The day's state is in the record, and the next session only has to read it. Check: every line in `self context` carries `latest report:`.
+**State.** The new session can continue without a separate handoff document. Check that each row in `self context` includes `latest report:`.
 
 ## State diff
 
@@ -166,3 +156,9 @@ The agents follow the same rule on their side. w-6h4es: "Not marked done — mai
 
 - Next tutorial: agents propose the decisions that pile up, and the operator clears them in one pass (in preparation).
 - Concept: [Company State and context](../concepts/company-state-and-context.md).
+
+## Sources
+
+- [Source records and recording notes for 2026-08-23](../../examples/2026-08-23-delegation-day/README.md)
+- [Eleven reports of agents drifting or stopping](../../examples/2026-08-23-delegation-day/voices.md)
+- Work-unit briefs, reports, and histories under [`examples/2026-08-23-delegation-day/units/`](../../examples/2026-08-23-delegation-day/README.md)

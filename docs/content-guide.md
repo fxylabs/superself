@@ -45,7 +45,7 @@
 
 - [ ] 논지는 운영자가 먼저 한두 문장으로 정했고, 초안은 그 뒤에 썼습니다.
 - [ ] 채널 도달 테스트: 이 채널에 우리 계정의 도달 경로(팔로워, 들어가 있는 태그 피드, 게시 권한)가 있습니다. 없으면 mirror로 기록합니다.
-- [ ] AI-tell 감사: em-dash 없음, 대조 구문("A가 아니라 B")은 글 전체에서 하나까지, 문장 길이가 섞여 있음, 상투 어휘 없음(delve, leverage, seamless, robust, "in today's", "it's worth noting").
+- [ ] AI-tell 감사: 작성한 문장에는 em-dash가 없고, 대조 구문("A가 아니라 B")은 글 전체에서 하나까지이며, 문장 길이가 섞여 있습니다. 원문 발췌와 제품 출력은 고치지 않고 감사 대상에서 따로 셉니다.
 - [ ] CLI 주장 검증: 글에 쓴 모든 명령과 옵션을 `self --help`와 실제 실행으로 확인했습니다.
 - [ ] 스크럽: 발췌와 테이프에 `grep`을 돌려 이메일, 토큰, 내부 호스트가 없습니다.
 - [ ] 실제 제품 출력만 썼습니다. 가공한 화면, 가상의 기록이 없습니다.
@@ -70,6 +70,20 @@
 - 독자가 얻는 가치를 먼저, 배경과 세부 설정은 뒤에 둡니다.
 - 제목에 핵심 키워드를 넣고, 같은 수준의 제목은 같은 꼴("~하기")로 씁니다.
 - 개요는 제목 바로 아래에 두고 "이 문서를 읽으면 무엇을 할 수 있는가"에 답합니다.
+
+### AI slop을 걷어내는 편집 순서
+
+금칙어 목록만으로 문체를 만들지 않습니다. 아래 순서로 편집합니다.
+
+1. 초안 전에 사실표를 만듭니다. 각 행에 주장, 근거가 된 실제 기록, 독자가 할 행동을 하나씩 적습니다.
+2. 한국어와 영어는 서로 번역하지 않습니다. 같은 사실표를 보고 각 언어로 따로 씁니다.
+3. 문단마다 새 사실, 명령, 출력 가운데 하나가 있어야 합니다. 셋 다 없으면 문단을 지웁니다.
+4. 제품명을 다른 도구 이름으로 바꿔도 성립하는 문장은 지웁니다. 실제 사건, 수치, 명령으로 바꿀 수 있을 때만 남깁니다.
+5. 같은 길이의 문장 세 개, 같은 문두의 반복, 근거 없는 3단 나열, 질문으로 시작하는 상투적 도입을 찾습니다.
+6. 소리 내어 읽습니다. 한 번에 읽히지 않는 한국어 문장과 말로는 쓰지 않을 영어 표현을 고칩니다.
+7. 마지막에만 금칙어와 구두점 검사를 돌립니다. 검사는 문체를 만들지 않고 남은 흔적만 찾습니다.
+
+문체의 기준은 운영자의 실제 결정문, 프롬프트, 보고입니다. 원문의 짧고 구체적인 동사를 우선하고, 매끈하게 보이려고 원문에 없던 감정이나 확신을 보태지 않습니다.
 
 ---
 
@@ -118,7 +132,7 @@ Step rules
 
 - [ ] The operator dictated the thesis in one or two sentences before drafting started.
 - [ ] Channel reach test: our account has a reach path in this channel (followers, a tag feed we have entered, posting rights). A channel that fails is recorded as a mirror.
-- [ ] AI-tell audit: no em-dashes, at most one contrast construction ("not A but B") in the piece, sentence lengths vary, no stock vocabulary (delve, leverage, seamless, robust, "in today's", "it's worth noting").
+- [ ] AI-tell audit: authored prose has no em-dashes, at most one contrast construction ("not A but B"), and varied sentence lengths. Verbatim records and product output stay unchanged and are counted separately.
 - [ ] CLI claims verified: every command and flag in the piece checked against `self --help` and a real run.
 - [ ] Scrubbed: a `grep` over excerpts and tapes finds no emails, tokens, or internal hosts.
 - [ ] Real product output only. No mock screens, no invented records.
@@ -132,6 +146,20 @@ Step rules
 - Prefer verbs to noun chains, numbers to vague words, and name who does what where.
 - Use one term per concept, expand an abbreviation on first use, follow official spelling of tool names.
 - One page, one goal. Value first, background later. Keywords in headings, same grammatical form at the same level.
+
+### Editing out AI slop
+
+Do not build a voice from a banned-word list. Edit in this order:
+
+1. Make a fact table before drafting. Each row holds one claim, the real record behind it, and one action for the reader.
+2. Draft Korean and English separately from that table. Do not translate one draft into the other.
+3. Keep a paragraph only if it adds a fact, a command, or an output.
+4. Apply the swap test: if another product name fits without changing the sentence, cut it or replace it with concrete evidence.
+5. Find repeated openings, evenly sized sentences, unsupported groups of three, and canned rhetorical questions.
+6. Read the piece aloud. Rewrite anything you would not say to a colleague.
+7. Run phrase and punctuation checks last. They catch residue; they do not create a voice.
+
+Use the operator's decisions, prompts, and reports as the voice corpus. Prefer their short verbs and specific claims. Do not add confidence, emotion, or polish that the source record did not contain.
 
 ## Sources
 
