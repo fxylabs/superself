@@ -34,6 +34,42 @@ test("the approved path records the supersession and the confirmation it was typ
     assert.equal(written.payload.confirmation.challenge, first);
 });
 
+// The record's own words say what is being lost; the reason the call gives
+// says why it should be. A person judging a withdrawal reads both, and one
+// reviewed set (#312) is unreadable without the second.
+test("the disclosure states the reason the call gives, beside what the record says", () =>
+{
+    const id = idIn(must(box, demo, ["decide", "a policy whose scope ran out"]).out);
+    const refused = selfIn(box, demo, ["decide", "retract", id, "--why", "the scope it covered is gone"]);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /a policy whose scope ran out/);
+    assert.match(refused.out, /retracted because: the scope it covered is gone/);
+});
+
+// The verbs that give up an outcome read "retired", not "retireed": the
+// reason line is the one sentence a person reads to judge whether the reason
+// justifies the loss, and it was misspelled on every one of them.
+test("a retirement's reason is spelled retired on every verb that gives one up", () =>
+{
+    const unit = must(box, demo, ["work", "add", "an outcome that was given up"]).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const refused = selfIn(box, demo, ["work", "retire", unit, "--why", "the outcome moved to another unit"]);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /retired because: the outcome moved to another unit/);
+    assert.doesNotMatch(refused.out, /retireed/);
+});
+
+// A supersession carries no `--why` because its successor's text is the
+// reason. The disclosure states that text, so approving a supersession is
+// never approving words that were not shown.
+test("the disclosure states the record a supersession would write", () =>
+{
+    const first = idIn(must(box, demo, ["decide", "the policy as first taken"]).out);
+    const refused = selfIn(box, demo, ["decide", "the policy as it now stands", "--supersedes", first]);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /the policy as first taken/);
+    assert.match(refused.out, /replaced by this new decision: the policy as it now stands/);
+});
+
 test("a wrong answer at the terminal records nothing", async () =>
 {
     const first = idIn(must(box, demo, ["decide", "the third policy"]).out);

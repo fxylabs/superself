@@ -24,6 +24,7 @@ prints them during the same run.
 | Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path|--here] [--force]`, `project unlink [slug] <path|--here> [--force]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
+| Approving a reviewed set | `apply <file>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `artifact ...` |
@@ -37,7 +38,7 @@ The command catalogue currently includes these top-level verbs:
 ```text
 init workspace lang theme timezone tokens project remote sync clone
 goal objective milestone decide work report artifact convention state alias
-undo
+undo apply
 connect view context status setup
 log search fold
 login logout whoami app
@@ -107,6 +108,51 @@ as any other project, with one line saying it is set aside.
 from anywhere in the workspace, while `undo` reads its project from the working
 directory — and a project that is set aside frequently has no checkout on this
 machine at all.
+
+### Approving a reviewed set at once
+
+Destroying a record is a person's call, so `decide retract`, `convention drop`,
+`work retire` and the rest refuse to run from a process with no terminal. An
+agent auditing project state produces many of those calls at once, and running
+them one at a time prices the judgment per record instead of per decision.
+
+`self apply <file>` is the one human action that covers the set. The file holds
+one command per line, exactly as it would be typed, with or without the leading
+`self`; blank lines and lines beginning with `#` are notes:
+
+```text
+# duplicates the audit found
+self decide retract 01kz2n… --why "an exact duplicate of 01kz2m…"
+self work retire w-abc12 --why "the outcome moved to w-def34"
+```
+
+Every line runs through the same contract, argument parse and handler a typed
+command reaches, and every write is held until the whole set has been shown at
+one prompt: each record's id, its own text, how long it has been confirmed,
+what still points at it, and the reason the line gives for retiring it. Where a
+line supersedes rather than withdraws, the reason is the successor it writes, so
+the disclosure states that record's own words too — nothing is approved that was
+not read. One typed confirmation records the set. Where the ids are short enough
+to type back they are the challenge, as they are for a single command; a longer
+set is confirmed by what is being done and to how many, with the disclosure
+above it saying which.
+
+A plan runs only the verbs that retire, retract or supersede a record. Anything
+else — a verb that writes the store config, the git remote or an installed
+app, or one that only reads — is refused before it runs, so a refused file
+leaves nothing changed anywhere, not only in the event log.
+
+Nothing is applied outside the file, and a file with one bad line applies
+nothing at all. A line that records something rather than destroying a record,
+one no command dispatches, one its own verb refuses, and one naming a record an
+earlier line already names each refuse the whole file with nothing written. The
+approved set lands as one write and one commit, so a line the writer itself
+refuses — a reason holding an absolute path under this machine's home, a project
+archived while the plan sat unapplied — stops the set with the earlier lines
+still standing.
+
+A plan is not read from stdin. The confirmation is typed at the terminal on the
+same descriptor, so a piped file would leave nothing there to confirm at.
 
 ### The entity grammar
 

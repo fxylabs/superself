@@ -53,7 +53,7 @@ import {
 } from "./paths.js";
 import { notice } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
-import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
+import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { countCharacters, tokensOf } from "./style.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 import { historyOutput } from "./views.js";
@@ -251,17 +251,17 @@ export const STATE_COMMAND: Command = {
         children: [
             leaf("", SCOPE_OPTIONS, 0, stateList),
             leaf("list", SCOPE_OPTIONS, 0, stateList),
-            leaf("add", ADD_OPTIONS, 1, stateAdd),
+            retiring(leaf("add", ADD_OPTIONS, 1, stateAdd)),
             leaf("show", SHOW_OPTIONS, 1, stateShow),
             leaf("place", PLACE_OPTIONS, 1, statePlace),
             leaf("confirm", {}, 1, stateConfirm),
-            leaf("retract", WHY_OPTION, 1, stateRetract, { requires: [WHY_NO_LONGER_HOLDS] }),
+            retiring(leaf("retract", WHY_OPTION, 1, stateRetract, { requires: [WHY_NO_LONGER_HOLDS] })),
             leaf("cover", COVER_OPTIONS, 1, stateCover, { requires: COVERAGE_REQUIRED }),
             leaf("start", {}, 1, stateStart),
             leaf("block", BLOCK_OPTIONS, 1, stateBlock),
             leaf("unblock", {}, 1, stateUnblock),
             leaf("done", DONE_OPTIONS, 1, stateDone, { requires: [DONE_REPORT] }),
-            leaf("retire", RETIRE_OPTIONS, 1, stateExecRetire, { requires: [RETIRE_WHY] })
+            retiring(leaf("retire", RETIRE_OPTIONS, 1, stateExecRetire, { requires: [RETIRE_WHY] }))
         ]
     })
 };
@@ -329,7 +329,8 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     // A proposal displaces nothing: its supersedes links wait for the confirm
     // that makes them real, so the gate belongs there rather than here.
     const displaced = proposed ? [] : supersedeTargets(payload);
-    recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced), models[0],
+    recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced,
+        { successor: supersedingRecord(payload) }), models[0],
         (confirmation) => [
             makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
                 confirmation === undefined ? payload : { ...payload, confirmation }, undefined, !proposed),
@@ -1187,7 +1188,7 @@ function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>):
             : `${entity.id} was already superseded by ${entity.supersededBy ?? "a later entity"} — nothing is left to retract`);
     }
     const why = required(values.why);
-    recordRetirement(ctx, retirementIntent(model, "retract", [entity.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retract", [entity.id], { why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why, confirmation }, { retracts: entity.id }, true)],
         entity.text);
 }
@@ -1341,7 +1342,7 @@ function stateExecRetire({ values, positionals }: CommandInput<typeof RETIRE_OPT
     {
         payload.successor = requireSuccessor(model, entity, values.successor).id;
     }
-    recordRetirement(ctx, retirementIntent(model, "retire", [entity.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retire", [entity.id], { why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retired", { ...payload, confirmation })],
         entity.text);
 }

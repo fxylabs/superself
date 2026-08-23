@@ -214,6 +214,8 @@ usage: self <command>
                                              retire the unit itself: its outcome was given up or moved, not reached
                                              history stays inspectable; the unit stops counting as open work
   undo <event-id> --why "<why the retirement was wrong>"
+  apply <file>                               run a reviewed file of record-destroying commands on one confirmation
+                                             (nothing is recorded until the whole set is confirmed at a terminal)
   report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]
   artifact list [--work id] [--project slug]
                                              list artifacts from the derived registry

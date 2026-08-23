@@ -6,36 +6,67 @@
 // The disclosure is rendered once and ends two ways — a refusal inside a
 // process with no terminal, a challenge prompt at one — so what an agent
 // reads and what a person reads cannot drift apart.
+//
+// One person's judgment covers one reviewed set, not one record (#312). A
+// batch collects the gated calls a whole plan makes, discloses them together,
+// and reads one typed confirmation — the same disclosure and the same prompt,
+// over more than one call.
+import { CommandLeaf } from "./contract.js";
 import { EntityState } from "./entities.js";
 import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { ProjectModel } from "./model.js";
 import { CliContext } from "./paths.js";
-import { recordEvents } from "./pipeline.js";
-import { bold, dim, red } from "./style.js";
+import { holdAppends, recordCalls, recordEvents } from "./pipeline.js";
+import { bold, dim, plural, red } from "./style.js";
 import { CliError, SelfEvent } from "./types.js";
 
 // What the three transitions are called where a person reads them. The verb
 // each one arrives from varies; what is being lost does not.
 type RetirementKind = "supersede" | "retract" | "retire";
 
-interface RetirementIntent
+// The record a supersession writes in the place of the ones it retires: what
+// kind of record it is, and the words it will hold.
+interface Successor
+{
+    kind: string;
+    text: string;
+}
+
+// What a call carries beyond the records it destroys. Both fields are what the
+// disclosure is for, so both are stated by name rather than by position.
+interface RetirementDetail
+{
+    why?: string;
+    successor?: Successor;
+}
+
+interface RetirementIntent extends RetirementDetail
 {
     kind: RetirementKind;
     // The records this call destroys, already resolved and already checked
     // for being destroyable: resolution and its refusals stay with the verb
     // that owns them, so the gate never invents a second way to name a record.
     targets: EntityState[];
+    // `why` is the reason this call gives, where its transition carries one. It
+    // is half of what a person is judging — the record says what is being lost
+    // and this says why the caller thinks it should be — and a reviewed set is
+    // unreadable without it.
+    //
+    // A supersession gives no reason because its successor's text *is* the
+    // reason, which is why `--why` is excused there — so a supersession has to
+    // disclose that text. Without it a reviewed set asks a person to approve
+    // words they were never shown: the old records render, the agent-authored
+    // ones replacing them do not, and one answer writes both (#312 review 1).
 }
 
 // What a verb hands the gate: the ids it already resolved, read back out of
 // the folded model it already built. A target the model does not carry is
-// dropped rather than guessed at — the verb's own refusals ran first.
-// What a verb hands the gate: the ids it already resolved, read back out of
-// the folded model it already built. Only a record that is still standing is
-// a target — a supersedes link naming something already superseded destroys
-// nothing, and the trigger is what this call displaces now, never which flag
-// was typed.
-export function retirementIntent(model: ProjectModel, kind: RetirementKind, ids: string[]): RetirementIntent
+// dropped rather than guessed at — the verb's own refusals ran first. Only a
+// record that is still standing is a target: a supersedes link naming
+// something already superseded destroys nothing, and the trigger is what this
+// call displaces now, never which flag was typed.
+export function retirementIntent(model: ProjectModel, kind: RetirementKind, ids: string[],
+    detail: RetirementDetail = {}): RetirementIntent
 {
     const targets: EntityState[] = [];
     for (const id of ids)
@@ -46,7 +77,22 @@ export function retirementIntent(model: ProjectModel, kind: RetirementKind, ids:
             targets.push(target);
         }
     }
-    return { kind, targets };
+    return { ...detail, kind, targets };
+}
+
+// The successor read off the payload the verb already composed, the way
+// `supersedeTargets` reads the links off it: every add and revise verb spells
+// its new record the same way once it reaches here, so the disclosure does not
+// need one line per verb to learn what is replacing what.
+export function supersedingRecord(payload: Record<string, unknown>): Successor | undefined
+{
+    if (typeof payload.text !== "string")
+    {
+        return undefined;
+    }
+    const labels = payload.labels;
+    const kind = Array.isArray(labels) && typeof labels[0] === "string" ? labels[0] : "record";
+    return { kind, text: payload.text };
 }
 
 // The records an add verb's payload displaces. Read off the payload rather
@@ -71,30 +117,86 @@ const SUBJECT: Record<RetirementKind, string> = {
     retire: "gives up the outcome of"
 };
 
+// What a person types back where the ids are too many to type. `supersede`
+// answers "retire" because that is what displacing a record does to it.
+const ACTION: Record<RetirementKind, string> = {
+    supersede: "retire",
+    retract: "retract",
+    retire: "retire"
+};
+
+// The same three transitions in the past tense, for the line that states the
+// reason a call gives. A table rather than `${ACTION[kind]}ed`, because that
+// spelled "retireed" on every `work retire`, `objective close --as dropped`,
+// `milestone drop` and `state retire` — the one line a person reads to judge
+// whether the reason justifies the loss.
+const PAST: Record<RetirementKind, string> = {
+    supersede: "retired",
+    retract: "retracted",
+    retire: "retired"
+};
+
 // How many references and how much text a person will actually read. A
 // disclosure that scrolls past the top of the terminal is not a disclosure.
 const REFERENCE_LIMIT = 8;
 const TEXT_LINE_LIMIT = 20;
 
+// How much a person is asked to type back. Naming the exact ids is the
+// strongest statement of "these ones and no others", and it stays the
+// challenge while it is short enough to read and type; past that a person
+// copies without reading, which confirms nothing. A reviewed set beyond the
+// bound says what is being done and to how many, and the disclosure above it
+// says which.
+const CHALLENGE_LIMIT = 60;
+
+// What one call — or one line of a reviewed set — puts in front of a person:
+// the records it destroys, and the folded model the verb resolved them
+// against, so every target is described by the fold its own verb read.
+interface Disclosed
+{
+    intent: RetirementIntent;
+    model: ProjectModel;
+}
+
+function targetsOf(disclosed: Disclosed[]): EntityState[]
+{
+    return disclosed.flatMap((one) => one.intent.targets);
+}
+
 // The gate. Returns the record of how the person was verified, which the
 // caller puts in the event payload — `origin.confirmed` alone is a bit any
 // process can set, so the payload carries what was actually typed.
-function requireHumanRetirement(intent: RetirementIntent, model: ProjectModel): HumanConfirmation
+function requireHumanRetirement(disclosed: Disclosed[]): HumanConfirmation
 {
-    const challenge = intent.targets.map((target) => target.id).join(" ");
+    const asked = challenge(disclosed);
     if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
     {
-        throw new CliError(refusal(intent, renderDisclosure(intent, model, PLAIN_EMPHASIS)));
+        throw new CliError(refusal(disclosed, renderDisclosure(disclosed, PLAIN_EMPHASIS)));
     }
     const confirmed = confirmHuman(
-        `${red(bold(headline(intent)))}\n\n${renderDisclosure(intent, model, PROMPT_EMPHASIS)}`,
-        challenge,
-        `type ${bold(challenge)} to confirm exactly what you are approving`);
+        `${red(bold(headline(disclosed)))}\n\n${renderDisclosure(disclosed, PROMPT_EMPHASIS)}`,
+        asked,
+        `type ${bold(asked)} to confirm exactly what you are approving`);
     if ("code" in confirmed)
     {
         throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
     }
     return confirmed;
+}
+
+function challenge(disclosed: Disclosed[]): string
+{
+    const ids = targetsOf(disclosed).map((target) => target.id).join(" ");
+    return ids.length <= CHALLENGE_LIMIT ? ids : `${action(disclosed)} ${targetsOf(disclosed).length}`;
+}
+
+// The word for what the whole set is having done to it. A set that mixes
+// transitions is described by the one they share: every record in it is being
+// retired from what is true now.
+function action(disclosed: Disclosed[]): string
+{
+    const kinds = new Set(disclosed.map((one) => one.intent.kind));
+    return kinds.size === 1 ? ACTION[[...kinds][0]] : ACTION.supersede;
 }
 
 // Destroying a record goes through the gate and then through the same single
@@ -119,15 +221,135 @@ export function recordRetirement(
         recordEvents(ctx, events(), summary);
         return;
     }
-    recordEvents(ctx, events(requireHumanRetirement(intent, model)), summary);
+    if (collecting !== null)
+    {
+        collecting.push({ ctx, intent, model, events, summary });
+        return;
+    }
+    recordEvents(ctx, events(requireHumanRetirement([{ intent, model }])), summary);
+}
+
+/* ── which verbs a reviewed set may run ────────────────────────────── */
+
+// The leaves that can reach this gate, declared where they are declared.
+//
+// Holding the log shut is not enough on its own to keep a plan inside what one
+// confirmation covers: the log is not the only thing a verb writes. `remote
+// add` rewrites the store's git remote, `theme` and `timezone` rewrite the
+// store config, `app install` writes the plugin registry — none of them
+// touch the event log, so the hold never sees them, and running one and *then*
+// refusing the file printed "nothing in this file was recorded" over a change
+// that had already happened. So a plan resolves a line against these leaves
+// only, and refuses anything else before it runs rather than after.
+//
+// Marking a leaf that turns out to destroy nothing costs nothing — the line
+// queues no call and is refused for that. Forgetting to mark one that does
+// costs a plan that refuses a verb it could have run. Both failures are safe,
+// which is the point of putting the mark on the declaration.
+const retiringLeaves = new WeakSet<CommandLeaf>();
+
+export function retiring(node: CommandLeaf): CommandLeaf
+{
+    retiringLeaves.add(node);
+    return node;
+}
+
+export function retires(node: CommandLeaf): boolean
+{
+    return retiringLeaves.has(node);
+}
+
+/* ── one judgment over a reviewed set (#312) ───────────────────────── */
+
+// A gated call collected rather than asked about: everything the write needs,
+// held until the person has seen the whole set it belongs to.
+interface Collected extends Disclosed
+{
+    ctx: CliContext;
+    events: (confirmation?: HumanConfirmation) => SelfEvent[];
+    summary: string;
+}
+
+let collecting: Collected[] | null = null;
+
+export const NESTED_SET_REFUSAL = "a reviewed set cannot open another one — one confirmation covers one file, "
+    + "and a plan that applies a plan would put records outside it under the same answer";
+
+// Open the collection, and stop the log accepting anything at all while it is
+// open: a verb that records rather than destroys is refused by the append gate
+// instead of writing before the person was asked.
+export function collectRetirements(): void
+{
+    if (collecting !== null)
+    {
+        throw new CliError(NESTED_SET_REFUSAL);
+    }
+    collecting = [];
+    holdAppends(true);
+}
+
+// How many gated calls the open collection is holding. A caller runs a line
+// and asks whether it added anything: a line that destroys nothing has no
+// place in a set one confirmation covers.
+export function collectedSoFar(): number
+{
+    return collecting === null ? 0 : collecting.length;
+}
+
+// Dropped with nothing written. Every path that leaves the collection calls
+// this, so a refused line cannot leave the next command holding a queue or a
+// log that refuses appends.
+export function dropCollected(): void
+{
+    collecting = null;
+    holdAppends(false);
+}
+
+// The whole set, disclosed once and written only after one typed
+// confirmation. Returns how many records were retired, which is what the
+// caller answers with.
+export function approveCollected(): number
+{
+    const queued = collecting ?? [];
+    dropCollected();
+    refuseRepeats(queued);
+    const confirmation = requireHumanRetirement(queued);
+    const retired = targetsOf(queued).length;
+    // One write, not one per line. Every line's events are composed first and
+    // handed over together, so a line the sanitizer or the archive gate refuses
+    // stops the whole set before a byte is appended. Writing them one at a time
+    // meant a second line carrying an absolute home path, or a first line
+    // naming an archived project, destroyed the records above it and then
+    // exited 1 saying nothing had been recorded (#312 review 1).
+    recordCalls(queued.map((one) => ({ ctx: one.ctx, events: one.events(confirmation), summary: one.summary })),
+        `${plural(retired, "record")} retired on one confirmation`);
+    return retired;
+}
+
+// One confirmation covers a set, and a set holds each record once. A second
+// line naming a record an earlier one already retires records an event that
+// changes nothing, so it is a mistake in the reviewed file rather than a
+// no-op to wave through.
+function refuseRepeats(queued: Collected[]): void
+{
+    const seen = new Set<string>();
+    for (const target of targetsOf(queued))
+    {
+        if (seen.has(target.id))
+        {
+            throw new CliError(`${target.id} is named twice, and one confirmation covers each record once — `
+                + "drop the repeated line and run it again");
+        }
+        seen.add(target.id);
+    }
 }
 
 // The refusal an agent reads. It ends with the command as it was typed, so
 // the person it is handed to runs that rather than rebuilding it.
-function refusal(intent: RetirementIntent, disclosure: string): string
+function refusal(disclosed: Disclosed[], disclosure: string): string
 {
     return [
-        `this ${SUBJECT[intent.kind]} ${describe(intent)}, and nothing was recorded — ` +
+        `this ${subject(disclosed)} ${describe(disclosed)}, and nothing was recorded — ` +
             "retiring a record is a person's call, and this process has no terminal to make it at",
         "",
         disclosure,
@@ -137,9 +359,17 @@ function refusal(intent: RetirementIntent, disclosure: string): string
     ].join("\n");
 }
 
-function headline(intent: RetirementIntent): string
+function headline(disclosed: Disclosed[]): string
 {
-    return `this ${SUBJECT[intent.kind]} ${describe(intent)} — nothing is recorded until you confirm`;
+    return `this ${subject(disclosed)} ${describe(disclosed)} — nothing is recorded until you confirm`;
+}
+
+// What is happening to the set, in one verb. A set that mixes transitions
+// reads as the one thing they all do: it retires the records in it.
+function subject(disclosed: Disclosed[]): string
+{
+    const kinds = new Set(disclosed.map((one) => one.intent.kind));
+    return kinds.size === 1 ? SUBJECT[[...kinds][0]] : SUBJECT.supersede;
 }
 
 // What is about to be lost, in the words a person uses for it. The label a
@@ -147,11 +377,20 @@ function headline(intent: RetirementIntent): string
 // here too — except where the label is a shorthand the sentence cannot use.
 const NOUN: Record<string, string> = { work: "work unit" };
 
-function describe(intent: RetirementIntent): string
+function describe(disclosed: Disclosed[]): string
 {
-    const label = intent.targets[0]?.labels[0] ?? "record";
-    const noun = NOUN[label] ?? label;
-    return intent.targets.length === 1 ? `a confirmed ${noun}` : `${intent.targets.length} confirmed ${noun}s`;
+    const targets = targetsOf(disclosed);
+    const noun = NOUN[commonLabel(targets)] ?? commonLabel(targets);
+    return targets.length === 1 ? `a confirmed ${noun}` : `${targets.length} confirmed ${noun}s`;
+}
+
+// What the set is made of, where it is made of one thing. A reviewed set that
+// mixes kinds is described as records rather than named after whichever one
+// happened to be listed first.
+function commonLabel(targets: EntityState[]): string
+{
+    const labels = new Set(targets.map((target) => target.labels[0] ?? "record"));
+    return labels.size === 1 ? [...labels][0] : "record";
 }
 
 // How a disclosure is weighted where it is read. The prompt is the only styled
@@ -185,9 +424,34 @@ function renderTarget(target: EntityState, model: ProjectModel, emphasis: Emphas
     return lines;
 }
 
-function renderDisclosure(intent: RetirementIntent, model: ProjectModel, emphasis: Emphasis): string
+// One blank line between calls, because a reviewed set of a dozen read as one
+// wall of text is a list nobody checks record by record.
+function renderDisclosure(disclosed: Disclosed[], emphasis: Emphasis): string
 {
-    return intent.targets.flatMap((target) => renderTarget(target, model, emphasis)).join("\n");
+    return disclosed.map((one) => renderCall(one, emphasis).join("\n")).join("\n\n");
+}
+
+// One call's targets, and under them the reason it gives for retiring them.
+// Both halves are what a person judges: the record's own words say what is
+// being lost, and the reason says why this call thinks it should be.
+function renderCall(one: Disclosed, emphasis: Emphasis): string[]
+{
+    const lines = one.intent.targets.flatMap((target) => renderTarget(target, one.model, emphasis));
+    return [...lines, ...reasonGiven(one.intent)];
+}
+
+// Why this call says the records should go. A withdrawal says it in `--why`; a
+// supersession says it by writing a successor, so the successor's own words are
+// the reason and the disclosure states them — the person is approving that text
+// as much as the loss of the text above it.
+function reasonGiven(intent: RetirementIntent): string[]
+{
+    const lines = intent.successor === undefined
+        ? []
+        : quoted(intent.successor.text, `replaced by this new ${intent.successor.kind}: `);
+    return intent.why === undefined
+        ? lines
+        : [...lines, ...quoted(intent.why, `${PAST[intent.kind]} because: `)];
 }
 
 // Everything that still names this record. Read off the same folded model the
