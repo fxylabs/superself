@@ -1,5 +1,8 @@
 # Hand six units of a day's work to agents and read the result as state
 
+> Archived. This preserves the six-agent operating record from 2026-08-23,
+> but it is no longer part of the active tutorial path.
+
 This tutorial follows six pieces of work in one project, each assigned to a separate agent. The operator wrote the required outcomes first, read the agents' surveys before approving execution, and used `self work` to check where the work stopped that evening.
 
 The commands and records come from 2026-08-23. Operator scenes were re-recorded with the same commands in an isolated workspace. Each agent ran in its own Claude Code session inside an Orca worktree.
@@ -27,11 +30,11 @@ held by another session, running since 2026-08-22 15:25
 - 2026-08-22 — npm publish done by the maintainer: dsh-plugin-superself@0.1.0 is live …
 ```
 
-Two-minute intro: [`intro.mp4`](../../examples/2026-08-23-delegation-day/tapes/intro.mp4) ([GIF](../../examples/2026-08-23-delegation-day/tapes/intro.gif)).
+Two-minute intro: [`intro.mp4`](../../../examples/2026-08-23-delegation-day/tapes/intro.mp4) ([GIF](../../../examples/2026-08-23-delegation-day/tapes/intro.gif)).
 
 ## Before you start
 
-- `self` 0.7.0 (`npm install -g superself`), and a project where `self init` and `self project init` have run. First time: follow the [getting started guide](../guides/getting-started.md).
+- `self` 0.7.0 (`npm install -g superself`), and a project where `self init` and `self project init` have run. First time: follow the [getting started guide](../../guides/getting-started.md).
 - One agent harness. On this day it was one Claude Code session per Orca worktree. `self` uses the same commands in any harness.
 - The recorded run took 1 hour 45 minutes. The first brief was written at 14:57 UTC, and the sixth unit started at 16:42.
 
@@ -48,7 +51,7 @@ $ self decide confirm 01m0n7…
 ✓ entity.confirmed  M1 front-door strategy: Superself does not open its own curated repo now; it ge…
 ```
 
-![Waiting on you in self context](../../examples/2026-08-23-delegation-day/tapes/waiting-on-you.gif)
+![Waiting on you in self context](../../../examples/2026-08-23-delegation-day/tapes/waiting-on-you.gif)
 
 **Record.** The DSH wave decision reads, "Superself ships a plugin, not a repo … within 7 days." Its `why` records the reason: the list-of-record slot closed on launch day, while the plugin surface remained open.
 
@@ -65,7 +68,7 @@ $ self work add "The adoption-metrics snapshot runs again daily and reads truthf
 w-fvhq9
 ```
 
-![self work list](../../examples/2026-08-23-delegation-day/tapes/work-list.gif)
+![self work list](../../../examples/2026-08-23-delegation-day/tapes/work-list.gif)
 
 **State.** Six `next` rows appear in `self work`. Read each row by itself. If the finished state is unclear, rewrite the outcome before dispatching it.
 
@@ -108,7 +111,7 @@ One line read from the w-6h4es Orca terminal, verbatim (Korean): "PR #1이 열�
 
 The implementation reports also record what differed from the plan. One w-fvhq9 report says: "Friction: expected a dead launchd job or a dirty tree; it was a swallowed non-fast-forward push that launchd reported as exit 0".
 
-![self report and self work show](../../examples/2026-08-23-delegation-day/tapes/intro.gif)
+![self report and self work show](../../../examples/2026-08-23-delegation-day/tapes/intro.gif)
 
 **State.** `self work show` lists each evidence commit with a verdict. Check that `[8ad441b]` at the end of the report matches the hash on the `Evidence:` line.
 
@@ -138,7 +141,7 @@ The agents follow the same rule on their side. w-6h4es: "Not marked done — mai
 - w-6h4es superselfs.com has a use-with guide generator: … — latest report: PR opened: … Gates: build green …
 ```
 
-![self context](../../examples/2026-08-23-delegation-day/tapes/self-context.gif)
+![self context](../../../examples/2026-08-23-delegation-day/tapes/self-context.gif)
 
 **State.** The new session can continue without a separate handoff document. Check that each row in `self context` includes `latest report:`.
 
@@ -155,10 +158,10 @@ The agents follow the same rule on their side. w-6h4es: "Not marked done — mai
 ## Next steps
 
 - Next tutorial: agents propose the decisions that pile up, and the operator clears them in one pass (in preparation).
-- Concept: [Company State and context](../concepts/company-state-and-context.md).
+- Concept: [Company State and context](../../concepts/company-state-and-context.md).
 
 ## Sources
 
-- [Source records and recording notes for 2026-08-23](../../examples/2026-08-23-delegation-day/README.md)
-- [Eleven reports of agents drifting or stopping](../../examples/2026-08-23-delegation-day/voices.md)
-- Work-unit briefs, reports, and histories under [`examples/2026-08-23-delegation-day/units/`](../../examples/2026-08-23-delegation-day/README.md)
+- [Source records and recording notes for 2026-08-23](../../../examples/2026-08-23-delegation-day/README.md)
+- [Eleven reports of agents drifting or stopping](../../../examples/2026-08-23-delegation-day/voices.md)
+- Work-unit briefs, reports, and histories under [`examples/2026-08-23-delegation-day/units/`](../../../examples/2026-08-23-delegation-day/README.md)

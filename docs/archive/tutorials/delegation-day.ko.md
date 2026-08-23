@@ -1,5 +1,8 @@
 # 하루치 일 6개를 에이전트에게 맡기고, 상태로 확인하기
 
+> 보관된 글입니다. 2026-08-23의 여섯 에이전트 운영 기록을 보존하지만,
+> 현재 튜토리얼 학습 경로에는 포함하지 않습니다.
+
 한 프로젝트의 일 여섯 개를 에이전트 여섯에게 맡깁니다. 시작 전에 필요한 결과를 한 줄로 적고, 실행 전에 조사 보고를 읽습니다. 하루가 끝나면 `self work`에서 각 일이 어디까지 갔는지 확인합니다.
 
 아래 명령과 출력은 2026-08-23의 실제 기록입니다. 운영자 화면만 격리된 임시 워크스페이스에서 같은 명령으로 다시 녹화했습니다. 에이전트는 Orca 워크트리마다 Claude Code 세션을 하나씩 사용했습니다.
@@ -27,11 +30,11 @@ held by another session, running since 2026-08-22 15:25
 - 2026-08-22 — npm publish done by the maintainer: dsh-plugin-superself@0.1.0 is live …
 ```
 
-2분 인트로: [`intro.mp4`](../../examples/2026-08-23-delegation-day/tapes/intro.mp4) ([GIF](../../examples/2026-08-23-delegation-day/tapes/intro.gif)).
+2분 인트로: [`intro.mp4`](../../../examples/2026-08-23-delegation-day/tapes/intro.mp4) ([GIF](../../../examples/2026-08-23-delegation-day/tapes/intro.gif)).
 
 ## 준비물
 
-- `self` 0.7.0 (`npm install -g superself`), 그리고 `self init`과 `self project init`을 마친 프로젝트. 처음이면 [시작 가이드](../guides/getting-started.md)를 먼저 따라 하세요.
+- `self` 0.7.0 (`npm install -g superself`), 그리고 `self init`과 `self project init`을 마친 프로젝트. 처음이면 [시작 가이드](../../guides/getting-started.md)를 먼저 따라 하세요.
 - 에이전트 하네스 하나. 이 날은 Orca 워크트리마다 Claude Code 세션을 하나씩 띄웠습니다. `self`는 어느 하네스에서나 같은 명령을 씁니다.
 - 기록된 실행 시간은 1시간 45분입니다. 첫 브리프는 2026-08-22 14:57(UTC)에 썼고, 여섯 번째 단위는 16:42에 시작했습니다.
 
@@ -48,7 +51,7 @@ $ self decide confirm 01m0n7…
 ✓ entity.confirmed  M1 front-door strategy: Superself does not open its own curated repo now; it ge…
 ```
 
-![self context의 Waiting on you](../../examples/2026-08-23-delegation-day/tapes/waiting-on-you.gif)
+![self context의 Waiting on you](../../../examples/2026-08-23-delegation-day/tapes/waiting-on-you.gif)
 
 **기록.** DSH wave 결정에는 "Superself ships a plugin, not a repo … within 7 days"라고 적혀 있습니다. `why`에는 출시 당일 목록 자리는 닫혔지만 플러그인 표면은 열려 있었다는 판단이 남아 있습니다.
 
@@ -65,7 +68,7 @@ $ self work add "The adoption-metrics snapshot runs again daily and reads truthf
 w-fvhq9
 ```
 
-![self work 목록](../../examples/2026-08-23-delegation-day/tapes/work-list.gif)
+![self work 목록](../../../examples/2026-08-23-delegation-day/tapes/work-list.gif)
 
 **상태.** `self work`에 여섯 줄이 `next`로 나타납니다. 한 줄만 읽고도 끝난 모습을 그릴 수 있어야 합니다. 그렇지 않다면 필요한 결과를 다시 씁니다.
 
@@ -108,7 +111,7 @@ Orca 터미널에서 읽은 한 줄(w-6h4es, 원문): "PR #1이 열렸습니다.
 
 구현 보고에는 예상과 달랐던 점도 남겼습니다. w-fvhq9에는 "Friction: expected a dead launchd job or a dirty tree; it was a swallowed non-fast-forward push that launchd reported as exit 0"라고 적혀 있습니다.
 
-![self report와 self work show](../../examples/2026-08-23-delegation-day/tapes/intro.gif)
+![self report와 self work show](../../../examples/2026-08-23-delegation-day/tapes/intro.gif)
 
 **상태.** `self work show`의 `Evidence:` 줄에 커밋과 판정이 나타납니다. 보고 끝의 `[8ad441b]`와 `Evidence:` 줄의 해시가 같은지 확인합니다.
 
@@ -138,7 +141,7 @@ health: w-1aedt looks stalled — no events for 12 days; … w-64t76 evidence aa
 - w-6h4es superselfs.com has a use-with guide generator: … — latest report: PR opened: … Gates: build green …
 ```
 
-![self context](../../examples/2026-08-23-delegation-day/tapes/self-context.gif)
+![self context](../../../examples/2026-08-23-delegation-day/tapes/self-context.gif)
 
 **상태.** 새 세션은 별도 인계 문서 없이 마지막 보고를 읽을 수 있습니다. 각 줄에 `latest report:`가 붙어 있는지 확인합니다.
 
@@ -155,10 +158,10 @@ health: w-1aedt looks stalled — no events for 12 days; … w-64t76 evidence aa
 ## 다음 단계
 
 - 다음 튜토리얼: 밀린 결정을 에이전트가 제안하고 운영자가 한 번에 정리하기 (준비 중).
-- 개념: [Company State와 context](../concepts/company-state-and-context.md).
+- 개념: [Company State와 context](../../concepts/company-state-and-context.md).
 
 ## 출처
 
-- [2026-08-23 원자료와 녹화 정보](../../examples/2026-08-23-delegation-day/README.md)
-- [에이전트가 방향에서 벗어나거나 중간에 멈춘 사례 11건](../../examples/2026-08-23-delegation-day/voices.md)
-- 각 작업 단위의 브리프·보고·이력: [`examples/2026-08-23-delegation-day/units/`](../../examples/2026-08-23-delegation-day/README.md)
+- [2026-08-23 원자료와 녹화 정보](../../../examples/2026-08-23-delegation-day/README.md)
+- [에이전트가 방향에서 벗어나거나 중간에 멈춘 사례 11건](../../../examples/2026-08-23-delegation-day/voices.md)
+- 각 작업 단위의 브리프·보고·이력: [`examples/2026-08-23-delegation-day/units/`](../../../examples/2026-08-23-delegation-day/README.md)
