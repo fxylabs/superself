@@ -143,6 +143,9 @@ usage: self <command>
   project link [slug] [path|--here] [--force]
                                              attach a registered project's directory on this machine, or — with neither
                                              a path nor --here — show where it is linked (--force adds a second repository)
+  project unlink [slug] <path|--here> [--force]
+                                             detach a checkout path from a registered project on this machine
+                                             (--force detaches the last one it has left)
   project from <parent-slug> --why "<reason>" [--supersedes <id>]
                                              record that this project came from another registered one
   project archive <slug> --why "<reason>"    set a project aside, with its open work as it stands

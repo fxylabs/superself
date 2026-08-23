@@ -303,6 +303,22 @@ self connect
 Inspect and commit the resulting `AGENTS.md` and `CLAUDE.md` changes in the
 project repository.
 
+### A recorded checkout path is wrong, or its directory is gone
+
+Detach it. The path leaves this machine's link list; the project itself stays
+registered, with its history untouched:
+
+```bash
+self project link <project-slug>            # what is linked here right now
+self project unlink <project-slug> <path>   # detach that one
+self project unlink <project-slug> --here   # detach the checkout you are in
+```
+
+The path does not have to still exist — a renamed or deleted workspace is the
+case this exists for. Detaching the last checkout on this machine needs
+`--force`, because the project then resolves only from wherever a command
+happens to run. Re-linking the path later brings it back.
+
 ### `self sync` reports that no remote is configured
 
 Create an empty private remote, then run `self remote add <url>` before trying

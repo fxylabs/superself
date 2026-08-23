@@ -884,12 +884,43 @@ export function recordLink(storeDir: string, slug: string, at: string, repositor
     return "added";
 }
 
+// Every path this machine has recorded for a slug, gone ones included,
+// resolved the way every read of the ledger resolves them. `project unlink`
+// reads this rather than `linkedPaths`: a path whose checkout is no longer
+// there is exactly what it is asked to detach (#263).
+export function recordedPaths(storeDir: string, slug: string): string[]
+{
+    return (readLinks(storeDir)[slug] ?? []).map((link) => realPath(link.path));
+}
+
 // The paths this machine has linked for a slug and still has, resolved the
 // way every read of the ledger resolves them. What `project link` prints when
 // asked to read, and what it compares a write against (#332).
 export function linkedPaths(storeDir: string, slug: string): string[]
 {
-    return (readLinks(storeDir)[slug] ?? []).map((link) => realPath(link.path)).filter((path) => existsSync(path));
+    return recordedPaths(storeDir, slug).filter((path) => existsSync(path));
+}
+
+// Which projects have this exact path recorded. One path can be recorded for
+// two slugs — linking it to a second project never took it from the first —
+// so an unlink that named the wrong project is told which one holds it (#263).
+export function slugsLinkedAt(storeDir: string, path: string): string[]
+{
+    return Object.entries(readLinks(storeDir))
+        .filter(([, linked]) => linked.some((link) => realPath(link.path) === path))
+        .map(([slug]) => slug);
+}
+
+// Detaching a path a person named, written the way the automatic sweep writes
+// one it found gone (#128): an appended entry naming the path and why it went,
+// never surgery on the lines already in the file. So the account of a checkout
+// stays legible after it stops resolving, and re-linking the path brings it
+// back — the ledger is replayed in order, and a later link entry wins.
+export function recordUnlink(storeDir: string, slug: string, path: string): void
+{
+    appendFileSync(join(storeDir, LINKS_FILE),
+        JSON.stringify({ slug, path, pruned: new Date().toISOString(), why: "unlinked" }) + "\n");
+    invalidateResolution();
 }
 
 // Warned about once per process, and deliberately not per tick: the resolution
