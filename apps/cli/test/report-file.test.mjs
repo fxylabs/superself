@@ -129,6 +129,43 @@ test("a file whose auth header carries a real credential is refused, and records
     }
 });
 
+// The same two cells with the header taken away (#347). A transcript quotes a
+// credential line without the header in front of it, and a design document
+// writes the scheme word into a sentence, so both have to keep working: the
+// generated value is refused, and the sentence and the substitution marks are
+// not. The base64url value is the shape #347 was filed over — its separators
+// hid it from every reading the bare rule had.
+const BARE_DESIGN = [
+    "# Things API v0.2",
+    "",
+    "Send the credential as `bearer <token>`, or `basic <base64>` for the",
+    "legacy tenants. In CI the value comes from `$ACCESS_TOKEN`.",
+    "",
+    "The bearer token-refresh-window is 30 days, and each token lives for",
+    "thirty days and is revocable."
+].join("\n");
+
+test("a design document that writes bare scheme words attaches in full", () =>
+{
+    const id = freshUnit();
+    const result = selfIn(box, demo, ["report", id, "--file", fileHolding(BARE_DESIGN)]);
+    assert.equal(result.code, 0, result.out);
+    assert.deepEqual(reportsOf(id).map((event) => event.payload.text), [BARE_DESIGN]);
+});
+
+test("a file whose bare scheme line carries a real credential is refused, and records nothing", () =>
+{
+    for (const line of ["bearer Zx-9Kq_mR4tVn2Bs7Lw1Yd", "token <Zx-9Kq_mR4tVn2Bs7Lw1Yd>"])
+    {
+        const id = freshUnit();
+        const path = fileHolding(`# staging\n\n    curl -H '${line}' /v1/things`);
+        const result = selfIn(box, demo, ["report", id, "--file", path]);
+        assert.equal(result.code, 1, line);
+        assert.match(result.out, /shaped like a credential \(rule auth-scheme/);
+        assert.equal(reportsOf(id).length, 0);
+    }
+});
+
 // The other surface the gate guards. `state add` writes the text a person
 // typed straight into an event payload, with no file in the way, so the same
 // two cells are asserted through it.
@@ -151,4 +188,20 @@ test("state add refuses an entity whose auth header carries a credential, and re
     assert.equal(result.code, 1);
     assert.match(result.out, /shaped like a credential \(rule auth-header/);
     assert.ok(!entitiesListed().includes("rollout note"));
+});
+
+test("state add records an entity that writes a bare scheme word in a sentence", () =>
+{
+    const text = "auth brief: the bearer token-refresh-window is 30 days and bearer <token> is the format";
+    assert.equal(selfIn(box, demo, ["state", "add", text]).code, 0);
+    assert.ok(entitiesListed().includes("auth brief"));
+});
+
+test("state add refuses an entity whose bare scheme line carries a credential, and records nothing", () =>
+{
+    const text = "cutover note: bearer Zx-9Kq_mR4tVn2Bs7Lw1Yd";
+    const result = selfIn(box, demo, ["state", "add", text]);
+    assert.equal(result.code, 1);
+    assert.match(result.out, /shaped like a credential \(rule auth-scheme/);
+    assert.ok(!entitiesListed().includes("cutover note"));
 });

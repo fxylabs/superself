@@ -63,7 +63,34 @@ const PATTERNS: Rule[] = [
     // one is quoting a session. It goes first so a cookie line's refusal always
     // names the rule that actually decided it.
     { name: "cookie-header", pattern: /\b(set-cookie|cookie)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
-    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, refuseWhen: carriesAuthCredential },
+    // A scheme word with no header in front of it. The value after it is read
+    // exactly as the header rule below reads its own — the token measured whole
+    // over the base64url alphabet, a `basic` value decoded — because a
+    // credential written this way is the same credential (#347). Reading it as
+    // prose instead is what recorded a sixteen-character base64url token four
+    // times in ten: that alphabet puts '-' and '_' wherever the bytes fall, and
+    // every prose reading here splits runs on both.
+    //
+    // What keeps the harder reading safe without a header name to license it is
+    // the span. `bearer`, `basic` and `token` are English words as often as
+    // scheme names, so the match is the scheme word and the one token after it
+    // and never a character more: the rest of the sentence is not read, and
+    // `the bearer token-refresh-window is 30 days` puts `token-refresh-window`
+    // up for judgment and nothing else. The value's own alphabet is wide enough
+    // to hold the shapes a document substitutes — `<token>`, `${API_TOKEN}`,
+    // `$TOKEN` — because a bracket must not be the thing that excuses a value:
+    // what excuses it is the name inside reading as a name.
+    //
+    // The residual, stated because it is real: an unbroken sixteen-character
+    // run in that alphabet, written as the single token after one of the three
+    // words, is refused whether it is a key or a note. `basic
+    // auth/token-exchange-flow` and `token 2026-08-23-review-note` go with the
+    // keys — a slash and a leading date are both outside what a name reads as.
+    // It is a rephrase away, and the refusal names the rule and shows the span.
+    // Nothing else that recorded as prose changes: a single-case hyphenated
+    // phrase reads as a name at any length, and prose past the first token is
+    // outside the match.
+    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=<>${}-]{8,}/gi, replacement: `$1 ${REDACTED}`, refuseWhen: carriesAuthCredential },
     // The other half, and the one an API document writes on purpose. An
     // `Authorization` header is the only header here whose value has a
     // published grammar — a scheme name, then the credential — and the scheme
@@ -73,11 +100,11 @@ const PATTERNS: Rule[] = [
     //
     // So the value is judged by the reading the scheme rule above already
     // uses, on the wider span: the whole rest of the line, which is a superset
-    // of what `auth-scheme` matched, so a credential that slips the scheme
-    // rule's narrower span is still caught here. What stays refused is what a
-    // generator produces — an unbroken run at the key bar in any alphabet, a
-    // JWT, a UUID, a decodable `basic` pair.
-    { name: "auth-header", pattern: /\b(authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}`, refuseWhen: headerCarriesCredential },
+    // of what `auth-scheme` matched, so a credential behind a scheme name that
+    // rule does not know — `SharedKey`, `Hawk` — is still caught here. What
+    // stays refused is what a generator produces — an unbroken run at the key
+    // bar in any alphabet, a JWT, a UUID, a decodable `basic` pair.
+    { name: "auth-header", pattern: /\b(authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}`, refuseWhen: carriesAuthCredential },
     // JSON is the encoding the spool itself writes — the plan, the status, and
     // every structured line go through JSON.stringify — and the key's own
     // closing quote sits between the name and the colon, where a rule written
@@ -432,27 +459,22 @@ function unbrokenKeyRun(run: string): boolean
     return run.length >= MIN_KEY_RUN && !isEventId(run);
 }
 
-// What a bare auth scheme has to carry before it is refused. The general
-// reading is the one every prose-matching rule uses — and it has to stay the
-// prose reading here, because `bearer`, `basic` and `token` are English words
-// as often as they are scheme names, and `the bearer token-refresh-window` is
-// a sentence. `basic` adds the single thing that reading cannot see: a Basic
-// credential is often shorter than the run bar, because it is base64 of
-// `user:password` and a short pair encodes short — `dXNlcjpwYXNz` is twelve
-// characters and reads `user:pass`.
+// What an auth span has to carry before it is refused. One reading for both
+// rules above, because a credential does not change shape when the header name
+// in front of it is dropped (#347) — what changes is how much text the rule
+// reads, and each rule's own pattern settles that.
+//
+// Three readings together. The first is the one every prose-matching rule uses.
+// The second measures the credential token whole, which is the reading the
+// prose one cannot give: the prose reading has to split runs on '-' and '_',
+// because a person writes those into names and phrases, and base64url puts both
+// wherever the bytes fall. The third is `basic`, which adds the single thing
+// neither can see — a Basic credential is often shorter than the run bar,
+// because it is base64 of `user:password` and a short pair encodes short:
+// `dXNlcjpwYXNz` is twelve characters and reads `user:pass`.
 function carriesAuthCredential(span: string): boolean
 {
-    return carriesKeyMaterial(span) || carriesBasicCredential(span);
-}
-
-// An `Authorization` header is read harder than a bare scheme, and the header
-// name is what licenses it: nothing writes `Authorization:` in a sentence, and
-// what follows it is a credential or a document of one — never prose that
-// happens to contain the word. So the credential token is measured whole,
-// which is the reading the prose one cannot give.
-function headerCarriesCredential(span: string): boolean
-{
-    return carriesAuthCredential(span) || generatedAuthValue(span);
+    return carriesKeyMaterial(span) || carriesBasicCredential(span) || generatedAuthValue(span);
 }
 
 // An elision says the rest of the value was cut, and carries no name at all,
@@ -469,13 +491,20 @@ const ELISION = /\.{3}|…/g;
 const BRACKETED_NAME = /<([^<>]*)>|\$\{([^{}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 // A name a person wrote, as opposed to a value a generator produced: one case
-// throughout, letters joined by the separators a phrase uses, digits allowed
-// only after a separator. The single-case reading is the load-bearing half —
-// base64url draws from both cases at every position, so a generated value that
-// is all letters is almost never all one case, while every way a document
-// spells a substitution is: `your-api-token-here`, `ACCESS_TOKEN`.
-const LOWER_NAME = /^[a-z]+(?:[._-][a-z0-9]+)*$/;
-const UPPER_NAME = /^[A-Z]+(?:[._-][A-Z0-9]+)*$/;
+// throughout, and words joined by the separators a phrase uses. The single-case
+// reading is the load-bearing half — base64url draws from both cases at every
+// position, so a generated value that is all letters is almost never all one
+// case, while every way a document spells a substitution is:
+// `your-api-token-here`, `ACCESS_TOKEN`.
+//
+// A piece between two separators is a word or a number and never a mix of the
+// two, which is the same distinction `readsAsWords` draws one screen up: a digit
+// inside a word is not how people write prose and is how a generator writes
+// everything. Letting a piece mix them is what still recorded a generated
+// base64url value one time in twenty thousand — `o-0yjr9xyknif2p4` read as a
+// lowercase name, and `YOUR_ACCESS_TOKEN_HERE` does not need it to (#347).
+const LOWER_NAME = /^[a-z]+(?:[._-](?:[a-z]+|[0-9]+))*$/;
+const UPPER_NAME = /^[A-Z]+(?:[._-](?:[A-Z]+|[0-9]+))*$/;
 
 function readsAsName(name: string): boolean
 {
@@ -519,12 +548,17 @@ function withoutPlaceholders(value: string): string
         .replace(BRACKETED_NAME, (span, angle, braced, bare) => readsAsName(angle ?? braced ?? bare ?? "") ? " " : span);
 }
 
-// The credential inside a header span. An HTTP credential is one token, and it
+// The credential inside an auth span. An HTTP credential is one token, and it
 // is either the first token after the colon or the second, since a scheme name
 // may stand in front of it. Both are read, and nothing past them is: what
 // follows is prose about the header, and reading that too is what would refuse
 // `Authorization: Bearer <token> — see docs/key-rotation-policy.md` over a
 // hyphenated filename that is nobody's key.
+//
+// A bare scheme span carries no colon, so the whole span is the value and the
+// same two tokens are the scheme word and the credential after it. That the
+// scheme word is measured alongside costs nothing — `bearer`, `basic` and
+// `token` are all shorter than the run bar.
 //
 // Reading both rather than deciding which one is the scheme is deliberate. A
 // scheme name is not a closed set — `SharedKey`, `AWS4-HMAC-SHA256` and `Hawk`
