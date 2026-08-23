@@ -178,7 +178,20 @@ on every pull request. It takes minutes, not seconds: around twelve at the
 current suite size, and the figure grows as the suite does. The run prints
 nothing until it finishes, so a long silence is the normal case and not a
 hang — do not kill it, and give any watchdog wrapping it room for a run that
-long. The integration tests run on a contributor's macOS laptop and on the
+long.
+
+The full suite runs once and alone per machine. Each integration test spawns
+the CLI many times and refolds the store each time, so two suites running at
+once slow each other far more than twofold: measured on 2026-08-23, 1003 tests
+took 8,144 seconds on a laptop where six agents ran the suite together, and
+five of those runs were lost to timeouts. A session that is not alone on its
+machine — a parallel agent, a second checkout with a suite already running —
+runs `pnpm typecheck`, `pnpm build`, `pnpm structure` and the test files it
+touched locally, and leaves the full suite to CI's `verify` job, saying so in
+the pull request body. CI runs the whole tier on every pull request either
+way.
+
+The integration tests run on a contributor's macOS laptop and on the
 ubuntu CI runner, against whatever git the host has. Write them
 checkout-agnostic:
 
@@ -233,6 +246,11 @@ pnpm build
 pnpm structure
 ```
 
+`pnpm test` is the full tier and runs once and alone per machine (see
+[Tests](#tests)); when another suite is already running on your machine, run
+the other three plus the test files you touched, and say in the pull request
+body that the full suite is left to CI.
+
 `pnpm structure` needs history to diff against, so it refuses on a shallow
 clone and names the fix rather than passing empty. Point it at another base
 with `--base <ref>` or `STRUCTURE_BASE` when you are not branched off `main`.
@@ -264,7 +282,10 @@ much as to hand-written work:
 - The pull request title names the issue's outcome, and the body contains
   `Closes #N` for the single accepted issue.
 - Run `pnpm typecheck`, `pnpm test`, `pnpm build` and `pnpm structure` locally
-  — CI runs the same four on every pull request.
+  — CI runs the same four on every pull request. The full `pnpm test` runs
+  once and alone per machine; a session that is not alone runs the other
+  three plus the suites it touched and says in the body that the full suite is
+  left to CI.
 - Do not use `gh pr edit`; it rewrites fields you did not intend to touch. Set
   the title and body at `gh pr create` time, or PATCH the specific field through
   the API.
