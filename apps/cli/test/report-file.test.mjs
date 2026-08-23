@@ -1,10 +1,12 @@
-// What `report --file` accepts from a file a person wrote (#317). A design
-// document about an auth system names credentials on every other line, and
-// naming one is not carrying one; two refusals are asserted beside it, because
-// the gate still has to hold for a file that really does carry a key — and
-// because the two write a key in different shapes, only one of which this
-// change touched. The full case table for those shapes is in sanitize.test.mjs;
-// what is here is the end-to-end contract that the command obeys it.
+// What the two commands that record a person's own text accept from it, and
+// what they still refuse (#317, #319). A design document about an auth system
+// names credentials on every other line and shows the format of an
+// `Authorization` header, and neither is carrying one; the refusals are
+// asserted beside it, because the gate still has to hold for a file that
+// really does carry a key, in each of the shapes a key is written in. The full
+// case tables for those shapes are in sanitize.test.mjs; what is here is the
+// end-to-end contract that the commands obey them — the surface row of both
+// tables, once through `report --file` and once through `state add`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -80,4 +82,73 @@ test("a file holding an unquoted key on its own line is refused, and records not
     assert.equal(result.code, 1);
     assert.match(result.out, /shaped like a credential \(rule secret-line/);
     assert.equal(reportsOf(id).length, 0);
+});
+
+// An API document shows what an `Authorization` header looks like, in every
+// spelling a document uses for the part the reader substitutes (#319). Before
+// this, one such line refused the whole attachment and the session fell back
+// to recording a path, which loses the text for every later session.
+const API_DESIGN = [
+    "# Things API v0.1",
+    "",
+    "    GET /v1/things",
+    "    Authorization: Bearer <token>",
+    "    Authorization: Basic <base64>",
+    "    Authorization: SharedKey YOUR_ACCESS_TOKEN_HERE",
+    "",
+    "The token is elided in the transcript above: `Authorization: Bearer eyJexample...`.",
+    "In CI the value comes from `$ACCESS_TOKEN` and never appears in the document."
+].join("\n");
+
+test("a design document showing example auth headers attaches in full", () =>
+{
+    const id = freshUnit();
+    const result = selfIn(box, demo, ["report", id, "--file", fileHolding(API_DESIGN)]);
+    assert.equal(result.code, 0, result.out);
+    assert.deepEqual(reportsOf(id).map((event) => event.payload.text), [API_DESIGN]);
+});
+
+// The two shapes a real credential arrives in behind the same header. The
+// first is caught by the scheme rule, one rule ahead of the header rule; the
+// second is in base64url, whose separators hide it from every reading but the
+// header rule's own. Both values are dummies of a generator's length and
+// alphabet.
+test("a file whose auth header carries a real credential is refused, and records nothing", () =>
+{
+    for (const [header, rule] of [
+        ["Authorization: Bearer 7Hs9KpQwErTyUiOpAsDfGhJk", "auth-scheme"],
+        ["Authorization: SharedKey Zx-9Kq_mR4tVn2Bs7Lw1Yd", "auth-header"]
+    ])
+    {
+        const id = freshUnit();
+        const path = fileHolding(`# staging\n\n    GET /v1/things\n    ${header}`);
+        const result = selfIn(box, demo, ["report", id, "--file", path]);
+        assert.equal(result.code, 1, header);
+        assert.match(result.out, new RegExp(`shaped like a credential \\(rule ${rule}`));
+        assert.equal(reportsOf(id).length, 0);
+    }
+});
+
+// The other surface the gate guards. `state add` writes the text a person
+// typed straight into an event payload, with no file in the way, so the same
+// two cells are asserted through it.
+function entitiesListed()
+{
+    return must(box, demo, ["state", "list"]).out;
+}
+
+test("state add records an entity that quotes an example auth header", () =>
+{
+    const text = "API brief: examples show Authorization: Bearer <token> and nothing else";
+    assert.equal(selfIn(box, demo, ["state", "add", text]).code, 0);
+    assert.ok(entitiesListed().includes("API brief"));
+});
+
+test("state add refuses an entity whose auth header carries a credential, and records nothing", () =>
+{
+    const text = "rollout note: Authorization: SharedKey Zx-9Kq_mR4tVn2Bs7Lw1Yd";
+    const result = selfIn(box, demo, ["state", "add", text]);
+    assert.equal(result.code, 1);
+    assert.match(result.out, /shaped like a credential \(rule auth-header/);
+    assert.ok(!entitiesListed().includes("rollout note"));
 });

@@ -57,8 +57,27 @@ interface Rule
 }
 
 const PATTERNS: Rule[] = [
-    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, refuseWhen: carriesKeyMaterial },
-    { name: "auth-header", pattern: /\b(set-cookie|cookie|authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
+    // A cookie header is the half of the old header rule that stays eager. Its
+    // value is a session credential and nothing else: there is no documented
+    // placeholder grammar for a `Set-Cookie` line, and a document that quotes
+    // one is quoting a session. It goes first so a cookie line's refusal always
+    // names the rule that actually decided it.
+    { name: "cookie-header", pattern: /\b(set-cookie|cookie)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}` },
+    { name: "auth-scheme", pattern: /\b(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED}`, refuseWhen: carriesAuthCredential },
+    // The other half, and the one an API document writes on purpose. An
+    // `Authorization` header is the only header here whose value has a
+    // published grammar — a scheme name, then the credential — and the scheme
+    // is the part a document exists to show. `Authorization: Bearer <token>`
+    // is that document, not a credential, and blanking the value on sight
+    // refused every design artifact with an HTTP example in it (#319).
+    //
+    // So the value is judged by the reading the scheme rule above already
+    // uses, on the wider span: the whole rest of the line, which is a superset
+    // of what `auth-scheme` matched, so a credential that slips the scheme
+    // rule's narrower span is still caught here. What stays refused is what a
+    // generator produces — an unbroken run at the key bar in any alphabet, a
+    // JWT, a UUID, a decodable `basic` pair.
+    { name: "auth-header", pattern: /\b(authorization|proxy-authorization)[ \t]*:[ \t]*[^\r\n]+/gi, replacement: `$1: ${REDACTED}`, refuseWhen: headerCarriesCredential },
     // JSON is the encoding the spool itself writes — the plan, the status, and
     // every structured line go through JSON.stringify — and the key's own
     // closing quote sits between the name and the colon, where a rule written
@@ -411,6 +430,133 @@ function carriesKeyMaterial(text: string): boolean
 function unbrokenKeyRun(run: string): boolean
 {
     return run.length >= MIN_KEY_RUN && !isEventId(run);
+}
+
+// What a bare auth scheme has to carry before it is refused. The general
+// reading is the one every prose-matching rule uses — and it has to stay the
+// prose reading here, because `bearer`, `basic` and `token` are English words
+// as often as they are scheme names, and `the bearer token-refresh-window` is
+// a sentence. `basic` adds the single thing that reading cannot see: a Basic
+// credential is often shorter than the run bar, because it is base64 of
+// `user:password` and a short pair encodes short — `dXNlcjpwYXNz` is twelve
+// characters and reads `user:pass`.
+function carriesAuthCredential(span: string): boolean
+{
+    return carriesKeyMaterial(span) || carriesBasicCredential(span);
+}
+
+// An `Authorization` header is read harder than a bare scheme, and the header
+// name is what licenses it: nothing writes `Authorization:` in a sentence, and
+// what follows it is a credential or a document of one — never prose that
+// happens to contain the word. So the credential token is measured whole,
+// which is the reading the prose one cannot give.
+function headerCarriesCredential(span: string): boolean
+{
+    return carriesAuthCredential(span) || generatedAuthValue(span);
+}
+
+// An elision says the rest of the value was cut, and carries no name at all,
+// so it always drops. What is left of the value is still measured, which is
+// the whole point of dropping rather than allowlisting: `Bearer eyJ…` records
+// and `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…` does not.
+const ELISION = /\.{3}|…/g;
+
+// The three ways a document brackets a name the reader is to substitute. The
+// brackets alone decide nothing: what is inside them has to read as a name
+// first, or wrapping a real token in angle brackets would be a way of writing
+// it into a record, and the very punctuation a document uses would be the tool
+// that let it through.
+const BRACKETED_NAME = /<([^<>]*)>|\$\{([^{}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
+
+// A name a person wrote, as opposed to a value a generator produced: one case
+// throughout, letters joined by the separators a phrase uses, digits allowed
+// only after a separator. The single-case reading is the load-bearing half —
+// base64url draws from both cases at every position, so a generated value that
+// is all letters is almost never all one case, while every way a document
+// spells a substitution is: `your-api-token-here`, `ACCESS_TOKEN`.
+const LOWER_NAME = /^[a-z]+(?:[._-][a-z0-9]+)*$/;
+const UPPER_NAME = /^[A-Z]+(?:[._-][A-Z0-9]+)*$/;
+
+function readsAsName(name: string): boolean
+{
+    return LOWER_NAME.test(name) || UPPER_NAME.test(name);
+}
+
+// base64url is the alphabet an opaque token is written in, and it puts '-' and
+// '_' wherever the bytes fall. So a credential token is measured over the
+// whole of that alphabet: splitting on '-' and '_' the way the prose reading
+// does is what let a sixteen-character base64url token past this rule four
+// times in ten. Prose is not measured this way and does not have to be — the
+// one token is all this reads.
+const TOKEN_RUN = /[A-Za-z0-9+/=_-]+/g;
+
+// A bare value — no brackets, no sigil — is read as a name only when it also
+// carries a separator. `YOUR_ACCESS_TOKEN_HERE` and `your-token-goes-here` are
+// how API documents spell a substitution without brackets, and a generated run
+// has no separator to spell it with. Without that second half the reading
+// would record `password: correcthorsebatterystaple`'s cousin here, a
+// twenty-letter lowercase token, which is the leak #318 closed.
+const SEPARATED = /[._-]/;
+
+function generatedAuthValue(span: string): boolean
+{
+    return credentialTokens(span).map(withoutPlaceholders).some(generatedValue);
+}
+
+function generatedValue(value: string): boolean
+{
+    if (SEPARATED.test(value) && readsAsName(value))
+    {
+        return false;
+    }
+    return (value.match(TOKEN_RUN) ?? []).some(unbrokenKeyRun);
+}
+
+function withoutPlaceholders(value: string): string
+{
+    return value
+        .replace(ELISION, " ")
+        .replace(BRACKETED_NAME, (span, angle, braced, bare) => readsAsName(angle ?? braced ?? bare ?? "") ? " " : span);
+}
+
+// The credential inside a header span. An HTTP credential is one token, and it
+// is either the first token after the colon or the second, since a scheme name
+// may stand in front of it. Both are read, and nothing past them is: what
+// follows is prose about the header, and reading that too is what would refuse
+// `Authorization: Bearer <token> — see docs/key-rotation-policy.md` over a
+// hyphenated filename that is nobody's key.
+//
+// Reading both rather than deciding which one is the scheme is deliberate. A
+// scheme name is not a closed set — `SharedKey`, `AWS4-HMAC-SHA256` and `Hawk`
+// are all real — so any test for "is this the scheme" is a test a value can be
+// shaped to pass, and the one that stood here could be passed by a hyphenated
+// token with prose behind it.
+function credentialTokens(span: string): string[]
+{
+    return span.slice(span.indexOf(":") + 1).trim().split(/[ \t]+/).slice(0, 2);
+}
+
+// The `basic` scheme names its own encoding, so its value can be decoded
+// rather than measured, and no placeholder survives the decode: `<base64>` and
+// `$CREDS` are not the base64 alphabet, a word of the wrong length is not a
+// whole number of bytes, and a word that is decodes to bytes with no colon
+// among them. What is left — two printable halves with a colon between them —
+// is a username and a password at any length.
+//
+// Read as latin1 rather than utf8 so every byte maps to one character: a byte
+// outside printable ASCII then fails the class instead of arriving as a
+// replacement character that would pass it.
+const BASIC_VALUE = /\bbasic[ \t]+([A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])/i;
+const PRINTABLE_PAIR = /^[\x20-\x7e]+:[\x20-\x7e]+$/;
+
+function carriesBasicCredential(span: string): boolean
+{
+    const encoded = span.match(BASIC_VALUE)?.[1] ?? "";
+    if (encoded.length < 4 || encoded.length % 4 !== 0)
+    {
+        return false;
+    }
+    return PRINTABLE_PAIR.test(Buffer.from(encoded, "base64").toString("latin1"));
 }
 
 // Raw provider output arrives in chunks whose boundaries fall wherever the
