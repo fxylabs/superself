@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { designNote } from "./design.js";
-import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, planNote, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
@@ -193,6 +193,8 @@ function renderState(model: ProjectModel): string
     section(lines, "Conventions", currentConventions(model.conventions).map((c) => `- ${c.text} _(${c.id})_`));
     section(lines, "Work in progress", model.works.filter((w) => w.status === "active").map(workLine));
     section(lines, "Blocked", model.works.filter((w) => w.status === "blocked").map(blockedLine));
+    section(lines, "Waiting on review", model.works.filter((w) => w.status === "review")
+        .map((w) => `- **${w.id}** ${w.outcome} — ${planNote(w)}`));
     section(lines, "Next", model.works.filter((w) => w.status === "next").map((w) => `- **${w.id}** ${w.outcome}`));
     section(lines, "Open questions", model.openQuestions.map((q) => `- ${q}`));
     section(lines, "Health", model.health.map((h) => `- ${h}`));
@@ -533,7 +535,7 @@ function workUnshippedLines(work: WorkState, verdicts: Record<string, Verdict>):
 // Where the unit stands: status, what it contributes to, and what stopped it.
 function workStandingLines(work: WorkState, model: ProjectModel, supersedes: string[]): string[]
 {
-    const lines: string[] = [`- Status: ${work.status}`];
+    const lines: string[] = [`- Status: ${work.status}`, ...planLines(work)];
     const contributes = contributionLines(work, model);
     if (contributes.length > 0)
     {
@@ -555,6 +557,18 @@ function workStandingLines(work: WorkState, model: ProjectModel, supersedes: str
         lines.push(`- Process: ${work.process.state}${work.process.code === undefined ? "" : ` (code ${work.process.code})`} at ${work.process.at}`);
     }
     return lines;
+}
+
+// Which version of the plan a unit awaiting review currently states, and the
+// command that ends the wait. Printed for that status alone: a plan whose
+// current version is accepted has nothing outstanding to say about itself.
+function planLines(work: WorkState): string[]
+{
+    if (work.status !== "review")
+    {
+        return [];
+    }
+    return [`- Plan: ${planNote(work)}`, `- A person accepts it: self work accept ${work.id}`];
 }
 
 // What the unit has to show for itself.

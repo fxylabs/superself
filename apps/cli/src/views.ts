@@ -13,7 +13,9 @@ import {
     ForeignObjectiveLink,
     foreignToward,
     otherGoals,
+    planNote,
     ProjectModel,
+    reviewWork,
     WaitingItem,
     workScope,
     WorkState
@@ -708,8 +710,36 @@ function unitCount(branch: BranchUnshipped): string
     return plural(branchTotals(branch).units, "open work unit");
 }
 
-// A proposal is only actionable if the reader can weigh it, so the whole brief
-// travels with it rather than an outcome line pointing at a page.
+// Everything a person is being asked to answer about work: the gap proposals
+// the goal fold carries with their briefs, and the standalone plans (#356)
+// only the entity view carries. Each row appears once — a plan awaiting
+// review is in exactly one of the two lists.
+function workProposalItems(model: ProjectModel): WaitingItem[]
+{
+    return [...gapProposalItems(model), ...planReviewItems(model)];
+}
+
+// A standalone plan (#356) has no brief to travel with it, so the row states
+// what a reader has to weigh instead: which version is current, which one
+// they already accepted, and the first line of the plan itself.
+function planReviewItems(model: ProjectModel): WaitingItem[]
+{
+    return reviewWork(model).map((work): WaitingItem => ({
+        action: `self work accept ${work.id}`,
+        full: `work proposal ${work.id} (${planNote(work)}): ${firstLine(work.outcome)}`
+            + ` — \`self work accept ${work.id}\``,
+        identity: `work proposal ${work.id}`,
+        recovery: { verb: "work-show", id: work.id }
+    }));
+}
+
+function firstLine(text: string): string
+{
+    return text.split("\n")[0];
+}
+
+// A gap proposal is only actionable if the reader can weigh it, so the whole
+// brief travels with it rather than an outcome line pointing at a page.
 //
 // The id travels whole (#304). A proposal made before the cutover is named by
 // its event id, whose first ten characters are the millisecond it was written
@@ -719,7 +749,7 @@ function unitCount(branch: BranchUnshipped): string
 // already, so nothing about that kind of row changes. Cutting to a unique
 // prefix instead would print a line that stops resolving the moment the next
 // record lands, which is worse than a long one.
-function workProposalItems(model: ProjectModel): WaitingItem[]
+function gapProposalItems(model: ProjectModel): WaitingItem[]
 {
     const project = shellArgument(model.slug);
     return openProposals(model.goals).map((proposal): WaitingItem => ({
@@ -895,7 +925,8 @@ function objectiveCountLine(model: ProjectModel): string
 
 function waitingCount(model: ProjectModel): number
 {
-    return model.openQuestions.length + attentionRows(model).length + openProposals(model.goals).length;
+    return model.openQuestions.length + attentionRows(model).length
+        + openProposals(model.goals).length + reviewWork(model).length;
 }
 
 // A workspace with nothing active says one line and declares no second render:
@@ -932,7 +963,9 @@ function countLine(works: WorkState[]): string
 {
     const count = (status: string): number => works.filter((w) => w.status === status).length;
     const retired = count("retired");
+    const review = count("review");
     return `${count("active")} active, ${count("blocked")} blocked, ${count("next")} next, ${count("done")} done`
+        + (review > 0 ? `, ${review} awaiting review` : "")
         + (retired > 0 ? `, ${retired} retired` : "");
 }
 

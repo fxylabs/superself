@@ -204,7 +204,11 @@ usage: self <command>
   work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
                                              state, or withdraw, what a work unit contributes to
                                              (an objective resolves here first, then across every registered project)
-  work propose "<outcome>" --milestone m --value v --success s --stop s --risk r
+  work propose "<plan>" [--milestone m --value v --success s --stop s --risk r]
+                                             propose work for a person to review; the plan text alone is enough
+                                             (--objective or --milestone makes it a gap proposal, which owes the full brief)
+  work revise <id> "<revised plan>" --why w  restate an unstarted plan under the same work id; acceptance is invalidated
+                                             (a plan that has started is corrected by a successor, the way `work add` records one)
   work accept|decline <proposal-id> [--why w]
                                              act on a goal-gap proposal; decline states why
   work started <id> --pid N | exited <id> [--code N]
@@ -298,7 +302,8 @@ usage: self work [--project <slug>] [--pretty|--plain]
        self work block|unblock <id>
        self work done <id> [--report "<what verifiably happened>"] [--why w]
        self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
-       self work propose "<outcome>" --milestone m --value v --success s --stop s --risk r
+       self work propose "<plan>" [--milestone m --value v --success s --stop s --risk r]
+       self work revise <id> "<revised plan>" --why w
        self work accept|decline <proposal-id> [--why w]
        self work started <id> --pid N | exited <id> [--code N]
        self work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]
@@ -323,6 +328,16 @@ carry evidence: a report with a commit or an artifact, or a done-time
 --report stating what verifiably happened — a bare summary never
 satisfies. Declared criteria additionally gate it. Done is allowed
 while blocked: completion is a judgment on the outcome, not the block.
+
+a plan an agent wrote is reviewed before it is worked: `work propose
+"<plan>"` records the plan as work waiting on a person, and `work accept`
+confirms it under the same id. Until it is first started that plan can be
+restated in place — `work revise <id> "<revised plan>" --why w` keeps the id,
+keeps every earlier version in the unit's history, and invalidates the
+acceptance, so a person accepts again before it can be picked up. Unlike
+`objective revise` and `milestone revise`, it mints no new id and supersedes
+nothing. The first `work start` freezes the plan: after it, a correction is a
+successor, the same as for any confirmed record.
 
 history is per unit and explicit: `work show <id> --history` prints the
 events of that unit alone, oldest first, ten to a page. A retired or
@@ -360,9 +375,8 @@ required, and refused in one pass when missing:
   work retire     --why
   work link       --objective|--milestone
   work unlink     --objective|--milestone
-  work propose    --value --success --stop --risk --capacity --evidence-plan
-                  --confidence --expires --objective|--milestone
   work decline    --why
+  work revise     --why
 
 A work unit states an outcome — what must become true — not a task list.
 
@@ -394,12 +408,23 @@ When work stops for a reason that is not completion:
 Retire is for an outcome given up or moved. Never mark such a unit done,
 and never leave it falsely blocked.
 
-Found a gap between an objective and current state? Propose the work
-rather than starting it: `self work propose "<outcome>"` with its full
-brief — value, success, stop, risk, capacity, evidence plan, confidence,
-expiry, and the objective or milestone it closes. The user accepts or
-declines. `self work --help` lists the flags, and the refusal names every
-one you left out at once.
+Wrote the plan yourself? Propose it rather than starting it, so the user
+reviews the plan and not the result:
+
+  self work propose "<plan>"                 recorded as work waiting on a person
+  self work revise <id> "<revised plan>" --why "<what changed>"
+
+One id carries the whole loop. A revision keeps that id, keeps every
+earlier version in `self work show <id> --history`, and invalidates the
+acceptance, so `self work start` is refused until the user accepts again.
+The first start freezes the plan; after it, a correction is a successor
+(`self work add "<corrected plan>" --supersedes <id> --why w`).
+
+Found a gap between an objective and current state? The same verb closes
+one, with its full brief — value, success, stop, risk, capacity, evidence
+plan, confidence, expiry, and the objective or milestone it closes.
+`self work --help` lists the flags, and the refusal names every one you
+left out at once.
 
 Related: `self help goals`.
 

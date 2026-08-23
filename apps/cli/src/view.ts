@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
-import { currentConventions, DecisionState, foreignToward, otherGoals, ProjectModel, WorkState } from "./model.js";
+import { currentConventions, DecisionState, foreignToward, otherGoals, planNote, ProjectModel, reviewWork, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
 import { ArtifactMeta, CliError, CommandOutput, SelfEvent } from "./types.js";
@@ -411,6 +411,14 @@ function rulingRows(model: ProjectModel): WaitingRow[]
             text: firstLine(`${proposal.outcome} — ${proposalBrief(proposal)}`, 240),
             ref: proposal.id,
             action: "accept"
+        })),
+        // A standalone plan (#356) carries no brief, so the row weighs it by
+        // its own text and the version a person is being asked about.
+        ...reviewWork(model).map((work) => ({
+            kind: "work",
+            text: firstLine(`${work.outcome} — ${planNote(work)}`, 240),
+            ref: work.id,
+            action: "accept"
         }))
     ];
 }
@@ -670,10 +678,16 @@ function milestonePanel(slug: string, milestone: MilestoneState): string
 
 function proposalRows(model: ProjectModel): string[]
 {
-    return openProposals(model.goals).map((proposal) =>
-        `<tr><td class="n">${esc(proposal.id)}</td>` +
-        `<td>${esc(proposal.outcome)}<span class="hf-sub">${esc(proposalBrief(proposal))}</span></td>` +
-        `<td class="act">${esc(proposal.confidence)}</td></tr>`);
+    return [
+        ...openProposals(model.goals).map((proposal) =>
+            `<tr><td class="n">${esc(proposal.id)}</td>` +
+            `<td>${esc(proposal.outcome)}<span class="hf-sub">${esc(proposalBrief(proposal))}</span></td>` +
+            `<td class="act">${esc(proposal.confidence)}</td></tr>`),
+        ...reviewWork(model).map((work) =>
+            `<tr><td class="n">${esc(work.id)}</td>` +
+            `<td>${esc(work.outcome)}<span class="hf-sub">${esc(planNote(work))}</span></td>` +
+            `<td class="act">review</td></tr>`)
+    ];
 }
 
 function proposalBrief(proposal: WorkProposal): string

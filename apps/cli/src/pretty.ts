@@ -466,7 +466,10 @@ const STATE_PAINT: Record<string, Paint> = {
     blocked: yellow,
     next: plain,
     done: green,
-    retired: dim
+    retired: dim,
+    // The same paint the waiting band wears: a unit awaiting review is
+    // something a person owes an answer to, not something in flight.
+    review: yellow
 };
 
 function workRow(model: ProjectModel, work: WorkState): Row
@@ -762,7 +765,9 @@ function attemptRow(tally: AttemptTally): Row
 function workCounts(model: ProjectModel): string
 {
     const count = (status: string): number => model.works.filter((work) => work.status === status).length;
-    return `${count("active")} active · ${count("blocked")} blocked · ${count("next")} next · ${count("done")} done`;
+    const review = count("review");
+    return `${count("active")} active · ${count("blocked")} blocked · ${count("next")} next · ${count("done")} done`
+        + (review > 0 ? ` · ${review} awaiting review` : "");
 }
 
 // What a surface is rendered from. `waiting` arrives already composed by the

@@ -210,6 +210,16 @@ work, or a free-labeled entity — folds into one record kind with placement:
   done-time `--report` stating what verifiably happened. A bare claim is
   refused, and declared criteria gate done until each carries a coverage
   claim.
+- `work propose "<plan>"` records work for a person to review. The plan text
+  alone is enough; naming `--objective` or `--milestone` makes it a gap
+  proposal, which owes the full brief. `work accept` confirms it under the
+  same id, and the acceptance binds the exact version of the plan it read.
+- `work revise <id> "<revised plan>" --why w` restates an unstarted plan under
+  the same work id. Every version stays in that unit's history, the previous
+  acceptance stops authorizing a start, and `work start` is refused by name
+  until a person accepts again. Unlike `objective revise` and `milestone
+  revise`, it mints no new id and supersedes nothing. The first `work start`
+  freezes the plan; after it, a correction is a successor like any other.
 - `report` attaches a progress report, optional commit evidence, and optional
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
@@ -292,8 +302,8 @@ supersession, work, branch, blocked work, and decision sequencing.
 
 The CLI writes one shared event grammar. Every asserted record uses the
 `entity.*` namespace — `entity.proposed`, `entity.confirmed`,
-`entity.superseded`, `entity.retracted`, `entity.placed`, `entity.linked`,
-`entity.unlinked`, `entity.covered` — and the execution facts
+`entity.revised`, `entity.superseded`, `entity.retracted`, `entity.placed`,
+`entity.linked`, `entity.unlinked`, `entity.covered` — and the execution facts
 `entity.started`, `entity.blocked`, `entity.unblocked`, `entity.done`,
 `entity.retired`. Beside them, `report.added` records progress,
 `report.confirmed` records a person's approval of a design report, and

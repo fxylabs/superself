@@ -205,6 +205,9 @@ async function writeCurrentVocabulary(box, demo)
     await approvedIn(box, demo, ["state", "retract", note, "--why", "probe over"], note);
     const objective = entityIdIn(must(box, demo, ["objective", "add", "an outcome"]).out);
     const milestone = entityIdIn(must(box, demo, ["milestone", "add", "a checkpoint", "--objective", objective, "--exit", "the proof passes"]).out);
+    const plan = workIdIn(must(box, demo, ["work", "propose", "review the flow before it is worked"]).out);
+    must(box, demo, ["work", "revise", plan, "review the flow, then work it", "--why", "the first plan skipped the review"]);
+    must(box, demo, ["work", "accept", plan]);
     const unit = workIdIn(must(box, demo, ["work", "add", "the flow works"]).out);
     must(box, demo, ["work", "link", unit, "--milestone", milestone]);
     must(box, demo, ["work", "unlink", unit, "--milestone", milestone]);
