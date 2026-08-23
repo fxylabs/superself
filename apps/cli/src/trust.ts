@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { configDir, now as systemNow, replacePrivateFile, writePrivateFile } from "./credentials.js";
 import { DEFAULT_API_BASE, readProfile } from "./credentials.js";
 import { ROOT_KEYS, RootKey, SIGNATURE_ALG, findRootKey } from "./rootkeys.js";
-import { RailSession, jcs, publicGet } from "./rail.js";
+import { RailSession, jcs, publicGet, sanitizeText } from "./rail.js";
 import { CliError, JsonValue, fail, pending } from "./types.js";
 
 /* ── constants (design §10) ────────────────────────────────────────── */
@@ -202,12 +202,12 @@ function verifyTrust(signed: SignedTrust, roots: readonly RootKey[]): RootKey
 {
     if (signed.signature.alg !== SIGNATURE_ALG)
     {
-        throw invalidTrust(`the trust document's signature algorithm "${String(signed.signature.alg)}" is not accepted`);
+        throw invalidTrust(`the trust document's signature algorithm "${sanitizeText(String(signed.signature.alg))}" is not accepted`);
     }
     const root = findRootKey(signed.signature.kid, roots);
     if (root === undefined)
     {
-        throw invalidTrust(`no pinned root key "${signed.signature.kid}" signs a trust document this CLI accepts`);
+        throw invalidTrust(`no pinned root key "${sanitizeText(String(signed.signature.kid))}" signs a trust document this CLI accepts`);
     }
     const issued = Date.parse(signed.document.issued_at);
     if (issued < Date.parse(root.notBefore) || issued >= Date.parse(root.notAfter))

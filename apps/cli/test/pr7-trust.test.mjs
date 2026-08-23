@@ -1086,10 +1086,11 @@ test("D10: a build with no pinned root accepts no document at all", async () =>
 test("cell 170: a document one byte over the cap is refused before it is parsed", async () =>
 {
     const it = box();
-    // Valid JSON, correctly signed, and 64 KB + 1 byte long. Size is the only
-    // thing wrong with it, so a refusal can only be the cap.
-    const body = JSON.stringify(signedTrust());
-    const padded = body + " ".repeat(64 * 1024 + 1 - Buffer.byteLength(body));
+    // 64 KB + 1 byte long and NOT valid JSON (a truncated document): the cap is
+    // checked on the bytes before any parse, so the refusal is the cap and not a
+    // parse error — an implementation that parsed first would answer differently.
+    const broken = JSON.stringify(signedTrust()).slice(0, -1);
+    const padded = broken + " ".repeat(64 * 1024 + 1 - Buffer.byteLength(broken));
     const rail = await railServer((call) => (call.path === TRUST_PATH
         ? { status: 200, body: padded }
         : { status: 500, body: {} }), { trust: null });
