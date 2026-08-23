@@ -73,7 +73,9 @@ disagree, the implementation-owned `--help` output wins.
   concurrent appends from different machines merge cleanly, and
   `self project link <slug> --here` reconnects each project to the cloned
   store, once per repository rather than once per checkout of it (`self
-  project link` alone only shows where a project is linked);
+  project link` alone only shows where a project is linked, and `self project
+  unlink <slug> <path>` takes one back out — a checkout that is gone included,
+  without touching the project's own record);
 - `self view` opens a live, read-only HTML dashboard — a workspace overview,
   one project in detail, any work unit's full report history, and a full page
   of decisions, events, and artifacts each — rendered at fold time as

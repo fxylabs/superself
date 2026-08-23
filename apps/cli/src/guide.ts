@@ -279,6 +279,7 @@ export const TOPICS: Topic[] = [
             "  self project init            register this directory and write its agent block",
             "  self project link [slug]     where a registered project is linked on this machine",
             "  self project link <slug> --here   attach this directory to it (or name a path)",
+            "  self project unlink <slug> <path> detach one again — a directory that is gone too",
             "  self setup                   what this directory resolves to",
             "",
             "`project init` takes no path — it registers the directory it runs in, and",

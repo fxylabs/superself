@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
@@ -38,7 +38,9 @@ import {
     readScopes,
     readStoreConfig,
     readVerdicts,
+    recordedPaths,
     recordLink,
+    recordUnlink,
     refuseArchived,
     requireProject,
     requireRegistered,
@@ -46,6 +48,7 @@ import {
     resolveProjectPath,
     SCOPE_OPTIONS,
     siblingSlug,
+    slugsLinkedAt,
     tokenScale,
     STORE_DIR,
     StoreConfig,
@@ -82,7 +85,7 @@ import {
 } from "./plugins.js";
 import { jsonMode, renderFailure, selectJsonMode } from "./output.js";
 import { suppressJournal } from "./rail.js";
-import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
+import { CliError, CommandOutput, EventRefs, OutputBlock, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
 {
@@ -483,6 +486,12 @@ const PROJECT_INIT_OPTIONS = { name: { type: "string" }, desc: { type: "string" 
 // evidence is judged (#332).
 const PROJECT_LINK_OPTIONS = { here: { type: "boolean" }, force: { type: "boolean" } } as const;
 
+// The inverse takes the same options for the same reasons, and `--force` keeps
+// its meaning: yes, change the set of repositories this project's evidence is
+// judged across. On `link` that is adding one; here it is taking away the last
+// checkout this machine has (#263).
+const PROJECT_UNLINK_OPTIONS = { here: { type: "boolean" }, force: { type: "boolean" } } as const;
+
 // The bare listing answers for the projects this workspace is working on; the
 // flag asks for the ones it set aside (#283). Two lists rather than one marked
 // list: the reason a project was archived is worth a column of its own, and the
@@ -696,6 +705,14 @@ export const COMMANDS: Command[] = [
                 verbs: ["link"]
             },
             {
+                syntax: "project unlink [slug] <path|--here> [--force]",
+                description: [
+                    "detach a checkout path from a registered project on this machine",
+                    "(--force detaches the last one it has left)"
+                ],
+                verbs: ["unlink"]
+            },
+            {
                 syntax: 'project from <parent-slug> --why "<reason>" [--supersedes <id>]',
                 description: ["record that this project came from another registered one"],
                 verbs: ["from"]
@@ -721,10 +738,21 @@ export const COMMANDS: Command[] = [
             "those paths. --here or a path writes; a path of a repository the project does",
             "not have yet needs --force, because it changes where its evidence is judged.",
             "",
+            "`unlink` is that write undone: it takes a recorded path out of this machine's",
+            "link ledger — a path whose checkout is gone included, which is the one thing",
+            "no other verb could do — and removes the `.self` marker it wrote there. The",
+            "project itself is untouched: it stays registered, its log gains no event, and",
+            "the path recorded in its registry row stands. It names one of a <path> and",
+            "--here, never neither, because `project link <slug>` is already the listing;",
+            "and taking away the last checkout on this machine needs --force, because the",
+            "project then resolves only from wherever a command happens to run.",
+            "",
             "the bare list is the answer to \"which slugs does --scope and --project take\",",
-            "and it reads the whole workspace: it takes neither flag, while init and link",
-            "are writes that record into the workspace store they run against and from is",
-            "a write that records into the project it runs in.",
+            "and it reads the whole workspace: it takes neither flag, while init, link and",
+            "unlink are writes that record into the workspace store they run against — link",
+            "and unlink into its machine-local link ledger alone, taking no scope flag and",
+            "naming the slug they act on — and from is a write that records into the",
+            "project it runs in.",
             "",
             "`init` takes no path: it registers the directory it runs in, so a project is",
             "named by --name rather than by an argument that reads like a name and is",
@@ -768,6 +796,7 @@ export const COMMANDS: Command[] = [
                 leaf("list", PROJECT_LIST_OPTIONS, 0, projectList),
                 leaf("init", PROJECT_INIT_OPTIONS, 1, projectInit),
                 leaf("link", PROJECT_LINK_OPTIONS, 2, projectLink),
+                leaf("unlink", PROJECT_UNLINK_OPTIONS, 2, projectUnlink),
                 PROJECT_FROM_LEAF,
                 PROJECT_ARCHIVE_LEAF,
                 PROJECT_RESTORE_LEAF
@@ -1506,7 +1535,7 @@ function projectRefusal(verb: string | undefined): string
             + "or `self project link <slug> --here` if it is a checkout of a project registered already";
     }
     return 'usage: self project | init [--name <slug>] [--desc "<description>"] | link [slug] [path|--here] [--force]'
-        + ' | from <parent-slug> --why "<reason>"';
+        + ' | unlink [slug] <path|--here> [--force] | from <parent-slug> --why "<reason>"';
 }
 
 // The leaf accepts one positional so a path can be refused by name here. The
@@ -1686,7 +1715,16 @@ function linkListing(ctx: CliContext, wanted: string | undefined): CommandOutput
 {
     const slug = wanted ?? requireProject(process.cwd()).project;
     requireRegistered(ctx.storeDir, slug);
-    const linked = linkedPaths(ctx.storeDir, slug);
+    return [linkedListing(ctx.storeDir, slug)];
+}
+
+// Where the slug stands on this machine, as one block. `project unlink`
+// answers with it too — "what is left" after a detachment is the same question
+// this listing exists to answer, and wording it twice is how two answers drift
+// apart (#263).
+function linkedListing(storeDir: string, slug: string): OutputBlock
+{
+    const linked = linkedPaths(storeDir, slug);
     const cwd = realPath(process.cwd());
     const remedy = `run \`self project link ${slug} --here\``;
     const rows = linked.length === 0
@@ -1697,7 +1735,7 @@ function linkListing(ctx: CliContext, wanted: string | undefined): CommandOutput
     {
         rows.push(`this directory is not linked — ${remedy} to link it`);
     }
-    return [{ kind: "listing", rows, total: linked.length, noun: "linked path" }];
+    return { kind: "listing", rows, total: linked.length, noun: "linked path" };
 }
 
 // Linking a repository the project does not have yet, while it has one, is
@@ -1795,6 +1833,187 @@ function linkProject(ctx: CliContext, slug: string, projectDir: string): void
     }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);
+}
+
+// `project link` undone (#263). A registered checkout path leaves this
+// machine's link ledger — a path whose checkout is gone included, which is the
+// one thing no other verb could do and the reason the issue exists. Nothing of
+// the project itself moves: no event, and the registry row it was registered
+// with stands, so the slug stays registered and resolvable from its own
+// directory.
+function projectUnlink({ values, positionals }: CommandInput<typeof PROJECT_UNLINK_OPTIONS>): CommandOutput
+{
+    const ctx = requireWorkspace(process.cwd());
+    // Refused before the slug is resolved, exactly as `link` refuses its
+    // spellings first: which directory a command was typed in cannot decide
+    // whether the command was typed correctly.
+    const named = unlinkTarget(positionals[1], values.here === true, positionals[0]);
+    const slug = positionals[0] ?? requireProject(process.cwd()).project;
+    requireRegistered(ctx.storeDir, slug);
+    const path = named === null
+        ? hereLink(ctx.storeDir, slug)
+        : requireLinkedPath(ctx.storeDir, slug, resolve(named));
+    requireDetachable(ctx.storeDir, slug, path, values.force === true);
+    const marker = detachProject(ctx, slug, path);
+    warnStillResolving(ctx.storeDir, slug, path);
+    foldProject(ctx.storeDir, slug);
+    return [
+        {
+            kind: "receipt",
+            text: `project "${slug}" unlinked from ${path}${marker ? ` — its ${MARKER_FILE} marker there is gone too` : ""}`
+        },
+        linkedListing(ctx.storeDir, slug)
+    ];
+}
+
+// The path a write was told to take away, or `null` for `--here`. Unlike
+// `link`, naming neither is not a read: `self project link <slug>` already
+// prints what is linked, and a second verb printing it would be two spellings
+// for one answer. `--force` needs no case of its own — with nothing named it
+// has nothing to apply to, and falls into the same refusal.
+function unlinkTarget(path: string | undefined, here: boolean, slug: string | undefined): string | null
+{
+    if (path !== undefined && here)
+    {
+        throw new CliError("project unlink takes one of <path> or --here — a path names the directory to detach, --here detaches this one");
+    }
+    if (path !== undefined)
+    {
+        return path;
+    }
+    if (here)
+    {
+        return null;
+    }
+    throw new CliError("project unlink takes the path to detach — name it, or pass --here to detach this directory"
+        + ` (\`self project link ${slug ?? "<slug>"}\` lists what is linked)`);
+}
+
+// What `--here` means: the recorded path that contains this directory. The
+// same containment marks a row `(this directory)` in the listing, so what a
+// reader sees marked is what `--here` takes away — and a subdirectory of a
+// linked checkout is inside it, which is where a person actually stands.
+function hereLink(storeDir: string, slug: string): string
+{
+    const recorded = recordedPaths(storeDir, slug);
+    const cwd = realPath(process.cwd());
+    // Deepest first: a folder of checkouts and a checkout inside it can both
+    // be linked, and both contain this directory. The nearer one is the one a
+    // person standing here means.
+    const here = recorded.filter((path) => contains(path, cwd)).sort((a, b) => b.length - a.length)[0];
+    if (here !== undefined)
+    {
+        return here;
+    }
+    throw new CliError(recorded.length === 0
+        ? `project "${slug}" has no linked path on this machine — nothing to unlink`
+        : `this directory is not a linked path of "${slug}" — it is linked to ${recorded.join(", ")}; name the path to detach`);
+}
+
+// An explicit path matches a recorded one exactly — containment is `--here`'s
+// job, and a verb that removes things guesses at nothing. The path is resolved
+// through `realPath` as the ledger records it; a path that is already gone
+// resolves to itself, which is how a dead link is nameable at all.
+function requireLinkedPath(storeDir: string, slug: string, path: string): string
+{
+    const target = realPath(path);
+    const recorded = recordedPaths(storeDir, slug);
+    if (recorded.includes(target))
+    {
+        return target;
+    }
+    const holder = slugsLinkedAt(storeDir, target).find((other) => other !== slug);
+    if (holder !== undefined)
+    {
+        throw new CliError(`"${target}" is linked to project "${holder}", not "${slug}" — ` +
+            `run \`self project unlink ${holder} ${target}\` to detach it there`);
+    }
+    throw new CliError(`"${target}" is not a linked path of project "${slug}"` + (recorded.length === 0
+        ? " — it has no linked path on this machine"
+        : `, which is linked to ${recorded.join(", ")}`));
+}
+
+// Taking away the last checkout this machine has is the act that changes where
+// the project's evidence is judged — to nowhere — so it is asked for with
+// --force and disclosed before the write, the mirror of what adding a
+// repository asks for (#332). A path whose checkout is already gone resolved
+// nothing to begin with, so it is never the last standing one.
+function requireDetachable(storeDir: string, slug: string, path: string, force: boolean): void
+{
+    const standing = linkedPaths(storeDir, slug);
+    if (!standing.includes(path) || standing.length > 1)
+    {
+        return;
+    }
+    if (!force)
+    {
+        throw new CliError(`"${path}" is the only checkout of "${slug}" on this machine — unlinking it leaves the project ` +
+            "resolvable only from its own directory and the path its registry row recorded — pass --force to detach it anyway");
+    }
+    notice(`project "${slug}" had one checkout on this machine (${path}); after this it has none`);
+}
+
+// The ledger entry and the marker go together: `link` wrote both, and a marker
+// left behind keeps the directory answering for the project after its link is
+// gone — the detachment not happening. A marker naming another project is
+// another project's, and stays.
+function detachProject(ctx: CliContext, slug: string, path: string): boolean
+{
+    // The ledger is this machine's, never the store's: the exclude is asserted
+    // on every write to it, exactly as `linkProject` asserts it, so a store
+    // whose links file predates the rule cannot start syncing paths here.
+    excludeLocally(ctx.storeDir, LINKS_FILE);
+    recordUnlink(ctx.storeDir, slug, path);
+    // The set of repositories the project is judged across moved, so the
+    // verdicts judged against the previous set are stale; the fold that
+    // follows walks them again (#332).
+    dropEvidenceHead(ctx.storeDir, slug);
+    const marker = join(path, MARKER_FILE);
+    if (!existsSync(marker) || markerSlug(marker) !== slug)
+    {
+        return false;
+    }
+    rmSync(marker);
+    return true;
+}
+
+// A marker file too broken to read claims nothing, and is left where it is:
+// removing a file whose contents could not be understood is not this verb's
+// call to make.
+function markerSlug(marker: string): string | null
+{
+    try
+    {
+        const read = JSON.parse(readFileSync(marker, "utf8")).project;
+        return typeof read === "string" ? read : null;
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+// A project is identified by its repository, so another checkout of the same
+// repository that stayed linked keeps answering for the detached path (#6).
+// Said plainly rather than left for the reader to discover: the receipt names
+// a path that is out of the ledger, and the listing names what is left, but
+// neither of them says the directory still resolves.
+function warnStillResolving(storeDir: string, slug: string, path: string): void
+{
+    if (!existsSync(path))
+    {
+        return;
+    }
+    const through = checkoutProject(storeDir, path);
+    if (through === null || through.slug !== slug)
+    {
+        return;
+    }
+    const linked = linkedPaths(storeDir, slug);
+    const identity = repositoryIdentity(path);
+    const siblings = linked.filter((other) => repositoryIdentity(other) === identity);
+    notice(`${path} still answers for "${slug}" — another checkout of its repository is linked ` +
+        `(${(siblings.length === 0 ? linked : siblings).join(", ")}); unlink that too to detach the repository`);
 }
 
 // Every preset write is an entity write now (#207 B): the verb keeps its
