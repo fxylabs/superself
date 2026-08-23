@@ -436,14 +436,14 @@ docs/
 ├─ roadmap.md             current capability, next outcomes, and exit evidence
 └─ strategy/              problem definition and positioning decisions
 
-site/
-├─ pages/index.html       the landing page, served at the site root
-└─ public/                favicon and social card
-
 ARCHITECTURE.md           layering, single gates, event namespaces, fixed naming
 CONTRIBUTING.md           process and code conventions
-spfn.site.yaml            opt-in and metadata for the site served from this repo
 ```
+
+This repository holds the CLI and the documentation. The superselfs.com site
+and the operational jobs that measure it live in a separate deployment
+repository, which reads `docs/` from here — nothing in this repository
+publishes a website or runs a scheduled job.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing code and
 [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
