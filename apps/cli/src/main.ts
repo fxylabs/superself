@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
+import { applyCommand } from "./apply.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
@@ -53,7 +54,7 @@ import {
 } from "./paths.js";
 import { notice, renderOutput } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
-import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
+import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
@@ -585,7 +586,7 @@ const DONE_OPTIONS = { why: { type: "string" }, report: { type: "string" } } as 
 // as a separator standing where a subcommand belongs.
 const WORK_CHILDREN: CommandLeaf[] = [
     leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
-    leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd),
+    retiring(leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd)),
     leaf("show", HISTORY_OPTIONS, 1, cmdWorkShow),
     leaf("start", TRANSITION_OPTIONS, 1, cmdWorkStart),
     ...WORK_TRANSITIONS.map(([verb, type, requires]) =>
@@ -593,10 +594,10 @@ const WORK_CHILDREN: CommandLeaf[] = [
     leaf("done", DONE_OPTIONS, 1, cmdWorkDone),
     leaf("started", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, true)),
     leaf("exited", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, false)),
-    leaf("retire", RETIRE_OPTIONS, 1, cmdWorkRetireUnit, {
+    retiring(leaf("retire", RETIRE_OPTIONS, 1, cmdWorkRetireUnit, {
         undocumented: ["requirement"],
         requires: [{ flags: ["why"], hint: "why the outcome was given up or moved" }]
-    }),
+    })),
     ...WORK_GOAL_LEAVES
 ];
 
@@ -828,8 +829,8 @@ export const COMMANDS: Command[] = [
                 ? 'goal set is now `self goal add "<text>"` — the goal it replaces is named with --supersedes <id> rather than implied'
                 : 'usage: self goal add "<text>" [--supersedes <id>] | retract <id> --why w',
             children: [
-                leaf("add", GOAL_OPTIONS, 1, goalAdd),
-                leaf("retract", GOAL_OPTIONS, 1, goalRetract, { requires: [WHY_REQUIRED] })
+                retiring(leaf("add", GOAL_OPTIONS, 1, goalAdd)),
+                retiring(leaf("retract", GOAL_OPTIONS, 1, goalRetract, { requires: [WHY_REQUIRED] }))
             ]
         })
     },
@@ -885,14 +886,14 @@ export const COMMANDS: Command[] = [
             unnamed: "text",
             refusal: 'usage: self decide "<text>" | confirm <id> | retract <id> --why w | decline <id> --why w',
             children: [
-                leaf("", DECIDE_OPTIONS, 1, cmdDecide),
+                retiring(leaf("", DECIDE_OPTIONS, 1, cmdDecide)),
                 leaf("confirm", {}, 1, ({ positionals }) => confirmDecision(positionals[0])),
-                leaf("decline", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
+                retiring(leaf("decline", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
                     withdrawDecision(requireProject(process.cwd()), "decline", positionals[0], values.why),
-                { requires: [{ flags: ["why"], hint: "why the proposed decision was turned down" }] }),
-                leaf("retract", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
+                { requires: [{ flags: ["why"], hint: "why the proposed decision was turned down" }] })),
+                retiring(leaf("retract", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
                     withdrawDecision(requireProject(process.cwd()), "retract", positionals[0], values.why),
-                { requires: [WHY_REQUIRED] })
+                { requires: [WHY_REQUIRED] }))
             ]
         })
     },
@@ -1052,6 +1053,10 @@ export const COMMANDS: Command[] = [
         node: leaf("", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
             cmdUndo(requireProject(process.cwd()), positionals[0], values.why), { requires: [WHY_REQUIRED] })
     },
+    // The command list is handed over as a thunk rather than imported by
+    // `apply.ts`: this is the root list the verb dispatches against, and a
+    // module that composes commands importing the composition back is a cycle.
+    applyCommand(() => COMMANDS),
     {
         name: "report",
         usage: [
@@ -1100,8 +1105,8 @@ export const COMMANDS: Command[] = [
             unnamed: "refuse",
             refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w',
             children: [
-                leaf("add", CONVENTION_OPTIONS, 1, conventionAdd),
-                leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop, { requires: [WHY_REQUIRED] })
+                retiring(leaf("add", CONVENTION_OPTIONS, 1, conventionAdd)),
+                retiring(leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop, { requires: [WHY_REQUIRED] }))
             ]
         })
     },
@@ -1857,7 +1862,8 @@ function presetEntityEvent(ctx: ProjectContext, models: ProjectModel[], verb: st
     // gate through this one line rather than each add verb deciding. A
     // proposal displaces nothing until it is confirmed, and passes through.
     const displaced = proposed ? [] : supersedeTargets(payload);
-    recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced), models[0],
+    recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced,
+        { successor: supersedingRecord(payload) }), models[0],
         (confirmation) =>
         {
             if (confirmation !== undefined)
@@ -1909,7 +1915,7 @@ function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>)
         throw new CliError(`${goal.id} is already ${goal.status} — a goal leaves once, and the first withdrawal is what happened`);
     }
     const payload = { entity: goal.id, why: required(values.why) };
-    recordRetirement(ctx, retirementIntent(model, "retract", [goal.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retract", [goal.id], { why: payload.why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retracted",
             confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: goal.id }, true)],
         goal.text);
@@ -2036,7 +2042,7 @@ function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", pref
     // A decline turns down a proposal, which was never held: only the retract
     // of a confirmed decision reaches the gate.
     const withdrawn = verb === "retract" ? [decision.id] : [];
-    recordRetirement(ctx, retirementIntent(model, "retract", withdrawn), model,
+    recordRetirement(ctx, retirementIntent(model, "retract", withdrawn, { why: payload.why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retracted",
             confirmation === undefined ? payload : { ...payload, confirmation }, refs, true)],
         decision.text);
@@ -2097,10 +2103,13 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const id = workId();
     const retirement = supersededRetirement(ctx, id, values);
-    recordRetirement(ctx, retirementIntent(model, "supersede", retirement === undefined ? [] : [String(retirement.payload.entity)]), model,
+    const payload = workPayload(ctx, id, outcome);
+    recordRetirement(ctx, retirementIntent(model, "supersede",
+        retirement === undefined ? [] : [String(retirement.payload.entity)],
+        { successor: supersedingRecord(payload) }), model,
         (confirmation) =>
         {
-            const events = [makeEvent(ctx.project, "entity.confirmed", workPayload(ctx, id, outcome))];
+            const events = [makeEvent(ctx.project, "entity.confirmed", payload)];
             if (retirement !== undefined)
             {
                 retirement.payload = confirmation === undefined ? retirement.payload : { ...retirement.payload, confirmation };
@@ -2407,7 +2416,7 @@ function recordUnitRetirement(ctx: ProjectContext, model: ProjectModel, work: Wo
     values: CommandInput<typeof RETIRE_OPTIONS>["values"]): void
 {
     const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
-    recordRetirement(ctx, retirementIntent(model, "retire", [work.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retire", [work.id], { why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retired",
             confirmation === undefined ? payload : { ...payload, confirmation }, undefined, true)],
         `${work.id} ${why}`);
@@ -2753,7 +2762,7 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     // ever wrote down.
     const payload = { entity: id, why: required(values.why) };
     const text = model.conventions.find((item) => item.id === id)?.text ?? id;
-    recordRetirement(ctx, retirementIntent(model, "retract", [id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retract", [id], { why: payload.why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retracted",
             confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: id }, true)],
         text);

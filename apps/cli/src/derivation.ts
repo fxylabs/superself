@@ -21,6 +21,7 @@ import { CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { DERIVATION_LABEL, derivationOf, EntityState } from "./entities.js";
 import { ProjectModel, workspaceModels } from "./model.js";
 import { ProjectContext, requireProject, requireRegistered } from "./paths.js";
+import { retiring } from "./retirement.js";
 import { composedEntityAdd } from "./state.js";
 import { CliError, CommandOutput } from "./types.js";
 
@@ -43,7 +44,10 @@ const FROM_WHY: Requirement = { flags: ["why"], hint: "why this project came fro
 // tier like any record; no cap has an exemption for it.
 const DERIVATION_ROW = { label: DERIVATION_LABEL, exposure: "index" as const, priority: 50 };
 
-export const PROJECT_FROM_LEAF: CommandLeaf = leaf("from", FROM_OPTIONS, 1, projectFrom, { requires: [FROM_WHY] });
+// Marked as a verb a reviewed set may run: `--supersedes` here retires a
+// standing derivation record like any other supersession (#312).
+export const PROJECT_FROM_LEAF: CommandLeaf =
+    retiring(leaf("from", FROM_OPTIONS, 1, projectFrom, { requires: [FROM_WHY] }));
 
 // A write verb: it takes no read-scope flag and records into the project it
 // runs in, because "this project came from that one" is the child's own fact.

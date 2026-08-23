@@ -26,7 +26,7 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
-import { recordRetirement, retirementIntent, supersedeTargets } from "./retirement.js";
+import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
 import { countCharacters, dim, errYellow, markdownHeadings, plural, styled } from "./style.js";
 import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
@@ -188,14 +188,14 @@ export const OBJECTIVE_COMMAND: Command = {
         children: [
             leaf("", WORKSPACE_SCOPE_OPTIONS, 0, objectiveList),
             leaf("list", WORKSPACE_SCOPE_OPTIONS, 0, objectiveList),
-            leaf("add", OBJECTIVE_ADD_OPTIONS, 1, objectiveAdd),
+            retiring(leaf("add", OBJECTIVE_ADD_OPTIONS, 1, objectiveAdd)),
             leaf("show", SCOPE_OPTIONS, 1, objectiveShow),
             leaf("confirm", {}, 1, confirmObjective),
             leaf("decline", WHY_OPTION, 1, declineObjective, { requires: [WHY_TURNED_DOWN] }),
-            leaf("revise", OBJECTIVE_REVISE_OPTIONS, 1, objectiveRevise, { requires: [WHY_CHANGED] }),
-            leaf("close", OBJECTIVE_CLOSE_OPTIONS, 1, objectiveClose, {
+            retiring(leaf("revise", OBJECTIVE_REVISE_OPTIONS, 1, objectiveRevise, { requires: [WHY_CHANGED] })),
+            retiring(leaf("close", OBJECTIVE_CLOSE_OPTIONS, 1, objectiveClose, {
                 requires: [{ flags: ["as"], value: "reached|dropped", hint: "whether the outcome was reached or given up" }]
-            })
+            }))
         ]
     })
 };
@@ -333,7 +333,8 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
     // (#197 §7, #207 B7): whatever span the caller states is recorded.
     const payload = objectiveAddPayload(id, outcome, row, model, values);
     const demotions = presetGate(ctx, models, 'objective add "<outcome>"', row.exposure, values, outcome, payload);
-    recordRetirement(ctx, retirementIntent(model, "supersede", proposed ? [] : supersedeTargets(payload)), model,
+    recordRetirement(ctx, retirementIntent(model, "supersede", proposed ? [] : supersedeTargets(payload),
+        { successor: supersedingRecord(payload) }), model,
         (confirmation) => [makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed),
         ...demotionEvents(demotions, id, proposed)],
@@ -408,7 +409,8 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
         why
     };
     const carried = liveMilestones(objective);
-    recordRetirement(ctx, retirementIntent(model, "supersede", [objective.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "supersede", [objective.id],
+        { successor: supersedingRecord(payload) }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
         ...carryEvents(ctx, carried, id)],
@@ -505,7 +507,8 @@ function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_C
     const payload = values.as === "reached"
         ? strip({ entity: objective.id, report: values.why })
         : { entity: objective.id, why: values.why };
-    recordRetirement(ctx, retirementIntent(model, "retire", values.as === "reached" ? [] : [objective.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retire", values.as === "reached" ? [] : [objective.id],
+        { why: values.why }), model,
         (confirmation) => [makeEvent(ctx.project, values.as === "reached" ? "entity.done" : "entity.retired",
             confirmation === undefined ? payload : { ...payload, confirmation }, undefined, true)],
         `${objective.id} ${values.as}`);
@@ -578,17 +581,17 @@ export const MILESTONE_COMMAND: Command = {
         children: [
             leaf("", SCOPE_OPTIONS, 0, milestoneList),
             leaf("list", SCOPE_OPTIONS, 0, milestoneList),
-            leaf("add", MILESTONE_ADD_OPTIONS, 1, milestoneAdd, {
+            retiring(leaf("add", MILESTONE_ADD_OPTIONS, 1, milestoneAdd, {
                 requires: [
                     { flags: ["objective"], value: "<id>", hint: "the objective this checkpoint sits under" },
                     { flags: ["exit"], value: "<criterion>", hint: "what has to be true to call it reached, repeatable" }
                 ]
-            }),
+            })),
             leaf("show", SCOPE_OPTIONS, 1, milestoneShow),
-            leaf("revise", MILESTONE_REVISE_OPTIONS, 1, milestoneRevise, { requires: [WHY_CHANGED] }),
-            leaf("drop", WHY_OPTION, 1, milestoneDrop, {
+            retiring(leaf("revise", MILESTONE_REVISE_OPTIONS, 1, milestoneRevise, { requires: [WHY_CHANGED] })),
+            retiring(leaf("drop", WHY_OPTION, 1, milestoneDrop, {
                 requires: [{ flags: ["why"], hint: "why it is not being reached" }]
-            }),
+            })),
             leaf("met", COVERAGE_OPTIONS, 1, milestoneMet, { requires: COVERAGE_REQUIRED }),
             leaf("reach", {}, 1, milestoneReach),
             leaf("recheck", COVERAGE_OPTIONS, 1, milestoneRecheck, { requires: RECHECK_REQUIRED })
@@ -661,7 +664,8 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
     }
     const payload = milestoneAddPayload(id, outcome, row, links, objective, values);
     const demotions = presetGate(ctx, models, 'milestone add "<outcome>"', row.exposure, values, outcome, payload);
-    recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload)), model,
+    recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload),
+        { successor: supersedingRecord(payload) }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
         ...demotionEvents(demotions, id, false)],
@@ -708,7 +712,8 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
         target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, milestone.target),
         why
     };
-    recordRetirement(ctx, retirementIntent(model, "supersede", [milestone.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "supersede", [milestone.id],
+        { successor: supersedingRecord(payload) }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
             strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
         `${id} ${why}`);
@@ -730,7 +735,7 @@ function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>)
     {
         throw new CliError(`${milestone.id} is already closed — ${milestone.reason}`);
     }
-    recordRetirement(ctx, retirementIntent(model, "retire", [milestone.id]), model,
+    recordRetirement(ctx, retirementIntent(model, "retire", [milestone.id], { why }), model,
         (confirmation) => [makeEvent(ctx.project, "entity.retired",
             { entity: milestone.id, why, ...(confirmation === undefined ? {} : { confirmation }) }, undefined, true)],
         `${milestone.id} ${why}`);

@@ -12,6 +12,7 @@
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { Exposure, EXPOSURES } from "./entities.js";
 import { AliasRow, readStoreConfig, requireWorkspace, StoreConfig } from "./paths.js";
+import { retiring } from "./retirement.js";
 import { aliasEntityAdd, ALIAS_ADD_OPTIONS, validExposure, validPriority } from "./state.js";
 import { commitAll } from "./gitutil.js";
 import { CliError, CommandOutput } from "./types.js";
@@ -378,7 +379,7 @@ function aliasCommand(verb: string, row: PresetRow): Command
             unnamed: "refuse",
             refusal: `usage: self ${verb} add "<text>" [--priority n] [--exposure full|index|search] [--scope <slug>|workspace]`,
             children: [
-                leaf("add", ALIAS_ADD_OPTIONS, 1, (input) => aliasEntityAdd(row, input))
+                retiring(leaf("add", ALIAS_ADD_OPTIONS, 1, (input) => aliasEntityAdd(row, input)))
             ]
         })
     };
