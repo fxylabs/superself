@@ -7,27 +7,28 @@
 // timeouts, headers, status codes and all. And both signing keys are DEV
 // keypairs whose private halves are in this repository: the release key
 // `dev-2026a`, which the trust document names, and the root `dev-root-2026a`,
-// which is pinned in `src/rootkeys.ts` and signs that document. Both are public
-// by construction, which is exactly why `npm run release-keys` refuses to
-// publish while the root is pinned.
+// which signs that document. Both are public by construction, which is why
+// neither is pinned in `src/rootkeys.ts` and why `npm run release-keys` refuses
+// to publish a tree that pins one.
 import { createServer } from "node:http";
-import { createPrivateKey, createHash, sign } from "node:crypto";
+import { createPrivateKey, createPublicKey, createHash, sign } from "node:crypto";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { jcs } from "../dist/rail.js";
 import { TRUST_PATH } from "../dist/trust.js";
 
-const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
 /* ── signing ───────────────────────────────────────────────────────── */
 
 // ⚠ DEVELOPMENT KEYS. The release key's public half is what the fixture trust
-// document names; the root's public half is `dev-root-2026a` in
-// `src/rootkeys.ts`. Both private halves are in this repository, so anything
-// they sign is signed by a key everyone has. They exist so the loader can be
-// driven end to end.
+// document names; the root's public half is the record the test build below
+// pins in place of the ceremony's. Both private halves are in this repository,
+// so anything they sign is signed by a key everyone has. They exist so the
+// loader can be driven end to end.
 export const DEV_KID = "dev-2026a";
 export const DEV_ROOT_KID = "dev-root-2026a";
 export const DEV_RELEASE_PUBLIC = "y/tV2B9W5IhPHM89i6r0aosTvc/fS5jaHy0xB3aikIo=";
@@ -41,6 +42,65 @@ function devRootKey()
 {
     return createPrivateKey(readFileSync(new URL("./fixtures/dev-root-key.pem", import.meta.url)));
 }
+
+// The fixture root as `rootkeys.ts` spells a record: the raw 32 bytes of the
+// public half, derived from the private one here rather than copied, so the key
+// and the record it is pinned as cannot drift apart. The window is the three
+// years §10 fixes.
+const DEV_ROOT_RECORD = {
+    kid: DEV_ROOT_KID,
+    publicKey: createPublicKey(devRootKey()).export({ type: "spki", format: "der" }).subarray(12).toString("base64"),
+    notBefore: "2026-01-01T00:00:00Z",
+    notAfter: "2029-01-01T00:00:00Z"
+};
+
+/* ── the binary these cells spawn: a test build ────────────────────── */
+
+// The shipped build pins the production roots, and refusing a document the
+// fixture root signed is exactly what that pin is for. So the cells that drive
+// a real process drive a **test build**: `dist/`, `bin/` and `package.json`
+// copied once per test process into a scratch directory whose
+// `dist/rootkeys.js` carries `dev-root-2026a` in place of the ceremony's
+// records. One data module differs; every other byte is the product's own build
+// output, and neither `dist/` nor the package is written to.
+//
+// Nothing selects this. The path is computed here, the product is never told it
+// moved, and no environment variable, flag or file reaches the root list — cell
+// 171 scans the sources for every variable the CLI reads and this adds none. A
+// shipped CLI has no such build and no way to ask for one.
+function testBuild()
+{
+    const root = mkdtempSync(join(tmpdir(), "self-test-build-"));
+    for (const entry of ["dist", "bin", "package.json"])
+    {
+        cpSync(join(packageRoot, entry), join(root, entry), { recursive: true });
+    }
+    writeFileSync(join(root, "dist", "rootkeys.js"), fixtureRootModule());
+    process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+    return join(root, "bin", "self.mjs");
+}
+
+// The built root module with its record list swapped for the fixture's. A
+// substitution rather than a module written from scratch, so an export added to
+// `rootkeys.ts` tomorrow reaches the test build too — and a shape this cannot
+// find is an error here rather than a build that silently pins nothing.
+function fixtureRootModule()
+{
+    const source = readFileSync(join(packageRoot, "dist", "rootkeys.js"), "utf8");
+    const opens = source.indexOf("export const ROOT_KEYS = [");
+    const closes = source.indexOf("];", opens);
+    if (opens < 0 || closes < 0)
+    {
+        throw new Error("dist/rootkeys.js no longer declares ROOT_KEYS as an array literal");
+    }
+    return source.slice(0, opens)
+        + `export const ROOT_KEYS = ${JSON.stringify([DEV_ROOT_RECORD], null, 4)}`
+        + source.slice(closes + 1);
+}
+
+// Exported for the one cell that spawns its own child: a SIGINT has to reach a
+// live process, which neither runner below can arrange.
+export const SELF_BIN = testBuild();
 
 export function signManifest(manifest, kid = DEV_KID)
 {
@@ -403,7 +463,7 @@ export function selfSplit(box, cwd, args, extra = {})
     // `spawnSync` rather than `execFileSync`: the latter throws away stderr on
     // a successful exit, and several of these cells are about what a *successful*
     // run said on stderr — a development banner, a low-balance notice.
-    const result = spawnSync(process.execPath, [bin, ...args],
+    const result = spawnSync(process.execPath, [SELF_BIN, ...args],
         { cwd, env: { ...box.env, ...extra }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return { code: result.status ?? 1, out: result.stdout ?? "", err: result.stderr ?? "", all: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
@@ -424,7 +484,7 @@ export function selfAsync(box, cwd, args, extra = {})
     const env = { ...box.env, ...extra };
     return new Promise((resolve) =>
     {
-        execFile(process.execPath, [bin, ...args], { cwd, env, encoding: "utf8" }, (error, out, err) =>
+        execFile(process.execPath, [SELF_BIN, ...args], { cwd, env, encoding: "utf8" }, (error, out, err) =>
             // `all` is the merged stream the shipped harness reports, for the
             // assertions that only care what was said; `out` and `err` stay
             // apart for the cells whose subject is *which* stream said it.

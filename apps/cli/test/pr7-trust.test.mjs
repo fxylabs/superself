@@ -15,7 +15,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { machine } from "./harness.mjs";
@@ -1048,19 +1049,69 @@ test("D12: a public key that is not an ed25519 key is a named refusal, not a raw
     assert.match(load.all, /not a valid ed25519 public key/);
 });
 
+// A package tree for the gate to judge: the whole publish path copied beside a
+// `src/rootkeys.ts` that pins exactly `kid`. The gate takes no argument and
+// reads the package it lives in, so which tree it judges is which copy of it
+// runs. `node_modules` is linked rather than copied because `structure.mjs`
+// needs its compiler and nothing here writes to it.
+function gateTree(kid)
+{
+    const here = fileURLToPath(new URL(".", import.meta.url));
+    const root = mkdtempSync(join(tmpdir(), "self-gate-"));
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "test"));
+    for (const file of ["release-keys.mjs", "structure.mjs"])
+    {
+        cpSync(join(here, file), join(root, "test", file));
+    }
+    writeFileSync(join(root, "src", "rootkeys.ts"), `export const ROOT_KEYS = [{ kid: "${kid}" }];\n`);
+    symlinkSync(join(here, "..", "node_modules"), join(root, "node_modules"));
+    return root;
+}
+
+// The linked `node_modules` is unlinked by name first: a recursive delete does
+// not follow a symlink, but the one it would follow here is the package's own
+// dependency tree, and that is not a risk worth leaving to a library's rules.
+function removeGateTree(root)
+{
+    unlinkSync(join(root, "node_modules"));
+    rmSync(root, { recursive: true, force: true });
+}
+
+// The gate with the variable that would once have disarmed it set.
+function runGate(packageDir)
+{
+    return spawnSync(process.execPath, [join(packageDir, "test", "release-keys.mjs")],
+        { env: { ...process.env, SUPERSELF_DEV_KEYS: "1" }, encoding: "utf8" });
+}
+
 test("D13: the publish gate refuses a development root, and no environment variable turns it off", () =>
 {
     // The gate is the last thing between `npm publish` and a CLI that trusts a
     // root whose private half is committed here. A skip switch would be read in
-    // the same shell that runs the publish, so there is none — asserted twice:
-    // the gate refuses this tree with the variable that used to disarm it set,
-    // and neither file on the publish path reads the environment at all.
-    const gate = fileURLToPath(new URL("./release-keys.mjs", import.meta.url));
-    const run = spawnSync(process.execPath, [gate],
-        { env: { ...process.env, SUPERSELF_DEV_KEYS: "1" }, encoding: "utf8" });
-    assert.equal(run.status, 1, `${run.stdout}${run.stderr}`);
-    assert.match(run.stderr, /development-trust-anchor/);
+    // the same shell that runs the publish, so there is none — asserted three
+    // ways: the gate refuses a tree pinning the development root with the
+    // variable that used to disarm it set, it passes this tree now that the
+    // ceremony roots are pinned, and neither file on the publish path reads the
+    // environment at all.
+    const tree = gateTree("dev-root-2026a");
+    try
+    {
+        const run = runGate(tree);
+        assert.equal(run.status, 1, `${run.stdout}${run.stderr}`);
+        assert.match(run.stderr, /development-trust-anchor/);
+    }
+    finally
+    {
+        removeGateTree(tree);
+    }
 
+    // And the mirror, on the tree that is actually published: the ceremony has
+    // been performed, so the gate that stands in front of `npm publish` passes.
+    const shipped = runGate(fileURLToPath(new URL("..", import.meta.url)));
+    assert.equal(shipped.status, 0, `${shipped.stdout}${shipped.stderr}`);
+
+    const gate = fileURLToPath(new URL("./release-keys.mjs", import.meta.url));
     const structure = readFileSync(fileURLToPath(new URL("./structure.mjs", import.meta.url)), "utf8");
     const decides = structure.slice(structure.indexOf("export function rootKeyViolations"),
         structure.indexOf("function violation("));

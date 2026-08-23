@@ -9,14 +9,13 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { machine } from "./harness.mjs";
-
-const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 import {
     CALL_KEY_PATTERN, checkCallKey, deriveCallKey, jcs, journalCall, journalPath, newCallKey
 } from "../dist/rail.js";
-import { installFixture, jsonOf, railEnv, railServer, selfAsync, writeCredential } from "./pr7-lib.mjs";
+import {
+    SELF_BIN, installFixture, jsonOf, railEnv, railServer, selfAsync, writeCredential
+} from "./pr7-lib.mjs";
 
 const ACCOUNT = "acct_01J8TEST";
 
@@ -271,7 +270,7 @@ test("SIGINT during a charged send aborts it: one exit:-1 line, exit 1, no compl
     try
     {
         writeCredential(it, { apiBase: rail.url });
-        const child = spawn(process.execPath, [bin, "keyed", "--json"],
+        const child = spawn(process.execPath, [SELF_BIN, "keyed", "--json"],
             { cwd: it.root, env: { ...it.env, ...railEnv(rail), SUPERSELF_NO_JOURNAL: "" }, stdio: ["ignore", "pipe", "pipe"] });
         let out = "";
         let err = "";
