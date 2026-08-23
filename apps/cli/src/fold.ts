@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
+import { designNote } from "./design.js";
 import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, ProjectModel, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
@@ -598,13 +599,17 @@ function workReportLines(work: WorkState): string[]
     for (const report of [...work.reports].reverse())
     {
         const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
+        // A design report says what it implements and whether a person ruled
+        // on it, because that pair is what decides whether the unit can be
+        // picked up at all (#316).
+        const design = designNote(report);
         if (report.text.includes("\n"))
         {
-            lines.push(`### ${day(report.ts)}${commits}`, "", report.text, "");
+            lines.push(`### ${day(report.ts)}${design}${commits}`, "", report.text, "");
         }
         else
         {
-            lines.push(`- ${day(report.ts)} — ${report.text}${commits}`);
+            lines.push(`- ${day(report.ts)}${design} — ${report.text}${commits}`);
         }
     }
     lines.push("");

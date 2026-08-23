@@ -202,6 +202,15 @@ work, or a free-labeled entity — folds into one record kind with placement:
 - `report` attaches a progress report, optional commit evidence, and optional
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
+- `report --design --implements <decision-id>` submits a design or scope
+  proposal. It is refused unless every cited decision exists, still holds, and
+  renders in the work unit's project, and the receipt prints each cited
+  decision's own text. `report confirm <report-id>` is how a person approves
+  one: it needs an interactive terminal and the design artifact's hash typed
+  back, so the recorded approval names the exact bytes. `work start` then
+  refuses a unit whose design is unapproved, whose approval names no hash, or
+  whose decision has since been superseded or retracted — the way to change
+  direction is to supersede the decision and cite the successor.
 
 The full work transitions and flags are in the `work` declaration of
 [`main.ts`](../../apps/cli/src/main.ts), and the completion rules are implemented by
@@ -275,7 +284,8 @@ The CLI writes one shared event grammar. Every asserted record uses the
 `entity.superseded`, `entity.retracted`, `entity.placed`, `entity.linked`,
 `entity.unlinked`, `entity.covered` — and the execution facts
 `entity.started`, `entity.blocked`, `entity.unblocked`, `entity.done`,
-`entity.retired`. Beside them, `report.added` records progress and
+`entity.retired`. Beside them, `report.added` records progress,
+`report.confirmed` records a person's approval of a design report, and
 `work.run-started` / `work.run-exited` record process transitions. Event
 namespaces are owned; the current owners are listed in
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md#event-namespaces), and the
@@ -296,8 +306,10 @@ A report may carry:
 
 - commit revisions, which are resolved against the project repository;
 - descriptive notes, which are retained but never treated as Git revisions;
-- attached artifacts; and
-- the next action for a later session.
+- attached artifacts;
+- the next action for a later session; and
+- on a design report, the decisions it implements and the approval bound to
+  its artifact hash.
 
 Artifact metadata in the folded project state is `{id, name, path, digest?}`.
 The declared artifact shape everywhere else is `{name, sha256, bytes}` —

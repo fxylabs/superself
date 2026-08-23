@@ -10,16 +10,18 @@ import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
+import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitations } from "./design.js";
 import { EntityState, Exposure, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
+import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
-import { buildModel, DecisionState, ProjectModel, readableModels, workScope, workspaceModels, WorkState } from "./model.js";
+import { buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, workScope, workspaceModels, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -73,7 +75,7 @@ import {
     tierOf
 } from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
-import { countCharacters, dim, markdownHeadings, styled } from "./style.js";
+import { bold, countCharacters, dim, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS } from "./pretty.js";
 import { contextOutput, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
@@ -532,7 +534,9 @@ const REPORT_OPTIONS = {
     evidence: { type: "string", multiple: true },
     artifact: { type: "string", multiple: true },
     next: { type: "string" },
-    file: { type: "string" }
+    file: { type: "string" },
+    design: { type: "boolean" },
+    implements: { type: "string", multiple: true }
 } as const;
 
 // Declared once for the whole verb, so the subcommand that does not take one
@@ -1091,7 +1095,13 @@ export const COMMANDS: Command[] = [
         usage: [
             {
                 syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]',
+                description: ["add --design --implements <decision-id> to submit a design or scope proposal,", "which is refused unless every decision it cites still holds"],
                 verbs: [""]
+            },
+            {
+                syntax: "report confirm <report-id>",
+                description: ["approve a design at a terminal, binding the approval to the artifact's hash"],
+                verbs: ["confirm"]
             }
         ],
         detail: [
@@ -1105,9 +1115,38 @@ export const COMMANDS: Command[] = [
             "  --evidence <v>      record evidence, repeatable: a revision this repo",
             "                      resolves, else a note; commit:<v>/note:<v> force it",
             "  --artifact <path>   copy a file into the store and attach it, repeatable",
-            "  --next <text>       what the next session should pick up"
+            "                      (a design report carries exactly one: the design)",
+            "  --next <text>       what the next session should pick up",
+            "  --design            this report proposes a design or a scope, not history",
+            "  --implements <id>   the decisions the design implements, repeatable and",
+            "                      comma-separable; every one must exist, still hold, and",
+            "                      render in the work unit's project",
+            "",
+            "a design report is refused unless it cites a live decision, and the receipt",
+            "prints each cited decision's own text so a design that drifted from it is",
+            "visible at submission. Changing direction is spelled by superseding the",
+            "decision and citing the successor — no flag skips the citation.",
+            "",
+            "`report confirm` is how a person approves a design. It needs an interactive",
+            "terminal and the artifact's hash typed back, so the approval records which",
+            "exact bytes were ruled on. `self work start` refuses a unit whose design is",
+            "unapproved, whose approval names no hash, or whose decision has since been",
+            "superseded or retracted.",
+            "",
+            "both forms write, so neither takes a read scope: they record into the",
+            "project the named work unit belongs to."
         ],
-        node: leaf("", REPORT_OPTIONS, 2, cmdReport)
+        node: branch({
+            name: "report",
+            // Every other first argument is a work id, so only the literal
+            // verb is a subcommand — the same reading `decide` takes.
+            unnamed: "text",
+            refusal: 'usage: self report <work-id> "<summary>" [--design --implements <id>] | confirm <report-id>',
+            children: [
+                leaf("", REPORT_OPTIONS, 2, cmdReport),
+                leaf("confirm", {}, 1, cmdReportConfirm)
+            ]
+        })
     },
     ARTIFACT_COMMAND,
     {
@@ -2482,6 +2521,7 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
 {
     const ctx = requireProject(process.cwd());
     const { work, owner } = requireOpenWork(ctx, positionals[0]);
+    requireDispatchable(ctx, owner, work);
     const mine = sessionToken();
     // Read before anything is written, and printed before it too: the fact a
     // session is deciding on is who held the unit when it walked up. A
@@ -2498,6 +2538,19 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
     }
     noteSessionSeen(mine, new Date().toISOString());
     return [{ kind: "document", plain: () => briefLines(ctx, owner, work) }];
+}
+
+// The dispatch half of the design gate (#316), read before the claim and
+// before the brief: picking a unit up is what turns a design into code, so a
+// design nobody approved — or one whose decision has since been superseded —
+// stops here rather than being noticed at review.
+function requireDispatchable(ctx: ProjectContext, owner: string, work: WorkState): void
+{
+    const refused = dispatchRefusal(workspaceModels(ctx.storeDir, owner), owner, work);
+    if (refused !== null)
+    {
+        throw new CliError(refused);
+    }
 }
 
 // The unit as it stood when the session walked up, against the model the claim
@@ -2814,7 +2867,7 @@ function attachEvidence(ctx: ProjectContext, values: CommandInput<typeof REPORT_
     }
 }
 
-function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): void
+function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const { work, owner } = requireOpenWork(ctx, positionals[0]);
@@ -2825,14 +2878,148 @@ function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>)
     const refs: EventRefs = { work: work.id };
     const payload: Record<string, unknown> = { text };
     attachEvidence(ctx, values, refs, payload);
+    // Before a byte is staged: a design citing a decision that no longer holds
+    // must leave the store exactly as it found it.
+    const cited = designCitations(ctx, owner, values, refs, payload);
     const staged = stageArtifacts(ctx.storeDir, owner, values.artifact);
     if (staged.artifacts.length > 0)
     {
         payload.artifacts = staged.artifacts;
         refs.artifacts = staged.artifacts.map((meta) => meta.id);
     }
-    commitStaged(staged, (recorded) =>
-        recordEvent(ctx, makeEvent(owner, "report.added", payload, refs), `${work.id} ${text}`, recorded));
+    const event = makeEvent(owner, "report.added", payload, refs);
+    commitStaged(staged, (recorded) => recordEvent(ctx, event, `${work.id} ${text}`, recorded));
+    return cited === null ? [] : [designReceipt(event.id, work.id, cited, staged.artifacts.length > 0)];
+}
+
+// The submission half of the design gate (#316). Marks the event and resolves
+// the citation, or refuses — and the two flags are refused apart, because a
+// design with no citation and a citation on an ordinary report are each a
+// caller meaning something the record cannot carry.
+function designCitations(ctx: ProjectContext, owner: string,
+    values: CommandInput<typeof REPORT_OPTIONS>["values"],
+    refs: EventRefs, payload: Record<string, unknown>): CitedDecision[] | null
+{
+    const ids = citedIds(values.implements);
+    if (values.design !== true)
+    {
+        if (ids.length > 0)
+        {
+            throw new CliError("--implements states what a design implements — pass --design too, or leave it off an ordinary report");
+        }
+        return null;
+    }
+    if (ids.length === 0)
+    {
+        throw new CliError("a design report has to say which decision it implements — pass --implements <decision-id> (`self search --type decision` lists them), or drop --design if this reports what happened");
+    }
+    if ((values.artifact ?? []).length > 1)
+    {
+        throw new CliError("a design report carries one artifact — the design an approval binds to — so pass --artifact once");
+    }
+    const cited = requireCitations(workspaceModels(ctx.storeDir, owner), owner, ids);
+    payload.design = true;
+    refs.implements = cited.map((item) => item.id);
+    return cited;
+}
+
+// The echo the issue asks for: each cited decision's own text, beside the
+// command that approves the design. A design that drifted from its decision is
+// readable here, at submission, rather than at review.
+function designReceipt(report: string, work: string, cited: CitedDecision[], bound: boolean): OutputBlock
+{
+    const next = bound
+        ? `  a person approves it: self report confirm ${report}`
+        : "  no artifact attached, so this design binds no hash — `self work start` refuses until an approved design carries one";
+    return {
+        kind: "receipt",
+        text: [`design report ${report} recorded for ${work}`, ...citationLines(cited), next].join("\n")
+    };
+}
+
+// The approval half (#316). There is no approval verb left in the CLI —
+// decision 01kz2nczhtde554qx5tqpqzrt3 removed the whole governance layer — so
+// this composes the one human ruling mechanism that survived it, `human.ts`
+// `confirmHuman`, under the spelling every other person-ruled proposal uses.
+// The typed challenge is the design artifact's digest: what is approved is a
+// set of bytes, and the record says which.
+function cmdReportConfirm({ positionals }: CommandInput<Record<string, never>>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const wanted = requireText(positionals[0], "report confirm <report-id> — `self work show <work-id>` lists a unit's reports");
+    const found = requireDesignReport(ctx, wanted);
+    const digest = found.report.artifacts[0]?.digest;
+    if (digest === undefined)
+    {
+        throw new CliError(`${found.report.id} carries no artifact digest, so there is nothing for an approval to bind to — resubmit the design with --artifact <path>`);
+    }
+    if (found.report.approval !== undefined)
+    {
+        return [{ kind: "receipt", text: `${found.report.id} was already approved on ${found.report.approval.ts.slice(0, 10)} — nothing recorded` }];
+    }
+    return recordDesignApproval(ctx, found, digest);
+}
+
+interface FoundReport
+{
+    owner: string;
+    work: WorkState;
+    report: ReportEntry;
+}
+
+function recordDesignApproval(ctx: ProjectContext, found: FoundReport, digest: string): CommandOutput
+{
+    const challenge = digest.slice(0, 12);
+    const confirmation = approveDesign(found, challenge);
+    const payload = { report: found.report.id, digest, confirmation };
+    const refs: EventRefs = { work: found.work.id, confirms: found.report.id, artifacts: found.report.artifacts.map((meta) => meta.id) };
+    recordEvent(ctx, makeEvent(found.owner, "report.confirmed", payload, refs, true), `${found.work.id} design ${found.report.id} approved`);
+    return [{ kind: "receipt", text: `${found.report.id} approved for ${found.work.id}, bound to artifact ${challenge}` }];
+}
+
+// The same refusal shape `retirement.ts` gives a process with no person behind
+// it: the agent is handed the exact line for a person to run, rather than a
+// rule it cannot satisfy.
+function approveDesign(found: FoundReport, challenge: string): HumanConfirmation
+{
+    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    {
+        throw new CliError(`approving a design is a person's call, and this process has no terminal to make it at — nothing was recorded\n\n`
+            + `  ${found.report.text.split("\n")[0]}\n\n  a person runs this in their own terminal:\n    self report confirm ${found.report.id}`);
+    }
+    const confirmed = confirmHuman(
+        `${bold(`approve the design ${found.report.id} for ${found.work.id}?`)}\n\n  ${found.report.text.split("\n")[0]}`,
+        challenge,
+        `type ${bold(challenge)} — the design artifact's hash — to approve exactly these bytes`);
+    if ("code" in confirmed)
+    {
+        throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
+    }
+    return confirmed;
+}
+
+// A report is named by its own event id, and it is found wherever the unit
+// carrying it renders — the same workspace-wide reading `work show` takes, so
+// a design is approved from the person's own checkout rather than only from
+// the one the agent submitted it in.
+function requireDesignReport(ctx: ProjectContext, wanted: string): FoundReport
+{
+    for (const model of workspaceModels(ctx.storeDir, ctx.project))
+    {
+        for (const work of model.works)
+        {
+            const report = work.reports.find((item) => item.id === wanted || item.id.startsWith(wanted));
+            if (report !== undefined && report.design === true)
+            {
+                return { owner: model.slug, work, report };
+            }
+            if (report !== undefined)
+            {
+                throw new CliError(`${report.id} is an ordinary report, not a design — only a report recorded with --design is approved`);
+            }
+        }
+    }
+    throw new CliError(`no report "${wanted}" — \`self work show <work-id>\` lists a unit's reports by id`);
 }
 
 // A decision may look back at finished work, so this accepts any unit the

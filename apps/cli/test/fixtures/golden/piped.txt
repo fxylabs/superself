@@ -217,6 +217,9 @@ usage: self <command>
   apply <file>                               run a reviewed file of record-destroying commands on one confirmation
                                              (nothing is recorded until the whole set is confirmed at a terminal)
   report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]
+                                             add --design --implements <decision-id> to submit a design or scope proposal,
+                                             which is refused unless every decision it cites still holds
+  report confirm <report-id>                 approve a design at a terminal, binding the approval to the artifact's hash
   artifact list [--work id] [--project slug]
                                              list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
