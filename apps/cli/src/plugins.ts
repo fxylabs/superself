@@ -49,7 +49,10 @@ export const PLUGIN_KEY_PATTERN = /^[a-z][a-z0-9-]{1,30}$/;
 // `1.0.0-../../../../tmp/x` reached `mkdirSync` and `writeFileSync` outside the
 // plugin tree. A signature check gates execution; it does not gate the path a
 // verified document is written to.
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// The prerelease part is captured because precedence depends on it: `0.1.2-alpha`
+// is **below** `0.1.2`, and a comparison that read the core alone would let a
+// prerelease pass a floor the released version of itself sits exactly on.
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
 
 // The same statement a second way. The regex is one reading of what a version
 // may contain; this is an explicit reading of what a path segment may never
@@ -156,7 +159,75 @@ export function compareVersions(left: string, right: string): number
             return diff < 0 ? -1 : 1;
         }
     }
+    return comparePrerelease(a[4], b[4]);
+}
+
+// SemVer 2.0 §11, and the reason the floor needs it: a version carrying a
+// prerelease is **lower** than the same core without one, so `0.1.2-alpha` is
+// below the floor `0.1.2` rather than equal to it. Build metadata (`+…`) is
+// captured by nothing above, because §10 says it never affects precedence.
+function comparePrerelease(left: string | undefined, right: string | undefined): number
+{
+    if (left === undefined && right === undefined)
+    {
+        return 0;
+    }
+    if (left === undefined || right === undefined)
+    {
+        // The released version outranks the prerelease of itself.
+        return left === undefined ? 1 : -1;
+    }
+    const a = left.split(".");
+    const b = right.split(".");
+    for (let n = 0; n < Math.max(a.length, b.length); n += 1)
+    {
+        const diff = compareIdentifier(a[n], b[n]);
+        if (diff !== 0)
+        {
+            return diff;
+        }
+    }
     return 0;
+}
+
+const NUMERIC_IDENTIFIER = /^\d+$/;
+
+// A prerelease that runs out of identifiers first is the lower one
+// (`alpha` < `alpha.1`); numeric identifiers compare as numbers and rank below
+// alphanumeric ones; everything else compares by ASCII, which is what `<` is
+// over the characters SemVer allows here.
+function compareIdentifier(left: string | undefined, right: string | undefined): number
+{
+    if (left === undefined || right === undefined)
+    {
+        return left === undefined ? -1 : 1;
+    }
+    const leftIsNumber = NUMERIC_IDENTIFIER.test(left);
+    const rightIsNumber = NUMERIC_IDENTIFIER.test(right);
+    if (leftIsNumber && rightIsNumber)
+    {
+        return sign(Number(left) - Number(right));
+    }
+    if (leftIsNumber !== rightIsNumber)
+    {
+        return leftIsNumber ? -1 : 1;
+    }
+    // `<` over these characters is code-unit order, which is the ASCII order
+    // SemVer §11 names — `localeCompare` is not, because it folds case.
+    if (left === right)
+    {
+        return 0;
+    }
+    return left < right ? -1 : 1;
+}
+
+function sign(diff: number): number
+{
+    if (diff === 0)
+    {
+        return 0;
+    }
+    return diff < 0 ? -1 : 1;
 }
 
 // The range forms a manifest actually uses: `*`, `^1`, `^1.2.3`, `>=1.2.3`,

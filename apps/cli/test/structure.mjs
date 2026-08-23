@@ -54,8 +54,14 @@ export const credentialModules = ["src/credentials.ts", "src/rail.ts", "src/trus
 // name any release key it likes, so that CLI will run a plugin anyone on earth
 // signed.
 //
-// A comment saying "replace this" is not a gate; this is. `SUPERSELF_DEV_KEYS=1`
-// is the deliberate opt-out for a development build, so the check fails closed.
+// A comment saying "replace this" is not a gate; this is, and it has **no**
+// opt-out. An environment variable that skipped it would live on the publish
+// path itself, where one `export` in the shell that runs `npm publish` is the
+// entire distance between the gate and a released CLI that trusts a key
+// everybody has — and a gate one variable disarms is a comment with an exit
+// code. Nothing else needs one: `npm run build`, `npm test` and
+// `npm run structure` never call this, so a development build has nothing to
+// opt out of.
 export const rootKeysModule = "src/rootkeys.ts";
 
 // Deliberately NOT part of `runStructure`. This branch legitimately pins only
@@ -66,10 +72,6 @@ export const rootKeysModule = "src/rootkeys.ts";
 // prevents is made.
 export function rootKeyViolations(tree)
 {
-    if (process.env.SUPERSELF_DEV_KEYS === "1")
-    {
-        return [];
-    }
     if (!tree.paths.includes(rootKeysModule))
     {
         return [violation("missing-trust-anchor", "there is no pinned root key module to publish against")];
@@ -87,7 +89,7 @@ export function rootKeyViolations(tree)
     // the real root does not withdraw the development root's trust.
     return kids.filter((kid) => kid.startsWith("dev-")).map((kid) => violation("development-trust-anchor",
         `"${kid}" is a development root whose private half is a test fixture — `
-        + "replace it before publishing, or set SUPERSELF_DEV_KEYS=1 for a development build"));
+        + "run the root ceremony and replace it before publishing"));
 }
 
 function violation(rule, detail)

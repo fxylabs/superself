@@ -29,23 +29,26 @@ import {
     resolveBase
 } from "./structure.mjs";
 
-// The gate reads `SUPERSELF_DEV_KEYS` as the opt-out, so a run that happens to
-// have it set would make every "must fire" case vacuous. Each case below runs
-// with the variable cleared and restores whatever the environment had.
-function withoutDevKeyOptOut(run)
+// The gate reads no environment variable at all, so a case below fires — or
+// does not — on the tree it is handed and on nothing else. `withDevKeyOptOut`
+// is the proof of that: it sets the variable the gate used to honour, and every
+// case asserts the same outcome with it set.
+function withDevKeyOptOut(run)
 {
     const had = process.env.SUPERSELF_DEV_KEYS;
-    delete process.env.SUPERSELF_DEV_KEYS;
+    process.env.SUPERSELF_DEV_KEYS = "1";
     try
     {
         run();
     }
     finally
     {
-        if (had !== undefined)
+        if (had === undefined)
         {
-            process.env.SUPERSELF_DEV_KEYS = had;
+            delete process.env.SUPERSELF_DEV_KEYS;
+            return;
         }
+        process.env.SUPERSELF_DEV_KEYS = had;
     }
 }
 
@@ -413,13 +416,10 @@ test("cell 116: the real tree has no such import, and both credential modules ar
 // dev key's committed private half.
 test("the publish gate fires when the only pinned root is the development root", () =>
 {
-    withoutDevKeyOptOut(() =>
-    {
-        const violations = rootKeyViolations(keyPins("dev-root-2026a"));
-        assert.equal(violations.length, 1);
-        assert.equal(violations[0].rule, "development-trust-anchor");
-        assert.match(violations[0].detail, /dev-root-2026a/);
-    });
+    const violations = rootKeyViolations(keyPins("dev-root-2026a"));
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].rule, "development-trust-anchor");
+    assert.match(violations[0].detail, /dev-root-2026a/);
 });
 
 // The other half of the same gate, and the reason it is two rules rather than
@@ -428,52 +428,39 @@ test("the publish gate fires when the only pinned root is the development root",
 // not shippable.
 test("the publish gate fires when no root is pinned at all", () =>
 {
-    withoutDevKeyOptOut(() =>
-    {
-        const violations = rootKeyViolations(keyPins());
-        assert.equal(violations.length, 1);
-        assert.equal(violations[0].rule, "empty-trust-anchor");
-        assert.match(violations[0].detail, /root ceremony/);
-    });
+    const violations = rootKeyViolations(keyPins());
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].rule, "empty-trust-anchor");
+    assert.match(violations[0].detail, /root ceremony/);
 });
 
 test("the publish gate still fires when a real root is mixed with a dev- root", () =>
 {
-    withoutDevKeyOptOut(() =>
-    {
-        const violations = rootKeyViolations(keyPins("root-2026a", "dev-root-2026a"));
-        // Exactly the development root is named; the real one is not a violation.
-        assert.equal(violations.length, 1);
-        assert.match(violations[0].detail, /dev-root-2026a/);
-        assert.doesNotMatch(violations[0].detail, /"root-2026a"/);
-    });
+    const violations = rootKeyViolations(keyPins("root-2026a", "dev-root-2026a"));
+    // Exactly the development root is named; the real one is not a violation.
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].detail, /dev-root-2026a/);
+    assert.doesNotMatch(violations[0].detail, /"root-2026a"/);
 });
 
 test("the publish gate passes when a real root is pinned and no dev- root is", () =>
 {
-    withoutDevKeyOptOut(() =>
-    {
-        assert.deepEqual(rootKeyViolations(keyPins("root-2026a", "root-2026b")), []);
-    });
+    assert.deepEqual(rootKeyViolations(keyPins("root-2026a", "root-2026b")), []);
 });
 
-test("the publish gate passes for any key set when SUPERSELF_DEV_KEYS=1 opts out", () =>
+// The gate used to honour `SUPERSELF_DEV_KEYS=1` as an opt-out, which put the
+// one switch that disarms it in the same shell that runs `npm publish`. There
+// is no opt-out now, and this is the case that says so: with the variable set,
+// every refusal above is still a refusal.
+test("the publish gate has no environment opt-out", () =>
 {
-    const had = process.env.SUPERSELF_DEV_KEYS;
-    process.env.SUPERSELF_DEV_KEYS = "1";
-    try
+    withDevKeyOptOut(() =>
     {
-        assert.deepEqual(rootKeyViolations(keyPins("dev-root-2026a")), []);
-    }
-    finally
-    {
-        if (had === undefined)
-        {
-            delete process.env.SUPERSELF_DEV_KEYS;
-        }
-        else
-        {
-            process.env.SUPERSELF_DEV_KEYS = had;
-        }
-    }
+        assert.equal(rootKeyViolations(keyPins("dev-root-2026a"))[0]?.rule, "development-trust-anchor");
+        assert.equal(rootKeyViolations(keyPins())[0]?.rule, "empty-trust-anchor");
+        assert.equal(rootKeyViolations(keyPins("root-2026a", "dev-root-2026a")).length, 1);
+        // And a clean pin still passes, so the variable changes nothing at all
+        // rather than inverting the gate.
+        assert.deepEqual(rootKeyViolations(keyPins("root-2026a", "root-2026b")), []);
+    });
 });

@@ -12,6 +12,12 @@
 // stands in front of `npm publish` rather than in front of every build, because
 // pinning only the development root is the correct state until the operator has
 // performed the ceremony and the wrong state at exactly one moment.
+//
+// It reads **no** environment variable and takes no argument. A skip switch
+// would be read in the same shell that runs `npm publish`, so the one command
+// this gate exists to stop would be the one command able to turn it off; and a
+// development build never reaches here, because nothing but `prepublishOnly`
+// runs it.
 import { diskTree, packageRoot, rootKeyViolations } from "./structure.mjs";
 
 const violations = rootKeyViolations(diskTree(packageRoot));

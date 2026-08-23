@@ -13,6 +13,7 @@
 // root, changes nothing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,7 +25,8 @@ import {
     writeCredential, writeTrustCache
 } from "./pr7-lib.mjs";
 import { jcs } from "../dist/rail.js";
-import { TRUST_PATH, loadTrustDocument } from "../dist/trust.js";
+import { compareVersions } from "../dist/plugins.js";
+import { TRUST_PATH, loadTrustDocument, trustVerifierCalls } from "../dist/trust.js";
 
 function box()
 {
@@ -130,6 +132,17 @@ async function refusal(work)
         return error;
     }
     return null;
+}
+
+// A refusal, and what it cost the ed25519 verifier. `trustVerifierCalls` counts
+// every document signature this process put in front of the verifier, which is
+// the only way to assert the negative cell 169 states: the verifier was never
+// consulted about the bad document at all.
+async function measured(work)
+{
+    const before = trustVerifierCalls();
+    const error = await refusal(work);
+    return { error, calls: trustVerifierCalls() - before };
 }
 
 /* ── 158–159: nothing to fall back on ──────────────────────────────── */
@@ -240,6 +253,79 @@ test("cell 161: a document older than the cached one is trust_document_rollback 
     }
 });
 
+// The same statement one layer down, where the comparison actually happens. A
+// second process caches T2 while this run is fetching, and the rail's answer is
+// T1 — newer than the T0 this run started from, so nothing is a rollback, and
+// older than T2, so the cache write is skipped. What the run is judged under
+// must be T2 all the same: a revocation this machine has already recorded is
+// not undone by a slower fetch finishing after it.
+function racingRail(box, older, newer)
+{
+    return (call) =>
+    {
+        if (call.path !== TRUST_PATH)
+        {
+            return { status: 200, body: releaseDocument({ key: "email" }) };
+        }
+        writeTrustCache(box, { trust: newer });
+        return { status: 200, body: older };
+    };
+}
+
+function seededCache(fetchedHoursAgo)
+{
+    return { at: Date.now() - 96 * HOUR_MS, fetchedAt: new Date(Date.now() - fetchedHoursAgo * HOUR_MS).toISOString() };
+}
+
+test("cell 161: a newer document cached mid-run governs the install, and the older answer never does", async () =>
+{
+    const it = box();
+    const newer = signedTrust({ keys: [trustKey({ status: "revoked", revokedAt: "2026-08-22T00:00:00Z" })] });
+    const older = signedTrust({ at: Date.now() - 48 * HOUR_MS });
+    const rail = await railServer(racingRail(it, older, newer), { trust: null });
+    try
+    {
+        installFixture(it, { key: "email", trustCache: seededCache(1) });
+        writeCredential(it, { apiBase: rail.url });
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
+        assert.equal(install.code, 1, install.all);
+        assert.equal(errorOf(install).code, "plugin_key_revoked");
+        const cached = JSON.parse(readFileSync(trustCacheFile(it), "utf8"));
+        assert.equal(cached.trust.document.issued_at, newer.document.issued_at, "the older answer replaced the newer cache");
+        assert.equal(cached.trust.document.keys[0].status, "revoked");
+        assert.deepEqual(rail.calls.map((call) => call.path), [TRUST_PATH], "a release was fetched for a revoked key");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("cell 161: a newer document cached mid-run governs the load that follows it", async () =>
+{
+    const it = box();
+    const witness = join(it.root, "imported");
+    const newer = signedTrust({ keys: [trustKey({ status: "revoked", revokedAt: "2026-08-22T00:00:00Z" })] });
+    const older = signedTrust({ at: Date.now() - 48 * HOUR_MS });
+    const rail = await railServer(racingRail(it, older, newer), { trust: null });
+    try
+    {
+        // 25 h old, so the load refreshes — which is the moment the race is run.
+        installFixture(it, { key: "email", entry: witnessed(witness, "email"), trustCache: seededCache(25) });
+        writeCredential(it, { apiBase: rail.url });
+        const load = await selfAsync(it, it.demo, ["email"], railEnv(rail));
+        assert.equal(load.code, 1, load.all);
+        assert.match(load.all, /release key "dev-2026a" has been revoked/);
+        assert.equal(existsSync(witness), false, "the revoked plugin's module was imported");
+        const cached = JSON.parse(readFileSync(trustCacheFile(it), "utf8"));
+        assert.equal(cached.trust.document.issued_at, newer.document.issued_at, "the older answer replaced the newer cache");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
 /* ── 162: revocation reaches an installed plugin ───────────────────── */
 
 test("cell 162: a refreshed document that revokes the signing key refuses the load and the install", async () =>
@@ -284,6 +370,32 @@ test("cell 162: a refreshed document that revokes the signing key refuses the lo
     }
 });
 
+test("cell 162: a fresh install of a release the served document revokes writes nothing", async () =>
+{
+    const it = box();
+    // Nothing is installed, so the release route is genuinely reached and its
+    // answer is genuinely verified — the half the already-installed cell above
+    // short-circuits past.
+    const revoked = signedTrust({ keys: [trustKey({ status: "revoked", revokedAt: "2026-08-20T00:00:00Z" })] });
+    const rail = await railServer((call) => (call.path.endsWith("/release")
+        ? { status: 200, body: releaseDocument({ key: "email" }) }
+        : { status: 404, body: {} }), { trust: revoked });
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
+        assert.equal(install.code, 1, install.all);
+        assert.equal(errorOf(install).code, "plugin_key_revoked");
+        assert.deepEqual(rail.calls.map((call) => call.path), ["/api/plugins/email/release"],
+            "the release route was not the path under test");
+        assert.equal(existsSync(pluginsRoot(it)), false, "a refused install wrote into the plugin tree");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
 /* ── 163: which key of the document the kid selects ────────────────── */
 
 test("cell 163: a release signed by the document's second active key verifies against that record", async () =>
@@ -307,6 +419,54 @@ test("cell 163: a release signed by the document's second active key verifies ag
     const result = await selfAsync(it, it.demo, ["email"], {});
     assert.equal(result.code, 0, result.all);
     assert.match(result.out, /^ok$/m);
+});
+
+// The second key, and a release signed with it. The two records carry
+// different public halves, so a signature that verifies at all verifies only
+// under the record the kid names.
+function secondKeyRelease()
+{
+    const pair = generateKeyPairSync("ed25519");
+    const built = releaseDocument({ key: "email" });
+    return {
+        publicKey: pair.publicKey.export({ type: "spki", format: "der" }).subarray(12).toString("base64"),
+        document: {
+            ...built,
+            signature: {
+                kid: "dev-2026b",
+                alg: "ed25519",
+                sig: sign(null, Buffer.from(jcs(built.manifest)), pair.privateKey).toString("base64")
+            }
+        }
+    };
+}
+
+test("cell 163: a fresh install verifies the served release against the document's second active key", async () =>
+{
+    const it = box();
+    const second = secondKeyRelease();
+    const trust = signedTrust({ keys: [trustKey(), trustKey({ kid: "dev-2026b", publicKey: second.publicKey })] });
+    const rail = await railServer((call) => (call.path.endsWith("/release")
+        ? { status: 200, body: second.document }
+        : { status: 404, body: {} }), { trust });
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        const install = await selfAsync(it, it.demo, ["app", "install", "email", "--json"], railEnv(rail));
+        assert.equal(install.code, 0, install.all);
+        const written = JSON.parse(readFileSync(join(pluginsRoot(it), "email", "0.1.0", "signature.json"), "utf8"));
+        assert.equal(written.kid, "dev-2026b", "the installed release was verified against another record");
+
+        // And the plugin loads on the document the install cached, which is the
+        // same lookup a second time.
+        const load = await selfAsync(it, it.demo, ["email"], railEnv(rail));
+        assert.equal(load.code, 0, load.all);
+        assert.match(load.out, /^ok$/m);
+    }
+    finally
+    {
+        await rail.close();
+    }
 });
 
 /* ── 164: the published floor ──────────────────────────────────────── */
@@ -370,6 +530,91 @@ test("cell 164: below the floor and signed by a revoked key is refused by the fl
     assert.equal(load.code, 1, load.all);
     assert.match(load.all, /"email" 0\.1\.1 is below 0\.1\.2/);
     assert.doesNotMatch(load.all, /revoked/, "the revocation was reported ahead of the floor");
+});
+
+// A rail whose release route serves one version, under a document that floors
+// the plugin at another.
+async function floorRail(version, floor)
+{
+    return railServer((call) => (call.path.endsWith("/release")
+        ? { status: 200, body: releaseDocument({ key: "email", version }) }
+        : { status: 404, body: {} }), { trust: signedTrust({ floors: { email: floor } }) });
+}
+
+test("cell 164: a served release below the floor is refused before anything is written", async () =>
+{
+    const it = box();
+    const rail = await floorRail("0.1.1", "0.1.2");
+    try
+    {
+        writeCredential(it, { apiBase: rail.url });
+        // Nothing is installed, so this is the fresh path: the release is
+        // fetched, verified, and then refused by the floor with nothing on disk
+        // to show for it. `--allow-downgrade` moves the local mark and has
+        // nothing to say about a published floor.
+        for (const extra of [[], ["--allow-downgrade"]])
+        {
+            const install = await selfAsync(it, it.demo,
+                ["app", "install", "email@0.1.1", "--json", ...extra], railEnv(rail));
+            assert.equal(install.code, 1, install.all);
+            assert.equal(errorOf(install).code, "plugin_version_below_minimum",
+                "--allow-downgrade moved the published floor, not just the local mark");
+            assert.equal(existsSync(pluginsRoot(it)), false, "a release below the floor was written");
+        }
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("cell 164: a prerelease is below the release it precedes, so it cannot pass that floor", () =>
+{
+    // SemVer 2.0 §11. Without the prerelease half, `0.1.2-alpha` compares
+    // **equal** to `0.1.2` and a withdrawn version walks back in under the
+    // floor that withdrew it.
+    assert.equal(compareVersions("0.1.2-alpha", "0.1.2"), -1);
+    assert.equal(compareVersions("0.1.2", "0.1.2-alpha"), 1);
+    assert.equal(compareVersions("0.1.2-alpha.1", "0.1.2-alpha.2"), -1);
+    assert.equal(compareVersions("0.1.2-alpha", "0.1.2-beta"), -1);
+    assert.equal(compareVersions("1.0.0-rc.1", "1.0.0"), -1);
+    // A prerelease that runs out of identifiers first is the lower one, a
+    // numeric identifier ranks below an alphanumeric one, and build metadata
+    // decides nothing.
+    assert.equal(compareVersions("0.1.2-alpha", "0.1.2-alpha.1"), -1);
+    assert.equal(compareVersions("0.1.2-1", "0.1.2-alpha"), -1);
+    assert.equal(compareVersions("0.1.2-alpha", "0.1.2-alpha"), 0);
+    assert.equal(compareVersions("0.1.2+build.9", "0.1.2"), 0);
+});
+
+test("cell 164: a prerelease of the floor's own version is refused at load and at install", async () =>
+{
+    const it = box();
+    const witness = join(it.root, "imported");
+    const rail = await floorRail("0.1.2-alpha", "0.1.2");
+    try
+    {
+        installFixture(it, {
+            key: "email",
+            version: "0.1.2-alpha",
+            entry: witnessed(witness, "email"),
+            trustCache: { at: Date.now() - 6 * HOUR_MS, floors: { email: "0.1.2" } }
+        });
+        writeCredential(it, { apiBase: rail.url });
+        const load = await selfAsync(it, it.demo, ["email"], railEnv(rail));
+        assert.equal(load.code, 1, load.all);
+        assert.match(load.all, /"email" 0\.1\.2-alpha is below 0\.1\.2/);
+        assert.equal(existsSync(witness), false, "a prerelease below the floor was imported");
+
+        const install = await selfAsync(it, it.demo,
+            ["app", "install", "email@0.1.2-alpha", "--json"], railEnv(rail));
+        assert.equal(install.code, 1, install.all);
+        assert.equal(errorOf(install).code, "plugin_version_below_minimum");
+    }
+    finally
+    {
+        await rail.close();
+    }
 });
 
 /* ── 165–166: what a load costs, online and off ────────────────────── */
@@ -490,6 +735,15 @@ test("cell 169: alg equality and root lookup are decided before the verifier is 
         const held = await loadTrustDocument({
             mode: "install", session: SESSION, roots: [root.record], fetch: servesDocument(fixtureDocument(root))
         });
+        // What a refusal that provably never reaches the verifier costs: a body
+        // that is not a signed document at all. The one call it spends is the
+        // cache this run re-verifies on the way in, and every block below must
+        // cost exactly that and no more — which is "the verifier was called zero
+        // times for the served document", counted rather than argued.
+        const floor = await measured(() => loadTrustDocument({
+            mode: "install", session: SESSION, roots: [root.record], fetch: async () => ({ status: 200, text: "{}" })
+        }));
+        assert.equal(floor.error?.code, "trust_document_invalid");
         // Each block below carries a signature that verifies. Every one of them
         // must still be refused, which is only possible if `alg` and `kid` were
         // judged first and the verifier's answer was never reached for.
@@ -497,12 +751,16 @@ test("cell 169: alg equality and root lookup are decided before the verifier is 
         for (const block of blocks)
         {
             const fetch = servesDocument(fixtureDocument(root, { block }));
-            const error = await refusal(() => loadTrustDocument({ mode: "install", session: SESSION, roots: [root.record], fetch }));
-            assert.equal(error?.code, "trust_document_invalid", `install accepted ${JSON.stringify(block)}`);
+            const install = await measured(() => loadTrustDocument({ mode: "install", session: SESSION, roots: [root.record], fetch }));
+            assert.equal(install.error?.code, "trust_document_invalid", `install accepted ${JSON.stringify(block)}`);
+            assert.equal(install.calls, floor.calls, `the verifier was consulted about ${JSON.stringify(block)}`);
+            const before = trustVerifierCalls();
             const kept = await loadTrustDocument({
                 mode: "load", session: SESSION, roots: [root.record], fetch, refresh: true
             });
             assert.equal(kept.signature.sig, held.signature.sig, `load adopted ${JSON.stringify(block)}`);
+            assert.equal(trustVerifierCalls() - before, floor.calls,
+                `the verifier was consulted about ${JSON.stringify(block)} at load`);
         }
     });
 });
@@ -552,6 +810,26 @@ test("D12: a public key that is not an ed25519 key is a named refusal, not a raw
     assert.match(load.all, /not a valid ed25519 public key/);
 });
 
+test("D13: the publish gate refuses a development root, and no environment variable turns it off", () =>
+{
+    // The gate is the last thing between `npm publish` and a CLI that trusts a
+    // root whose private half is committed here. A skip switch would be read in
+    // the same shell that runs the publish, so there is none — asserted twice:
+    // the gate refuses this tree with the variable that used to disarm it set,
+    // and neither file on the publish path reads the environment at all.
+    const gate = fileURLToPath(new URL("./release-keys.mjs", import.meta.url));
+    const run = spawnSync(process.execPath, [gate],
+        { env: { ...process.env, SUPERSELF_DEV_KEYS: "1" }, encoding: "utf8" });
+    assert.equal(run.status, 1, `${run.stdout}${run.stderr}`);
+    assert.match(run.stderr, /development-trust-anchor/);
+
+    const structure = readFileSync(fileURLToPath(new URL("./structure.mjs", import.meta.url)), "utf8");
+    const decides = structure.slice(structure.indexOf("export function rootKeyViolations"),
+        structure.indexOf("function violation("));
+    assert.doesNotMatch(readFileSync(gate, "utf8") + decides, /process\.env/,
+        "the publish gate reads an environment variable");
+});
+
 test("D10: a build with no pinned root accepts no document at all", async () =>
 {
     await inScratch(async () =>
@@ -584,6 +862,9 @@ test("cell 170: a document one byte over the cap is refused before it is parsed"
         assert.equal(result.code, 1, result.all);
         assert.equal(errorOf(result).code, "trust_document_too_large");
         assert.equal(existsSync(trustCacheFile(it)), false, "an oversized document was cached");
+        assert.equal(existsSync(pluginsRoot(it)), false, "a plugin tree was written");
+        assert.equal(existsSync(join(configRoot(it), "plugin-state.json")), false, "an install record was written");
+        assert.deepEqual(rail.calls.map((call) => call.path), [TRUST_PATH], "a release was requested anyway");
     }
     finally
     {
@@ -595,12 +876,46 @@ test("cell 170: a document one byte over the cap is refused before it is parsed"
 
 // Read from the sources rather than kept as a list here, so a variable added
 // tomorrow joins this cell instead of quietly escaping it.
+//
+// Two forms are read, because the CLI writes both. `process.env.NAME` names the
+// variable where it is read; `process.env[name]` reads a name the module holds
+// in a declared list — which is how `machine.ts` finds the agent harness's
+// session id and `human.ts` finds an attempt marker. A scan that saw only the
+// first form would call this cell exhaustive while three variables walked past
+// it.
 function environmentNames()
 {
-    const src = fileURLToPath(new URL("../src", import.meta.url));
-    const names = readdirSync(src).flatMap((file) =>
-        [...readFileSync(join(src, file), "utf8").matchAll(/process\.env\.([A-Za-z_0-9]+)/g)].map((found) => found[1]));
+    const names = sourceFiles().flatMap(([, text]) => [...directNames(text), ...listedNames(text)]);
     return [...new Set(names)].sort();
+}
+
+function sourceFiles()
+{
+    const src = fileURLToPath(new URL("../src", import.meta.url));
+    return readdirSync(src).map((file) => [file, readFileSync(join(src, file), "utf8")]);
+}
+
+function directNames(text)
+{
+    return [...text.matchAll(/process\.env\.([A-Za-z_0-9]+)/g)].map((found) => found[1]);
+}
+
+// The declared name lists of a module that indexes `process.env` with one.
+// Only such a module is read this way, so an unrelated constant array elsewhere
+// in the tree does not become an environment variable.
+function listedNames(text)
+{
+    if (!/process\.env\[/.test(text))
+    {
+        return [];
+    }
+    return [...text.matchAll(/const\s+[A-Z][A-Z0-9_]*\s*=\s*\[([^\]]*)\]/g)]
+        .flatMap((found) => [...found[1].matchAll(/"([A-Za-z_][A-Za-z_0-9]*)"/g)].map((name) => name[1]));
+}
+
+function indirectReaders()
+{
+    return sourceFiles().filter(([, text]) => /process\.env\[/.test(text)).map(([file]) => file);
 }
 
 test("cell 171: every environment variable the CLI reads, set to a fixture root, adds nothing", async () =>
@@ -620,11 +935,19 @@ test("cell 171: every environment variable the CLI reads, set to a fixture root,
         // root is what the rest of the variables are being tested for.
         const names = environmentNames();
         assert.deepEqual(names, [
-            "CI", "NODE_TLS_REJECT_UNAUTHORIZED", "NO_COLOR", "SUPERSELF_API_BASE", "SUPERSELF_ATTEMPT_ID",
-            "SUPERSELF_DEBUG", "SUPERSELF_DEV", "SUPERSELF_JSON", "SUPERSELF_NO_JOURNAL",
-            "SUPERSELF_PLUGIN_DEV", "SUPERSELF_PROFILE", "SUPERSELF_SESSION", "TERM",
+            "CI", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "NODE_TLS_REJECT_UNAUTHORIZED", "NO_COLOR",
+            "SUPERSELF_API_BASE", "SUPERSELF_ATTEMPT_ID", "SUPERSELF_DEBUG", "SUPERSELF_DEV",
+            "SUPERSELF_JSON", "SUPERSELF_NO_JOURNAL", "SUPERSELF_PLUGIN_DEV", "SUPERSELF_PROFILE",
+            "SUPERSELF_SESSION", "SUPERSELF_SESSION_PID", "TERM",
             "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"
         ], "a new environment variable joined the CLI without joining this cell");
+        // A module that indexes `process.env` with something other than a
+        // declared list reads names the scan above cannot enumerate, so which
+        // modules do it at all is asserted rather than assumed. `redact.ts` is
+        // the one that reads by pattern — it turns a value into a redaction
+        // literal and names no key material.
+        assert.deepEqual(indirectReaders(), ["human.ts", "machine.ts", "redact.ts"],
+            "a module started reading process.env indirectly without joining this cell");
         // Four keep their real values, and none of them is about a key.
         // `SUPERSELF_API_BASE` and the XDG paths say which rail and which
         // machine — point them elsewhere and the run never reaches the document
@@ -689,6 +1012,14 @@ test("cell 172: one changed byte in the cache makes it absent — a fetch happen
         const result = await selfAsync(offline, offline.demo, ["email"], railEnv(dead));
         assert.equal(result.code, 3, result.all);
         assert.match(result.all, /has no plugin key list and could not obtain one/);
+        // The load refusal happens before a leaf resolves, so there is no
+        // machine mode to render the code into. `app trust` is a leaf and reads
+        // the same state through the same step 0, so the code the run is
+        // refusing with is read from there.
+        const named = await selfAsync(offline, offline.demo, ["app", "trust", "--json"], railEnv(dead));
+        assert.equal(named.code, 3, named.all);
+        assert.equal(errorOf(named).code, "trust_unavailable");
+        assert.equal(errorOf(named).retry_after_s, 5);
     }
     finally
     {

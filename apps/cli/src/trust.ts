@@ -184,6 +184,20 @@ export function ed25519Key(publicKeyBase64: string, code: string): ReturnType<ty
 // is `expires_at` and what bounds a replayed one is monotonicity — both of them
 // statements the root signed, rather than a comparison with a local clock the
 // same attacker could move.
+//
+// `verifierCalls` counts how many times a document signature was put in front
+// of the ed25519 verifier. Nothing decides anything by it — it is incremented
+// beside the call and read by no code path — and it exists because cell 169's
+// claim is a **negative**: a document whose `alg` or `kid` is wrong is refused
+// without the verifier ever being consulted, and "never consulted" is only
+// assertable by counting.
+let verifierCalls = 0;
+
+export function trustVerifierCalls(): number
+{
+    return verifierCalls;
+}
+
 function verifyTrust(signed: SignedTrust, roots: readonly RootKey[]): RootKey
 {
     if (signed.signature.alg !== SIGNATURE_ALG)
@@ -201,6 +215,7 @@ function verifyTrust(signed: SignedTrust, roots: readonly RootKey[]): RootKey
         throw invalidTrust(`root "${root.kid}" was not valid when this document was issued`);
     }
     const body = Buffer.from(jcs(signed.document as unknown as JsonValue));
+    verifierCalls += 1;
     if (!verify(null, body, ed25519Key(root.publicKey, "trust_document_invalid"), Buffer.from(signed.signature.sig, "base64")))
     {
         throw invalidTrust("the trust document is not signed by a pinned root");
@@ -348,13 +363,22 @@ function verifiedRecord(text: string, roots: readonly RootKey[]): TrustState | n
 //
 // A lock this process cannot take is never a reason to fail. The fresh document
 // is already in memory for this run, and the next run refreshes.
-async function writeTrustCache(state: TrustState, roots: readonly RootKey[]): Promise<void>
+//
+// What comes back is the document **this run is judged under**, which is not
+// always the one that went in. When disk already holds a newer document, the
+// write is skipped — and returning the older one anyway would let this process
+// install or load under keys the newer document revoked, which is precisely the
+// state monotonicity exists to make unreachable. So the newer document wins the
+// comparison and the caller's answer both.
+async function writeTrustCache(state: TrustState, roots: readonly RootKey[]): Promise<TrustState>
 {
+    let authoritative = state;
     await withTrustLock(() =>
     {
         const onDisk = readTrustCache(roots);
         if (onDisk !== null && Date.parse(state.document.issued_at) < Date.parse(onDisk.document.issued_at))
         {
+            authoritative = onDisk;
             return;
         }
         const record = {
@@ -365,6 +389,7 @@ async function writeTrustCache(state: TrustState, roots: readonly RootKey[]): Pr
         };
         replacePrivateFile(trustCachePath(), `${JSON.stringify(record, null, 2)}\n`);
     });
+    return authoritative;
 }
 
 async function withTrustLock(work: () => void): Promise<void>
@@ -541,15 +566,24 @@ async function installDocument(options: TrustOptions, roots: readonly RootKey[],
     {
         throw rollback();
     }
+    assertCurrent(state, at);
+    // The write may hand back a **newer** document another process cached while
+    // this one was fetching, and that document — not the one in hand — is what
+    // this install is judged under. It may revoke a key this one still calls
+    // active, and it is checked for expiry on its own terms.
+    const stored = await writeTrustCache({ ...state, fetched_at: at().toISOString() }, roots);
+    assertCurrent(stored, at);
+    return stored;
+}
+
+function assertCurrent(state: TrustState, at: () => Date): void
+{
     if (trustExpired(state, at))
     {
         throw fail("trust_document_expired",
             `the plugin key list expired at ${state.document.expires_at}`,
             { hint: "the operator has not published a current key list — try again later" });
     }
-    const stored = { ...state, fetched_at: at().toISOString() };
-    await writeTrustCache(stored, roots);
-    return stored;
 }
 
 // Fail-open on a valid cache. A plugin already on this machine keeps working
@@ -600,9 +634,7 @@ async function firstDocument(options: TrustOptions, roots: readonly RootKey[], a
     {
         throw unavailable("this machine has no plugin key list and could not obtain one", codeOf(error));
     }
-    const stored = { ...(fetched as TrustState), fetched_at: at().toISOString() };
-    await writeTrustCache(stored, roots);
-    return stored;
+    return writeTrustCache({ ...(fetched as TrustState), fetched_at: at().toISOString() }, roots);
 }
 
 interface Refreshed
@@ -632,9 +664,9 @@ async function refreshOrKeep(options: TrustOptions, roots: readonly RootKey[],
     {
         return { state: cached, note: keptNote("trust_document_rollback") };
     }
-    const stored = { ...(fetched ?? cached), fetched_at: at().toISOString() };
-    await writeTrustCache(stored, roots);
-    return { state: stored };
+    // Again the write decides: a document another process cached in the meantime
+    // is newer than this one and governs the load that follows it.
+    return { state: await writeTrustCache({ ...(fetched ?? cached), fetched_at: at().toISOString() }, roots) };
 }
 
 function keptNote(code: string): string
