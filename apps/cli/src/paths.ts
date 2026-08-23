@@ -1,6 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { checkoutTops, excludeLocally, realPath, repositoryIdentity, topOf } from "./gitutil.js";
+import { checkoutTops, commonDir, excludeLocally, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
 
@@ -437,6 +437,7 @@ const links = new Map<string, Record<string, LinkedCheckout[]>>();
 const registries = new Map<string, RegistryEntry[]>();
 const matched = new Map<string, CheckoutMatch[]>();
 const resolvedPaths = new Map<string, string | null>();
+const resolvedLists = new Map<string, ProjectRepositories>();
 
 export function invalidateResolution(): void
 {
@@ -444,6 +445,7 @@ export function invalidateResolution(): void
     registries.clear();
     matched.clear();
     resolvedPaths.clear();
+    resolvedLists.clear();
     // The archive state is folded from a project's own log, which an append
     // just changed: `project archive` and `project restore` both write through
     // the same pipeline, so a read after either must start from the file.
@@ -641,6 +643,15 @@ export interface EvidenceHead
 {
     repository: string;
     verdicts: string;
+    // One key per repository the verdicts were judged across, by repository
+    // identity (#331): a project linked to two repositories walks only the one
+    // whose refs moved. Absent on a head written before evidence was judged
+    // across repositories; the combined `repository` key above stands in.
+    repositories?: Record<string, string>;
+    // The repositories this machine asked, as the health line names them —
+    // read by the console surfaces, which reuse the stored verdicts without
+    // touching git and so cannot derive the names themselves.
+    asked?: string[];
 }
 
 export function readEvidenceHead(storeDir: string, slug: string): EvidenceHead | null
@@ -653,12 +664,29 @@ export function readEvidenceHead(storeDir: string, slug: string): EvidenceHead |
     try
     {
         const parsed = JSON.parse(readFileSync(file, "utf8"));
-        return typeof parsed?.repository === "string" && typeof parsed?.verdicts === "string" ? parsed : null;
+        return typeof parsed?.repository === "string" && typeof parsed?.verdicts === "string" ? evidenceHead(parsed) : null;
     }
     catch
     {
         return null;
     }
+}
+
+// The optional fields are taken only in the shape they were written in; a
+// hand-edited or half-written head reads as one that recorded nothing there.
+function evidenceHead(parsed: EvidenceHead & { repositories?: unknown; asked?: unknown }): EvidenceHead
+{
+    const head: EvidenceHead = { repository: parsed.repository, verdicts: parsed.verdicts };
+    if (parsed.repositories !== null && typeof parsed.repositories === "object" && !Array.isArray(parsed.repositories))
+    {
+        head.repositories = Object.fromEntries(Object.entries(parsed.repositories)
+            .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    }
+    if (Array.isArray(parsed.asked))
+    {
+        head.asked = parsed.asked.filter((name): name is string => typeof name === "string");
+    }
+    return head;
 }
 
 // Written once the exclude is in place, so a store that has never synced
@@ -902,6 +930,142 @@ export function resolveProjectPath(storeDir: string, slug: string, from: string 
         resolvedPaths.set(key, resolveProjectPathOnce(storeDir, slug, from));
     }
     return resolvedPaths.get(key) ?? null;
+}
+
+// Every repository a project's evidence is judged across, one path each
+// (#331), in the order the links were recorded — so a hash two repositories
+// both know is judged in the same one whichever checkout the fold ran from.
+// The path `resolveProjectPath` picks stands for its repository, so a project
+// linked to one repository is judged exactly where it was before; a second
+// worktree of a repository already in hand is dropped before its identity is
+// probed — the `rev-parse` that tells two paths are one repository is the
+// cheap question, the history walk behind `standing` the dear one (#128).
+//
+// A linked path that exists but is not a repository stands for the
+// repositories one level below it: the folder that holds a project's
+// checkouts is what gets linked when the project spans more than one.
+//
+// `missing` is the links whose path is not on this machine and whose
+// recorded repository is none of the ones found — a repository that cannot
+// be asked, which is what stops a hash it alone knows from reading as
+// vanished. A path that is gone but whose repository is here under another
+// worktree is not missing, and a link that recorded no identity claims
+// nothing, exactly as every other read of the ledger takes it.
+export interface ProjectRepositories
+{
+    dirs: string[];
+    missing: string[];
+}
+
+export function resolveProjectPaths(storeDir: string, slug: string, from: string = process.cwd()): ProjectRepositories
+{
+    const key = JSON.stringify([storeDir, slug, from]);
+    if (!resolvedLists.has(key))
+    {
+        resolvedLists.set(key, resolveProjectPathsOnce(storeDir, slug, from));
+    }
+    return resolvedLists.get(key) ?? { dirs: [], missing: [] };
+}
+
+function resolveProjectPathsOnce(storeDir: string, slug: string, from: string): ProjectRepositories
+{
+    const primary = resolveProjectPath(storeDir, slug, from);
+    const primaryKey = primary === null ? null : commonDir(primary);
+    const found = new Map<string, string>();
+    const take = (path: string): void =>
+    {
+        for (const dir of repositoriesAt(path))
+        {
+            const key = commonDir(dir) ?? dir;
+            if (!found.has(key))
+            {
+                found.set(key, key === primaryKey && primary !== null ? primary : dir);
+            }
+        }
+    };
+    const absent = takeLinked(readLinks(storeDir)[slug] ?? [], found, primaryKey, take);
+    if (primary !== null && !found.has(primaryKey ?? primary))
+    {
+        take(primary);
+    }
+    const dirs = [...found.values()];
+    return { dirs, missing: missingRepositories(absent, dirs) };
+}
+
+// Every standing link whose repository is not in hand yet is taken; the links
+// whose path is not on this machine come back for the caller to account for.
+// A link of the primary's own repository is taken on the primary's standing,
+// already asked by `resolveProjectPath`, so a project linked to one repository
+// pays for no probe it did not pay for before (#128).
+function takeLinked(
+    linked: LinkedCheckout[],
+    found: Map<string, string>,
+    primaryKey: string | null,
+    take: (path: string) => void
+): LinkedCheckout[]
+{
+    const absent: LinkedCheckout[] = [];
+    for (const link of linked)
+    {
+        const path = realPath(link.path);
+        if (!existsSync(path))
+        {
+            absent.push(link);
+            continue;
+        }
+        const key = commonDir(path) ?? path;
+        if (!found.has(key) && (key === primaryKey || standing(link)))
+        {
+            take(path);
+        }
+    }
+    return absent;
+}
+
+// Identities are asked only when a link is absent: they are what tells a
+// missing worktree of a repository in hand from a missing repository.
+function missingRepositories(absent: LinkedCheckout[], dirs: string[]): string[]
+{
+    const claimed = absent.filter((link) => link.repository !== undefined);
+    if (claimed.length === 0)
+    {
+        return [];
+    }
+    const here = new Set(dirs.map((dir) => repositoryIdentity(dir)));
+    return claimed.filter((link) => !here.has(link.repository as string)).map((link) => link.path);
+}
+
+// The repository at a path, or — a folder that is not one — the repositories
+// directly below it, by name. One level only, and only children that carry a
+// `.git` entry are asked, so a folder of many things costs one `rev-parse`
+// per checkout rather than one per entry.
+function repositoriesAt(path: string): string[]
+{
+    if (!existsSync(path))
+    {
+        return [];
+    }
+    if (commonDir(path) !== null)
+    {
+        return [path];
+    }
+    return childDirectories(path)
+        .filter((child) => existsSync(join(child, ".git")) && commonDir(child) !== null);
+}
+
+function childDirectories(path: string): string[]
+{
+    try
+    {
+        return readdirSync(path, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => join(path, entry.name))
+            .sort();
+    }
+    catch
+    {
+        return [];
+    }
 }
 
 function resolveProjectPathOnce(storeDir: string, slug: string, from: string): string | null

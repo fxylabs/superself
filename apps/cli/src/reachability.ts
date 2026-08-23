@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { git, refListing, resolveCommits, revListExcept } from "./gitutil.js";
-import { EvidenceHead, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { checkoutTops, git, realPath, refListing, repositoryIdentity, resolveCommits, revListExcept } from "./gitutil.js";
+import { EvidenceHead, ProjectRepositories, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
 import { WorkState } from "./model.js";
 import { digestFile } from "./repo.js";
 import { ArtifactMeta } from "./types.js";
@@ -11,6 +11,9 @@ interface Evidence
 {
     hash: string;
     branch?: string;
+    // The repository the report named, by identity (#331). Where two linked
+    // repositories both resolve the hash, this one judges it.
+    repository?: string;
 }
 
 // Everything a reachability verdict reads *out of the refs*, in one probe:
@@ -38,23 +41,51 @@ function repositoryState(projectDir: string): RepositoryState
     return { key: digest(listing), branches };
 }
 
+// One repository a project's evidence is judged in (#331): where it is, what
+// it is, what it is called, and the state its verdicts are keyed on. The
+// identity is the root commit, the same value a link records and a report
+// stamps; a repository with no commit yet is keyed by its path instead. The
+// label is the name a person knows the repository by — its main working
+// tree's directory — and is what the health line prints.
+interface Repository
+{
+    dir: string;
+    identity: string;
+    label: string;
+    state: RepositoryState;
+}
+
+function openRepository(dir: string): Repository | null
+{
+    if (!existsSync(dir) || !git(dir, "rev-parse", "--git-dir").ok)
+    {
+        return null;
+    }
+    return {
+        dir,
+        identity: repositoryIdentity(dir) ?? realPath(dir),
+        label: basename(checkoutTops(dir)[0] ?? dir),
+        state: repositoryState(dir)
+    };
+}
+
 function digest(content: string): string
 {
     return createHash("sha256").update(content).digest("hex");
 }
 
-// Recomputes verdicts where the project repo is available; anywhere else the
-// stored verdicts pass through untouched, so an unlinked machine never
-// demotes evidence it cannot check.
+// Recomputes verdicts across every repository the project is linked to on
+// this machine (#331); where none is, the stored verdicts pass through
+// untouched, so an unlinked machine never demotes evidence it cannot check.
 //
 // Two things bound what is recomputed, and neither of them changes what a
 // verdict says. Settled is final, which is a recorded decision: a commit on
 // the default branch does not come off it, and the archive was riding the
 // sweep on every event for nothing. And the two history walks are spent only
-// when the repository state a verdict was computed against has moved — a ref,
-// a branch, a HEAD, or the evidence file itself, which another machine's fold
-// can replace under a sync. A hash nothing has judged yet is always walked,
-// whatever the state says (#128).
+// in a repository whose state a verdict was computed against has moved — a
+// ref, a branch, a HEAD, or the evidence file itself, which another machine's
+// fold can replace under a sync. A hash nothing has judged yet is always
+// walked, whatever the state says (#128).
 //
 // Whether the object is still in the database is asked every time, because it
 // is the one input the ref listing cannot carry: pruning an unreachable commit
@@ -66,30 +97,50 @@ function digest(content: string): string
 // signal never fired again. Asking costs one `cat-file --batch-check` process
 // for the whole repository, so the bound #128 defends — flat in the number of
 // commits — is untouched.
-export function updateVerdicts(storeDir: string, slug: string, projectDir: string | null, evidence: Evidence[]): Record<string, Verdict>
+export function updateVerdicts(storeDir: string, slug: string, linked: ProjectRepositories, evidence: Evidence[]): Record<string, Verdict>
 {
     const verdicts = readVerdicts(storeDir, slug);
-    if (projectDir === null || !existsSync(projectDir) || !git(projectDir, "rev-parse", "--git-dir").ok)
+    const opened = linked.dirs.map(openRepository);
+    const repositories = opened.filter((repo): repo is Repository => repo !== null);
+    if (repositories.length === 0)
     {
         return verdicts;
     }
-    const state = repositoryState(projectDir);
+    // Every linked repository answered: the one condition under which
+    // "nothing resolves it" may be said. A path that is gone, or one git can
+    // no longer open, might be the repository that knows the hash.
+    const complete = linked.missing.length === 0 && opened.length === repositories.length;
     const known = readEvidenceHead(storeDir, slug);
-    const moved = !unchanged(known, { repository: state.key, verdicts: digest(serialize(verdicts)) });
+    const current = digest(serialize(verdicts));
+    const moved = (repo: Repository): boolean =>
+        known === null || known.verdicts !== current || keyOf(known, repo) !== repo.state.key;
     const pending = evidence.filter((item) => verdicts[item.hash] !== "settled");
     const judged = pending.length === 0
         ? new Map<string, Verdict>()
-        : classifyAll(projectDir, state, pending, verdicts, moved);
+        : classifyAcross(repositories, pending, verdicts, moved, complete);
     if (judged === null)
     {
         return verdicts;
     }
-    return commitVerdicts(storeDir, slug, verdicts, judged, state);
+    return commitVerdicts(storeDir, slug, verdicts, judged, repositories);
 }
 
-function unchanged(known: EvidenceHead | null, current: EvidenceHead): boolean
+// The key this repository's verdicts were last judged against. A head written
+// before verdicts were judged across repositories recorded one key for the
+// one repository it had, and that key still answers for it — so an upgrade
+// walks nothing a moved ref would not have.
+function keyOf(known: EvidenceHead, repo: Repository): string | undefined
 {
-    return known !== null && known.repository === current.repository && known.verdicts === current.verdicts;
+    return known.repositories === undefined ? known.repository : known.repositories[repo.identity];
+}
+
+// The repositories this machine last judged the verdicts across, as the
+// health line names them (#331). Read off the head rather than derived, so
+// the console surfaces — which reuse the stored verdicts without touching git
+// — print the same names the fold did.
+export function askedRepositories(storeDir: string, slug: string): string[]
+{
+    return readEvidenceHead(storeDir, slug)?.asked ?? [];
 }
 
 function serialize(verdicts: Record<string, Verdict>): string
@@ -107,7 +158,7 @@ function commitVerdicts(
     slug: string,
     verdicts: Record<string, Verdict>,
     judged: Map<string, Verdict>,
-    state: RepositoryState
+    repositories: Repository[]
 ): Record<string, Verdict>
 {
     let changed = false;
@@ -124,54 +175,132 @@ function commitVerdicts(
     {
         writeFileSync(join(projectStateDir(storeDir, slug), "evidence.json"), content);
     }
-    writeEvidenceHead(storeDir, slug, { repository: state.key, verdicts: digest(content) });
+    writeEvidenceHead(storeDir, slug, headOf(repositories, digest(content)));
     return verdicts;
 }
 
+// One key per repository, and a combined key over all of them in identity
+// order, so the record reads the same whichever checkout the fold ran from.
+function headOf(repositories: Repository[], verdicts: string): EvidenceHead
+{
+    const sorted = [...repositories].sort((a, b) => a.identity.localeCompare(b.identity));
+    return {
+        repository: digest(sorted.map((repo) => repo.state.key).join("\n")),
+        verdicts,
+        repositories: Object.fromEntries(sorted.map((repo) => [repo.identity, repo.state.key])),
+        asked: repositories.map((repo) => repo.label)
+    };
+}
+
 // The same four questions `classify` asked one hash at a time, asked once for
-// the whole set. The order is the order it decided in, so a hash gets the
-// verdict it always got:
+// the whole set, in the repository that knows each hash (#331). The order is
+// the order it decided in, so a hash gets the verdict it always got:
 //
-//   nothing resolves it                     → unverifiable
-//   reachable from the default branch       → settled
+//   no linked repository resolves it        → unverifiable
+//   reachable from that repo's default branch → settled
 //   reachable from some ref, or from HEAD   → provisional
 //   otherwise, and its branch still exists  → abandoned, else unknown
 //
-// Existence is asked for every hash; only the walks are gated. A hash that
-// still resolves and already carries a verdict keeps it while the repository
-// state stands still, and a hash that resolves to nothing is `unverifiable`
-// without walking anything. A stored `unverifiable` is walked again the moment
-// the object comes back, because no ref listing can report that it did.
+// Existence is asked of every repository for every hash — one `cat-file
+// --batch-check` per repository, which is #128's bound — and a hash is judged
+// in the repository the report named when that one resolves it, else in the
+// first, in link order, that does. Only the walks are gated, per repository:
+// a hash that still resolves and already carries a verdict keeps it while the
+// repository that knows it stands still. A stored `unverifiable` is walked
+// again the moment the object comes back, because no ref listing can report
+// that it did.
+//
+// `unverifiable` is said only when every linked repository could be asked.
+// A repository whose path is not on this machine might be the one that knows
+// the hash, and silence from it is not "nothing resolves" — those hashes keep
+// whatever verdict they had.
 //
 // `null` says git could not be asked. The caller leaves every stored verdict
 // alone there rather than reading silence as "nothing resolves".
-function classifyAll(
-    projectDir: string,
-    state: RepositoryState,
+function classifyAcross(
+    repositories: Repository[],
     items: Evidence[],
     verdicts: Record<string, Verdict>,
-    moved: boolean
+    moved: (repo: Repository) => boolean,
+    complete: boolean
 ): Map<string, Verdict> | null
 {
-    const resolved = resolveCommits(projectDir, items.map((item) => item.hash));
+    const resolved = resolveEverywhere(repositories, items.map((item) => item.hash));
     if (resolved === null)
     {
         return null;
     }
     const judged = new Map<string, Verdict>();
-    for (const item of items.filter((entry) => !resolved.has(entry.hash)))
+    const homed = new Map<Repository, Evidence[]>(repositories.map((repo) => [repo, []]));
+    for (const item of items)
     {
-        judged.set(item.hash, "unverifiable");
+        const home = homeOf(item, repositories, resolved);
+        if (home !== null)
+        {
+            homed.get(home)?.push(item);
+        }
+        else if (complete)
+        {
+            judged.set(item.hash, "unverifiable");
+        }
     }
-    const walking = items.filter((item) => resolved.has(item.hash)
-        && (moved || verdicts[item.hash] === undefined || verdicts[item.hash] === "unverifiable"));
-    const walked = walkVerdicts(projectDir, state, walking, resolved);
-    if (walked === null)
+    return walkHomed(homed, verdicts, moved, resolved, judged);
+}
+
+function walkHomed(
+    homed: Map<Repository, Evidence[]>,
+    verdicts: Record<string, Verdict>,
+    moved: (repo: Repository) => boolean,
+    resolved: Map<Repository, Map<string, string>>,
+    judged: Map<string, Verdict>
+): Map<string, Verdict> | null
+{
+    for (const [repo, owned] of homed)
     {
-        return null;
+        const walked = classifyIn(repo, owned, verdicts, moved(repo), resolved.get(repo) ?? new Map());
+        if (walked === null)
+        {
+            return null;
+        }
+        walked.forEach((verdict, hash) => judged.set(hash, verdict));
     }
-    walked.forEach((verdict, hash) => judged.set(hash, verdict));
     return judged;
+}
+
+function resolveEverywhere(repositories: Repository[], hashes: string[]): Map<Repository, Map<string, string>> | null
+{
+    const resolved = new Map<Repository, Map<string, string>>();
+    for (const repo of repositories)
+    {
+        const answer = resolveCommits(repo.dir, hashes);
+        if (answer === null)
+        {
+            return null;
+        }
+        resolved.set(repo, answer);
+    }
+    return resolved;
+}
+
+function homeOf(item: Evidence, repositories: Repository[], resolved: Map<Repository, Map<string, string>>): Repository | null
+{
+    const knows = (repo: Repository): boolean => resolved.get(repo)?.has(item.hash) === true;
+    return repositories.find((repo) => repo.identity === item.repository && knows(repo))
+        ?? repositories.find(knows)
+        ?? null;
+}
+
+function classifyIn(
+    repo: Repository,
+    items: Evidence[],
+    verdicts: Record<string, Verdict>,
+    moved: boolean,
+    resolved: Map<string, string>
+): Map<string, Verdict> | null
+{
+    const walking = items.filter((item) =>
+        moved || verdicts[item.hash] === undefined || verdicts[item.hash] === "unverifiable");
+    return walkVerdicts(repo.dir, repo.state, walking, resolved);
 }
 
 // Where the commit sits once it is known to exist: merged, live on some ref,
@@ -306,7 +435,7 @@ export function evidenceOf(works: WorkState[]): Evidence[]
             {
                 if (!seen.has(hash) || seen.get(hash)?.branch === undefined)
                 {
-                    seen.set(hash, { hash, branch: report.branch });
+                    seen.set(hash, { hash, branch: report.branch, repository: report.repository });
                 }
             }
         }
@@ -317,7 +446,7 @@ export function evidenceOf(works: WorkState[]): Evidence[]
 // Only verdicts that ask for an action reach health. "unknown" says the fold
 // cannot tell a merge from a discard; that is not the reader's problem to fix,
 // and raising it would fire on every squash-merged pull request.
-export function verdictSignals(works: WorkState[], verdicts: Record<string, Verdict>): string[]
+export function verdictSignals(works: WorkState[], verdicts: Record<string, Verdict>, asked: string[]): string[]
 {
     const signals: string[] = [];
     for (const work of works.filter((item) => item.status !== "done" && item.status !== "retired"))
@@ -330,11 +459,26 @@ export function verdictSignals(works: WorkState[], verdicts: Record<string, Verd
             }
             if (verdicts[hash] === "unverifiable")
             {
-                signals.push(`${work.id} evidence ${hash} no longer resolves in the project repo — history may have been rewritten`);
+                signals.push(`${work.id} evidence ${hash} ${vanished(asked)}`);
             }
         }
     }
     return signals;
+}
+
+// A project judged in one repository keeps the line it always had. One judged
+// across several names the repositories that were asked, because the reader's
+// first question is whether the one holding the hash was among them — and the
+// likeliest answer, a repository not linked on this machine, is said beside
+// the rewrite it used to be blamed on (#331).
+function vanished(asked: string[]): string
+{
+    if (asked.length < 2)
+    {
+        return "no longer resolves in the project repo — history may have been rewritten";
+    }
+    return `no longer resolves in any linked repository (asked: ${asked.join(", ")}) — ` +
+        "history may have been rewritten, or the repository holding it is not linked on this machine";
 }
 
 // Artifacts are the other evidence class this module verifies, against the

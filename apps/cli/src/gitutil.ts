@@ -166,6 +166,23 @@ export function headCommit(dir: string): string | null
     return result.ok ? result.out : null;
 }
 
+const commons = new Map<string, string | null>();
+
+// The git directory every working tree of one repository shares, or `null`
+// where the path is not inside a repository at all. Two linked paths with one
+// answer here are one repository, and this is the cheap way to know it — a
+// `rev-parse`, not the history walk an identity costs — so it is what the
+// repositories a project's evidence is judged across are deduplicated by
+// (#331). Memoized: resolution asks about the same paths on every command.
+export function commonDir(dir: string): string | null
+{
+    if (!commons.has(dir))
+    {
+        commons.set(dir, gitCommonDir(dir));
+    }
+    return commons.get(dir) ?? null;
+}
+
 function gitCommonDir(dir: string): string | null
 {
     const result = git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir");

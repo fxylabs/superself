@@ -101,6 +101,9 @@ interface ReportEntry
     // The branch these commits were reported from — what lets the fold tell a
     // discarded branch from a squash-merged one.
     branch?: string;
+    // The repository they were reported from, by identity (#331). Absent on a
+    // report written before it was recorded, or from a checkout with no commit.
+    repository?: string;
 }
 
 // What a runner attempt left in the synced log: the state it reached, why it
@@ -1740,6 +1743,12 @@ function branchRef(event: SelfEvent): string | undefined
     return typeof branch === "string" && branch !== "" ? branch : undefined;
 }
 
+function repositoryRef(event: SelfEvent): string | undefined
+{
+    const repository = event.refs?.repository;
+    return typeof repository === "string" && repository !== "" ? repository : undefined;
+}
+
 function branchOf(event: SelfEvent): string[]
 {
     const branch = branchRef(event);
@@ -1967,7 +1976,10 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     noteBranch(work, event);
     const { commits, notes } = splitEvidence(event);
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
-    work.reports.push({ id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts, branch: branchRef(event) });
+    work.reports.push({
+        id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts,
+        branch: branchRef(event), repository: repositoryRef(event)
+    });
     work.evidence.push(...commits.filter((commit) => !work.evidence.includes(commit)));
     work.notes.push(...notes.filter((note) => !work.notes.includes(note)));
     work.artifacts.push(...artifacts);

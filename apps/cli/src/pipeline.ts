@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { foldProject } from "./fold.js";
-import { commitAll, currentBranch } from "./gitutil.js";
+import { commitAll, currentBranch, topOf } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { sessionToken } from "./machine.js";
 import { notice } from "./output.js";
@@ -82,10 +82,14 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
 }
 
 // The branch every event was composed on, stamped once for the batch: history
-// ("this happened here"), never a live pointer.
+// ("this happened here"), never a live pointer. Read off the project directory
+// where that is a repository, else off the checkout the command stands in — a
+// project registered at the folder holding its repositories has no branch of
+// its own, and the command ran on one of theirs (#331).
 function stampBranch(ctx: CliContext, events: SelfEvent[]): void
 {
-    const branch = ctx.projectDir === undefined ? null : currentBranch(ctx.projectDir);
+    const branch = ctx.projectDir === undefined ? null
+        : currentBranch(topOf(ctx.projectDir) === null ? process.cwd() : ctx.projectDir);
     if (branch !== null)
     {
         events.forEach((event) => { event.refs = { ...event.refs, branch }; });
