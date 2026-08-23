@@ -162,6 +162,20 @@ export interface EntityState
     // supersedes links displace their targets — a proposal must not, and a
     // proposal retracted before confirmation never did.
     confirmedOnce: boolean;
+    // Whether the record was born as a proposal rather than asserted outright
+    // (#356). Read where the current status cannot answer: an accepted
+    // proposal and a record confirmed at birth are both `confirmed`, and only
+    // the first is revisable. Absent on the legacy readings.
+    bornProposed?: boolean;
+    // The stated versions of a revisable record's text, and which of them an
+    // acceptance bound (#356). Absent on every other record — nothing else
+    // restates its text in place.
+    plan?: PlanState;
+    // Set by the first `entity.started` and never cleared: a plan that has
+    // been picked up is frozen, whatever the record's working state becomes
+    // afterwards. `claim` answers who holds the unit, which is a different
+    // question, so the freeze is not read off it.
+    startedOnce?: boolean;
     // The coverage claims recorded against the declared criteria, in the
     // order they landed. done/reach is gated on every criterion carrying one.
     covered: CoverageClaim[];
@@ -184,9 +198,38 @@ export interface EntityState
     claim?: { session?: string; ts: string };
 }
 
+// Which version of a record's plan is current, the id an acceptance of it
+// names, and the newest version an acceptance has named. The current
+// revision's id is the record's own id until the plan is first restated:
+// every `work accept` ever written names the record, so a log from before
+// #356 already says which version it approved.
+export interface PlanState
+{
+    current: number;
+    event: string;
+    accepted?: number;
+}
+
 export function isLive(entity: EntityState): boolean
 {
     return entity.status === "proposed" || entity.status === "confirmed";
+}
+
+// Whether the plan a record currently states is one nobody has accepted — the
+// state a person is being asked to answer. True both for a plan never
+// accepted and for one revised past the acceptance that approved it (#356).
+export function awaitsReview(entity: EntityState): boolean
+{
+    return isLive(entity) && entity.plan !== undefined && entity.plan.accepted !== entity.plan.current;
+}
+
+// A work record born as a proposal: the kind a person accepts, declines or
+// revises, and the only kind whose text is restated in place (#356). A unit
+// `work add` asserted is already approved, so it is corrected with a
+// successor like every other confirmed record.
+export function isWorkProposal(entity: EntityState): boolean
+{
+    return entity.native === true && entity.source === "work" && entity.bornProposed === true;
 }
 
 // The label that makes a record the derivation of a project (#75). Spelled
@@ -227,6 +270,14 @@ const SUPERSEDE_SPELLING: Record<EntityKind, string> = {
     work: '`self work add "<outcome>" --supersedes <id> --why w`',
     entity: '`self state add "<text>" --supersedes <id>`'
 };
+
+// How a record of one kind is corrected, with the id filled in. Read by the
+// refusals that send a caller to the successor path, so the spelling they
+// name cannot drift from the flag the add verb actually takes.
+export function supersedeSpelling(kind: EntitySource | "entity", id: string): string
+{
+    return SUPERSEDE_SPELLING[kind].replace("<id>", id);
+}
 
 // Refuses a `--supersedes` target that is another kind of record, naming the
 // add verb that corrects that kind. An id no record answers to is left to the
@@ -337,6 +388,18 @@ interface CoverageEvent
     claim: CoverageClaim;
 }
 
+// One `entity.revised` line: a whole restated text, never a diff, and the
+// reason the plan changed. Collected like every other transition, because the
+// record it names can be created later in a union-merged log.
+interface RevisionEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    text: string;
+    why?: string;
+}
+
 const EXECUTION_EVENTS = ["entity.started", "entity.blocked", "entity.unblocked", "entity.done", "entity.retired"];
 
 export interface EntityFold
@@ -352,6 +415,10 @@ export interface EntityFold
     retractions: RetractEvent[];
     links: LinkEvent[];
     coverage: CoverageEvent[];
+    // Every restatement of a record's text (#356). Accumulates rather than
+    // settles: the newest one is the record's text, and the whole list is
+    // what an acceptance binds a version number to.
+    revisions: RevisionEvent[];
     // Every id an `entity.confirmed` named in `refs.confirms`. A placement
     // proposal applies only when its event id is in here, and collecting the
     // ids first is what lets a union merge order the confirm above the
@@ -378,6 +445,7 @@ export function emptyEntityFold(): EntityFold
         retractions: [],
         links: [],
         coverage: [],
+        revisions: [],
         confirmations: new Set(),
         annulled: new Set()
     };
@@ -484,6 +552,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         status: confirmed ? "confirmed" : "proposed",
         humanConfirmed: event.origin.confirmed === true,
         confirmedOnce: confirmed,
+        bornProposed: !confirmed,
         covered: [],
         native: true,
         source: sourceOf(labels)
@@ -535,6 +604,7 @@ const COLLECTORS: ReadonlyArray<readonly [(event: SelfEvent) => boolean, Collect
     [(event) => event.type === "entity.placed", collectPlacement],
     [(event) => event.type === "entity.linked" || event.type === "entity.unlinked", collectLink],
     [(event) => event.type === "entity.covered", collectCoverage],
+    [(event) => event.type === "entity.revised", collectRevision],
     [(event) => EXECUTION_EVENTS.includes(event.type), collectExecution]
 ];
 
@@ -612,6 +682,21 @@ function collectCoverage(fold: EntityFold, event: SelfEvent): void
             commits: stringList(event.refs?.commits)
         }
     });
+}
+
+// A revision restates the whole text (#356). Collected like the rest — the
+// record it names can be legacy-derived or arrive later in a merged log — and
+// the event-id guard is what lets the reconcile pass route the same line
+// twice without counting it twice.
+function collectRevision(fold: EntityFold, event: SelfEvent): void
+{
+    const entity = String(event.payload.entity ?? "");
+    const text = String(event.payload.text ?? "");
+    if (entity === "" || text === "" || fold.revisions.some((item) => item.event === event.id))
+    {
+        return;
+    }
+    fold.revisions.push({ event: event.id, ts: event.ts, entity, text, why: str(event.payload.why) });
 }
 
 // Placement moves by event (#197 §3), collected here and applied over the
@@ -698,11 +783,15 @@ export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityS
         ...legacy.objectives.map(objectiveEntity),
         ...legacy.objectives.flatMap((objective) => objective.milestones.map(milestoneEntity))
     ];
+    const revisions = statedRevisions(fold);
     linkLineage(entities, legacy);
-    applyConfirms(entities, fold);
+    applyConfirms(entities, fold, revisions);
     applyRetractions(entities, fold);
     applyLinks(entities, fold);
     applySupersessions(entities, fold);
+    // Last of the lifecycle passes: a plan's review state is read off the
+    // settled status, so a withdrawn or superseded record is past reviewing.
+    applyPlans(entities, fold, revisions);
     applyPlacements(entities, fold);
     applyCoverage(entities, fold);
     applyExecutions(entities, fold);
@@ -714,12 +803,16 @@ export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityS
 // retraction is the one that happened, and it is applied before supersession
 // so a withdrawal that already happened wins however the merged log ordered
 // the two.
-function applyConfirms(entities: EntityState[], fold: EntityFold): void
+function applyConfirms(entities: EntityState[], fold: EntityFold, revisions: Map<string, RevisionEvent[]>): void
 {
     const byId = new Map(entities.map((item) => [item.id, item]));
+    // A confirm names the exact revision it approves (#356), so an acceptance
+    // of v2 onwards carries a revision event id. Existing confirms name the
+    // record and resolve on the first term exactly as they always did.
+    const owner = revisionOwners(revisions);
     for (const confirm of ordered(fold.confirms))
     {
-        const target = byId.get(confirm.confirms);
+        const target = byId.get(confirm.confirms) ?? byId.get(owner.get(confirm.confirms) ?? "");
         if (target !== undefined && target.status === "proposed")
         {
             target.status = "confirmed";
@@ -728,6 +821,78 @@ function applyConfirms(entities: EntityState[], fold: EntityFold): void
             target.ts = confirm.ts;
         }
     }
+}
+
+// Every record's restatements, oldest first. The creation is not among them:
+// it is always v1 whatever its timestamp says — a revision pulled from a
+// clock-skewed clone can carry an earlier one — so only the restatements are
+// ordered, by `(ts, event id)` like every other collected event. An annulled
+// revision is dropped here, which is what makes `undo` of one give back the
+// version before it with no rule of its own.
+function statedRevisions(fold: EntityFold): Map<string, RevisionEvent[]>
+{
+    const grouped = new Map<string, RevisionEvent[]>();
+    for (const item of ordered(fold.revisions))
+    {
+        if (!fold.annulled.has(item.event))
+        {
+            grouped.set(item.entity, [...grouped.get(item.entity) ?? [], item]);
+        }
+    }
+    return grouped;
+}
+
+function revisionOwners(revisions: Map<string, RevisionEvent[]>): Map<string, string>
+{
+    const owner = new Map<string, string>();
+    for (const [entity, stated] of revisions)
+    {
+        for (const item of stated)
+        {
+            owner.set(item.event, entity);
+        }
+    }
+    return owner;
+}
+
+// What a revisable record's plan currently says, and whether anyone accepted
+// it. The newest revision is the record's text; a record whose current
+// revision no confirm names goes back to proposed, because nobody approved
+// the text that is current now. `confirmedOnce` deliberately stays: it is the
+// flag supersession reads, and flipping it back would resurrect a record this
+// work had already replaced.
+function applyPlans(entities: EntityState[], fold: EntityFold, revisions: Map<string, RevisionEvent[]>): void
+{
+    const accepted = acceptedRevisions(fold);
+    for (const entity of entities.filter((item) => isWorkProposal(item) && isLive(item)))
+    {
+        const stated = revisions.get(entity.id) ?? [];
+        if (stated.length > 0)
+        {
+            entity.text = stated[stated.length - 1].text;
+        }
+        entity.plan = planOf(entity.id, stated, accepted);
+        if (entity.plan.accepted !== entity.plan.current && entity.status === "confirmed")
+        {
+            entity.status = "proposed";
+            entity.humanConfirmed = false;
+        }
+    }
+}
+
+// Accepted iff some confirm names the current revision — not "the newest
+// confirm names the newest revision": a lagging clone accepting v1 after v2
+// was accepted must not send v2 back to review.
+function planOf(id: string, stated: RevisionEvent[], accepted: Set<string>): PlanState
+{
+    const ids = [id, ...stated.map((item) => item.event)];
+    const bound = ids.reduce<number | undefined>((last, event, index) => accepted.has(event) ? index + 1 : last, undefined);
+    return { current: ids.length, event: ids[ids.length - 1], accepted: bound };
+}
+
+function acceptedRevisions(fold: EntityFold): Set<string>
+{
+    return new Set(fold.confirms.filter((item) => !fold.annulled.has(item.event)).map((item) => item.confirms));
 }
 
 // Withdrawal is terminal and keeps the record: text, links and lineage stay
@@ -857,6 +1022,7 @@ function applyExecution(target: EntityState, event: ExecutionEvent): void
     if (event.type === "entity.started")
     {
         target.claim = { session: event.session, ts: event.ts };
+        target.startedOnce = true;
     }
     const next = nextExecution(status, event);
     if (next !== null)

@@ -1,8 +1,8 @@
 import { presetRow } from "./aliases.js";
-import { required, Requirement } from "./args.js";
+import { required, Requirement, requireOptions } from "./args.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
-import { Exposure, requireSupersedeKind } from "./entities.js";
+import { awaitsReview, EntityState, Exposure, isWorkProposal, requireSupersedeKind, rendersIn, supersedeSpelling } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
@@ -861,11 +861,12 @@ const PROPOSAL_OPTIONS = {
     expires: { type: "string" }
 } as const;
 
-// One statement of what a proposal has to say for itself, read by the gate
-// that refuses a call missing any of it and by the help page that lists them.
-// The gap a proposal closes is the requirement a project can be unable to
-// satisfy yet, so it carries the verb that creates one.
-const PROPOSAL_REQUIRED: Requirement[] = [
+// One statement of what a *gap* proposal has to say for itself. It is applied
+// inside the handler rather than declared on the leaf (#356): a standalone
+// plan needs none of it, and a requirement that depends on another flag's
+// value is not declarable — but it is still refused by the one gate, so a
+// call missing four of these is told all four at once.
+const GAP_PROPOSAL_REQUIRED: Requirement[] = [
     { flags: ["value"], hint: "what reaching this buys the objective" },
     { flags: ["success"], hint: "what done looks like, repeatable" },
     { flags: ["stop"], hint: "the condition that ends it early, repeatable" },
@@ -882,12 +883,22 @@ const PROPOSAL_REQUIRED: Requirement[] = [
     }
 ];
 
+const REVISE_OPTIONS = { why: { type: "string" } } as const;
+
+const WHY_PLAN_CHANGED: Requirement = { flags: ["why"], hint: "why the plan changed" };
+
+const REVISE_USAGE = 'work revise <work-id> "<revised plan>" --why "<why the plan changed>"';
+
 export const WORK_GOAL_LEAVES: CommandLeaf[] = [
     leaf("link", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, true), { requires: [LINK_TARGET] }),
     leaf("unlink", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, false), { requires: [LINK_TARGET] }),
-    leaf("propose", PROPOSAL_OPTIONS, 1, cmdPropose, { undocumented: ["depends"], requires: PROPOSAL_REQUIRED }),
+    leaf("propose", PROPOSAL_OPTIONS, 1, cmdPropose, { undocumented: ["depends"] }),
     leaf("accept", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true)),
-    leaf("decline", WHY_OPTION, 1, (input) => cmdProposalDecision(input, false), { requires: [WHY_TURNED_DOWN] })
+    leaf("decline", WHY_OPTION, 1, (input) => cmdProposalDecision(input, false), { requires: [WHY_TURNED_DOWN] }),
+    // Deliberately not `retiring`: a revision destroys nothing — one id, no
+    // successor, no supersession — which is the opposite of what `objective
+    // revise` and `milestone revise` do, and the help says so.
+    leaf("revise", REVISE_OPTIONS, 2, cmdWorkRevise, { requires: [WHY_PLAN_CHANGED] })
 ];
 
 // Stating what a unit contributes to is a grouping edge in the shared
@@ -936,13 +947,14 @@ function linkEdges(ctx: ProjectContext, model: ProjectModel,
 
 // A proposal is a proposed work entity (#207 B13): the brief rides the
 // creation event, and accepting is confirming — the proposal's id is the
-// unit's id.
+// unit's id. Since #356 the plain form takes the plan text alone: the brief
+// belongs to a proposal that closes a stated gap, not to every proposal.
 function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
-    const outcome = requireText(positionals[0], 'work propose "<required outcome>" --milestone <id> …');
+    const outcome = requireText(positionals[0], 'work propose "<plan>" [--objective <id>|--milestone <id> …]');
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const brief = proposalPayload(model, outcome, values as Record<string, string | string[] | undefined>);
+    const brief = briefFor(model, outcome, values as Record<string, string | string[] | undefined>);
     requireNovel(model, outcome, brief);
     const row = presetRow(ctx.storeDir, "work");
     const id = workId();
@@ -963,11 +975,39 @@ function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTION
     return [{ kind: "receipt", text: id }];
 }
 
-// The gate refused a proposal missing any of its required options before this
-// ran, so what is left is whether the values it was given are ones the record
-// can keep.
+// What the creation event carries beyond the plan text: a gap proposal's full
+// brief, or nothing at all. The link is what the brief hangs on, so it is also
+// what decides whether the brief is demanded (#356).
+function briefFor(model: ProjectModel, outcome: string, values: Record<string, string | string[] | undefined>): Record<string, unknown>
+{
+    if (values.objective !== undefined || values.milestone !== undefined)
+    {
+        return proposalPayload(model, outcome, values);
+    }
+    refuseStrayBrief(values);
+    return {};
+}
+
+// The planning flags a gap proposal carries. Named here so the standalone
+// form can refuse a stray one by name instead of recording half a brief
+// nothing reads.
+const BRIEF_FLAGS = ["value", "success", "stop", "depends", "risk", "capacity", "evidence-plan", "confidence", "expires"];
+
+function refuseStrayBrief(values: Record<string, string | string[] | undefined>): void
+{
+    const stray = BRIEF_FLAGS.find((flag) => values[flag] !== undefined);
+    if (stray !== undefined)
+    {
+        throw new CliError(`work propose --${stray} belongs to a gap proposal — add --objective <id> or --milestone <id>, or drop the planning flags`);
+    }
+}
+
+// The brief a gap proposal owes, refused through the one required-option gate
+// so a call missing several is told all of them at once (#106). Judged here
+// rather than declared on the leaf because it depends on another flag's value.
 function proposalPayload(model: ProjectModel, outcome: string, values: Record<string, string | string[] | undefined>): Record<string, unknown>
 {
+    requireOptions("work propose", values, GAP_PROPOSAL_REQUIRED);
     if (!CONFIDENCE.includes(values.confidence as string))
     {
         throw new CliError(`work propose --confidence must be one of ${CONFIDENCE.join(", ")}`);
@@ -1002,7 +1042,12 @@ function requireNovel(model: ProjectModel, outcome: string, payload: Record<stri
     {
         return;
     }
-    const target = (payload.milestone ?? payload.objective) as string;
+    const target = (payload.milestone ?? payload.objective) as string | undefined;
+    if (target === undefined)
+    {
+        requireNovelPlan(model, key);
+        return;
+    }
     const clash = model.goals.proposals.find((proposal) =>
         proposal.status === "open" && !proposal.expired && normalize(proposal.outcome) === key
         && (proposal.milestone ?? proposal.objective) === target);
@@ -1015,6 +1060,21 @@ function requireNovel(model: ProjectModel, outcome: string, payload: Record<stri
     if (existing !== undefined)
     {
         throw new CliError(`${existing.id} already carries this outcome for ${target}`);
+    }
+}
+
+// A standalone proposal names no gap, so the outcome alone is its key —
+// keying on the absent target instead would make every standalone proposal
+// clash with every other. Compared against the plans still awaiting review;
+// a plan someone already accepted is a unit, and proposing it again is a
+// different mistake from queuing the same review twice.
+function requireNovelPlan(model: ProjectModel, key: string): void
+{
+    const clash = model.works.find((work) => work.status === "review" && normalize(work.outcome) === key
+        && work.objectives.length === 0 && work.milestones.length === 0);
+    if (clash !== undefined)
+    {
+        throw new CliError(`proposal ${clash.id} already proposes this plan — accept, decline or revise it instead`);
     }
 }
 
@@ -1047,17 +1107,134 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
         const why = required(values.why);
         // Declining answers with the append's own line and nothing more: the
         // proposal is gone, so there is no id left worth handing back.
-        recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.outcome}`);
+        recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.text}`);
         return [];
     }
-    const target = proposal.milestone ?? proposal.objective;
-    const events = [makeEvent(ctx.project, "entity.confirmed", { entity: proposal.id }, { confirms: proposal.id }, true)];
-    if (target !== undefined)
-    {
-        events.push(makeEvent(ctx.project, "entity.linked", { entity: proposal.id, link: { type: "member-of", target } }, undefined, true));
-    }
-    recordEvents(ctx, events, `${proposal.id} ${proposal.outcome}`);
+    recordEvents(ctx, acceptEvents(ctx, model, proposal), `${proposal.id} ${proposal.text}`);
     return [{ kind: "receipt", text: proposal.id }];
+}
+
+// The acceptance names the exact revision it approves (#356) — the record's
+// own id until the plan was restated — so a plan revised after this was
+// written is not authorized by it, however a merged log ordered the two. The
+// grouping edge toward the gap rides the same append, and is left alone where
+// a re-acceptance would only state it twice.
+function acceptEvents(ctx: ProjectScope, model: ProjectModel, proposal: Answerable): SelfEvent[]
+{
+    const events = [makeEvent(ctx.project, "entity.confirmed", { entity: proposal.id }, { confirms: proposal.confirms }, true)];
+    if (proposal.target !== undefined && !alreadyToward(model, proposal))
+    {
+        events.push(makeEvent(ctx.project, "entity.linked",
+            { entity: proposal.id, link: { type: "member-of", target: proposal.target } }, undefined, true));
+    }
+    return events;
+}
+
+function alreadyToward(model: ProjectModel, proposal: Answerable): boolean
+{
+    return model.entities.some((item) => item.id === proposal.id
+        && item.links.some((link) => link.type === "member-of" && link.target === proposal.target));
+}
+
+/* ── revising an unstarted plan (#356) ─────────────────────────────── */
+
+// Restating a plan under the id it was proposed under. Append-only: the
+// previous version stays in the record's own history, the acceptance that
+// approved it stops authorizing a start, and nothing is superseded — which is
+// why a started plan cannot come here at all.
+function cmdWorkRevise({ values, positionals }: CommandInput<typeof REVISE_OPTIONS>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const wanted = requireText(positionals[0], REVISE_USAGE);
+    const text = requireText(positionals[1], REVISE_USAGE);
+    const { entity, owner } = requireRevisable(ctx, wanted);
+    if (entity.text === text)
+    {
+        throw new CliError(`${entity.id} already states this plan — a revision restates it, and this changes nothing`);
+    }
+    const why = required(values.why);
+    recordEvent(ctx, makeEvent(owner, "entity.revised", { entity: entity.id, text, why }), `${entity.id} ${text}`);
+    return [{
+        kind: "receipt",
+        text: `${entity.id} — v${(entity.plan?.current ?? 1) + 1}; a person runs \`self work accept ${entity.id}\``
+    }];
+}
+
+// The record a revision names, and the log that owns it — the same resolution
+// `work start` makes, so a unit scoped in from another project is revised
+// where its record lives (#181 D3). A legacy unit is not a record here, and
+// says so rather than reading as an unknown id.
+function requireRevisable(ctx: ProjectContext, wanted: string): { entity: EntityState; owner: string }
+{
+    for (const model of workspaceModels(ctx.storeDir, ctx.project))
+    {
+        const entity = model.entities.find((item) => item.id === wanted);
+        if (entity !== undefined && rendersHere(model, entity, ctx.project))
+        {
+            refuseUnrevisable(entity);
+            return { entity, owner: model.slug };
+        }
+        // A unit still folded from pre-cutover `work.*` history is no record
+        // here, and only ever renders at home — so this is asked of the home
+        // project alone, and never of a record another project renders.
+        if (entity === undefined && model.slug === ctx.project && model.works.some((item) => item.id === wanted))
+        {
+            throw new CliError(`${wanted} was recorded before plans were revisable — correct it with a successor: `
+                + supersedeSpelling("work", wanted));
+        }
+    }
+    throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
+}
+
+// A project's own records answer here whatever project they render in, and
+// another project's records answer only where they render — the rule
+// `work start` resolves an owner by (#181 D3/D5).
+function rendersHere(model: ProjectModel, entity: EntityState, viewer: string): boolean
+{
+    return model.slug === viewer || rendersIn(entity, model.slug, viewer);
+}
+
+// Everything a revision is refused for, in the order a reader needs to hear
+// it: what the record is, what has already happened to it, and only then that
+// the plan is frozen.
+function refuseUnrevisable(entity: EntityState): void
+{
+    if ((entity.source ?? "entity") !== "work")
+    {
+        const found = entity.source ?? "plain";
+        throw new CliError(`${entity.id} is a ${found} record, and work revise restates a work plan — correct it with ${supersedeSpelling(entity.source ?? "entity", entity.id)}`);
+    }
+    refuseClosedPlan(entity);
+    if (entity.startedOnce === true)
+    {
+        throw new CliError(`${entity.id} has already been picked up — a plan that has started is corrected with a successor: `
+            + supersedeSpelling("work", entity.id));
+    }
+    if (!isWorkProposal(entity))
+    {
+        throw new CliError(`${entity.id} was recorded with \`work add\`, which is the already-approved path — correct it with a successor: `
+            + supersedeSpelling("work", entity.id));
+    }
+}
+
+function refuseClosedPlan(entity: EntityState): void
+{
+    if (entity.execution?.status === "done")
+    {
+        throw new CliError(`${entity.id} is already done`);
+    }
+    if (entity.execution?.status === "retired")
+    {
+        throw new CliError(`${entity.id} is retired — ${entity.execution.why ?? "its outcome was given up"}; see \`self work show ${entity.id}\``);
+    }
+    if (entity.status === "retracted")
+    {
+        throw new CliError(`${entity.id} is already ${entity.confirmedOnce ? "withdrawn" : "declined"} — ${entity.closedWhy ?? "it was taken back"}`);
+    }
+    if (entity.status === "superseded")
+    {
+        throw new CliError(`${entity.id} was superseded by ${entity.supersededBy ?? "a successor"} — revise the successor instead`);
+    }
 }
 
 /* ── console output ────────────────────────────────────────────────── */
@@ -1252,6 +1429,53 @@ function requireLinkedWork(model: ProjectModel, milestone: MilestoneState, id: s
 
 const PROPOSAL_USAGE = "… <proposal-id> — run `self context` to list open proposals";
 
+// What `work accept` and `work decline` answer to, whichever fold carries it:
+// a gap proposal, whose brief the goal fold reads, and a standalone plan
+// (#356), which only the entity view carries. One shape and one list, so a
+// prefix means the same thing on both paths and neither verb grows a second
+// resolver.
+interface Answerable
+{
+    id: string;
+    text: string;
+    // The objective or milestone an acceptance links the unit to, where the
+    // proposal named one.
+    target?: string;
+    // What the acceptance binds to: the current revision (#356), which is the
+    // record's own id until the plan has been restated.
+    confirms: string;
+    status: "open" | "accepted" | "declined";
+}
+
+function answerables(model: ProjectModel): Answerable[]
+{
+    const proposals = model.goals.proposals.map((item) => fromProposal(model, item));
+    const named = new Set(proposals.map((item) => item.id));
+    return [...proposals, ...model.entities.filter((item) => isWorkProposal(item) && !named.has(item.id)).map(fromRecord)];
+}
+
+function fromProposal(model: ProjectModel, proposal: WorkProposal): Answerable
+{
+    const entity = model.entities.find((item) => item.id === proposal.id);
+    return {
+        id: proposal.id,
+        text: proposal.outcome,
+        target: proposal.milestone ?? proposal.objective,
+        confirms: entity?.plan?.event ?? proposal.id,
+        status: proposal.status
+    };
+}
+
+function fromRecord(entity: EntityState): Answerable
+{
+    return {
+        id: entity.id,
+        text: entity.text,
+        confirms: entity.plan?.event ?? entity.id,
+        status: awaitsReview(entity) ? "open" : entity.status === "retracted" ? "declined" : "accepted"
+    };
+}
+
 // Whether `requireProposal` would find anything here, asked of a whole project
 // so `recordOwner` can pick the one whose lookup is about to succeed. Status is
 // deliberately not part of it: a proposal already accepted or declined is held
@@ -1259,13 +1483,13 @@ const PROPOSAL_USAGE = "… <proposal-id> — run `self context` to list open pr
 // not "no registered project holds it".
 function holdsProposal(model: ProjectModel, wanted: string): boolean
 {
-    return model.goals.proposals.some((proposal) => proposal.id.startsWith(wanted));
+    return answerables(model).some((proposal) => proposal.id.startsWith(wanted));
 }
 
-function requireProposal(model: ProjectModel, prefix: string | undefined): WorkProposal
+function requireProposal(model: ProjectModel, prefix: string | undefined): Answerable
 {
     const wanted = requireText(prefix, PROPOSAL_USAGE);
-    const matches = model.goals.proposals.filter((proposal) => proposal.id.startsWith(wanted));
+    const matches = answerables(model).filter((proposal) => proposal.id.startsWith(wanted));
     if (matches.length !== 1)
     {
         throw new CliError(matches.length === 0

@@ -21,7 +21,7 @@ import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
-import { buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, workScope, workspaceModels, WorkState } from "./model.js";
+import { buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, reviewRefusal, workScope, workspaceModels, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -989,7 +989,22 @@ export const COMMANDS: Command[] = [
                 ],
                 verbs: ["link", "unlink"]
             },
-            { syntax: 'work propose "<outcome>" --milestone m --value v --success s --stop s --risk r', verbs: ["propose"] },
+            {
+                syntax: 'work propose "<plan>" [--milestone m --value v --success s --stop s --risk r]',
+                description: [
+                    "propose work for a person to review; the plan text alone is enough",
+                    "(--objective or --milestone makes it a gap proposal, which owes the full brief)"
+                ],
+                verbs: ["propose"]
+            },
+            {
+                syntax: 'work revise <id> "<revised plan>" --why w',
+                description: [
+                    "restate an unstarted plan under the same work id; acceptance is invalidated",
+                    "(a plan that has started is corrected by a successor, the way `work add` records one)"
+                ],
+                verbs: ["revise"]
+            },
             { syntax: "work accept|decline <proposal-id> [--why w]", description: ["act on a goal-gap proposal; decline states why"], verbs: ["accept", "decline"] },
             {
                 syntax: "work started <id> --pid N | exited <id> [--code N]",
@@ -1027,6 +1042,16 @@ export const COMMANDS: Command[] = [
             "satisfies. Declared criteria additionally gate it. Done is allowed",
             "while blocked: completion is a judgment on the outcome, not the block.",
             "",
+            "a plan an agent wrote is reviewed before it is worked: `work propose",
+            '"<plan>"` records the plan as work waiting on a person, and `work accept`',
+            "confirms it under the same id. Until it is first started that plan can be",
+            "restated in place — `work revise <id> \"<revised plan>\" --why w` keeps the id,",
+            "keeps every earlier version in the unit's history, and invalidates the",
+            "acceptance, so a person accepts again before it can be picked up. Unlike",
+            "`objective revise` and `milestone revise`, it mints no new id and supersedes",
+            "nothing. The first `work start` freezes the plan: after it, a correction is a",
+            "successor, the same as for any confirmed record.",
+            "",
             "history is per unit and explicit: `work show <id> --history` prints the",
             "events of that unit alone, oldest first, ten to a page. A retired or",
             "superseded unit answers there too — nothing is made unreachable, and a",
@@ -1061,7 +1086,7 @@ export const COMMANDS: Command[] = [
         node: branch({
             name: "work",
             unnamed: "options",
-            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|accept|decline`,
+            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|revise|accept|decline`,
             children: WORK_CHILDREN
         })
     },
@@ -2557,7 +2582,10 @@ function cmdWorkStart({ positionals }: CommandInput<typeof TRANSITION_OPTIONS>):
 // stops here rather than being noticed at review.
 function requireDispatchable(ctx: ProjectContext, owner: string, work: WorkState): void
 {
-    const refused = dispatchRefusal(workspaceModels(ctx.storeDir, owner), owner, work);
+    // Review first, and composed here rather than inside the design gate: a
+    // plan nobody accepted is not a design that stopped standing, and one
+    // gate answering both questions would be two rules under one name (#356).
+    const refused = reviewRefusal(work) ?? dispatchRefusal(workspaceModels(ctx.storeDir, owner), owner, work);
     if (refused !== null)
     {
         throw new CliError(refused);
@@ -3302,7 +3330,11 @@ const UNDOABLE: Record<string, string> = {
     "entity.retired": "retirement",
     // A link is a statement too (#244 D5): taking the event back removes the
     // contribution edge from every surface that read it, in every project.
-    "entity.linked": "link"
+    "entity.linked": "link",
+    // Taking a revision back leaves the version before it current, and an
+    // acceptance bound to that version current with it (#356) — everything
+    // derives from the revisions that still stand, so there is no rule here.
+    "entity.revised": "revision"
 };
 
 // Reversing one destructive event. The event is named rather than the record,
@@ -3324,14 +3356,23 @@ function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | 
     const text = model.entities.find((item) => item.id === restored)?.text ?? restored;
     recordEvent(ctx, makeEvent(ctx.project, "entity.restored",
         { entity: restored, why: required(why) }, { annuls: event.id }, true), text);
-    // Undoing a link never removed the record itself, so "standing again"
-    // would claim a restoration that did not happen.
-    return [{
-        kind: "receipt",
-        text: undone === "link"
-            ? `${restored} no longer carries the link — the linked event was taken back`
-            : `${restored} is standing again — its ${undone} was taken back`
-    }];
+    return [{ kind: "receipt", text: undoneNote(restored, undone) }];
+}
+
+// Undoing a link never removed the record itself, and undoing a revision
+// never removed it either — so neither says "standing again", which would
+// claim a restoration that did not happen.
+function undoneNote(restored: string, undone: string): string
+{
+    if (undone === "link")
+    {
+        return `${restored} no longer carries the link — the linked event was taken back`;
+    }
+    if (undone === "revision")
+    {
+        return `${restored} states its previous plan again — the revision was taken back`;
+    }
+    return `${restored} is standing again — its ${undone} was taken back`;
 }
 
 // Which act this event was, or a refusal naming the ones that can be taken
@@ -3349,6 +3390,7 @@ function undoableKind(event: SelfEvent): string
         return "supersession";
     }
     refuseArchiveUndo(event);
+    refuseAcceptanceUndo(event);
     throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, `
         + "or a record's supersession of another, and nothing else");
 }
@@ -3365,6 +3407,19 @@ function refuseArchiveUndo(event: SelfEvent): void
     {
         throw new CliError(`${event.id} archived project "${event.project}" — an archive is ended by `
             + `\`self project restore ${event.project}\`, which takes --why if it should never have been archived`);
+    }
+}
+
+// An acceptance is not taken back (#356). The way back from one is a
+// revision: the record keeps every version it ever stated, and the plan is
+// waiting on a person again the moment a new one is stated.
+function refuseAcceptanceUndo(event: SelfEvent): void
+{
+    if (event.type === "entity.confirmed" && event.refs?.confirms !== undefined)
+    {
+        const entity = String(event.payload.entity ?? "<id>");
+        throw new CliError(`${event.id} accepted ${entity} — an acceptance is not taken back; restate the plan with `
+            + `\`self work revise ${entity} "<revised plan>" --why w\`, which returns it to review`);
     }
 }
 

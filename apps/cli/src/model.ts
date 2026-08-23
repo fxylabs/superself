@@ -9,7 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isLive, reconcileEntity } from "./entities.js";
+import { applyEntity, awaitsReview, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isLive, PlanState, reconcileEntity } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -147,7 +147,14 @@ export interface WorkState
     outcome: string;
     ts: string;
     lastEventTs: string;
-    status: "next" | "active" | "blocked" | "done" | "retired";
+    // `review` is the sixth (#356): a unit whose current plan nobody has
+    // accepted. It is open work — it lists, it counts, it can carry a design
+    // — and it is the one status `work start` refuses.
+    status: "next" | "active" | "blocked" | "done" | "retired" | "review";
+    // Which version of the plan is current and which one an acceptance bound,
+    // for a unit that began as a proposal (#356). Absent on a `work add` unit
+    // and on every unit folded from pre-cutover history.
+    plan?: PlanState;
     blockedOn?: string;
     blockedWhy?: string;
     // Why this unit was retired without reaching its outcome, and where the
@@ -1365,12 +1372,16 @@ function milestoneDroppedWhy(entity: EntityState): string | undefined
 // so one record carries the whole lifecycle under one id.
 function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): void
 {
-    const brief = creation?.payload.value !== undefined;
-    if (brief)
+    // The brief, not the proposed status, is what makes a proposal a gap
+    // proposal: a standalone plan (#356) is born proposed and carries none.
+    if (creation?.payload.value !== undefined)
     {
         model.goals.proposals.push(projectProposal(entity, creation as SelfEvent));
     }
-    if (!entity.confirmedOnce)
+    // A plan awaiting review is a unit too, in the `review` status: the
+    // dispatch gate has to see it to refuse a start by name, and a filter
+    // restated in six renderers is what a sixth status exists instead of.
+    if (!entity.confirmedOnce && !awaitsReview(entity))
     {
         return;
     }
@@ -1407,6 +1418,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         successor: entity.execution?.successor === undefined ? undefined
             : { work: entity.execution.successor, project: entity.execution.successorProject },
         claim: entity.claim,
+        plan: entity.plan,
         reports: [],
         evidence: [],
         notes: [],
@@ -1430,7 +1442,46 @@ function workStatusOf(entity: EntityState): WorkState["status"]
     {
         return status;
     }
-    return "next";
+    return awaitsReview(entity) ? "review" : "next";
+}
+
+// Why a unit awaiting review may not be picked up, or null when nothing stands
+// in the way. A plan nobody accepted and one revised past the acceptance that
+// approved it are the same refusal: the same person runs the same command.
+export function reviewRefusal(work: WorkState): string | null
+{
+    if (work.status !== "review")
+    {
+        return null;
+    }
+    const plan = work.plan;
+    const stated = plan?.accepted === undefined
+        ? `its plan (v${plan?.current ?? 1}) has not been accepted`
+        : `v${plan.accepted} was accepted and v${plan.current} is the current plan`;
+    return `${work.id} is waiting on review — ${stated}; a person runs \`self work accept ${work.id}\``;
+}
+
+// The units a person is being asked to review that no gap proposal already
+// speaks for (#356). Gap proposals keep their own brief rows, so a surface
+// that shows both reads this beside `openProposals` and counts each once.
+export function reviewWork(model: ProjectModel): WorkState[]
+{
+    return model.works.filter((work) => work.status === "review"
+        && !model.goals.proposals.some((item) => item.id === work.id));
+}
+
+// How a plan under review reads wherever it is named, so the listing, the
+// waiting row, the unit's page and the HTML panel say it the same way.
+export function planNote(work: WorkState): string
+{
+    const plan = work.plan;
+    if (plan === undefined)
+    {
+        return "not yet accepted";
+    }
+    return plan.accepted === undefined
+        ? `v${plan.current} — not yet accepted`
+        : `v${plan.current} (current) · v${plan.accepted} accepted`;
 }
 
 function projectProposal(entity: EntityState, creation: SelfEvent)
@@ -1451,9 +1502,13 @@ function projectProposal(entity: EntityState, creation: SelfEvent)
         evidencePlan: String(payload.evidencePlan ?? ""),
         confidence: String(payload.confidence ?? ""),
         expires: String(payload.expires ?? ""),
-        status: entity.confirmedOnce ? "accepted" as const : entity.status === "retracted" ? "declined" as const : "open" as const,
+        // A revised acceptance reads open again (#356): the brief still stands,
+        // and the plan under it is waiting on the same person a second time.
+        status: awaitsReview(entity) ? "open" as const
+            : entity.confirmedOnce ? "accepted" as const
+                : entity.status === "retracted" ? "declined" as const : "open" as const,
         expired: false,
-        work: entity.confirmedOnce ? entity.id : undefined,
+        work: entity.confirmedOnce && !awaitsReview(entity) ? entity.id : undefined,
         declinedWhy: entity.status === "retracted" ? entity.closedWhy : undefined
     };
 }

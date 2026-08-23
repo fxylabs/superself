@@ -215,3 +215,53 @@ test("a standalone supersession claim settles only when its successor exists and
     assert.ok(list.includes("standing rule c"), "a nonexistent successor displaced a confirmed entity");
     assert.ok(must(box, demo, ["state", "show", "e-supa1"]).out.includes("confirmed"));
 });
+
+// The revision fold (#356). Asserted on hand-appended lines, because what
+// makes the numbering worth stating is exactly what no local run produces: a
+// clock-skewed revision from another clone, and an acceptance that names a
+// version rather than the record.
+function appendEntity(lines)
+{
+    const log = join(box.root, "ws", ".superself", "projects", "demo", "log.jsonl");
+    appendFileSync(log, lines.map((line) => JSON.stringify(line) + "\n").join(""));
+    must(box, demo, ["fold"]);
+}
+
+function revisionLine(id, event, ts, text)
+{
+    return { id: event, ts, type: "entity.revised", project: "demo", refs: {},
+        origin: { actor: "agent", confirmed: false }, payload: { entity: id, text, why: "a clone said so" } };
+}
+
+test("the creation is v1 however late its timestamp reads, and the rest sort by (ts, event id)", () =>
+{
+    const id = "w-revn1";
+    appendEntity([
+        // Written last, timestamped first: a revision pulled from a clock-skewed
+        // clone must not turn the creation into a later version of itself.
+        { id: "01hz00000000000000000rev01", ts: "2025-06-01T00:00:00.000Z", type: "entity.proposed", project: "demo", refs: {}, origin: { actor: "agent", confirmed: false }, payload: { entity: id, text: "the first plan", labels: ["work"], links: [], criteria: [], exposure: "search", scope: "project" } },
+        revisionLine(id, "01hz00000000000000000rev02", "2025-01-01T00:00:00.000Z", "the skewed second plan"),
+        revisionLine(id, "01hz00000000000000000rev03", "2025-01-01T00:00:00.000Z", "the skewed third plan")
+    ]);
+    const page = must(box, demo, ["work", "show", id]).out;
+    assert.ok(page.includes("the skewed third plan"), `the id did not break the timestamp tie:\n${page}`);
+    assert.ok(page.includes("- Plan: v3 — not yet accepted"), `the creation was not counted as v1:\n${page}`);
+});
+
+test("an acceptance naming a revision event confirms the record it belongs to", () =>
+{
+    const id = "w-revn2";
+    appendEntity([
+        { id: "01hz00000000000000000rev10", ts: "2025-06-01T00:00:00.000Z", type: "entity.proposed", project: "demo", refs: {}, origin: { actor: "agent", confirmed: false }, payload: { entity: id, text: "the first plan", labels: ["work"], links: [], criteria: [], exposure: "search", scope: "project" } },
+        revisionLine(id, "01hz00000000000000000rev11", "2025-06-02T00:00:00.000Z", "the second plan"),
+        { id: "01hz00000000000000000rev12", ts: "2025-06-03T00:00:00.000Z", type: "entity.confirmed", project: "demo", refs: { confirms: "01hz00000000000000000rev11" }, origin: { actor: "agent", confirmed: true }, payload: { entity: id } }
+    ]);
+    const page = must(box, demo, ["work", "show", id]).out;
+    assert.ok(page.includes("- Status: next"), `a confirm naming the revision did not confirm the record:\n${page}`);
+    assert.ok(!page.includes("- Plan:"), "an accepted current plan still reads as waiting");
+    // And a third version leaves that acceptance behind, without unmaking it.
+    appendEntity([revisionLine(id, "01hz00000000000000000rev13", "2025-06-04T00:00:00.000Z", "the third plan")]);
+    const again = must(box, demo, ["work", "show", id]).out;
+    assert.ok(again.includes("- Plan: v3 (current) · v2 accepted"), `the stale acceptance is not stated:\n${again}`);
+    assert.ok(again.includes("- Status: review"));
+});

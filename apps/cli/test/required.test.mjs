@@ -128,18 +128,19 @@ test("scoped help lists the required options, and says nothing when there are no
 const box = machine();
 const { demo } = demoWorkspace(box);
 
-test("a proposal reveals its whole contract in one refusal, and names the path that unblocks it", () =>
+test("the gap form reveals its whole brief in one refusal; the standalone form records (#356)", () =>
 {
-    const refused = selfIn(box, demo, ["work", "propose", "a gap worth closing"]);
+    const linked = must(box, demo, ["objective", "add", "a direction worth closing gaps for"]).out.match(/o-[0-9a-z]{5}/)[0];
+    const refused = selfIn(box, demo, ["work", "propose", "a gap worth closing", "--objective", linked]);
     assert.equal(refused.code, 1);
-    assert.match(refused.out, /work propose needs 9 more options:/);
+    assert.match(refused.out, /work propose needs 8 more options:/);
     for (const flag of ["--value", "--success", "--stop", "--risk", "--capacity",
-        "--evidence-plan", "--confidence", "--expires", "--objective|--milestone"])
+        "--evidence-plan", "--confidence", "--expires"])
     {
         assert.ok(refused.out.includes(flag), `${flag} is missing from the refusal:\n${refused.out}`);
     }
-    assert.match(refused.out, /self objective add "<outcome>" --proposed/);
-    assert.match(refused.out, /self objective confirm <id>/);
+    const standalone = must(box, demo, ["work", "propose", "a plan that only needs review"]);
+    assert.match(standalone.out, /w-[0-9a-z]{5}/);
 });
 
 test("what the refusal asked for is enough to make the call succeed", () =>
@@ -162,7 +163,7 @@ test("help is answered, not refused, when the required options are absent", () =
 {
     const asked = selfIn(box, demo, ["work", "propose", "--help"]);
     assert.equal(asked.code, 0);
-    assert.match(asked.out, /work propose {4}--value/);
+    assert.match(asked.out, /work propose "<plan>"/);
 });
 
 test("the contract is answered before the state: a bad id does not hide a missing option", () =>
