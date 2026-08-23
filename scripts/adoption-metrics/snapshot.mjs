@@ -12,8 +12,11 @@
 // be entered by hand:
 //
 //   --posthog <n>            LLM-referral pageviews, last 7 days
-//   --gsc-impressions <n>    Search Console impressions
-//   --gsc-clicks <n>         Search Console clicks
+//   --gsc-impressions <n>    Search Console impressions, whole domain
+//   --gsc-clicks <n>         Search Console clicks, whole domain
+//
+// Entering both by hand skips the Search Console call altogether, so the
+// per-piece readings and the sitemap read are unknown (null) for that row.
 //
 // The record is append-only: a bad row is corrected by appending a new row.
 
@@ -22,7 +25,10 @@ import { execFileSync } from 'node:child_process';
 import { createSign } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { devtoCounters, isDryRun, reachVerdictLines } from './lib.mjs';
+import {
+    devtoCounters, domainAnalyticsBody, isDryRun, loadChannels, needsSearchConsole,
+    pieceSearchResult, pieceSlugs, reachVerdictLines, searchAnalyticsBody, searchWindow,
+} from './lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RECORD = join(HERE, 'snapshots.jsonl');
@@ -193,7 +199,6 @@ async function fetchReach()
 // articles map back to pieces through their canonical URL; a reddit thread is
 // read unauthenticated and the counted comment is the first one linking our
 // domain, so no per-comment permalink bookkeeping. Failures degrade to null.
-const CHANNELS = join(HERE, 'channels.json');
 const SITE_DOMAIN = 'superselfs.com';
 
 // dev.to's public listing carries reactions and comments but no view count, so
@@ -257,10 +262,9 @@ function commentTexts(node, out)
     return out;
 }
 
-async function fetchChannels()
+async function fetchChannels(config, searchByPiece)
 {
-    if (!existsSync(CHANNELS)) return null;
-    const config = JSON.parse(readFileSync(CHANNELS, 'utf8'));
+    if (!config) return null;
 
     const devto = {};
     const { articles, authenticated } = await devtoArticles(config.devtoUsername);
@@ -280,7 +284,7 @@ async function fetchChannels()
             reddit[url] = ours?.score ?? null;
         }
     }
-    return { devto, devtoFollowers: await devtoFollowers(), reddit };
+    return { devto, devtoFollowers: await devtoFollowers(), reddit, search: searchByPiece };
 }
 
 // Search Console: the shared service account authenticates via a self-signed
@@ -328,22 +332,47 @@ async function gscAccessToken(sa)
     return (await res.json()).access_token ?? null;
 }
 
-async function fetchGsc()
+function searchAnalyticsUrl(site)
 {
+    return `https://www.googleapis.com/webmasters/v3/sites/${site}/searchAnalytics/query`;
+}
+
+// The second request against the same property, same credentials and same
+// window as the domain totals: the page dimension plus a filter naming every
+// piece, so each piece reads its own impressions and clicks instead of having
+// a whole-domain number stand in for it. A failure here is null (unknown) for
+// every piece and leaves the domain totals beside it untouched.
+async function fetchPieceSearch(site, auth, window, slugs)
+{
+    const body = searchAnalyticsBody(slugs, window);
+    if (body === null) return pieceSearchResult(null, slugs);
+    const answer = await fetch(searchAnalyticsUrl(site), {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    return pieceSearchResult(answer, slugs);
+}
+
+async function fetchGsc(config)
+{
+    const slugs = pieceSlugs(config);
+    const window = searchWindow(Date.now());
+    const unknown = {
+        impressions: null, clicks: null, sitemapLastRead: null,
+        window, searchByPiece: pieceSearchResult(null, slugs),
+    };
     const sa = gscKeychainJson();
-    if (!sa) return { impressions: null, clicks: null, sitemapLastRead: null };
+    if (!sa) return unknown;
     const token = await gscAccessToken(sa);
-    if (!token) return { impressions: null, clicks: null, sitemapLastRead: null };
+    if (!token) return unknown;
     const site = encodeURIComponent(GSC_SITE);
     const auth = { Authorization: `Bearer ${token}` };
 
-    // Search analytics lags about two days, so the window ends the day before
-    // yesterday and covers the seven days up to it.
-    const day = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
-    const query = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${site}/searchAnalytics/query`, {
+    const query = await fetch(searchAnalyticsUrl(site), {
         method: 'POST',
         headers: { ...auth, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startDate: day(8), endDate: day(2) }),
+        body: JSON.stringify(domainAnalyticsBody(window)),
     }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 
     const sitemap = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${site}/sitemaps/${encodeURIComponent(SITEMAP_URL)}`, { headers: auth })
@@ -355,6 +384,8 @@ async function fetchGsc()
         impressions: query === null ? null : (query.rows?.[0]?.impressions ?? 0),
         clicks: query === null ? null : (query.rows?.[0]?.clicks ?? 0),
         sitemapLastRead: sitemap?.lastDownloaded?.slice(0, 10) ?? null,
+        window,
+        searchByPiece: await fetchPieceSearch(site, auth, window, slugs),
     };
 }
 
@@ -416,8 +447,10 @@ function printView(rows)
     }
     console.log('');
     line('PostHog LLM referrals', curr.manual.posthogLlmReferrals, prev?.manual.posthogLlmReferrals);
-    line('GSC impressions', curr.manual.gscImpressions, prev?.manual.gscImpressions);
-    line('GSC clicks', curr.manual.gscClicks, prev?.manual.gscClicks);
+    const gscWindow = curr.gscWindow;
+    line('GSC window', gscWindow ? `${gscWindow.start}..${gscWindow.end}` : '—');
+    line('GSC impressions (domain)', curr.manual.gscImpressions, prev?.manual.gscImpressions);
+    line('GSC clicks (domain)', curr.manual.gscClicks, prev?.manual.gscClicks);
     line('sitemap last read', curr.sitemapLastRead ?? '—');
     if (curr.reach)
     {
@@ -447,6 +480,14 @@ function printView(rows)
         {
             line(`reddit ${url.split('/comments/')[1]?.split('/')[0] ?? url} score`, score, prev?.channels?.reddit?.[url]);
         }
+        // Per piece, never a total: a domain property answers for the landing
+        // page and the docs too, so a sum of these is not site traffic.
+        if (curr.channels.search === null) line('search per piece', '— (Search Console did not answer)');
+        for (const [slug, s] of Object.entries(curr.channels.search ?? {}))
+        {
+            line(`search ${slug} impressions`, s?.impressions ?? null, prev?.channels?.search?.[slug]?.impressions);
+            line(`search ${slug} clicks`, s?.clicks ?? null, prev?.channels?.search?.[slug]?.clicks);
+        }
     }
     console.log('');
     for (const l of reachVerdictLines(curr)) console.log(`  ${l}`);
@@ -474,13 +515,21 @@ if (manual.posthogLlmReferrals === null)
 {
     manual.posthogLlmReferrals = await fetchPosthogLlmReferrals();
 }
+// Both Search Console readings come from one call, so hand-entering the domain
+// totals skips the per-piece request too and leaves it unknown — the same way
+// it already leaves the sitemap read unknown.
+const channelsConfig = loadChannels(HERE);
 let sitemapLastRead = null;
-if (manual.gscImpressions === null || manual.gscClicks === null)
+let gscWindow = null;
+let searchByPiece = null;
+if (needsSearchConsole(manual))
 {
-    const gsc = await fetchGsc();
+    const gsc = await fetchGsc(channelsConfig);
     manual.gscImpressions = manual.gscImpressions ?? gsc.impressions;
     manual.gscClicks = manual.gscClicks ?? gsc.clicks;
     sitemapLastRead = gsc.sitemapLastRead;
+    gscWindow = gsc.window;
+    searchByPiece = gsc.searchByPiece;
 }
 
 const npm = await fetchNpm(packageNames());
@@ -491,9 +540,10 @@ const row = {
     npmWindow: npm.window,
     manual,
     sitemapLastRead,
+    gscWindow,
     referrals: await fetchReferralClasses(),
     reach: await fetchReach(),
-    channels: await fetchChannels(),
+    channels: await fetchChannels(channelsConfig, searchByPiece),
 };
 
 if (dry)

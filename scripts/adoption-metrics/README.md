@@ -20,7 +20,9 @@ node scripts/adoption-metrics/snapshot.mjs --view     # show the record only
 | npm weekly downloads | api.npmjs.org, every non-private `apps/*` package | secondary signal — includes our own CI |
 | npm window | the `start`/`end` the same call returns | which seven days those counts cover |
 | LLM-referral pageviews (7d) | PostHog query API, project 513406 | key from the macOS keychain (`service=posthog account=personal-api-key`, query:read scope); the project receives several products' events, so the query filters `$host='superselfs.com'` — the app host is excluded, this measures the site |
-| Search Console impressions, clicks, sitemap last read | Search Console API, domain property `sc-domain:superselfs.com` | service-account JSON from the keychain (`service=gsc account=service-account`) |
+| Search Console impressions, clicks, sitemap last read | Search Console API, domain property `sc-domain:superselfs.com` | whole domain — the landing page, the docs and every piece together; service-account JSON from the keychain (`service=gsc account=service-account`) |
+| Search Console per piece | same call, a second request carrying the `page` dimension filtered to the `channels.json` pieces | one impressions and clicks reading per piece, so a review never quotes the domain number as a piece's reading (see below) |
+| GSC window | computed from the clock: the seven days ending two days back | which days both Search Console readings cover |
 | Referral classes (7d site pageviews) | same PostHog query surface | classified by referring domain: llm / search / devto / reddit / github / x / threads / direct / other |
 | Reach (7d site pageviews) | same PostHog query surface | split into global / kr / unknown by GeoIP country; the adoption objective is read against the global count, because KR traffic arrives through a Korean-language funnel that serves a different goal |
 | Piece channel counters | `channels.json` → dev.to articles API (views, reactions, comments; matched by canonical URL) and reddit thread JSON (score of the first comment linking our domain) | reddit is **browser-only** (see below): the daily snapshot records null for every reddit score and that is expected, not an error |
@@ -45,6 +47,39 @@ node scripts/adoption-metrics/snapshot.mjs \
 ```
 
 Omitted fields are recorded as null and shown as `—`.
+
+### Search Console, per piece
+
+A domain property answers for every URL on the site at once, so the plain
+impressions and clicks numbers cover the landing page, the docs and every
+piece together — no piece has a reading in them. The snapshot therefore makes
+a second request against the same property, with the same credentials and the
+same window, carrying the `page` dimension and a filter naming every piece in
+`channels.json`. Each returned row is matched back to a piece by its site path
+`/updates/<slug>`, and the readings land in the row at:
+
+```json
+"channels": { "search": { "state-not-memory": { "impressions": 7, "clicks": 2 } } }
+```
+
+Reading them:
+
+- **`null` is a failed call, `0` is a measured zero.** A piece the API returned
+  no row for reads `0` — it was live in that window and no search showed it.
+  A failed or unauthenticated call leaves the whole `search` block `null`, and
+  the rest of the row is still written and committed.
+- **These are not a day's traffic.** The window is the seven days ending two
+  days back — Search Console reports with about a two-day lag — while the row
+  is stamped with the run date. `gscWindow` in the row says which days the
+  numbers actually cover, the same way `npmWindow` does for npm.
+- **Never add the pieces up.** Their sum is not site traffic, and it is not the
+  domain total either; the view prints them one by one for that reason.
+- A piece canonical at more than one spelling (a trailing slash, a `www` host)
+  comes back as several rows. They are summed onto the one piece, so a split
+  canonical under-counts nothing.
+- Entering both `--gsc-impressions` and `--gsc-clicks` by hand skips the
+  Search Console call altogether, so that row's per-piece readings and sitemap
+  read are `null`.
 
 npm counts a day partway through the following day, so a run's window depends
 on the hour it runs. Run too early and every package repeats yesterday's
@@ -92,6 +127,10 @@ unknown` because no API reports whether the piece entered the tag feed, and
 ```
 reach: (reviewer fills: yes/mirror)
 ```
+
+The `site/search` entry names its impressions and clicks as `whole domain` and
+follows them with one `per piece <slug>` line, so the reviewer states a piece's
+search reading from the piece's own numbers and never from the domain's.
 
 `yes` means the channel carries its own audience to the piece; `mirror` means
 it only echoes traffic that arrived elsewhere. The verdict goes into the
