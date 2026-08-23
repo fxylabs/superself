@@ -53,8 +53,9 @@ project identity. Superself excludes the marker from the project repository
 locally. For another Git worktree cut from an already-linked checkout of the
 same registered repository, the current CLI can resolve the project from the
 repository itself. A separate clone has no linked checkout to identify it, so
-run `self project link <project-slug>` after restoring a workspace on a new machine or when
-you want that path in the machine-local link list.
+run `self project link <project-slug> --here` after restoring a workspace on a new machine or
+when you want that path in the machine-local link list. `self project link` with neither a
+path nor `--here` only shows where the project is linked on this machine.
 The canonical event history remains in the workspace store.
 
 One machine uses one selected workspace. That workspace can hold several
@@ -245,7 +246,7 @@ Clone or locate the project code separately, then reconnect that checkout:
 
 ```bash
 cd ~/path/to/my-project
-self project link <project-slug>
+self project link <project-slug> --here
 self setup
 self context
 ```
@@ -256,11 +257,12 @@ decision, work, reports, and artifacts resolve from the new checkout.
 An additional Git worktree cut from an already-linked checkout of a registered
 project is recognized from the repository automatically on the current
 machine. A separate clone must be connected with `self project link
-<project-slug>`. Do not register either checkout as a duplicate project.
+<project-slug> --here`. Do not register either checkout as a duplicate project.
 
 A project that spans more than one repository links each of them: run
-`self project link <project-slug> <path>` once per repository, or register the
-project at the folder that holds the checkouts — a linked path that is not a
+`self project link <project-slug> <path>` once per repository (`--force` when
+the project already has one, because it changes where evidence is judged), or
+register the project at the folder that holds the checkouts — a linked path that is not a
 repository stands for the repositories one level below it. Commit evidence is
 then judged in whichever linked repository knows the hash, and a hash is
 reported as no longer resolving only when none of them does; the health line
@@ -284,7 +286,7 @@ machine to an existing one with `self workspace <path>`.
 Use:
 
 ```bash
-self project link <project-slug>
+self project link <project-slug> --here
 ```
 
 `self project init` correctly refuses to register a duplicate when it can

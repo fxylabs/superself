@@ -13,7 +13,7 @@ import { EntityState, Exposure, isEntityCreation, isLive, rendersIn, requireSupe
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
-import { classifyEvidence, commitAll, ensureWorkspaceRepo, excludeLocally, headCommit, repositoryIdentity, topOf } from "./gitutil.js";
+import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
@@ -23,9 +23,12 @@ import {
     checkoutMatches,
     checkoutProject,
     CliContext,
+    contains,
+    dropEvidenceHead,
     ensureDir,
     invalidateResolution,
     isStore,
+    linkedPaths,
     LINKS_FILE,
     MARKER_FILE,
     ProjectContext,
@@ -475,6 +478,11 @@ const INIT_OPTIONS = { lang: { type: "string" }, agents: { type: "boolean" } } a
 
 const PROJECT_INIT_OPTIONS = { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } } as const;
 
+// `--here` is the write that names no path; `--force` is what linking a second
+// repository to a project asks for, because it changes where the project's
+// evidence is judged (#332).
+const PROJECT_LINK_OPTIONS = { here: { type: "boolean" }, force: { type: "boolean" } } as const;
+
 // The bare listing answers for the projects this workspace is working on; the
 // flag asks for the ones it set aside (#283). Two lists rather than one marked
 // list: the reason a project was archived is worth a column of its own, and the
@@ -680,8 +688,11 @@ export const COMMANDS: Command[] = [
                 verbs: ["init"]
             },
             {
-                syntax: "project link [slug] [path]",
-                description: ["attach a registered project's directory on this machine"],
+                syntax: "project link [slug] [path|--here] [--force]",
+                description: [
+                    "attach a registered project's directory on this machine, or — with neither",
+                    "a path nor --here — show where it is linked (--force adds a second repository)"
+                ],
                 verbs: ["link"]
             },
             {
@@ -705,7 +716,10 @@ export const COMMANDS: Command[] = [
             "registered on another machine, or record which project this one came from.",
             "Every checkout of a registered git repository — worktrees included —",
             "resolves on its own; `link` with no slug infers it from the repository and",
-            "only saves the probe.",
+            "only saves the probe. `link` with neither a path nor --here reads: it prints",
+            "where the slug is linked on this machine and whether this directory is one of",
+            "those paths. --here or a path writes; a path of a repository the project does",
+            "not have yet needs --force, because it changes where its evidence is judged.",
             "",
             "the bare list is the answer to \"which slugs does --scope and --project take\",",
             "and it reads the whole workspace: it takes neither flag, while init and link",
@@ -753,7 +767,7 @@ export const COMMANDS: Command[] = [
                 leaf("", PROJECT_LIST_OPTIONS, 0, projectList),
                 leaf("list", PROJECT_LIST_OPTIONS, 0, projectList),
                 leaf("init", PROJECT_INIT_OPTIONS, 1, projectInit),
-                leaf("link", {}, 2, ({ positionals }) => projectLink(positionals[0], positionals[1])),
+                leaf("link", PROJECT_LINK_OPTIONS, 2, projectLink),
                 PROJECT_FROM_LEAF,
                 PROJECT_ARCHIVE_LEAF,
                 PROJECT_RESTORE_LEAF
@@ -1441,7 +1455,7 @@ function refuseDuplicateProject(storeDir: string, projectDir: string, slug: stri
     const sibling = siblingSlug(storeDir, projectDir);
     if (sibling !== null)
     {
-        throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling}\` instead of registering a duplicate`);
+        throw new CliError(`"${projectDir}" is another checkout of the registered project "${sibling}" — run \`self project link ${sibling} --here\` instead of registering a duplicate`);
     }
     refuseTakenSlug(storeDir, projectDir, slug);
 }
@@ -1476,7 +1490,7 @@ function refuseTakenSlug(storeDir: string, projectDir: string, slug: string): vo
     const held = resolveProjectPath(storeDir, slug, projectDir);
     throw new CliError(`project "${slug}" is already registered${held === null
         ? " in this workspace, with no directory linked on this machine" : ` at ${held}`}`
-        + ` — run \`self project link ${slug}\` here if this directory is that project,`
+        + ` — run \`self project link ${slug} --here\` if this directory is that project,`
         + " or `self project init --name <slug>` to register it under another slug");
 }
 
@@ -1489,9 +1503,9 @@ function projectRefusal(verb: string | undefined): string
     if (verb === "add")
     {
         return "`self project add` is gone — run `self project init` inside the directory to register it, "
-            + "or `self project link <slug>` if it is a checkout of a project registered already";
+            + "or `self project link <slug> --here` if it is a checkout of a project registered already";
     }
-    return 'usage: self project | init [--name <slug>] [--desc "<description>"] | link [slug] [path]'
+    return 'usage: self project | init [--name <slug>] [--desc "<description>"] | link [slug] [path|--here] [--force]'
         + ' | from <parent-slug> --why "<reason>"';
 }
 
@@ -1608,19 +1622,30 @@ function danglingScopes(models: ProjectModel[], registered: Set<string>): string
     return lines;
 }
 
-function projectLink(wanted: string | undefined, path: string | undefined): CommandOutput
+// `project link` reads unless told where to write (#332): with neither a path
+// nor --here it prints where the slug is linked and whether this directory is
+// one of those paths, and moves nothing. Running it to look used to re-point
+// the link to wherever it was run from, and the next fold judged every
+// evidence verdict against that repository.
+function projectLink({ values, positionals }: CommandInput<typeof PROJECT_LINK_OPTIONS>): CommandOutput
 {
     const ctx = requireWorkspace(process.cwd());
-    const projectDir = resolve(path ?? process.cwd());
+    const target = linkTarget(positionals[1], values.here === true, values.force === true);
+    if (target === null)
+    {
+        return linkListing(ctx, positionals[0]);
+    }
+    const projectDir = resolve(target);
     if (!existsSync(projectDir))
     {
         throw new CliError(`"${projectDir}" does not exist`);
     }
-    const slug = wanted ?? inferredSlug(ctx.storeDir, projectDir);
+    const slug = positionals[0] ?? inferredSlug(ctx.storeDir, projectDir);
     if (!readRegistry(ctx.storeDir).some((entry) => entry.slug === slug))
     {
         throw new CliError(`project "${slug}" is not registered — run \`self project init\` inside its directory instead`);
     }
+    requireLinkable(ctx.storeDir, slug, projectDir, values.force === true);
     linkProject(ctx, slug, projectDir);
     // A registry row can stand with no state directory behind it — the shape a
     // crashed registration leaves — and this verb is the completion path the
@@ -1629,6 +1654,85 @@ function projectLink(wanted: string | undefined, path: string | undefined): Comm
     ensureDir(join(projectStateDir(ctx.storeDir, slug), "work"));
     foldProject(ctx.storeDir, slug);
     return [{ kind: "receipt", text: `project "${slug}" linked to ${projectDir}` }];
+}
+
+// Where a write goes, or `null` for a read. One of a path and --here, never
+// both; --force alone is a write with nowhere to go, and is refused rather
+// than read as one.
+function linkTarget(path: string | undefined, here: boolean, force: boolean): string | null
+{
+    if (path !== undefined && here)
+    {
+        throw new CliError("project link takes one of <path> or --here — a path names the directory to link, --here links this one");
+    }
+    if (path !== undefined)
+    {
+        return path;
+    }
+    if (here)
+    {
+        return process.cwd();
+    }
+    if (force)
+    {
+        throw new CliError("--force applies to a write — name the path to link, or pass --here to link this directory");
+    }
+    return null;
+}
+
+// The read form. The slug, when omitted, is the one this directory answers
+// for — the marker, else the repository — exactly as every read verb finds it.
+function linkListing(ctx: CliContext, wanted: string | undefined): CommandOutput
+{
+    const slug = wanted ?? requireProject(process.cwd()).project;
+    requireRegistered(ctx.storeDir, slug);
+    const linked = linkedPaths(ctx.storeDir, slug);
+    const cwd = realPath(process.cwd());
+    const remedy = `run \`self project link ${slug} --here\``;
+    const rows = linked.length === 0
+        ? [`project "${slug}" has no linked path on this machine — ${remedy} from its checkout`]
+        : [`project "${slug}" is linked on this machine to:`,
+            ...linked.map((path) => `  ${path}${contains(path, cwd) ? "  (this directory)" : ""}`)];
+    if (linked.length > 0 && !linked.some((path) => contains(path, cwd)))
+    {
+        rows.push(`this directory is not linked — ${remedy} to link it`);
+    }
+    return [{ kind: "listing", rows, total: linked.length, noun: "linked path" }];
+}
+
+// Linking a repository the project does not have yet, while it has one, is
+// the act that changes where its evidence is judged (#331) — a person's call,
+// asked for with --force and disclosed before the write (#332). Another
+// checkout of a linked repository, a path already linked, a path inside one,
+// and the #115 replacement at a known path are not that act.
+function requireLinkable(storeDir: string, slug: string, projectDir: string, force: boolean): void
+{
+    const linked = linkedPaths(storeDir, slug);
+    const target = realPath(projectDir);
+    if (linked.length === 0 || linked.some((path) => contains(path, target)) || checkoutOfLinked(target, linked))
+    {
+        return;
+    }
+    if (!force)
+    {
+        throw new CliError(`project "${slug}" is linked to ${linked.join(", ")}; "${projectDir}" is a different repository — ` +
+            "pass --force to link it as well, and the project's evidence is then judged in both");
+    }
+    notice(`project "${slug}" was linked to ${linked.join(", ")}; now linked to ${[...linked, target].join(", ")}`);
+}
+
+// Whether the path is a checkout — a clone or a worktree — of a repository
+// already linked, told by identity. A checkout with no commit yet claims
+// nothing and is taken as it always was; a path that is no repository stands
+// for the repositories below it, which is exactly what the guard is for.
+function checkoutOfLinked(target: string, linked: string[]): boolean
+{
+    if (commonDir(target) === null)
+    {
+        return false;
+    }
+    const identity = repositoryIdentity(target);
+    return identity === null || linked.some((path) => repositoryIdentity(path) === identity);
 }
 
 // Omitting the slug is the worktree case: the repository already answers which
@@ -1651,9 +1755,9 @@ function inferredSlug(storeDir: string, projectDir: string): string
     {
         throw new CliError(`"${projectDir}" is the root of a repository whose registered projects sit below it ` +
             `(${below.map((match) => `${match.slug} at ${match.dir}`).join(", ")}) — ` +
-            `name the one you mean, or run \`self project link\` from its directory`);
+            `name the one you mean: \`self project link <slug> --here\` from its directory`);
     }
-    return requireText(undefined, "project link <slug> [path]");
+    return requireText(undefined, "project link <slug> [path|--here]");
 }
 
 function cmdView(slug: string | undefined): CommandOutput
@@ -1674,12 +1778,20 @@ function cmdView(slug: string | undefined): CommandOutput
 function linkProject(ctx: CliContext, slug: string, projectDir: string): void
 {
     excludeLocally(ctx.storeDir, LINKS_FILE);
-    if (recordLink(ctx.storeDir, slug, projectDir, repositoryIdentity(projectDir)))
+    const change = recordLink(ctx.storeDir, slug, projectDir, repositoryIdentity(projectDir));
+    if (change === "replaced")
     {
         // A disclosure the caller is owed before the link is replaced, not the
         // verb's answer: it prints where it stands, through the gate's notice,
         // so nothing moves relative to the recorded line that follows it.
         notice(`replacing the repository previously linked at ${projectDir}`);
+    }
+    if (change !== "unchanged")
+    {
+        // The set of repositories the project is judged across moved, so the
+        // verdicts judged against the previous set are stale; the fold that
+        // follows walks them again (#332).
+        dropEvidenceHead(ctx.storeDir, slug);
     }
     writeFileSync(join(projectDir, MARKER_FILE), JSON.stringify({ project: slug }) + "\n");
     excludeLocally(projectDir, MARKER_FILE);

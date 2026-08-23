@@ -21,7 +21,7 @@ prints them during the same run.
 | Family | Current entry points |
 | --- | --- |
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
-| Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
+| Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path|--here] [--force]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace]`, `convention drop <event-id>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |

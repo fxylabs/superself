@@ -175,7 +175,7 @@ function machineConfig(run, ws, demo)
     run(demo, "project", ["tokens"]);
 }
 
-// `project link` over a path whose recorded repository is gone is the
+// `project link --here` over a path whose recorded repository is gone is the
 // disclosure-then-write case: the replacement line is printed before the write
 // and the recorded line after it, and the two may not swap. A second project
 // is registered for it because the disclosure needs a link that named a
@@ -186,8 +186,9 @@ function projectReceipts(box, run, ws, demo)
     reinitRepository(box, second, "the repository that was linked");
     run(second, "second", ["project", "init", "--name", "second", "--desc", "the relinked checkout", "--no-connect"]);
     reinitRepository(box, second, "the repository standing there now");
-    run(second, "second", ["project", "link", "second"]);
-    run(demo, "project", ["project", "link", "demo"]);
+    run(second, "second", ["project", "link", "second", "--here"]);
+    // The read form (#332): where the project is linked, and that this is it.
+    run(demo, "project", ["project", "link"]);
     run(demo, "project", ["connect"]);
     run(demo, "project", ["connect", "--global"]);
     run(demo, "project", ["fold"]);

@@ -122,7 +122,7 @@ export function cloneStore(url: string, dir: string | undefined): CommandOutput
     if (slugs.length > 0)
     {
         cloned.push({ kind: "receipt", text: `registered projects: ${slugs.join(", ")}` });
-        cloned.push({ kind: "receipt", text: "run `self project link <slug> [path]` from each project to reconnect it — once per repository, not once per checkout" });
+        cloned.push({ kind: "receipt", text: "run `self project link <slug> --here` from each project to reconnect it — once per repository, not once per checkout" });
     }
     return cloned;
 }

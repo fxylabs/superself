@@ -115,7 +115,7 @@ function reportPruned(pruned: PrunedLink[]): void
     for (const link of pruned)
     {
         notice(`pruned the link to ${link.path} — no checkout there any more; ` +
-            `run \`self project link ${link.slug}\` in it if it comes back`);
+            `run \`self project link ${link.slug} --here\` in it if it comes back`);
     }
 }
 
