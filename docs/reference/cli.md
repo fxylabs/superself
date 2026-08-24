@@ -229,9 +229,9 @@ work, or a free-labeled entity — folds into one record kind with placement:
 - The entry is `--entry <file>` if given, else `index.html`, `index.md` or
   `README.md` at the directory's own root, else an index the CLI generates
   there. Nothing but a `.git` directory is left out of the copy.
-- A bundle is capped at 1000 files or 100 MiB, whichever comes first, with no
-  flag to lift it. Past that, package the directory into one file and attach
-  that.
+- A bundle is capped at the 1000 files you bring, or 100 MiB, whichever comes
+  first, with no flag to lift it. Past that, package the directory into one
+  file and attach that.
 - `report --design --implements <decision-id>` submits a design or scope
   proposal. It is refused unless every cited decision exists, still holds, and
   renders in the work unit's project, and the receipt prints each cited

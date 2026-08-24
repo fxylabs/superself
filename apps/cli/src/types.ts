@@ -101,9 +101,26 @@ export interface ArtifactMeta
 // reads this rather than deciding for itself what a directory looks like.
 export function artifactName(meta: ArtifactMeta): string
 {
-    return meta.members === undefined
-        ? meta.name
-        : `${meta.name}/ (${meta.members.length} file${meta.members.length === 1 ? "" : "s"})`;
+    return countedName(meta.name, meta.members?.length);
+}
+
+// The same row from the manifest's size alone, for the one reader that has the
+// size without the manifest: the HTML summary a workspace page is drawn from
+// carries how many members a bundle holds rather than which, because a page
+// showing four artifacts must not write four thousand member digests into a
+// file every fold rewrites. One row, one spelling, whichever half asks for it.
+export function countedName(name: string, files: number | undefined): string
+{
+    return files === undefined ? name : `${name}/ (${files} file${files === 1 ? "" : "s"})`;
+}
+
+// Encoded a segment at a time, so the separators survive and everything else
+// does not: `encodeURI` leaves `#` and `?` alone, and a member named `a#b.txt`
+// linked through it sends the reader to the directory with a fragment rather
+// than to the file (#362 review round 2).
+export function encodedPath(path: string): string
+{
+    return path.split("/").map(encodeURIComponent).join("/");
 }
 
 // What a query is matched against. A member path joins the haystack because

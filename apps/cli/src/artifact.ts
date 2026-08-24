@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { branch, Command, leaf } from "./contract.js";
 import { artifactId } from "./ids.js";
@@ -7,7 +7,7 @@ import { readEvents } from "./logfile.js";
 import { digestFile } from "./repo.js";
 import { activeProjects, CliContext, readRegistry, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
-import { ArtifactMember, ArtifactMeta, artifactName, artifactSearchText, CliError, CommandOutput } from "./types.js";
+import { ArtifactMember, ArtifactMeta, artifactName, artifactSearchText, CliError, CommandOutput, encodedPath } from "./types.js";
 
 interface ArtifactRecord extends ArtifactMeta
 {
@@ -60,8 +60,9 @@ interface Staging
 // another report is staging right now, and losing stored bytes is the one
 // mistake this module cannot undo.
 export function stageArtifacts(storeDir: string, slug: string, paths: string[] | undefined,
-    entry: string | undefined = undefined): StagedArtifacts
+    entries: string[] | undefined = undefined): StagedArtifacts
 {
+    const entry = requireOneEntry(entries);
     if (paths === undefined || paths.length === 0)
     {
         assignEntry([], entry);
@@ -186,7 +187,10 @@ function createDirs(dir: string): string[]
 function planArtifacts(slug: string, paths: string[]): PlannedArtifact[]
 {
     const sources = paths.map((path) => resolveDeclared(path));
-    requireDistinctSources(paths, sources);
+    // Compared after the links are followed, and planned before they are: one
+    // directory reached by two spellings is one path and is refused, while the
+    // name and the walk still start from what the caller actually typed.
+    requireDistinctSources(paths, sources.map((source) => realpathSync(source)));
     return sources.map((source, index) => planOne(slug, paths[index], source));
 }
 
@@ -348,7 +352,7 @@ export function foldedCollision(paths: string[]): [string, string] | null
     const seen = new Map<string, string>();
     for (const path of paths)
     {
-        const key = path.split("/").map((step) => step.normalize("NFC").toLowerCase()).join("/");
+        const key = path.split("/").map(folded).join("/");
         const twin = seen.get(key);
         if (twin !== undefined)
         {
@@ -357,6 +361,17 @@ export function foldedCollision(paths: string[]): [string, string] | null
         seen.set(key, path);
     }
     return null;
+}
+
+// Full case folding, which is what a case-insensitive filesystem compares by
+// and what `toLowerCase` alone is not: lowercasing leaves `straße` and
+// `STRASSE` apart, and macOS holds only one of them. Upper-then-lower is how
+// the standard library reaches the fold — uppercasing expands `ß` to `SS` —
+// and the NFC form goes in first so a decomposed name folds with its composed
+// twin.
+function folded(step: string): string
+{
+    return step.normalize("NFC").toLowerCase().toUpperCase().toLowerCase();
 }
 
 function requireDistinctMembers(label: string, paths: string[]): void
@@ -399,6 +414,18 @@ function requireBound(label: string, members: PlannedMember[]): void
 const INDEX_NAMES = ["index.html", "index.md", "README.md"];
 
 const GENERATED_INDEX = "index.html";
+
+// Taken as repeatable so a second one is refused by name. Left as a single
+// option, the parser keeps the last and drops the first without a word, and a
+// caller who meant two members would be told nothing at all.
+function requireOneEntry(entries: string[] | undefined): string | undefined
+{
+    if (entries !== undefined && entries.length > 1)
+    {
+        throw new CliError(`--entry names one member and was passed ${entries.length} times — a bundle has one entry, so pass it once`);
+    }
+    return entries?.[0];
+}
 
 function assignEntry(planned: PlannedArtifact[], entry: string | undefined): void
 {
@@ -453,8 +480,16 @@ function adoptOrGenerate(bundle: PlannedArtifact): void
         bundle.entry = adopted;
         return;
     }
-    // The name cannot collide: generation is reached only where no root
-    // `index.html`, `index.md` or `README.md` exists.
+    // Generation is reached only where no root `index.html`, `index.md` or
+    // `README.md` exists, so the name collides with no file. A **directory**
+    // of that name at the root is the one thing that stands where the index
+    // would go, and the copy would fail on it with a message about an id
+    // already stored — which is not what happened, and which no rerun fixes.
+    if (members.some((member) => member.path.startsWith(`${GENERATED_INDEX}/`)))
+    {
+        throw new CliError(`artifact "${bundle.name}" holds a directory named ${GENERATED_INDEX} at its root, so no index can be generated there — `
+            + "name the member a person opens with --entry <file>");
+    }
     members.push(generatedIndex(bundle.name, members));
     members.sort((left, right) => comparePaths(left.path, right.path));
     bundle.entry = GENERATED_INDEX;
@@ -467,7 +502,7 @@ function adoptOrGenerate(bundle: PlannedArtifact): void
 function generatedIndex(name: string, members: PlannedMember[]): PlannedMember
 {
     const rows = members.map((member) =>
-        `<li><a href="${escapeHtml(encodeURI(member.path))}">${escapeHtml(member.path)}</a></li>`);
+        `<li><a href="${escapeHtml(encodedPath(member.path))}">${escapeHtml(member.path)}</a></li>`);
     return {
         path: GENERATED_INDEX,
         digest: "",
@@ -807,6 +842,31 @@ function requireArtifact(storeDir: string, slugs: string[], wanted: string): Art
     return stored[0];
 }
 
+// A bundle opens onto its entry, the one member a person is meant to read.
+//
+// Both halves of that path come out of an event, and a log travels between
+// machines through a shared remote, so neither is a name this module may hand
+// to the OS launcher unchecked: a crafted line naming `../../../etc/passwd` as
+// its entry would otherwise open whatever a peer chose on the reader's own
+// machine. The bundle must sit under the store's artifacts and the entry under
+// the bundle, or the event is refused rather than followed.
+function storedFile(storeDir: string, record: ArtifactRecord): string
+{
+    const bundle = resolve(storeDir, record.path);
+    const file = record.entry === undefined ? bundle : resolve(bundle, record.entry);
+    if (!within(join(storeDir, "artifacts"), bundle) || (record.entry !== undefined && !within(bundle, file)))
+    {
+        throw new CliError(`artifact ${record.id} is recorded at a path outside this store's artifacts — the event naming it cannot be trusted`);
+    }
+    return file;
+}
+
+function within(root: string, file: string): boolean
+{
+    const step = relative(root, file);
+    return step !== "" && step !== ".." && !step.startsWith(".." + sep) && !isAbsolute(step);
+}
+
 function openArtifact(ctx: CliContext, id: string | undefined, project: string | undefined): CommandOutput
 {
     const wanted = id?.trim();
@@ -818,11 +878,7 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
         ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
         : [requireRegistered(ctx, project)];
     const record = requireArtifact(ctx.storeDir, slugs, wanted);
-    // A bundle opens onto its entry, the one member a person is meant to read.
-    // The refusal still names the bundle: that is what `self sync` fetches, and
-    // an entry alone would send a reader looking for a file that never existed
-    // on its own.
-    const file = join(ctx.storeDir, record.path, ...(record.entry === undefined ? [] : record.entry.split("/")));
+    const file = storedFile(ctx.storeDir, record);
     if (!existsSync(file))
     {
         throw new CliError(`artifact file ${record.path} is missing from this store — run \`self sync\` to fetch it`);

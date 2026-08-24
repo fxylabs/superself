@@ -545,9 +545,10 @@ const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --
 const REPORT_OPTIONS = {
     evidence: { type: "string", multiple: true },
     artifact: { type: "string", multiple: true },
-    // Not repeatable: it names a member of one bundle, and with two bundles
+    // Taken as repeatable so that a second one is refused by name rather than
+    // silently dropped: it names a member of one bundle, and with two bundles
     // nothing in the flag says which (#362).
-    entry: { type: "string" },
+    entry: { type: "string", multiple: true },
     next: { type: "string" },
     file: { type: "string" },
     design: { type: "boolean" },

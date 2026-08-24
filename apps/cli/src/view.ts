@@ -8,7 +8,7 @@ import { eventSummary, readEvents } from "./logfile.js";
 import { currentConventions, DecisionState, foreignToward, otherGoals, planNote, ProjectModel, reviewWork, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
-import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
+import { ArtifactMeta, CliError, CommandOutput, countedName, encodedPath, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";
 const THEME_FILE = "theme.css";
@@ -48,11 +48,17 @@ export function validTheme(name: string): string
     return theme;
 }
 
+// What the workspace page needs to draw one artifact row, and no more. A
+// bundle's size travels rather than its manifest: this file is rewritten by
+// every fold, and four artifacts on a page must not put four thousand member
+// digests into it.
 interface SummaryArtifact
 {
     id: string;
     name: string;
     path: string;
+    entry?: string;
+    files?: number;
     workId: string;
     ts: string;
 }
@@ -346,7 +352,7 @@ function summarize(model: ProjectModel, feed: SummaryEvent[]): ProjectSummary
         openQuestions: model.openQuestions,
         proposedCount: model.decisions.filter((d) => d.status === "proposed" && !d.expired).length,
         recentArtifacts: artifactRows(model).slice(0, CAP_ARTIFACTS)
-            .map((r) => ({ id: r.meta.id, name: r.meta.name, path: r.meta.path, workId: r.workId, ts: r.ts })),
+            .map((r) => ({ id: r.id, name: r.name, path: r.path, entry: r.entry, files: r.files, workId: r.workId, ts: r.ts })),
         recentEvents: feed.slice(0, SUMMARY_EVENTS),
         recentDecisions: decisionOrder(model.decisions).slice(0, SUMMARY_DECISIONS)
             .map((d) => ({ ts: d.ts, text: d.text })),
@@ -942,7 +948,7 @@ function workspaceDecisionPanel(summaries: ProjectSummary[]): string
 function workspaceRecord(summaries: ProjectSummary[]): string | undefined
 {
     const artifacts = newestAcross(summaries, (s) => (s.recentArtifacts ?? []).map((a) =>
-        ({ meta: { id: a.id, name: a.name, path: a.path }, workId: a.workId, ts: a.ts, project: s.slug })), CAP_WORKSPACE_ARTIFACTS);
+        ({ ...a, project: s.slug })), CAP_WORKSPACE_ARTIFACTS);
     return artifacts.length === 0 ? undefined
         : panel("ARTIFACTS", artifacts.length, "", artifacts.map((r) => artifactRow(r, "..")).join("\n"));
 }
@@ -1181,9 +1187,16 @@ function eventPanel(events: SummaryEvent[], total: number, href: string): string
 
 /* ── artifacts ─────────────────────────────────────────────────────── */
 
+// One row, however it was reached: from the project model, where the manifest
+// is at hand, or from a workspace summary, which carries the size alone. Both
+// answer the same fields, so the two pages cannot render one bundle two ways.
 interface ArtifactRow
 {
-    meta: ArtifactMeta;
+    id: string;
+    name: string;
+    path: string;
+    entry?: string;
+    files?: number;
     workId: string;
     ts: string;
     project?: string;
@@ -1197,37 +1210,47 @@ function artifactRows(model: ProjectModel): ArtifactRow[]
 function workArtifactRows(work: WorkState): ArtifactRow[]
 {
     return work.reports.flatMap((report) =>
-        report.artifacts.map((meta) => ({ meta, workId: work.id, ts: report.ts })));
+        report.artifacts.map((meta) => ({ ...rowOf(meta), workId: work.id, ts: report.ts })));
+}
+
+function rowOf(meta: ArtifactMeta): Pick<ArtifactRow, "id" | "name" | "path" | "entry" | "files">
+{
+    return { id: meta.id, name: meta.name, path: meta.path, entry: meta.entry, files: meta.members?.length };
 }
 
 // prefix walks from the page's directory back to the store root, where the
 // ingested artifact bytes live. A bundle's link goes one step further, to the
 // entry: the directory itself is a listing the browser draws, not the thing
 // the reporter meant a reader to see.
-function artifactLink(meta: ArtifactMeta, prefix: string): string
+//
+// Encoded a segment at a time. A member — or an artifact — named `a#b.txt`
+// would otherwise link to its directory with a fragment attached, which is a
+// page the reader never asked for and cannot get back from.
+function artifactLink(row: ArtifactRow, prefix: string): string
 {
-    return esc(`${prefix}/${meta.path}${meta.entry === undefined ? "" : `/${meta.entry}`}`);
+    const path = row.entry === undefined ? row.path : `${row.path}/${row.entry}`;
+    return esc(`${prefix}/${encodedPath(path)}`);
 }
 
 function artifactRow(row: ArtifactRow, prefix: string): string
 {
-    const href = artifactLink(row.meta, prefix);
-    const thumb = row.meta.members !== undefined ? `<i class="dr-doc dr-dir">dir</i>`
-        : isImage(row.meta.name) ? `<img src="${href}" alt="" loading="lazy">`
-            : `<i class="dr-doc">${esc(extOf(row.meta.name))}</i>`;
+    const href = artifactLink(row, prefix);
+    const thumb = row.files !== undefined ? `<i class="dr-doc dr-dir">dir</i>`
+        : isImage(row.name) ? `<img src="${href}" alt="" loading="lazy">`
+            : `<i class="dr-doc">${esc(extOf(row.name))}</i>`;
     return `<a class="dr-art" href="${href}">${thumb}` +
-        `<span><b>${esc(artifactName(row.meta))}</b>` +
-        `<small>${esc(row.meta.id)} · ${esc(row.project ?? row.workId)}</small></span></a>`;
+        `<span><b>${esc(countedName(row.name, row.files))}</b>` +
+        `<small>${esc(row.id)} · ${esc(row.project ?? row.workId)}</small></span></a>`;
 }
 
 function artifactCard(row: ArtifactRow, slug: string): string
 {
-    const href = artifactLink(row.meta, "../..");
-    const plate = row.meta.members !== undefined ? `<i class="af-plate af-doc af-dir">dir</i>`
-        : isImage(row.meta.name) ? `<img class="af-plate" src="${href}" alt="" loading="lazy">`
-            : `<i class="af-plate af-doc">${esc(extOf(row.meta.name))}</i>`;
+    const href = artifactLink(row, "../..");
+    const plate = row.files !== undefined ? `<i class="af-plate af-doc af-dir">dir</i>`
+        : isImage(row.name) ? `<img class="af-plate" src="${href}" alt="" loading="lazy">`
+            : `<i class="af-plate af-doc">${esc(extOf(row.name))}</i>`;
     return `<article class="af-card"><a href="${href}">${plate}</a><div class="af-meta">` +
-        `<b>${esc(artifactName(row.meta))}</b><small class="mono">${esc(row.meta.id)}</small>` +
+        `<b>${esc(countedName(row.name, row.files))}</b><small class="mono">${esc(row.id)}</small>` +
         `<small><a href="${esc(row.workId)}.html">${esc(row.workId)}</a> · ${esc(slug)}</small>` +
         `<small class="mono dim">${day(row.ts)}</small></div></article>`;
 }
