@@ -363,13 +363,19 @@ export function foldedCollision(paths: string[]): [string, string] | null
     return null;
 }
 
-// The two letters the fold below must not touch: Turkish dotless `ı` and
-// dotted `İ`. Uppercasing `ı` gives plain `I`, so a round trip through the
-// upper case would fold `kisı.md` onto `kisi.md` — two files on every
-// filesystem this store is cloned to, and Unicode case folding keeps them
-// apart. Held out of the pass and compared as themselves, which is the
-// Turkish-i pitfall answered rather than walked into.
-const DOTLESS_I = /([İı])/;
+// The one letter the fold below must not touch: Turkish **dotless** `ı`.
+// Uppercasing it gives plain `I`, so a round trip through the upper case would
+// fold `kisı.md` onto `kisi.md` — two files on macOS and on Linux both, and
+// two that Unicode case folding keeps apart. Held out of the pass and compared
+// as itself, which is the Turkish-i pitfall answered rather than walked into.
+//
+// Dotted `İ` is **not** held out, and the distinction is the whole of the
+// pitfall: default full case folding maps it to `i` + U+0307, not to a letter
+// of its own, and macOS agrees — `İx.md` and `i̇x.md` are one file there. Held
+// out, it would let a bundle carrying both spellings pass this check on Linux
+// and break the first macOS clone's checkout, which is the harm rule 8 exists
+// to prevent.
+const DOTLESS_I = /([ı])/;
 
 // Full case folding, which is what a case-insensitive filesystem compares by
 // and what `toLowerCase` alone is not: lowercasing leaves `straße` and

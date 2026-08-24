@@ -290,6 +290,12 @@ test("cell 11: two member paths colliding under case folding are refused at plan
     assert.equal(foldedCollision(["kisi.md", "kis\u0131.md"]), null);
     assert.equal(foldedCollision(["Iid.md", "\u0131id.md"]), null);
     assert.equal(foldedCollision(["\u0130id.md", "iid.md"]), null);
+    // Dotted `\u0130` is the other half of that pitfall and folds normally: it
+    // maps to `i` + U+0307 rather than to a letter of its own, and macOS holds
+    // one file for the two spellings. Held apart, a bundle carrying both would
+    // pass this check on Linux and break the first macOS clone's checkout.
+    assert.deepEqual(foldedCollision(["\u0130x.md", "i\u0307x.md"]), ["\u0130x.md", "i\u0307x.md"]);
+    assert.deepEqual(foldedCollision(["\u0130STANBUL.md", "\u0130stanbul.md"]), ["\u0130STANBUL.md", "\u0130stanbul.md"]);
     const root = tree("caps", { "README.md": "a" });
     writeFileSync(join(root, "readme.md"), "b");
     // A case-insensitive filesystem — this Mac's default — just overwrote the
