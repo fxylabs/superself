@@ -2,6 +2,10 @@
 
 작업 하나를 에이전트에게 맡깁니다. 계획을 먼저 `work`에 올리고, 실행 전에 리뷰하고, 결과는 커밋과 테스트가 붙은 보고로 확인합니다.
 
+`w-cs7dj` 하나가 네 상태를 지나갑니다. 사용자는 계획을 승인하고 완료 여부를 판단합니다. 에이전트는 계획을 쓰고 고친 뒤, 승인된 계획을 실행하고 결과를 보고합니다.
+
+![사용자, work, 에이전트 사이의 계획 리뷰와 실행 흐름](../../examples/2026-08-24-one-work-review/visuals/work-review-flow.ko.svg)
+
 ## 도착점
 
 끝나면 `self work show`에서 완료 상태, 증거 커밋, 보고를 한 화면에서 볼 수 있습니다.
@@ -16,9 +20,7 @@
 - 2026-08-24 — Implemented the accepted v2 plan in commit fea913a. The zero-dependency checker scans README.md and docs/**/*.md, validates relative Markdown file targets, strips cross-file fragments before file lookup, skips external URLs and same-page anchors, and is exposed as npm run check:links. Four node:test cases cover valid links, missing files, nested docs, and cross-file fragments. Verification passed: npm test (4/4) and npm run check:links (3 Markdown files, all local file links resolve). [fea913a2c806]
 ```
 
-핵심 검토 흐름은 [22초 GIF](../../examples/2026-08-24-one-work-review/tapes/intro.gif)에서, 명령 전체는 [41초 영상](../../examples/2026-08-24-one-work-review/tapes/intro.mp4)에서 볼 수 있습니다.
-
-![v1 계획 리뷰부터 최종 보고까지](../../examples/2026-08-24-one-work-review/tapes/intro.gif)
+도식에 나온 명령은 [22초 터미널 재생](../../examples/2026-08-24-one-work-review/tapes/intro.gif)에서 확인할 수 있습니다. 계획 전문과 테스트까지 포함한 기록은 [41초 영상](../../examples/2026-08-24-one-work-review/tapes/intro.mp4)에 있습니다.
 
 ## 준비물
 

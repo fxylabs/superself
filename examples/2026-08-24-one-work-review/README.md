@@ -32,6 +32,9 @@ the reported result complete. The prompts were, in order: `ok 승인`, `리뷰
 - `review.md`: the two findings from the first review and the second review's
   disposition.
 - `fact-table.md`: the claims admitted into the Korean and English drafts.
+- `visuals/work-review-flow.ko.svg` and `visuals/work-review-flow.svg`: Korean
+  and English role-and-state maps derived from the actual `w-cs7dj` history
+  and final state. They are explanatory diagrams, not product screenshots.
 - `repository.bundle`: portable Git history of the disposable repository,
   including baseline `fe66f40` and implementation `fea913a`.
 - `tapes/intro.tape`: the full operator recording. It replays the same plan,
