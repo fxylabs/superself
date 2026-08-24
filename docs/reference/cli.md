@@ -27,7 +27,7 @@ prints them during the same run.
 | Approving a reviewed set | `apply <file>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
-| Work and evidence | `work ...`, `report <work-id> "<summary>"`, `artifact ...` |
+| Work and evidence | `work ...`, `report <work-id> "<summary>"`, `handoff <work-id> [--project <slug>]`, `artifact ...` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
 | Agent instructions | `connect [--global]` |
@@ -37,7 +37,7 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone tokens project remote sync clone
-goal objective milestone decide work report artifact convention state alias
+goal objective milestone decide work handoff report artifact convention state alias
 undo apply
 connect view context status setup
 log search fold
@@ -248,6 +248,17 @@ The full work transitions and flags are in the `work` declaration of
   request, owned by PR review and CI.
 
 ### Context and inspection commands
+
+`self handoff <work-id> [--project <slug>]` compiles one deterministic,
+self-contained packet for a fresh agent. It includes the fixed common protocol,
+the complete applicable convention closure, the bounded current context, the
+complete work and report history, and recovery guidance qualified by lifecycle
+and execution location. It is read-only, accepts exact work ids only, has no
+`--workspace` mode, and keeps the context-only 3,000-token cap; mandatory
+protocol, conventions, work, and reports are not silently truncated. From a
+workspace root, root-safe reads use `--project`; start/report/done/block actions
+remain owning-checkout-only, while `self project restore <slug>` is workspace-root
+safe for an explicitly named archived target.
 
 `self context` is the agent-facing projection of current project truth: placed
 entities in priority order — full text, then the derived live state, then the

@@ -9,7 +9,7 @@ import {
     isCompletionEvent
 } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, awaitsReview, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isLive, PlanState, reconcileEntity } from "./entities.js";
+import { applyEntity, awaitsReview, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -69,7 +69,7 @@ export interface DecisionState
 // live status; `superseded` means a later convention was recorded as its
 // replacement, and `dropped` means it was withdrawn with nothing taking its
 // place — the withdraw verb this type has always had.
-interface ConventionState
+export interface ConventionState
 {
     id: string;
     ts: string;
@@ -86,6 +86,42 @@ interface ConventionState
 export function currentConventions(conventions: ConventionState[]): ConventionState[]
 {
     return conventions.filter((convention) => convention.status === "current");
+}
+
+export interface HandoffConvention
+{
+    id: string;
+    ts: string;
+    text: string;
+}
+
+// The packet's convention closure follows the same placement graph as context:
+// live convention entities that render in the target, with one canonical row
+// per id. The caller supplies the one captured model graph, including an
+// explicitly named archived target when needed.
+export function applicableConventions(target: string, models: ProjectModel[]): HandoffConvention[]
+{
+    const found = new Map<string, HandoffConvention>();
+    for (const model of models)
+    {
+        for (const entity of model.entities.filter((item) => item.source === "convention" && item.status === "confirmed" && isCurrent(item)
+            && rendersIn(item, model.slug, target)))
+        {
+            if (!found.has(entity.id))
+            {
+                found.set(entity.id, { id: entity.id, ts: entity.ts, text: entity.text });
+            }
+        }
+    }
+    return [...found.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+// Reports are a projection, not an assumption about JSONL append order. A
+// merged log can carry newer evidence earlier, so both work pages and the
+// handoff consume this exact latest-first ordering.
+export function reportProjection(reports: ReportEntry[]): ReportEntry[]
+{
+    return [...reports].sort((left, right) => right.ts.localeCompare(left.ts) || right.id.localeCompare(left.id));
 }
 
 export interface ReportEntry
