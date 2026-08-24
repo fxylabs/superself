@@ -2,7 +2,9 @@
 
 This run asks one agent to add a local Markdown link checker. Before changing a file, the agent saves its plan as `w-cs7dj`. You send v1 to a review agent, send its two findings back for v2, and accept only after the second review passes. After implementation, check that the report points to commit `fea913a` and both test results before marking the work done.
 
-![The plan review and execution flow across the operator, work, and agents](../../examples/2026-08-24-one-work-review/visuals/work-review-flow.svg)
+[Watch the 39-second visual replay](../../examples/2026-08-24-one-work-review/visuals/work-review-replay.mp4)
+
+The replay turns the recorded `w-cs7dj` history into six fixed screens instead of typing through terminal output. The opening stays for 4.5 seconds; each remaining screen stays for 6.5 to 7 seconds, and the player can pause or enter full screen.
 
 ## What you'll see
 
@@ -14,7 +16,7 @@ Run `self work show w-cs7dj` at the end to check the final status and settled co
 - Evidence: fea913a2c806 (settled)
 ```
 
-In the [22-second terminal replay](../../examples/2026-08-24-one-work-review/tapes/intro.gif), v1 fails the start gate and v2 reaches `done` under the same ID. The [41-second video](../../examples/2026-08-24-one-work-review/tapes/intro.mp4) includes the full plan and both checks. The full report appears in Step 5.
+The steps below contain every command and the full report. The final source link includes the raw terminal recordings and replay instructions.
 
 ## Before you start
 

@@ -35,12 +35,14 @@
 | 사용자 명령 기록(`self context`, `self decide confirm`, `self work`) | 격리된 임시 프로젝트에서 만든 VHS 테이프 | 테이프 파일을 발췌와 같은 디렉터리에 둡니다 |
 | 상태 출력 | 실제 `self` 출력. 문장이나 줄 순서를 고치지 않습니다 | 명령과 실행 시각을 함께 적습니다 |
 | 설명 도식 | 실제 `work` 이력과 최종 상태에서 만든 역할·상태 그림 | 도식임을 밝히고 근거 기록을 적습니다. 제품 화면처럼 꾸미지 않습니다 |
-| 짧은 실행 영상 | VHS 테이프에서 자른 GIF 또는 MP4 | 원본 테이프 이름과 재생 시간을 적습니다 |
+| 시각 재생 | 실제 work 이력을 큰 문장과 상태 카드로 나눈 MP4 | 근거 기록, 화면 구성 파일, 렌더 명령, 재생 시간을 적습니다. 제품 화면이 아니라 설명 자료임을 밝힙니다 |
 
 - 발췌에서는 토큰, 이메일, 내부 URL만 지웁니다. 지운 자리에는 `<redacted>`를 쓰고, 다른 문장이나 줄 순서는 손대지 않습니다.
 - 발췌마다 출처를 남깁니다. `self report` 기록인지, Orca 터미널 기록인지, 어느 작업 단위인지 적습니다.
 - 테이프는 상대 경로만 씁니다. 녹화한 기기에만 있는 절대 경로가 들어가면 다시 녹화합니다.
 - 터미널이 사라져 기록을 읽을 수 없으면 `self work show <id>`의 보고서 기록을 대신 씁니다. 출처에 그 사실을 적습니다.
+- 긴 계획과 보고가 흐르는 터미널 녹화는 실행 증거로만 둡니다. 독자용 재생물은 한 화면에 판단 하나만 두고, 본문 폭에서도 명령과 결과를 읽을 수 있게 만듭니다.
+- 장면을 넘기기 전에 문장과 상태를 읽을 시간을 둡니다. 타이핑 시간을 줄이더라도 마지막 줄을 파악할 시간까지 줄이지 않습니다.
 
 ## 3. 발행 전 체크리스트
 
@@ -123,12 +125,14 @@ Build each tutorial around one real task and one agent interface. Give the reade
 | Operator command (`self context`, `self decide confirm`, `self work`) | A VHS tape from an isolated temporary project | Store the tape beside the excerpts |
 | State output | Unedited `self` output | Record the command and when it ran |
 | Explanatory diagram | A role or state diagram derived from real work history | Label it as a diagram, cite the records, and do not imitate a product screen |
-| Short walkthrough | A GIF or MP4 cut from a VHS tape | Name the source tape and give the running time |
+| Visual replay | An MP4 that turns real work history into large text and state cards | Name the source records, layout file, render command, and running time. Label it as explanatory media, not product UI |
 
 - Remove only tokens, email addresses, and internal URLs from excerpts. Replace each removal with `<redacted>`; leave the other words and line order intact.
 - For each excerpt, name the work unit and whether the source is `self report` or `orca terminal read`.
 - Tapes use relative paths only. A tape that carries an absolute path from this machine is re-recorded.
 - If the terminal no longer exists, use the report history from `self work show <id>` and say that you did so.
+- Keep terminal recordings with long plans or reports as execution evidence. A reader-facing replay puts one decision on each screen and keeps its commands and results legible at article width.
+- Time each screen for reading. Removing typing delays must not remove the pause a reader needs after the final line appears.
 
 ## 3. Pre-publish checklist
 

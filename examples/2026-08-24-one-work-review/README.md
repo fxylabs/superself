@@ -35,6 +35,15 @@ the reported result complete. The prompts were, in order: `ok 승인`, `리뷰
 - `visuals/work-review-flow.ko.svg` and `visuals/work-review-flow.svg`: Korean
   and English role-and-state maps derived from the actual `w-cs7dj` history
   and final state. They are explanatory diagrams, not product screenshots.
+- `visuals/work-review-replay.ko.mp4` and `visuals/work-review-replay.mp4`:
+  39-second Korean and English visual replays. Each uses six fixed screens,
+  large labels, and state cards derived from the same history. They are
+  explanatory media, not product UI or terminal output.
+- `visuals/work-review-replay.ko.svg` and `visuals/work-review-replay.svg`:
+  the poster frames used by the site player.
+- `visuals/render-work-review-replay.mjs`: generates both poster frames and
+  MP4 files with ImageMagick and ffmpeg. Run `node
+  visuals/render-work-review-replay.mjs visuals` from this directory.
 - `repository.bundle`: portable Git history of the disposable repository,
   including baseline `fe66f40` and implementation `fea913a`.
 - `tapes/intro.tape`: the full operator recording. It replays the same plan,
@@ -44,6 +53,10 @@ the reported result complete. The prompts were, in order: `ok 승인`, `리뷰
   setup creates v1 off-camera so the recording starts at the review gate.
 - `tapes/intro.gif` and `tapes/intro.mp4`: compact and full outputs of
   `tapes/record.sh`, respectively.
+
+The terminal files remain the raw execution evidence. The tutorial uses the
+visual replay because the full plans and report are not legible when a
+terminal recording is reduced to article width.
 
 The operator tape has different generated work and event IDs because it is an
 isolated replay. It does not reconstruct implementation output: the tape resets
