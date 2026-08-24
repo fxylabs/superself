@@ -363,15 +363,27 @@ export function foldedCollision(paths: string[]): [string, string] | null
     return null;
 }
 
+// The two letters the fold below must not touch: Turkish dotless `ı` and
+// dotted `İ`. Uppercasing `ı` gives plain `I`, so a round trip through the
+// upper case would fold `kisı.md` onto `kisi.md` — two files on every
+// filesystem this store is cloned to, and Unicode case folding keeps them
+// apart. Held out of the pass and compared as themselves, which is the
+// Turkish-i pitfall answered rather than walked into.
+const DOTLESS_I = /([İı])/;
+
 // Full case folding, which is what a case-insensitive filesystem compares by
 // and what `toLowerCase` alone is not: lowercasing leaves `straße` and
 // `STRASSE` apart, and macOS holds only one of them. Upper-then-lower is how
-// the standard library reaches the fold — uppercasing expands `ß` to `SS` —
-// and the NFC form goes in first so a decomposed name folds with its composed
-// twin.
+// the standard library reaches the fold — uppercasing expands `ß` to `SS`, `ſ`
+// to `S`, `ﬁ` to `FI` — and the NFC form goes in first so a decomposed name
+// folds with its composed twin.
 function folded(step: string): string
 {
-    return step.normalize("NFC").toLowerCase().toUpperCase().toLowerCase();
+    // A capturing split, so the odd positions are the held-out letters
+    // themselves and the even ones are everything the pass may have.
+    return step.normalize("NFC").split(DOTLESS_I)
+        .map((part, index) => index % 2 === 0 ? part.toLowerCase().toUpperCase().toLowerCase() : part)
+        .join("");
 }
 
 function requireDistinctMembers(label: string, paths: string[]): void
@@ -480,19 +492,34 @@ function adoptOrGenerate(bundle: PlannedArtifact): void
         bundle.entry = adopted;
         return;
     }
-    // Generation is reached only where no root `index.html`, `index.md` or
-    // `README.md` exists, so the name collides with no file. A **directory**
-    // of that name at the root is the one thing that stands where the index
-    // would go, and the copy would fail on it with a message about an id
-    // already stored — which is not what happened, and which no rerun fixes.
-    if (members.some((member) => member.path.startsWith(`${GENERATED_INDEX}/`)))
-    {
-        throw new CliError(`artifact "${bundle.name}" holds a directory named ${GENERATED_INDEX} at its root, so no index can be generated there — `
-            + "name the member a person opens with --entry <file>");
-    }
+    requireIndexNameFree(bundle, members);
     members.push(generatedIndex(bundle.name, members));
     members.sort((left, right) => comparePaths(left.path, right.path));
     bundle.entry = GENERATED_INDEX;
+}
+
+// Adoption is exact — rule 12's precedence is a list of names, not a pattern —
+// so reaching generation only says no root name is spelled `index.html`. What
+// the generated member needs is the stronger thing: that no root name **folds**
+// to it, by the same equality rule 8 refuses two members under. A root
+// `INDEX.HTML` file, or a directory of either spelling, is what stands where
+// the index would go.
+//
+// Refused here rather than left to the copy, which is the whole point: on a
+// case-insensitive filesystem the copy fails late with `artifact id <id> is
+// already stored`, which is false and which no rerun fixes, and on a
+// case-sensitive one both members store and the first macOS clone of the store
+// gets a broken checkout. The refusal names `--entry`, which is the way
+// through: naming a member skips generation entirely.
+function requireIndexNameFree(bundle: PlannedArtifact, members: PlannedMember[]): void
+{
+    const wanted = folded(GENERATED_INDEX);
+    const clash = members.map((member) => member.path.split("/")[0]).find((name) => folded(name) === wanted);
+    if (clash !== undefined)
+    {
+        throw new CliError(`artifact "${bundle.name}" holds "${clash}" at its root, which is the name a generated index takes once case and Unicode normalization are folded, `
+            + "so none can be generated there — name the member a person opens with --entry <file>");
+    }
 }
 
 // A minimal page listing every member the reporter brought — itself excluded,
