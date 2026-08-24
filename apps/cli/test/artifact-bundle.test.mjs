@@ -280,6 +280,16 @@ test("cell 11: two member paths colliding under case folding are refused at plan
     assert.equal(foldedCollision(["caf\u00e9.md", "cafe.md"]), null);
     assert.equal(foldedCollision(["\ubcf4\uace0\uc11c.md", "\ubcf4\uace0\uc11c v2.md"]), null);
     assert.equal(foldedCollision(["\ud83d\ude80 launch.txt", "launch.txt"]), null);
+    // The rest of full folding, which the same pass has to keep reaching.
+    assert.deepEqual(foldedCollision(["\u017fun.md", "sun.md"]), ["\u017fun.md", "sun.md"]);
+    assert.deepEqual(foldedCollision(["\u03c2.md", "\u03c3.md"]), ["\u03c2.md", "\u03c3.md"]);
+    assert.deepEqual(foldedCollision(["\ufb01le.md", "file.md"]), ["\ufb01le.md", "file.md"]);
+    // And the Turkish dotless i, which Unicode case folding keeps apart from
+    // plain i: these are two files on every filesystem this store reaches, so
+    // refusing them would turn away a report with no way through but a rename.
+    assert.equal(foldedCollision(["kisi.md", "kis\u0131.md"]), null);
+    assert.equal(foldedCollision(["Iid.md", "\u0131id.md"]), null);
+    assert.equal(foldedCollision(["\u0130id.md", "iid.md"]), null);
     const root = tree("caps", { "README.md": "a" });
     writeFileSync(join(root, "readme.md"), "b");
     // A case-insensitive filesystem — this Mac's default — just overwrote the
@@ -765,6 +775,14 @@ test("cell 42: the HTML views link a bundle to its entry, with a folder plate an
     assert.ok(workPage.includes(`href="../../${readingBundle.bundle.path}/index.html"`));
     assert.ok(workPage.includes("dr-dir"));
     assert.ok(workPage.includes("dist/ (12 files)"));
+    // An entry whose name holds a reserved character, which is the render the
+    // generated page of cell 21 does not reach: unencoded, the `#` would start
+    // a fragment and the link would land on the directory.
+    const { work } = attach(["--artifact", tree("marked", { "a#b.html": "h", "n.txt": "n" }), "--entry", "a#b.html"]);
+    const marked = attached(work)[0];
+    const cards = readFileSync(join(store, "view", "demo", "artifacts.html"), "utf8");
+    assert.ok(cards.includes(`href="../../${marked.path}/a%23b.html"`), "the card href was not encoded a segment at a time");
+    assert.ok(!cards.includes(`href="../../${marked.path}/a#b.html"`), "the card href carried a raw fragment mark");
 });
 
 test("cell 43: a member edited in the store raises one signal naming the artifact id and that member's path", () =>
@@ -973,7 +991,7 @@ test("cell 54: a root directory named index.html with no other candidate is refu
     const before = storeTree();
     const { code, out } = attach(["--artifact", tree("site", entries)]);
     assert.equal(code, 1, out);
-    assert.match(out, /holds a directory named index\.html at its root, so no index can be generated there/);
+    assert.match(out, /holds "index\.html" at its root, which is the name a generated index takes once case and Unicode normalization are folded/);
     assert.match(out, /--entry <file>/);
     assert.deepEqual(storeTree(), before, "a plan-time refusal staged bytes");
     // And --entry is the way through, exactly as the refusal says.
@@ -1079,4 +1097,42 @@ test("cell 59: the workspace page states each artifact exactly as its project pa
     assert.ok(workspace.includes("af-dir") || workspace.includes("dr-dir"), "the workspace page lost the folder plate");
     assert.ok(workspace.includes(`${readingBundle.bundle.path}/index.html`), "the workspace page linked the directory, not the entry");
     assert.ok(workspace.includes(`${readingBundle.file.path}"`), "a single-file row's link changed on the workspace page");
+});
+
+/* ── 60: review round 3 ────────────────────────────────────────────── */
+
+// Adoption is exact, so a root `INDEX.HTML` is not a candidate and generation
+// is reached — and the name it would generate is that same root name once
+// folded. Left to the copy, a case-insensitive filesystem answers `artifact id
+// … is already stored`, which is false and which no rerun fixes, and a
+// case-sensitive one stores both and hands the store's first macOS clone a
+// broken checkout.
+test("cell 60: a root name that folds to index.html refuses generation at plan time, naming --entry", () =>
+{
+    for (const [arm, entries] of [
+        ["a file", { "INDEX.HTML": "u", "notes.txt": "n" }],
+        ["a directory", { "INDEX.HTML/part.txt": "p", "notes.txt": "n" }],
+        ["a mixed spelling", { "index.HTML": "m", "notes.txt": "n" }]
+    ])
+    {
+        const before = storeTree();
+        const { work, code, out } = attach(["--artifact", tree("site", entries)]);
+        assert.equal(code, 1, `${arm}: ${out}`);
+        assert.match(out, /which is the name a generated index takes once case and Unicode normalization are folded/);
+        assert.match(out, /--entry <file>/);
+        assert.deepEqual(storeTree(), before, `${arm}: a plan-time refusal staged bytes`);
+        assert.equal(reportFor(work), undefined, `${arm}: a refused report reached the log`);
+    }
+    // `--entry` is the way through, exactly as the refusal says: it skips
+    // generation, and the root name records as it was read.
+    const named = entryOf("site", { "INDEX.HTML": "u", "notes.txt": "n" }, ["--entry", "notes.txt"]);
+    assert.equal(named.entry, "notes.txt");
+    assert.deepEqual(memberPaths(named), ["INDEX.HTML", "notes.txt"]);
+    assert.ok(named.members.every((member) => member.generated === undefined));
+    // A root name that folds to neither the generated name nor a candidate is
+    // untouched by the guard: it ingests, with an index generated beside it.
+    const beside = entryOf("site", { "README.MD": "r", "INDEX.MD": "i" });
+    assert.equal(beside.entry, "index.html");
+    assert.deepEqual(memberPaths(beside), ["INDEX.MD", "README.MD", "index.html"]);
+    assert.equal(beside.members.find((member) => member.path === "index.html").generated, true);
 });
