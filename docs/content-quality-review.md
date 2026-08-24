@@ -1,6 +1,6 @@
 # 콘텐츠 품질 검토 기준
 
-- Status: working standard v0.1
+- Status: working standard v0.2
 - Last updated: 2026-08-24
 - English: [content-quality-review.en.md](content-quality-review.en.md)
 
@@ -14,6 +14,22 @@
 - **필요한 것만 남는다:** 각 문장과 시각 자료가 이해, 행동, 확인 가운데 하나를 돕습니다.
 
 짧거나 쉬운 단어를 썼다는 이유만으로 통과시키지 않습니다. 필요한 설명을 빼서 독자가 추측하게 만들면 이해하기 어려운 콘텐츠입니다. AI 탐지기, 금칙어 개수, 가독성 점수도 통과 근거로 쓰지 않습니다.
+
+## 어디에 적용하는가
+
+파일 종류가 아니라 독자에게 생기는 변화로 판단합니다. 다음 작업은 모두 이 검토를 거칩니다.
+
+- 랜딩, 홈, 제품, 기능, 가격, 영업, 문의, 캠페인 페이지
+- 공개 온보딩, 이메일, CTA, 폼, 빈 화면 문구
+- 튜토리얼, 문서, 업데이트, 글, README, 릴리스 문구와 저장소 메타데이터
+- 제목, 요약, 검색·소셜 메타데이터, 도식, 이미지, 애니메이션, 영상의 설명과 정보 순서
+- 여러 공개 화면의 문구, 위계, 타이밍, 가독성을 바꾸는 공통 컴포넌트
+
+내부 메모, 고치지 않은 제품·터미널 출력, 생성 파일, 공개 의미·순서·가독성·행동을 바꾸지 않는 코드 수정은 제외합니다. 법률, 보안, 개인정보, 접근성, 금전 검토가 필요한 콘텐츠는 해당 검토도 별도로 통과해야 합니다.
+
+콘텐츠 단위는 파일 하나가 아니라 독자 결과 하나입니다. 한 랜딩페이지가 여러 컴포넌트와 메타데이터, 영상을 함께 쓴다면 하나의 기획서가 영향을 받는 파일과 화면을 모두 적습니다. 공통 컴포넌트가 여러 독자 결과를 바꾸면 각 결과를 함께 검토합니다.
+
+에이전트는 모든 콘텐츠 작업에서 [content-quality-gate Skill](../.agents/skills/content-quality-gate/SKILL.md)을 먼저 읽습니다.
 
 ## 검토 범위부터 고정하기
 
@@ -168,3 +184,8 @@
 - [토스 테크니컬 라이팅](https://github.com/toss/technical-writing): 독자의 문제 해결, 자연스러운 한국어, 구체적인 동사
 - [GOV.UK, Identify user needs](https://guidance.publishing.service.gov.uk/writing-to-gov-uk-standards/plan-manage-content/identify-user-needs/): 실제 사용자 요구와 근거에서 시작하기
 - [Google Developer Documentation Style Guide, Voice and tone](https://developers.google.com/style/tone): 직접적인 문장, 국제 독자, 소리 내어 읽기
+
+## Revision history
+
+- v0.2, 2026-08-24: 적용 범위를 랜딩·마케팅·이메일·메타데이터·공통 컴포넌트까지 넓히고 파일이 아닌 독자 결과를 검토 단위로 정함. 재사용 Skill을 연결함.
+- v0.1, 2026-08-24: 이해, 유용성, 정확성, 필요한 정보와 독자 확인을 기준으로 첫 작성.

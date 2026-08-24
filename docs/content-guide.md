@@ -2,7 +2,7 @@
 
 한국어판과 영어판은 같은 기준을 각각의 언어로 씁니다. The English guide follows the Korean guide.
 
-이 문서는 Superself 튜토리얼과 글을 만들 때 확인할 기준입니다. 무엇을 쓸지는 [콘텐츠 기획 기준](content-planning.md)에 따라 먼저 정합니다. 이 문서는 승인된 기획서를 실제 기록, 단계, 문장, 시각 자료로 만드는 법을 다룹니다. 완성된 콘텐츠의 이해와 유용성은 [콘텐츠 품질 검토 기준](content-quality-review.md)으로 확인합니다. 프로젝트별 규칙은 `self context`에서 확인합니다.
+이 문서는 Superself의 랜딩·마케팅 페이지, 이메일, 문서, 튜토리얼과 글을 만들 때 확인할 기준입니다. 무엇을 쓸지는 [콘텐츠 기획 기준](content-planning.md)에 따라 먼저 정합니다. 이 문서는 승인된 기획서를 실제 기록, 정보 순서, 문장, 시각 자료로 만드는 법을 다룹니다. 완성된 콘텐츠의 이해와 유용성은 [콘텐츠 품질 검토 기준](content-quality-review.md)으로 확인합니다. 프로젝트별 규칙은 `self context`에서 확인합니다.
 
 ## 1. 초안 전에 기획서 승인받기
 
@@ -104,7 +104,7 @@
 
 # Content guide (English)
 
-Use [Content planning standard](content-planning.en.md) to decide what a Superself tutorial or article should do before drafting it. This guide turns an approved brief into steps, prose, and visual evidence. Use [Content quality review standard](content-quality-review.en.md) to check whether the finished content is understandable and useful. Run `self context` for rules specific to the current project.
+Use [Content planning standard](content-planning.en.md) before drafting Superself landing and marketing pages, email, documentation, tutorials, or articles. This guide turns an approved brief into information order, prose, steps, and visual evidence. Use [Content quality review standard](content-quality-review.en.md) to check whether the finished content is understandable and useful. Run `self context` for rules specific to the current project.
 
 ## 1. Approve the brief before drafting
 

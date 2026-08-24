@@ -431,7 +431,9 @@ docs/
 ├─ examples/              end-to-end operating scenarios
 ├─ reference/             current CLI command and record reference
 ├─ viewer-theming.md      supported viewer tokens and accent themes
-├─ content-guide.md       tutorial form, visual rules, and pre-publish checklist (ko/en)
+├─ content-planning.md    reader-first brief and approval standard (Korean; .en counterpart)
+├─ content-quality-review.md  reusable ready/validated gate (Korean; .en counterpart)
+├─ content-guide.md       production form, language rules, and pre-publish checklist (ko/en)
 ├─ maintainers/           branch, version, and release policy
 ├─ roadmap.md             current capability, next outcomes, and exit evidence
 └─ strategy/              problem definition and positioning decisions
@@ -439,6 +441,13 @@ docs/
 ARCHITECTURE.md           layering, single gates, event namespaces, fixed naming
 CONTRIBUTING.md           process and code conventions
 ```
+
+Reader-facing content work also loads
+`.agents/skills/content-quality-gate/SKILL.md`. The gate applies to marketing
+pages, email, docs, tutorials, metadata and explanatory media: an approved
+brief precedes production, and an independent `ready` receipt precedes
+publication. It classifies work by its effect on the reader rather than by file
+extension.
 
 This repository holds the CLI and the documentation. The superselfs.com site
 and the operational jobs that measure it live in a separate deployment

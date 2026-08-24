@@ -1,11 +1,11 @@
 # Content planning standard
 
-- Status: working standard v0.2
+- Status: working standard v0.3
 - Last updated: 2026-08-24
 - Korean: [content-planning.md](content-planning.md)
 - Quality review: [content-quality-review.en.md](content-quality-review.en.md)
 
-Plan public content before choosing its title, drafting copy, or producing media. Put the Korean brief in `docs/content-plans/<slug>.md` and the English counterpart in `<slug>.en.md`. Production starts only after the brief reaches `approved`.
+Plan every public content unit, including landing pages, marketing copy, email, documentation, tutorials, and updates, before choosing its title, drafting copy, or producing media. A content unit is one reader outcome rather than one file. Put the Korean brief in `docs/content-plans/<slug>.md` and the English counterpart in `<slug>.en.md`. Production starts only after the brief reaches `approved`.
 
 The pair shares its status, revision, evidence, and decisions. Write and review the prose separately in each language. A brief begins with the problem the reader already has and decides what they should understand and try. It is not a document for steering the reader toward the product.
 
@@ -108,5 +108,6 @@ When replanning older content, keep the existing material and pause substantive 
 
 ## Revision history
 
+- v0.3, 2026-08-24: Applied the standard to every public content and marketing surface, with one reader outcome rather than one file as the content unit.
 - v0.2, 2026-08-24: Separated brief approval, pre-publication readiness, and post-publication validation. Added the content quality review requirement and a full English counterpart.
 - v0.1, 2026-08-24: First working standard for consumer-first content briefs.

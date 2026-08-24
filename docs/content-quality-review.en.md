@@ -1,6 +1,6 @@
 # Content quality review standard
 
-- Status: working standard v0.1
+- Status: working standard v0.2
 - Last updated: 2026-08-24
 - Korean: [content-quality-review.md](content-quality-review.md)
 
@@ -14,6 +14,22 @@ This review does not try to determine whether a person or AI wrote the content. 
 - **Focused:** Every sentence and visual helps the reader understand, act, or verify.
 
 Short copy and simple words do not guarantee a pass. Removing necessary context and making the reader guess is a comprehension failure. AI detectors, banned-word counts, and readability scores are not acceptance evidence.
+
+## Where it applies
+
+Classify work by its effect on the reader, not by file type. The review covers:
+
+- landing, home, product, feature, pricing, sales, contact, and campaign pages;
+- public onboarding, email, calls to action, forms, and empty-state copy;
+- tutorials, documentation, updates, articles, README files, release copy, and repository metadata;
+- titles, summaries, search and social metadata, diagrams, images, animation, and video explanation or information order; and
+- shared components that change copy, hierarchy, timing, or legibility across public surfaces.
+
+Internal notes, unchanged product or terminal output, generated files, and code-only changes that cannot affect public meaning, order, legibility, or action are excluded. Content subject to legal, security, privacy, accessibility, or financial review must pass those separate gates as well.
+
+A content unit is one reader outcome, not one file. If a landing page uses several components, metadata, and media, one brief lists every affected file and surface. A shared component that changes several reader outcomes requires each affected outcome to be reviewed.
+
+Agents read the [content-quality-gate Skill](../.agents/skills/content-quality-gate/SKILL.md) before every content task.
 
 ## Fix the review scope first
 
@@ -168,3 +184,8 @@ Remove lints and rules that do not change review decisions. After publication, a
 - [Toss Technical Writing](https://github.com/toss/technical-writing): helping readers solve problems, natural Korean, and specific verbs
 - [GOV.UK, Identify user needs](https://guidance.publishing.service.gov.uk/writing-to-gov-uk-standards/plan-manage-content/identify-user-needs/): begin with evidenced user needs
 - [Google Developer Documentation Style Guide, Voice and tone](https://developers.google.com/style/tone): direct sentences, global readers, and reading aloud
+
+## Revision history
+
+- v0.2, 2026-08-24: Extended the gate to landing and marketing pages, email, metadata, and shared components. Defined one reader outcome rather than one file as the review unit and linked the reusable Skill.
+- v0.1, 2026-08-24: First standard based on understanding, usefulness, accuracy, necessary information, and reader evidence.
