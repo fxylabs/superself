@@ -2,9 +2,15 @@
 
 한국어판과 영어판은 같은 기준을 각각의 언어로 씁니다. The English guide follows the Korean guide.
 
-이 문서는 Superself 튜토리얼과 글을 만들 때 확인할 기준입니다. 실제 기록을 골라 독자가 따라 할 단계로 만드는 법을 다룹니다. 시각 자료의 출처와 발행 전 확인 항목은 뒤에서 따로 설명합니다. 프로젝트별 규칙은 `self context`에서 확인합니다.
+이 문서는 Superself 튜토리얼과 글을 만들 때 확인할 기준입니다. 무엇을 쓸지는 [콘텐츠 기획 기준](content-planning.md)에 따라 먼저 정합니다. 이 문서는 승인된 기획서를 실제 기록, 단계, 문장, 시각 자료로 만드는 법을 다룹니다. 프로젝트별 규칙은 `self context`에서 확인합니다.
 
-## 1. 튜토리얼 형식: 프롬프트 → 에이전트 기록 → 상태 변화
+## 1. 초안 전에 기획서 승인받기
+
+모든 공개 콘텐츠는 `docs/content-plans/<slug>.md`에 기획서를 먼저 둡니다. 소비자의 제품과 무관한 상태, 현재 시도와 문제, 원인 가설, 해결 원리, 이해에서 채택까지의 순서를 적습니다. 관찰과 추론을 분리하고, 콘텐츠 하나가 소비자의 머릿속에 남길 자리와 한 문장을 하나씩만 정합니다.
+
+기획서가 `review`이면 내용을 검토할 수 있지만 본문과 시각 자료를 새로 만들지 않습니다. 상태가 `approved`가 된 뒤 초안을 씁니다. 이 기준보다 먼저 만든 콘텐츠를 다시 기획할 때는 기존 자료를 유지하고, 승인 전까지 의미 있는 추가 수정만 멈춥니다. 타깃, 원인, 머릿속 자리, 기억할 문장이 바뀌면 revision을 올리고 다시 리뷰합니다.
+
+## 2. 튜토리얼 형식: 프롬프트 → 에이전트 기록 → 상태 변화
 
 튜토리얼 하나에서는 실제 작업 하나와 에이전트 도구 하나만 다룹니다. 독자가 명령을 그대로 실행하고 같은 결과를 확인할 수 있게 씁니다. 배경 설명은 개념 문서(`docs/concepts/`)에 두고, 튜토리얼에는 행동과 결과를 남깁니다.
 
@@ -27,7 +33,7 @@
 - 같은 단계를 다시 해도 같은 결과가 나와야 합니다. 시간이나 이 기계에만 있는 경로에 기대는 단계는 쓰지 않습니다.
 - 프롬프트는 사용자가 실제로 보낸 문장을 그대로 둡니다. 다듬어 쓰면 기록이 아닙니다.
 
-## 2. 시각 자료 규칙
+## 3. 시각 자료 규칙
 
 | 장면 | 매체 | 출처 |
 | --- | --- | --- |
@@ -44,9 +50,11 @@
 - 긴 계획과 보고가 흐르는 터미널 녹화는 실행 증거로만 둡니다. 독자용 재생물은 한 화면에 판단 하나만 두고, 본문 폭에서도 명령과 결과를 읽을 수 있게 만듭니다.
 - 장면을 넘기기 전에 문장과 상태를 읽을 시간을 둡니다. 타이핑 시간을 줄이더라도 마지막 줄을 파악할 시간까지 줄이지 않습니다.
 
-## 3. 발행 전 체크리스트
+## 4. 발행 전 체크리스트
 
-- [ ] 글의 핵심 주장을 사용자가 한두 문장으로 먼저 정했습니다.
+- [ ] `docs/content-plans/<slug>.md`가 있고 상태가 `approved`입니다.
+- [ ] 기획서가 소비자의 상태와 문제에서 출발하며, 관찰과 원인 추론을 구분했습니다.
+- [ ] 소비자의 머릿속에 남길 자리, 기억할 한 문장, 실제 증거가 각각 하나입니다.
 - [ ] 올릴 채널에서 실제 독자에게 닿을 수 있습니다. 팔로워, 참여 중인 태그 피드, 게시 권한 중 하나도 없으면 `mirror`로 기록합니다.
 - [ ] AI 문체 점검: 작성한 문장에는 긴 대시(em dash)가 없고, "A가 아니라 B" 형식은 글 전체에서 한 번 이하이며, 문장 길이가 한 가지로 반복되지 않습니다. 원문 발췌와 제품 출력은 이 점검에서 제외합니다.
 - [ ] 명령 확인: 글에 쓴 모든 명령과 옵션을 `self --help`와 실제 실행으로 확인했습니다.
@@ -55,7 +63,7 @@
 - [ ] 검색형 글에서는 제품명을 한 번만 언급했습니다.
 - [ ] 글 끝에 출처 목록을 한 번만 뒀습니다.
 
-## 4. 한국어 문장 규칙
+## 5. 한국어 문장 규칙
 
 다음 다섯 원칙은 토스 테크니컬 라이팅을 바탕으로 정리했습니다.
 
@@ -92,9 +100,15 @@
 
 # Content guide (English)
 
-Use this guide when writing or reviewing a Superself tutorial or article. It explains which records belong in a tutorial and how to turn them into steps a reader can follow. A separate section covers visual evidence. The last section is the pre-publish review. Run `self context` for rules specific to the current project.
+Use [Content planning standard](content-planning.md) to decide what a Superself tutorial or article should do before drafting it. This guide turns an approved brief into steps, prose, and visual evidence. Run `self context` for rules specific to the current project.
 
-## 1. Tutorial form: prompt → agent record → state change
+## 1. Approve the brief before drafting
+
+Every public piece starts with `docs/content-plans/<slug>.md`. The brief records the reader's product-independent state, current attempts and cost, cause hypotheses, the mechanism we offer, and the path from understanding to adoption. It separates observations from inferences and chooses one mental slot, one remembered sentence, and one record that proves it.
+
+A brief in `review` can be reviewed, but it does not authorize new copy or media production. Draft only after it reaches `approved`. When replanning older content, keep existing material and pause substantive edits until approval. Raise the revision and review it again when the audience, cause, mental slot, or remembered sentence changes.
+
+## 2. Tutorial form: prompt → agent record → state change
 
 Build each tutorial around one real task and one agent interface. Give the reader commands they can run and results they can recognize. Put background material in `docs/concepts/`.
 
@@ -117,7 +131,7 @@ Build each tutorial around one real task and one agent interface. Give the reade
 - A reader who repeats a step should see the same result. Do not rely on the clock or a path that exists only on the recording machine.
 - Quote the prompt exactly. Editing it would misrepresent the run.
 
-## 2. Visual rules
+## 3. Visual rules
 
 | Scene | Medium | Source note |
 | --- | --- | --- |
@@ -134,9 +148,11 @@ Build each tutorial around one real task and one agent interface. Give the reade
 - Keep terminal recordings with long plans or reports as execution evidence. A reader-facing replay puts one decision on each screen and keeps its commands and results legible at article width.
 - Time each screen for reading. Removing typing delays must not remove the pause a reader needs after the final line appears.
 
-## 3. Pre-publish checklist
+## 4. Pre-publish checklist
 
-- [ ] Before drafting, the operator stated the point in one or two sentences.
+- [ ] `docs/content-plans/<slug>.md` exists and its status is `approved`.
+- [ ] The brief starts from the reader's state and problem, and separates observation from causal inference.
+- [ ] It names one mental slot, one remembered sentence, and one real record that proves it.
 - [ ] The intended channel can reach readers through followers, an account active in a relevant tag feed, or posting access. Otherwise, mark the publication as a `mirror`.
 - [ ] AI-writing check: your prose has no em dash, uses no more than one "not A but B" construction, and varies sentence length. Do not count exact quotes or product output.
 - [ ] Every command and flag was checked against `self --help` and a real run.
@@ -145,7 +161,7 @@ Build each tutorial around one real task and one agent interface. Give the reade
 - [ ] A search-driven article mentions the product no more than once.
 - [ ] One source list appears at the end.
 
-## 4. Sentence rules (English)
+## 5. Sentence rules (English)
 
 - Address the reader directly. Say what to run and what result to look for.
 - One idea per sentence. Cut meta-talk ("as mentioned above", "in conclusion").
