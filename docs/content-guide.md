@@ -2,7 +2,7 @@
 
 한국어판과 영어판은 같은 기준을 각각의 언어로 씁니다. The English guide follows the Korean guide.
 
-이 문서는 Superself 튜토리얼과 글을 만들 때 확인할 기준입니다. 무엇을 쓸지는 [콘텐츠 기획 기준](content-planning.md)에 따라 먼저 정합니다. 이 문서는 승인된 기획서를 실제 기록, 단계, 문장, 시각 자료로 만드는 법을 다룹니다. 프로젝트별 규칙은 `self context`에서 확인합니다.
+이 문서는 Superself 튜토리얼과 글을 만들 때 확인할 기준입니다. 무엇을 쓸지는 [콘텐츠 기획 기준](content-planning.md)에 따라 먼저 정합니다. 이 문서는 승인된 기획서를 실제 기록, 단계, 문장, 시각 자료로 만드는 법을 다룹니다. 완성된 콘텐츠의 이해와 유용성은 [콘텐츠 품질 검토 기준](content-quality-review.md)으로 확인합니다. 프로젝트별 규칙은 `self context`에서 확인합니다.
 
 ## 1. 초안 전에 기획서 승인받기
 
@@ -55,8 +55,11 @@
 - [ ] `docs/content-plans/<slug>.md`가 있고 상태가 `approved`입니다.
 - [ ] 기획서가 소비자의 상태와 문제에서 출발하며, 관찰과 원인 추론을 구분했습니다.
 - [ ] 소비자의 머릿속에 남길 자리, 기억할 한 문장, 실제 증거가 각각 하나입니다.
+- [ ] `docs/content-reviews/<slug>.<lang>.md`에 검토 범위와 근거가 있고 판정이 `ready`입니다.
+- [ ] 독자는 콘텐츠를 덮은 뒤 자기 상황, 첫 행동, 확인할 결과를 자기 말로 설명할 수 있습니다. 새 메시지와 첫 형식은 정해진 타깃 독자 확인을 거쳤습니다.
 - [ ] 올릴 채널에서 실제 독자에게 닿을 수 있습니다. 팔로워, 참여 중인 태그 피드, 게시 권한 중 하나도 없으면 `mirror`로 기록합니다.
-- [ ] AI 문체 점검: 작성한 문장에는 긴 대시(em dash)가 없고, "A가 아니라 B" 형식은 글 전체에서 한 번 이하이며, 문장 길이가 한 가지로 반복되지 않습니다. 원문 발췌와 제품 출력은 이 점검에서 제외합니다.
+- [ ] 표현 점검은 이해를 막는 문장만 찾는 보조 절차로 썼습니다. 금칙어가 없거나 AI 탐지기 점수가 낮다는 이유로 통과시키지 않았습니다.
+- [ ] 한국어판은 영어판을 옮기지 않고 같은 사실표에서 따로 썼으며, 피동·명사화·영어식 정보 순서가 독자의 행동을 늦추지 않는지 확인했습니다.
 - [ ] 명령 확인: 글에 쓴 모든 명령과 옵션을 `self --help`와 실제 실행으로 확인했습니다.
 - [ ] 민감 정보 확인: 발췌와 테이프에 `grep`을 돌려 이메일, 토큰, 내부 호스트가 없는지 확인했습니다.
 - [ ] 제품 출력은 실제 기록입니다. 설명 도식은 실제 기록을 근거로 만들었고 제품 화면처럼 보이게 꾸미지 않았습니다.
@@ -82,17 +85,18 @@
 - 제목에 핵심 키워드를 넣고, 같은 수준의 제목은 같은 꼴("~하기")로 씁니다.
 - 개요는 제목 바로 아래에 두고 "이 문서를 읽으면 무엇을 할 수 있는가"에 답합니다.
 
-### AI 문체를 걷어내는 편집 순서
+### 쉽게 이해되고 실제로 쓸 수 있게 편집하기
 
-금칙어 목록만으로 문체를 만들지 않습니다. 아래 순서로 편집합니다.
+목표는 사람처럼 보이는 문장이 아니라 독자가 자기 문제를 알아보고 필요한 행동을 끝내게 하는 문장입니다. 아래 순서로 편집하고, 전체 판정과 독자 확인은 [콘텐츠 품질 검토 기준](content-quality-review.md)에 따라 기록합니다.
 
 1. 초안 전에 사실표를 만듭니다. 각 행에 주장, 근거가 된 실제 기록, 독자가 할 행동을 하나씩 적습니다.
 2. 한국어와 영어는 서로 번역하지 않습니다. 같은 사실표를 보고 각 언어로 따로 씁니다.
 3. 문단마다 새 사실, 명령, 출력 가운데 하나가 있어야 합니다. 셋 다 없으면 문단을 지웁니다.
 4. 제품명을 다른 도구 이름으로 바꿔도 성립하는 문장은 지웁니다. 실제 사건, 수치, 명령으로 바꿀 수 있을 때만 남깁니다.
-5. 같은 길이의 문장 세 개, 같은 문두의 반복, 근거 없는 3단 나열, 질문으로 시작하는 상투적 도입을 찾습니다.
-6. 소리 내어 읽습니다. 한 번에 읽히지 않는 한국어 문장과 말로는 쓰지 않을 영어 표현을 고칩니다.
-7. 마지막에만 금칙어와 구두점 검사를 돌립니다. 검사는 문체를 만들지 않고 남은 흔적만 찾습니다.
+5. 독자가 보게 될 화면에서 명령과 결과를 따라가고, 각 단계가 행동과 확인으로 끝나는지 봅니다.
+6. 한국어는 영어판을 닫고 다시 읽습니다. 피동문, 명사화, `~를 통해`, 영어식 문장 순서를 구체적인 주체와 동사로 고칩니다.
+7. 소리 내어 읽고 대상 독자에게 무엇을 하라는 뜻으로 이해했는지 자기 말로 설명하게 합니다.
+8. 마지막에만 반복 문두, 같은 문장 길이, 상투적 도입, 구두점을 찾습니다. 이 검사는 남은 후보를 찾을 뿐 통과를 증명하지 않습니다.
 
 사용자의 실제 결정문, 프롬프트, 보고를 문체의 예로 삼습니다. 원문에 있는 짧고 구체적인 동사를 우선하고, 원문에 없던 감정이나 확신을 보태지 않습니다.
 
@@ -100,7 +104,7 @@
 
 # Content guide (English)
 
-Use [Content planning standard](content-planning.md) to decide what a Superself tutorial or article should do before drafting it. This guide turns an approved brief into steps, prose, and visual evidence. Run `self context` for rules specific to the current project.
+Use [Content planning standard](content-planning.en.md) to decide what a Superself tutorial or article should do before drafting it. This guide turns an approved brief into steps, prose, and visual evidence. Use [Content quality review standard](content-quality-review.en.md) to check whether the finished content is understandable and useful. Run `self context` for rules specific to the current project.
 
 ## 1. Approve the brief before drafting
 
@@ -153,8 +157,11 @@ Build each tutorial around one real task and one agent interface. Give the reade
 - [ ] `docs/content-plans/<slug>.md` exists and its status is `approved`.
 - [ ] The brief starts from the reader's state and problem, and separates observation from causal inference.
 - [ ] It names one mental slot, one remembered sentence, and one real record that proves it.
+- [ ] `docs/content-reviews/<slug>.<lang>.md` records the review scope and evidence, with a `ready` verdict.
+- [ ] After closing the content, the reader can explain their situation, first action, and expected result. A new message or format has completed the required target-reader check.
 - [ ] The intended channel can reach readers through followers, an account active in a relevant tag feed, or posting access. Otherwise, mark the publication as a `mirror`.
-- [ ] AI-writing check: your prose has no em dash, uses no more than one "not A but B" construction, and varies sentence length. Do not count exact quotes or product output.
+- [ ] Expression lint was used only to find wording that blocks understanding. No AI-detector result or clean banned-word scan was treated as acceptance evidence.
+- [ ] Korean was drafted separately from the shared facts, and passive forms, nominalizations, and English information order do not delay the reader's action.
 - [ ] Every command and flag was checked against `self --help` and a real run.
 - [ ] A `grep` over excerpts and tapes finds no email addresses, tokens, or internal hosts.
 - [ ] Product output comes from a real run. Any explanatory diagram cites real records and does not imitate the product UI.
@@ -169,16 +176,18 @@ Build each tutorial around one real task and one agent interface. Give the reade
 - Use one term per concept, expand an abbreviation on first use, and follow the official spelling of tool names.
 - Keep one reader outcome per page. State that outcome before the background. Use parallel grammar for headings at the same level.
 
-### Editing out AI slop
+### Edit for understanding and use
 
-Do not begin with a banned-word search. Work through these edits first and check phrases and punctuation at the end.
+The goal is not prose that appears human. The reader should recognize their problem and complete the intended action. Use these edits, then record the full verdict and reader evidence with [Content quality review standard](content-quality-review.en.md).
 
 1. Start with a fact table. For each claim, name the real record and the action the reader will take.
 2. Draft English from the facts, not from the Korean sentences. Write the Korean version from the same evidence in a separate pass.
 3. Delete any paragraph that adds no fact, command, or output.
 4. Replace sentences that still work with another product name. Keep the sentence only when a real event, number, or command makes it specific.
-5. Read the draft aloud and rewrite anything you would not say to a colleague.
-6. Only then check repeated openings, uniform sentence lengths, unsupported lists, stock questions, and punctuation.
+5. Follow the commands and results in the viewport the reader will use. Check that every step ends with an action and a visible result.
+6. Review Korean with the English draft closed. Replace passive forms, nominalizations, repeated connective frames, and English information order with a specific actor and verb.
+7. Read the draft aloud, then ask a target reader to retell the action they understood.
+8. Only then check repeated openings, uniform sentence lengths, unsupported lists, stock questions, and punctuation. These checks find candidates; they do not prove quality.
 
 Use the operator's decisions, prompts, and reports as examples of tone. Keep their short verbs and specific claims. Do not add confidence or emotion that is absent from the record.
 
@@ -190,3 +199,6 @@ Use the operator's decisions, prompts, and reports as examples of tone. Keep the
 - draft.dev, writing technical content. https://draft.dev/learn/technical-content
 - Lee Robinson, developer marketing. https://leerob.com/blog/developer-marketing
 - Superself content loop v2 convention, read with `self context`.
+- National Institute of Korean Language, easy public language and public-language evaluation. https://www.korean.go.kr/
+- GOV.UK, identify user needs. https://guidance.publishing.service.gov.uk/writing-to-gov-uk-standards/plan-manage-content/identify-user-needs/
+- Google Developer Documentation Style Guide, voice and tone. https://developers.google.com/style/tone

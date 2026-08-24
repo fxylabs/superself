@@ -6,6 +6,7 @@
 - Last reviewed: Not reviewed yet
 - Portfolio anchor revision: v0.1
 - Planned content: `docs/tutorials/review-one-work.ko.md`, `docs/tutorials/review-one-work.md`
+- Quality review: pending until the brief is approved and the tutorial is revised
 - Korean: [review-one-work.md](review-one-work.md)
 
 ## Evidence and inferences
@@ -102,7 +103,7 @@ After reading the tutorial, a person should be able to answer these questions wi
 3. Why does a plan revision keep the same work ID?
 4. What evidence should be checked in the report before completion?
 
-Ask the first five target readers these four questions and, "What will you do differently in your next agent task?" If three or more cannot explain the sequence of recording the plan, reviewing it, accepting it, and checking the report, revise the opening and the order of the steps.
+Ask the first five target readers these four questions and, "What will you do differently in your next agent task?" At least four should explain the sequence of recording the plan, reviewing it, accepting it, and checking the report, along with the first action they would take. If two readers fail at the same point, revise the opening and step order, then test again. When an executable draft is ready, check that at least four can complete the supported path without extra explanation.
 
 ## Review questions
 

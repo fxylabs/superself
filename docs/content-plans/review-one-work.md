@@ -6,6 +6,7 @@
 - Last reviewed: 아직 리뷰하지 않음
 - Portfolio anchor revision: v0.1
 - Planned content: `docs/tutorials/review-one-work.ko.md`, `docs/tutorials/review-one-work.md`
+- Quality review: pending, 기획 승인과 튜토리얼 수정 뒤 진행
 - English: [review-one-work.en.md](review-one-work.en.md)
 
 ## 관찰과 추론
@@ -102,7 +103,7 @@
 3. 계획을 고칠 때 왜 같은 work ID를 유지하는가?
 4. 완료 전에 report에서 무엇을 확인하는가?
 
-첫 5명의 타깃 독자에게 이 네 질문과 "다음 에이전트 작업에서 무엇을 다르게 하겠는가"를 묻습니다. 세 명 이상이 계획 등록 → 리뷰 → 승인 → report 확인 순서를 설명하지 못하면 도입과 단계 순서를 고칩니다.
+첫 번째 검토에 참여할 대상 독자 5명에게 이 네 질문과 "다음 에이전트 작업에서는 무엇을 다르게 하겠는가"를 묻습니다. 4명 이상이 계획 등록 → 리뷰 → 승인 → report 확인 순서와 첫 행동을 설명해야 합니다. 두 명 이상이 같은 지점에서 막히면 도입과 단계 순서를 고치고 다시 확인합니다. 실행 가능한 초안이 나오면 4명 이상이 추가 설명 없이 정해진 절차를 끝내는지도 확인합니다.
 
 ## 리뷰 질문
 

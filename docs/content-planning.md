@@ -1,12 +1,16 @@
-# 콘텐츠 기획 기준 · Content planning standard
+# 콘텐츠 기획 기준
 
-상태: working standard v0.1
+상태: working standard v0.2
 
 최종 수정: 2026-08-24
 
+영문판: [content-planning.en.md](content-planning.en.md)
+
+품질 검토: [콘텐츠 품질 검토 기준](content-quality-review.md)
+
 공개 콘텐츠는 제목, 초안, 영상보다 기획서가 먼저입니다. 각 콘텐츠는 `docs/content-plans/<slug>.md`에 기획서를 두고 `approved`가 된 뒤 제작합니다. 기획서는 독자를 제품으로 데려오기 위한 설명서가 아니라, 독자가 이미 겪는 문제에서 출발해 무엇을 이해하고 시도해야 하는지 정하는 문서입니다.
 
-한국어 기획서는 `<slug>.md`, 영문판은 `<slug>.en.md`로 둡니다. 두 문서는 상태, revision, 근거와 결정을 공유하되 문장은 각 언어에서 따로 작성하고 검토합니다.
+한국어 기획서는 `<slug>.md`, 영문판은 `<slug>.en.md`로 둡니다. 두 문서는 상태, revision, 근거와 결정을 공유하되 문장은 각 언어에서 따로 작성하고 검토합니다. 영문 전체 기준은 [content-planning.en.md](content-planning.en.md)에 둡니다.
 
 ## 모든 콘텐츠가 남길 하나의 자리
 
@@ -53,7 +57,7 @@
 
 한 콘텐츠가 제품 범주, 전체 기능, 여러 문제를 동시에 설명하지 않게 합니다. 일관성은 같은 문장을 반복하는 것이 아니라, 각 콘텐츠가 같은 프로젝트 상태라는 자리로 이어지는 것입니다.
 
-## 승인과 개정
+## 승인, 품질 검토, 발행 뒤 근거
 
 기획서 상태는 다음 순서로 바뀝니다.
 
@@ -61,6 +65,8 @@
 - `review`: 다섯 질문과 한 문장이 검토 가능한 상태
 - `approved`: 운영자가 승인해 제목, 본문, 시각 자료를 만들 수 있음
 - `superseded`: 새 revision이 대신함
+
+`approved`는 콘텐츠에 근거가 있고 검증 가능한 기획이 마련됐으며 제작을 시작해도 된다는 뜻입니다. 완성된 콘텐츠가 쉽고 유용하다는 사실까지 입증하지는 않습니다. 제작한 콘텐츠는 [콘텐츠 품질 검토 기준](content-quality-review.md)에 따라 발행 전에 `revise` 또는 `ready`로 판정합니다. 실제 독자의 이해나 사용 행동을 관찰한 뒤에만 `validated`로 기록합니다.
 
 타깃 상태, 원인 가설, 머릿속 자리, 기억할 문장 가운데 하나가 바뀌면 revision을 올리고 다시 리뷰합니다. 맞춤법이나 링크 수정은 revision을 올리지 않습니다. 발행 뒤에는 질문, 댓글, 이탈 지점, 채택 행동을 관찰에 추가합니다. 반응이 없다는 사실도 기록하되 원인을 추측해 사실처럼 쓰지 않습니다.
 
@@ -78,6 +84,7 @@
 - Owner:
 - Last reviewed:
 - Portfolio anchor revision: v0.1
+- Quality review: pending | <path>
 
 ## 관찰과 추론
 | 종류 | 내용 | 출처/횟수 | 가장 싼 반증 확인 |
@@ -104,17 +111,7 @@
 ## Revision history
 ```
 
----
+## Revision history
 
-All public content starts with a brief in `docs/content-plans/<slug>.md`. Drafting and media production begin only after the brief reaches `approved`.
-
-Use `<slug>.md` for the Korean brief and `<slug>.en.md` for its English counterpart. The pair shares its status, revision, evidence, and decisions. Write and review the prose separately in each language.
-
-Every brief answers the same five questions: the reader's product-independent state; what they try and where it fails; why it happens; the mechanism and new behavior we offer; and the path from recognition to understanding, action, proof, and adoption. Keep observations separate from inferences. Give each inference its observation count and the cheapest check that could disprove it.
-
-The current portfolio hypothesis is one association: **Superself helps people and AI agents work from the same project state.** Each piece uses one situation and one record to reinforce that association. Do not repeat the sentence mechanically, and do not describe Superself as a memory product.
-
-Briefs move through `draft`, `review`, `approved`, and `superseded`. A change to the audience state, cause, mental slot, or one remembered sentence requires a new revision and another review. After publication, add observed questions, exits, and adoption behavior. Treat a lack of response as an observation, not an explanation.
-
-When replanning content made before this standard, keep the existing material but pause substantive edits until the brief is approved.
-The authoring agent never approves its own brief. A missing brief or one still in `review` stops production and publication review.
+- v0.2, 2026-08-24: 기획 승인, 발행 전 `ready`, 발행 뒤 `validated`를 분리하고 콘텐츠 품질 검토 기준과 전체 영문판을 연결함.
+- v0.1, 2026-08-24: 소비자 상태에서 출발하는 콘텐츠 기획 기준 첫 작성.
