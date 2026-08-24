@@ -1,26 +1,20 @@
 # 에이전트의 작업 계획을 리뷰하고 결과까지 받기
 
-작업 하나를 에이전트에게 맡깁니다. 계획을 먼저 `work`에 올리고, 실행 전에 리뷰하고, 결과는 커밋과 테스트가 붙은 보고로 확인합니다.
-
-`w-cs7dj` 하나가 네 상태를 지나갑니다. 사용자는 계획을 승인하고 완료 여부를 판단합니다. 에이전트는 계획을 쓰고 고친 뒤, 승인된 계획을 실행하고 결과를 보고합니다.
+에이전트 한 명에게 로컬 Markdown 링크 검사기를 맡긴 실제 기록입니다. 에이전트는 파일을 고치기 전에 계획을 `w-cs7dj`로 등록했습니다. 사용자는 v1을 리뷰 에이전트에게 보내 결함 두 개를 찾았고, 두 번째 리뷰를 통과한 v2만 승인했습니다. 구현 뒤에는 보고가 커밋 `fea913a`와 두 검증 결과를 가리키는지 확인하고 완료로 판단했습니다.
 
 ![사용자, work, 에이전트 사이의 계획 리뷰와 실행 흐름](../../examples/2026-08-24-one-work-review/visuals/work-review-flow.ko.svg)
 
-## 도착점
+## 완료 후 확인할 것
 
-끝나면 `self work show`에서 완료 상태, 증거 커밋, 보고를 한 화면에서 볼 수 있습니다.
+마지막에 `self work show w-cs7dj`를 실행해 완료 상태와 증거 커밋을 확인합니다.
 
 ```text
 - Status: done
 - Branches: main
 - Evidence: fea913a2c806 (settled)
-
-## Reports (latest first)
-
-- 2026-08-24 — Implemented the accepted v2 plan in commit fea913a. The zero-dependency checker scans README.md and docs/**/*.md, validates relative Markdown file targets, strips cross-file fragments before file lookup, skips external URLs and same-page anchors, and is exposed as npm run check:links. Four node:test cases cover valid links, missing files, nested docs, and cross-file fragments. Verification passed: npm test (4/4) and npm run check:links (3 Markdown files, all local file links resolve). [fea913a2c806]
 ```
 
-도식에 나온 명령은 [22초 터미널 재생](../../examples/2026-08-24-one-work-review/tapes/intro.gif)에서 확인할 수 있습니다. 계획 전문과 테스트까지 포함한 기록은 [41초 영상](../../examples/2026-08-24-one-work-review/tapes/intro.mp4)에 있습니다.
+[22초 터미널 재생](../../examples/2026-08-24-one-work-review/tapes/intro.gif)에서는 v1의 시작이 거부되고, 같은 ID의 v2가 승인된 뒤 `done`에 이르는 과정을 볼 수 있습니다. [41초 영상](../../examples/2026-08-24-one-work-review/tapes/intro.mp4)에는 계획 전문과 두 검증 명령도 들어 있습니다. 전체 보고는 5단계에 있습니다.
 
 ## 준비물
 

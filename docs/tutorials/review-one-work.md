@@ -1,26 +1,20 @@
 # Review an agent's work plan and read the result
 
-Give one bounded job to one agent. Put the plan in `work`, review it before execution, and judge the result from a report tied to a tested commit.
-
-One work ID, `w-cs7dj`, moves through four states. The operator approves the plan and makes the final done decision; agents draft and revise the plan, execute the accepted revision, and report the result.
+This run asks one agent to add a local Markdown link checker. Before changing a file, the agent saves its plan as `w-cs7dj`. You send v1 to a review agent, send its two findings back for v2, and accept only after the second review passes. After implementation, check that the report points to commit `fea913a` and both test results before marking the work done.
 
 ![The plan review and execution flow across the operator, work, and agents](../../examples/2026-08-24-one-work-review/visuals/work-review-flow.svg)
 
-## Destination
+## What you'll see
 
-At the end, `self work show` puts the final status, settled commit, and report in one view.
+Run `self work show w-cs7dj` at the end to check the final status and settled commit.
 
 ```text
 - Status: done
 - Branches: main
 - Evidence: fea913a2c806 (settled)
-
-## Reports (latest first)
-
-- 2026-08-24 — Implemented the accepted v2 plan in commit fea913a. The zero-dependency checker scans README.md and docs/**/*.md, validates relative Markdown file targets, strips cross-file fragments before file lookup, skips external URLs and same-page anchors, and is exposed as npm run check:links. Four node:test cases cover valid links, missing files, nested docs, and cross-file fragments. Verification passed: npm test (4/4) and npm run check:links (3 Markdown files, all local file links resolve). [fea913a2c806]
 ```
 
-Check the commands in the diagram against the [22-second terminal replay](../../examples/2026-08-24-one-work-review/tapes/intro.gif). The [41-second video](../../examples/2026-08-24-one-work-review/tapes/intro.mp4) also includes the full plan and test run.
+In the [22-second terminal replay](../../examples/2026-08-24-one-work-review/tapes/intro.gif), v1 fails the start gate and v2 reaches `done` under the same ID. The [41-second video](../../examples/2026-08-24-one-work-review/tapes/intro.mp4) includes the full plan and both checks. The full report appears in Step 5.
 
 ## Before you start
 
@@ -53,7 +47,7 @@ The review agent found two defects: v1 omitted handling for the fragment link al
 
 ## Step 3. Revise under the same ID
 
-Have the agent apply the findings. `work revise` recorded v2 under `w-cs7dj` instead of creating another work unit.
+Tell the agent to cover nested docs and strip fragments before file lookup. `work revise` records both changes as v2 under `w-cs7dj`. No second work unit appears.
 
 ```text
 $ self work revise w-cs7dj "Add a zero-dependency local Markdown link checker to this repository. Plan: inspect README.md and every Markdown file recursively under docs/**/*.md; add scripts/check-links.mjs to check that relative Markdown file targets exist; for a link to another Markdown file with a #fragment, strip the fragment before resolving the file and do not validate the anchor itself; ignore external URLs and same-page anchors; add node:test cases for valid links, missing files, a nested docs directory, and a cross-file fragment; expose npm run check:links and document its supported scope; run npm test and npm run check:links; commit the implementation and attach the verification as a self report. Do not access the network or change files outside the checker, its tests, package.json, and README.md." --why "Review found that v1 did not define cross-file fragment handling and conflicted between docs/*.md and recursive discovery. v2 strips fragments before file lookup, keeps anchor validation out of scope, fixes the supported input to docs/**/*.md, and adds both cases to the test plan."
@@ -65,7 +59,7 @@ Run `self work show w-cs7dj --history` to see v1 followed by v2. The second revi
 
 ## Step 4. Accept the reviewed revision
 
-The operator accepts v2, then the agent starts the work. Keep those actions in that order.
+Run `self work accept` for v2. The agent can then start the work.
 
 ```text
 $ self work accept w-cs7dj
@@ -99,7 +93,7 @@ Run `self work show w-cs7dj`. Check that `Evidence: fea913a2c806 (settled)` and 
 
 ## Step 6. Judge completion
 
-The operator read the report and test results, then judged that the result met v2. Only then was the work closed.
+Compare the report with v2, commit `fea913a`, and the two checks. When they match, close the work.
 
 ```text
 $ self work done w-cs7dj
@@ -108,7 +102,7 @@ entity.done recorded [01m0rpj4nf9yf9q4w2f1a4da3g]
 
 The final `self work show w-cs7dj` should contain `Status: done` and settled evidence.
 
-## State change
+## State changes
 
 | Point | Status | What to check |
 | --- | --- | --- |
@@ -116,7 +110,7 @@ The final `self work show w-cs7dj` should contain `Status: done` and settled evi
 | After revising v2 | `review` | same ID, v2 is not accepted |
 | After accepting v2 | `next` | the current revision is accepted |
 | After starting | `entity.started` | the accepted plan has started once |
-| After the completion judgment | `done` | settled evidence and the final report remain |
+| After `self work done` | `done` | settled evidence and the final report remain |
 
 ## Next steps
 
