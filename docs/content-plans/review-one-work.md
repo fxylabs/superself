@@ -6,6 +6,7 @@
 - Last reviewed: 아직 리뷰하지 않음
 - Portfolio anchor revision: v0.1
 - Planned content: `docs/tutorials/review-one-work.ko.md`, `docs/tutorials/review-one-work.md`
+- English: [review-one-work.en.md](review-one-work.en.md)
 
 ## 관찰과 추론
 

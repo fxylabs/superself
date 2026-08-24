@@ -6,6 +6,8 @@
 
 공개 콘텐츠는 제목, 초안, 영상보다 기획서가 먼저입니다. 각 콘텐츠는 `docs/content-plans/<slug>.md`에 기획서를 두고 `approved`가 된 뒤 제작합니다. 기획서는 독자를 제품으로 데려오기 위한 설명서가 아니라, 독자가 이미 겪는 문제에서 출발해 무엇을 이해하고 시도해야 하는지 정하는 문서입니다.
 
+한국어 기획서는 `<slug>.md`, 영문판은 `<slug>.en.md`로 둡니다. 두 문서는 상태, revision, 근거와 결정을 공유하되 문장은 각 언어에서 따로 작성하고 검토합니다.
+
 ## 모든 콘텐츠가 남길 하나의 자리
 
 콘텐츠마다 새 메시지를 만들지 않습니다. 서로 다른 문제와 사례를 다루더라도 소비자의 머릿속에는 같은 연상이 남아야 합니다.
@@ -105,6 +107,8 @@
 ---
 
 All public content starts with a brief in `docs/content-plans/<slug>.md`. Drafting and media production begin only after the brief reaches `approved`.
+
+Use `<slug>.md` for the Korean brief and `<slug>.en.md` for its English counterpart. The pair shares its status, revision, evidence, and decisions. Write and review the prose separately in each language.
 
 Every brief answers the same five questions: the reader's product-independent state; what they try and where it fails; why it happens; the mechanism and new behavior we offer; and the path from recognition to understanding, action, proof, and adoption. Keep observations separate from inferences. Give each inference its observation count and the cheapest check that could disprove it.
 
