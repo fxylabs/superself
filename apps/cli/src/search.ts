@@ -17,7 +17,7 @@ import { buildModel, ProjectModel, WorkState } from "./model.js";
 import { notice } from "./output.js";
 import { activeProjects, CliContext, requireRegistered } from "./paths.js";
 import { bold, dim, displayWidth, fitDisplay, oneLine, styled } from "./style.js";
-import { CliError, CommandOutput } from "./types.js";
+import { artifactSearchText, CliError, CommandOutput } from "./types.js";
 import { contextRendered, recordLine } from "./views.js";
 
 // The record kinds `--type` narrows to (R2). The preset sources plus the free
@@ -234,7 +234,7 @@ function carried(work: WorkState | undefined): string
     return [
         ...work.reports.map((report) => report.text),
         ...work.completion.requirements.map((requirement) => requirement.text),
-        ...work.artifacts.map((artifact) => artifact.name),
+        ...work.artifacts.map((artifact) => artifactSearchText(artifact)),
         ...work.notes,
         work.next ?? "",
         work.blockedWhy ?? ""

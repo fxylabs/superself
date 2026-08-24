@@ -64,6 +64,17 @@ export interface SelfEvent
     refs?: EventRefs;
 }
 
+// One regular file copied out of a bundle's tree, named by its path relative
+// to that tree's root. `generated` marks the index this CLI wrote when the
+// directory carried no front door of its own: it is a member like any other —
+// stored, digested, counted — and this is what says no reporter wrote it.
+export interface ArtifactMember
+{
+    path: string;
+    digest: string;
+    generated?: true;
+}
+
 export interface ArtifactMeta
 {
     id: string;
@@ -71,8 +82,36 @@ export interface ArtifactMeta
     path: string;
     // sha256 of the bytes as they were ingested. Optional: artifacts attached
     // before digests were recorded verify by existence alone, and folding an
-    // existing store must not invent a digest for them.
+    // existing store must not invent a digest for them. A bundle carries none
+    // at all — its hash is derived from the manifest where something needs it,
+    // because a stored field could contradict the manifest and a derived one
+    // cannot.
     digest?: string;
+    // Present exactly when this artifact's bytes are a directory tree, which
+    // is what makes the manifest its own discriminator: no event written
+    // before bundles needs a field it does not carry, and no migration is
+    // written. Sorted by the members' UTF-8 bytes.
+    members?: ArtifactMember[];
+    // The one member a person is meant to open.
+    entry?: string;
+}
+
+// One row per artifact, everywhere (#362). A bundle states what it holds where
+// a single file states its name, and every surface that prints an artifact
+// reads this rather than deciding for itself what a directory looks like.
+export function artifactName(meta: ArtifactMeta): string
+{
+    return meta.members === undefined
+        ? meta.name
+        : `${meta.name}/ (${meta.members.length} file${meta.members.length === 1 ? "" : "s"})`;
+}
+
+// What a query is matched against. A member path joins the haystack because
+// the manifest is the machine-readable answer to what a bundle holds; a hit on
+// one still shows the bundle's row, since a member has no id of its own.
+export function artifactSearchText(meta: ArtifactMeta): string
+{
+    return [meta.name, ...(meta.members ?? []).map((member) => member.path)].join(" ");
 }
 
 export interface RegistryEntry

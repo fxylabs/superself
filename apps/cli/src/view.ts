@@ -8,7 +8,7 @@ import { eventSummary, readEvents } from "./logfile.js";
 import { currentConventions, DecisionState, foreignToward, otherGoals, planNote, ProjectModel, reviewWork, WorkState } from "./model.js";
 import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
-import { ArtifactMeta, CliError, CommandOutput, SelfEvent } from "./types.js";
+import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 
 const VIEW_DIR = "view";
 const THEME_FILE = "theme.css";
@@ -1201,26 +1201,33 @@ function workArtifactRows(work: WorkState): ArtifactRow[]
 }
 
 // prefix walks from the page's directory back to the store root, where the
-// ingested artifact bytes live.
+// ingested artifact bytes live. A bundle's link goes one step further, to the
+// entry: the directory itself is a listing the browser draws, not the thing
+// the reporter meant a reader to see.
+function artifactLink(meta: ArtifactMeta, prefix: string): string
+{
+    return esc(`${prefix}/${meta.path}${meta.entry === undefined ? "" : `/${meta.entry}`}`);
+}
+
 function artifactRow(row: ArtifactRow, prefix: string): string
 {
-    const href = esc(`${prefix}/${row.meta.path}`);
-    const thumb = isImage(row.meta.name)
-        ? `<img src="${href}" alt="" loading="lazy">`
-        : `<i class="dr-doc">${esc(extOf(row.meta.name))}</i>`;
+    const href = artifactLink(row.meta, prefix);
+    const thumb = row.meta.members !== undefined ? `<i class="dr-doc dr-dir">dir</i>`
+        : isImage(row.meta.name) ? `<img src="${href}" alt="" loading="lazy">`
+            : `<i class="dr-doc">${esc(extOf(row.meta.name))}</i>`;
     return `<a class="dr-art" href="${href}">${thumb}` +
-        `<span><b>${esc(row.meta.name)}</b>` +
+        `<span><b>${esc(artifactName(row.meta))}</b>` +
         `<small>${esc(row.meta.id)} · ${esc(row.project ?? row.workId)}</small></span></a>`;
 }
 
 function artifactCard(row: ArtifactRow, slug: string): string
 {
-    const href = esc(`../../${row.meta.path}`);
-    const plate = isImage(row.meta.name)
-        ? `<img class="af-plate" src="${href}" alt="" loading="lazy">`
-        : `<i class="af-plate af-doc">${esc(extOf(row.meta.name))}</i>`;
+    const href = artifactLink(row.meta, "../..");
+    const plate = row.meta.members !== undefined ? `<i class="af-plate af-doc af-dir">dir</i>`
+        : isImage(row.meta.name) ? `<img class="af-plate" src="${href}" alt="" loading="lazy">`
+            : `<i class="af-plate af-doc">${esc(extOf(row.meta.name))}</i>`;
     return `<article class="af-card"><a href="${href}">${plate}</a><div class="af-meta">` +
-        `<b>${esc(row.meta.name)}</b><small class="mono">${esc(row.meta.id)}</small>` +
+        `<b>${esc(artifactName(row.meta))}</b><small class="mono">${esc(row.meta.id)}</small>` +
         `<small><a href="${esc(row.workId)}.html">${esc(row.workId)}</a> · ${esc(slug)}</small>` +
         `<small class="mono dim">${day(row.ts)}</small></div></article>`;
 }
@@ -1595,6 +1602,8 @@ td.r { text-align: right; width: 78px; }
             border-bottom: 1px solid var(--sv-rule); background: var(--sv-surface-raised); }
 .af-doc { display: flex; align-items: center; justify-content: center;
           font: 13px var(--sv-mono); font-style: normal; color: var(--sv-faint); }
+/* A bundle's plate: a folder, not a file of some extension. */
+.af-dir, .dr-dir { color: var(--sv-muted); letter-spacing: .08em; text-transform: uppercase; }
 .af-meta { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 3px; }
 .af-meta b { font-size: 13px; font-weight: 600; color: var(--sv-text); overflow-wrap: anywhere; }
 .af-meta small { font-size: 11px; color: var(--sv-muted); line-height: 1.45; overflow-wrap: anywhere; }
