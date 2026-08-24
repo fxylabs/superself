@@ -4,7 +4,8 @@ The design artifact for #362, written before the code and reviewed on the
 issue. Every test in `apps/cli/test/artifact-bundle.test.mjs` is one cell
 below, named by its cell number, and asserts that cell's stated outcome. The
 table is the review surface: a cell the table lacks is a path nothing proves.
-Cells 51 and 52 come from review round 1.
+Cells 51 and 52 come from review round 1; cells 53 to 59 come from review
+round 2, which also amended rules 10 and 13.
 
 ## The defect
 
@@ -84,10 +85,15 @@ a stored file. The **entry** is the one member a person is meant to open.
 9. **An empty bundle is refused.** A report carrying an artifact satisfies the
    completion gate (`completion.ts`), so a bundle with no bytes would close a
    work unit on evidence that does not exist.
-10. **The bound is 1000 members or 100 MiB, whichever is reached first**, with
-    no override flag: an unbounded bundle is charged to every future clone of
-    the store, and the refusal says to attach a packaged file instead. Both are
-    counted during planning, so a refusal needs no rollback.
+10. **The bound is 1000 reporter-brought members or 100 MiB, whichever is
+    reached first**, with no override flag: an unbounded bundle is charged to
+    every future clone of the store, and the refusal says to attach a packaged
+    file instead. Both are counted during planning, so a refusal needs no
+    rollback. What the bound measures is what the reporter brought, so a
+    directory of exactly 1000 files with no front door of its own stores 1001
+    members — the generated index of rule 13 is this CLI's own line, not
+    theirs, and refusing it would refuse a bundle that is inside the bound
+    for a file the reporter never wrote (review round 2).
 11. **Each member carries its own digest; a bundle carries no top-level
     `digest`.** `reachability.ts` already reads an absent digest as silence
     rather than a mismatch, so a bundle folded by an older CLI — which would
@@ -109,10 +115,18 @@ a stored file. The **entry** is the one member a person is meant to open.
 13. **The generated index is `index.html` at the bundle root**, a minimal page
     listing every member the reporter brought — itself excluded, since a page
     linking to itself tells a reader nothing — stored as a member with
-    `generated: true` and named by `entry`. The name cannot collide: generation
-    is reached only where no root `index.html`, `index.md` or `README.md`
-    exists. It does count in the bundle's file count, which states what the
-    store holds; `generated` is what says no reporter wrote it.
+    `generated: true` and named by `entry`. It does count in the bundle's file
+    count, which states what the store holds; `generated` is what says no
+    reporter wrote it.
+
+    The name cannot collide with a **file**: generation is reached only where
+    no root `index.html`, `index.md` or `README.md` exists. It can collide
+    with a **directory** of that name, the one thing that stands where the
+    index would go, so that bundle is refused at plan time and the refusal
+    names `--entry` as the way through (review round 2). Left to the copy it
+    would fail with `artifact id <id> is already stored — run the report
+    again` — not what happened, and no rerun fixes it, so the directory would
+    be permanently unattachable.
 14. **`--entry` is not repeatable and requires exactly one directory
     `--artifact` in the report.** It names a member of a bundle; with a single
     file there is no member to name, and with two bundles nothing in the flag
@@ -195,6 +209,13 @@ a stored file. The **entry** is the one member a person is meant to open.
 | 50 | a report carrying only a bundle | `work done` | accepted: an artifact is completion evidence, and a bundle is one artifact |
 | 51 | `café.md` written composed and `café.md` written decomposed in one tree | ingest | refused at plan time, naming both members; a bundle read on macOS and the same bundle read on Linux refuse alike |
 | 52 | a synced design report carrying a bundle, read by a CLI that does not know `members` | `report confirm` there | refused with today's `carries no artifact digest` line; nothing is recorded, and the newer CLI still confirms the same report against the derived manifest digest |
+| 53 | exactly 1000 files, none of them a root index candidate | ingest | ingests; `members` is 1001 and the extra one is the generated index, which the bound does not count |
+| 54 | root holds a **directory** named `index.html` and no other candidate | ingest | refused at plan time, naming `--entry` as the way through; nothing staged. With `--entry` it ingests |
+| 55 | a synced bundle event naming `../../../../etc/passwd` as a member | `self fold` / `self status` | one signal: recorded outside the bundle, the event cannot be trusted; the named file is neither read nor hashed |
+| 56 | a synced bundle event whose `entry` climbs out of the store | `artifact open <id>` | refused as an untrusted event; nothing is launched and no path outside the store is printed |
+| 57 | `--artifact dist --artifact link-to-dist`, and `--artifact link-to-dist --artifact dist/index.html` | report | refused in both arms — one directory reached by two spellings is one path, and containment reads the followed path |
+| 58 | a bundle | `--entry a.html --entry b.html` | refused, naming the count: a bundle has one entry, and the second is not silently dropped |
+| 59 | one bundle and one file recorded | the workspace HTML page | each row is byte-identical to the same row on the project page: the entry link, the folder plate and the file count |
 
 ## The guide
 
