@@ -5,7 +5,8 @@ issue. Every test in `apps/cli/test/artifact-bundle.test.mjs` is one cell
 below, named by its cell number, and asserts that cell's stated outcome. The
 table is the review surface: a cell the table lacks is a path nothing proves.
 Cells 51 and 52 come from review round 1; cells 53 to 59 come from review
-round 2, which also amended rules 10 and 13.
+round 2, which also amended rules 10 and 13; cell 60 comes from review
+round 3, which amended rule 13 again.
 
 ## The defect
 
@@ -119,14 +120,22 @@ a stored file. The **entry** is the one member a person is meant to open.
     count, which states what the store holds; `generated` is what says no
     reporter wrote it.
 
-    The name cannot collide with a **file**: generation is reached only where
-    no root `index.html`, `index.md` or `README.md` exists. It can collide
-    with a **directory** of that name, the one thing that stands where the
-    index would go, so that bundle is refused at plan time and the refusal
-    names `--entry` as the way through (review round 2). Left to the copy it
-    would fail with `artifact id <id> is already stored — run the report
-    again` — not what happened, and no rerun fixes it, so the directory would
-    be permanently unattachable.
+    Whether the name can collide is settled **by fold-equality, not by
+    spelling** (review round 3). Adoption is exact — rule 12's precedence is a
+    list of names — so reaching generation only says no root entry is spelled
+    `index.html`. A root `INDEX.HTML`, an `index.HTML`, or a directory of any
+    of those spellings still stands where the index would go, and each is
+    refused at plan time by the same equality rule 8 compares two members
+    under, with a refusal naming `--entry` as the way through: naming a member
+    skips generation entirely.
+
+    Refused at plan time rather than left to the copy, because the copy answers
+    wrongly in both directions. On a case-insensitive filesystem it fails late
+    with `artifact id <id> is already stored — run the report again`, which is
+    false and which no rerun fixes, so that directory is permanently
+    unattachable. On a case-sensitive one both members store, and the first
+    macOS clone of the store gets a broken checkout — the harm rule 8 exists
+    to prevent.
 14. **`--entry` is not repeatable and requires exactly one directory
     `--artifact` in the report.** It names a member of a bundle; with a single
     file there is no member to name, and with two bundles nothing in the flag
@@ -198,7 +207,7 @@ a stored file. The **entry** is the one member a person is meant to open.
 | 39 | a bundle whose entry file is not in this store | `artifact open <id>` | refused, naming the bundle path and `self sync` |
 | 40 | a bundle | `work show`, and the folded work document | both render `<id> <name>/ (12 files)`, with no digest in parentheses |
 | 41 | a bundle | `self search "<member name>"` | resolves to the work unit that carries it, in today's shape |
-| 42 | a bundle | the HTML work and artifact views | the card links to the entry, shows a folder plate and the file count |
+| 42 | a bundle | the HTML work and artifact views | the card links to the entry, shows a folder plate and the file count; the link is encoded a segment at a time, so an entry named `a#b.html` is reached rather than the directory |
 | 43 | a member edited in the store after ingestion | `self fold` / `self status` | one signal naming the artifact id and that member's relative path |
 | 44 | a member deleted from the store | `self fold` / `self status` | one signal: missing from this store — run `self sync` |
 | 45 | a bundle event, folded by a CLI that does not know `members` | fold, `list`, `open` | one row with the directory name and no file count; `open` opens the directory; no digest recorded, so no health signal |
@@ -216,6 +225,7 @@ a stored file. The **entry** is the one member a person is meant to open.
 | 57 | `--artifact dist --artifact link-to-dist`, and `--artifact link-to-dist --artifact dist/index.html` | report | refused in both arms — one directory reached by two spellings is one path, and containment reads the followed path |
 | 58 | a bundle | `--entry a.html --entry b.html` | refused, naming the count: a bundle has one entry, and the second is not silently dropped |
 | 59 | one bundle and one file recorded | the workspace HTML page | each row is byte-identical to the same row on the project page: the entry link, the folder plate and the file count |
+| 60 | root holds `INDEX.HTML`, or a directory of that name, and no exactly-spelled candidate | ingest | refused at plan time in both arms — a generated index would be that same name once folded — naming `--entry` as the way through; with `--entry` it ingests and `INDEX.HTML` records verbatim. A root `README.MD` or `INDEX.MD`, which folds to neither the generated name nor a candidate, still ingests with a generated index |
 
 ## The guide
 
