@@ -16,7 +16,7 @@ At the end, `self work show` puts the final status, settled commit, and report i
 - 2026-08-24 — Implemented the accepted v2 plan in commit fea913a. The zero-dependency checker scans README.md and docs/**/*.md, validates relative Markdown file targets, strips cross-file fragments before file lookup, skips external URLs and same-page anchors, and is exposed as npm run check:links. Four node:test cases cover valid links, missing files, nested docs, and cross-file fragments. Verification passed: npm test (4/4) and npm run check:links (3 Markdown files, all local file links resolve). [fea913a2c806]
 ```
 
-Watch the full run as a [2:06 video](../../examples/2026-08-24-one-work-review/tapes/intro.mp4) or [GIF](../../examples/2026-08-24-one-work-review/tapes/intro.gif).
+Watch the core review loop as a [22-second GIF](../../examples/2026-08-24-one-work-review/tapes/intro.gif), or follow every command in the [41-second video](../../examples/2026-08-24-one-work-review/tapes/intro.mp4).
 
 ![From the v1 review to the final report](../../examples/2026-08-24-one-work-review/tapes/intro.gif)
 

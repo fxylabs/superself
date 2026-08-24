@@ -34,10 +34,13 @@ the reported result complete. The prompts were, in order: `ok 승인`, `리뷰
 - `fact-table.md`: the claims admitted into the Korean and English drafts.
 - `repository.bundle`: portable Git history of the disposable repository,
   including baseline `fe66f40` and implementation `fea913a`.
-- `tapes/intro.tape`: the 2:06 operator recording. It replays the same plan,
+- `tapes/intro.tape`: the full operator recording. It replays the same plan,
   revision reason, acceptance, implementation commit, tests, report and done
   command in an isolated workspace.
-- `tapes/intro.gif` and `tapes/intro.mp4`: outputs of `tapes/record.sh`.
+- `tapes/review-loop.tape`: a compact review loop for the inline GIF. Its
+  setup creates v1 off-camera so the recording starts at the review gate.
+- `tapes/intro.gif` and `tapes/intro.mp4`: compact and full outputs of
+  `tapes/record.sh`, respectively.
 
 The operator tape has different generated work and event IDs because it is an
 isolated replay. It does not reconstruct implementation output: the tape resets

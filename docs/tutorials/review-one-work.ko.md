@@ -16,7 +16,7 @@
 - 2026-08-24 — Implemented the accepted v2 plan in commit fea913a. The zero-dependency checker scans README.md and docs/**/*.md, validates relative Markdown file targets, strips cross-file fragments before file lookup, skips external URLs and same-page anchors, and is exposed as npm run check:links. Four node:test cases cover valid links, missing files, nested docs, and cross-file fragments. Verification passed: npm test (4/4) and npm run check:links (3 Markdown files, all local file links resolve). [fea913a2c806]
 ```
 
-전체 기록은 [2분 6초 영상](../../examples/2026-08-24-one-work-review/tapes/intro.mp4)과 [GIF](../../examples/2026-08-24-one-work-review/tapes/intro.gif)에서 볼 수 있습니다.
+핵심 검토 흐름은 [22초 GIF](../../examples/2026-08-24-one-work-review/tapes/intro.gif)에서, 명령 전체는 [41초 영상](../../examples/2026-08-24-one-work-review/tapes/intro.mp4)에서 볼 수 있습니다.
 
 ![v1 계획 리뷰부터 최종 보고까지](../../examples/2026-08-24-one-work-review/tapes/intro.gif)
 
