@@ -15,10 +15,10 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { foldProject } from "../dist/fold.js";
 import { foldedCollision, nameRefusal } from "../dist/artifact.js";
-import { artifactName } from "../dist/types.js";
+import { artifactName, countedName, encodedPath } from "../dist/types.js";
 import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
@@ -222,14 +222,21 @@ test("cell 7: --artifact on a symlink to a directory ingests that directory's fi
 
 /* ── 8–11, 51: what a member path may spell ────────────────────────── */
 
+// This is also the wiring proof cell 10 leans on: a control character and
+// invalid UTF-8 are two answers from the one `nameRefusal` the walk consults,
+// and only one of them can be built on this filesystem. What runs here is the
+// whole path from a bad name on disk to a refusal that stages nothing; what
+// cell 10 adds is the other answer, at the only level it can be reached.
 test("cell 8: a member name holding a newline refuses the bundle, naming the path", () =>
 {
     const root = tree("noted", { "ok.txt": "ok" });
     writeFileSync(join(root, "two\nlines.txt"), "x");
+    const before = storeTree();
     const { code, out } = attach(["--artifact", root]);
     assert.equal(code, 1, out);
     assert.match(out, /holds a control character/);
     assert.match(out, /two\nlines\.txt/);
+    assert.deepEqual(storeTree(), before, "a refused name still staged bytes");
 });
 
 test("cell 9: names holding non-ASCII text and an emoji record verbatim, and open resolves", () =>
@@ -266,6 +273,13 @@ test("cell 11: two member paths colliding under case folding are refused at plan
 {
     assert.deepEqual(foldedCollision(["README.md", "assets/x", "readme.md"]), ["README.md", "readme.md"]);
     assert.equal(foldedCollision(["README.md", "docs/readme.md"]), null);
+    // Full case folding, not `toLowerCase`: macOS holds one of these two, and
+    // lowercasing alone leaves them apart.
+    assert.deepEqual(foldedCollision(["stra\u00dfe.md", "STRASSE.md"]), ["stra\u00dfe.md", "STRASSE.md"]);
+    // And no over-refusal: folding must not make distinct names one.
+    assert.equal(foldedCollision(["caf\u00e9.md", "cafe.md"]), null);
+    assert.equal(foldedCollision(["\ubcf4\uace0\uc11c.md", "\ubcf4\uace0\uc11c v2.md"]), null);
+    assert.equal(foldedCollision(["\ud83d\ude80 launch.txt", "launch.txt"]), null);
     const root = tree("caps", { "README.md": "a" });
     writeFileSync(join(root, "readme.md"), "b");
     // A case-insensitive filesystem — this Mac's default — just overwrote the
@@ -276,28 +290,41 @@ test("cell 11: two member paths colliding under case folding are refused at plan
         assert.deepEqual(readdirSync(root), ["README.md"], "the tree could not be built, and was not built halfway");
         return;
     }
+    const before = storeTree();
     const { code, out } = attach(["--artifact", root]);
     assert.equal(code, 1, out);
     assert.match(out, /"README\.md" and "readme\.md"/);
     assert.match(out, /case and Unicode normalization are folded/);
+    assert.deepEqual(storeTree(), before, "a plan-time refusal copied bytes");
 });
 
 test("cell 51: two member paths colliding under Unicode normalization are refused at plan time", () =>
 {
     const composed = "café.md";
     const decomposed = "café.md";
+    assert.notEqual(composed, decomposed, "the two spellings must differ, or this cell proves nothing");
     assert.deepEqual(foldedCollision([composed, decomposed]), [composed, decomposed]);
     assert.equal(foldedCollision([composed, "sub/" + decomposed]), null);
+    // The same pair with case folded in too, which is what a macOS clone
+    // compares by.
+    assert.deepEqual(foldedCollision([composed, decomposed.toUpperCase()]), [composed, decomposed.toUpperCase()]);
     const root = tree("notes", {});
     writeFileSync(join(root, composed), "a");
     writeFileSync(join(root, decomposed), "b");
     if (readdirSync(root).length < 2)
     {
+        // This filesystem folded the two spellings into one name, so there is
+        // no tree to attach and the unit assertions above are this cell's whole
+        // answer here — they ran before this branch was reached.
+        assert.equal(readdirSync(root).length, 1, "the tree could not be built, and was not built halfway");
         return;
     }
+    const before = storeTree();
     const { code, out } = attach(["--artifact", root]);
     assert.equal(code, 1, out);
     assert.match(out, /case and Unicode normalization are folded/);
+    assert.ok(out.includes(composed) && out.includes(decomposed), `the refusal did not name both members:\n${out}`);
+    assert.deepEqual(storeTree(), before, "a plan-time refusal copied bytes");
 });
 
 test("cell 12: a member with no read permission refuses the bundle before any byte is copied",
@@ -402,16 +429,33 @@ test("cell 20: a directory named index.html is not a candidate; README.md is the
 
 test("cell 21: with no candidate a root index.html is generated, linking every brought member and not itself", () =>
 {
-    const meta = entryOf("site", { "notes.md": "n", "sub/a.txt": "a" });
+    // The names are the ones a link can be got wrong on: `#` and `?` are what
+    // `encodeURI` leaves alone, `%` is what a second encoding would double, and
+    // a space and non-ASCII text are what has to survive it all.
+    const meta = entryOf("site", {
+        "notes.md": "n", "sub/a.txt": "a", "a#b.txt": "h", "q?r.txt": "q",
+        "100%.txt": "p", "보고서 v2.md": "r"
+    });
     assert.equal(meta.entry, "index.html");
     const index = meta.members.find((member) => member.path === "index.html");
     assert.equal(index.generated, true);
-    assert.equal(meta.members.length, 3, "the generated index counts in what the store holds");
+    assert.equal(meta.members.length, 7, "the generated index counts in what the store holds");
     const page = readFileSync(join(store, meta.path, "index.html"), "utf8");
     assert.match(page, /href="notes\.md"/);
-    assert.match(page, /href="sub\/a\.txt"/);
+    assert.match(page, /href="sub\/a\.txt"/, "the separator between segments was encoded away");
+    assert.match(page, /href="a%23b\.txt"/);
+    assert.match(page, /href="q%3Fr\.txt"/);
+    assert.match(page, /href="100%25\.txt"/);
+    assert.match(page, /href="%EB%B3%B4%EA%B3%A0%EC%84%9C%20v2\.md"/);
     assert.ok(!page.includes('href="index.html"'), "the generated index linked to itself");
-    assert.match(must(box, demo, ["artifact", "list"]).out, /site\/ \(3 files\)/);
+    // Every href resolves back to the member it names, and to bytes in the store.
+    for (const member of meta.members.filter((item) => item.generated === undefined))
+    {
+        assert.ok(page.includes(`href="${encodedPath(member.path)}"`), `${member.path} has no link in the generated index`);
+        assert.equal(decodeURIComponent(encodedPath(member.path)), member.path);
+        assert.ok(existsSync(join(store, meta.path, ...member.path.split("/"))));
+    }
+    assert.match(must(box, demo, ["artifact", "list"]).out, /site\/ \(7 files\)/);
 });
 
 /* ── 22–27: --entry ────────────────────────────────────────────────── */
@@ -734,14 +778,18 @@ test("cell 43: a member edited in the store raises one signal naming the artifac
     assert.equal(status.split("assets/logo.svg").length - 1, 1, "one edited member raised more than one signal");
 });
 
+// A member name of its own, not cell 43's: both cells leave an open work unit
+// carrying a broken bundle, so a shared name would make each one's "exactly
+// one signal" count the other's as well.
 test("cell 44: a member deleted from the store raises one missing signal pointing at self sync", () =>
 {
-    const { work } = attach(["--artifact", tree("dist", { "index.html": "hi", "assets/logo.svg": "<svg/>" })]);
+    const { work } = attach(["--artifact", tree("dist", { "index.html": "hi", "assets/gone.svg": "<svg/>" })]);
     const meta = attached(work)[0];
-    rmSync(join(store, meta.path, "assets", "logo.svg"), { force: true });
+    rmSync(join(store, meta.path, "assets", "gone.svg"), { force: true });
     const status = must(box, demo, ["status"]).out;
-    assert.ok(status.includes(`artifact ${meta.id} dist member assets/logo.svg is missing from this store — run \`self sync\``),
+    assert.ok(status.includes(`artifact ${meta.id} dist member assets/gone.svg is missing from this store — run \`self sync\``),
         `no signal named the missing member:\n${status}`);
+    assert.equal(status.split("assets/gone.svg").length - 1, 1, "one missing member raised more than one signal");
 });
 
 /* ── 45, 52: a CLI that does not know the manifest ─────────────────── */
@@ -904,4 +952,131 @@ test("cell 50: work done accepts a unit whose only evidence is a bundle", () =>
     must(place.box, place.demo, ["report", work, "the deliverable", "--artifact", root]);
     const done = selfIn(place.box, place.demo, ["work", "done", work]);
     assert.equal(done.code, 0, done.out);
+});
+
+/* ── 53–59: review round 2 ─────────────────────────────────────────── */
+
+test("cell 53: 1000 brought files with no root candidate ingest, and the generated index is the 1001st", () =>
+{
+    const { work, code, out } = attach(["--artifact", manyFiles("brim", 1000)]);
+    assert.equal(code, 0, out);
+    const meta = attached(work)[0];
+    assert.equal(meta.members.length, 1001, "the bound counted the CLI's own index against the reporter");
+    assert.equal(meta.entry, "index.html");
+    assert.equal(meta.members.filter((member) => member.generated === true).length, 1);
+    assert.match(must(box, demo, ["artifact", "list", "--work", work]).out, /brim\/ \(1001 files\)/);
+});
+
+test("cell 54: a root directory named index.html with no other candidate is refused, naming --entry", () =>
+{
+    const entries = { "index.html/part.txt": "p", "notes.txt": "n" };
+    const before = storeTree();
+    const { code, out } = attach(["--artifact", tree("site", entries)]);
+    assert.equal(code, 1, out);
+    assert.match(out, /holds a directory named index\.html at its root, so no index can be generated there/);
+    assert.match(out, /--entry <file>/);
+    assert.deepEqual(storeTree(), before, "a plan-time refusal staged bytes");
+    // And --entry is the way through, exactly as the refusal says.
+    const named = entryOf("site", entries, ["--entry", "notes.txt"]);
+    assert.equal(named.entry, "notes.txt");
+    assert.ok(named.members.every((member) => member.generated === undefined));
+});
+
+// The two cells below hand the fold and the open verb an event nobody on this
+// machine wrote. A log travels between machines through a shared remote, so a
+// member path and an entry are peer-supplied data, and neither may send a
+// reader's own commands at a file outside the store.
+function hostileBundle(place, mutate)
+{
+    const root = join(place.box.root, `hostile-${seq += 1}`);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "index.html"), "hi");
+    const work = workIdIn(must(place.box, place.demo, ["work", "add", `hostile ${seq}`]).out);
+    must(place.box, place.demo, ["report", work, "attached", "--artifact", root]);
+    const file = join(place.ws, ".superself", "projects", "demo", "log.jsonl");
+    const lines = readFileSync(file, "utf8").split("\n").map((line) =>
+    {
+        if (line.trim() === "" || JSON.parse(line).type !== "report.added")
+        {
+            return line;
+        }
+        const event = JSON.parse(line);
+        mutate(event.payload.artifacts[0]);
+        return JSON.stringify(event);
+    });
+    writeFileSync(file, lines.join("\n"));
+    foldProject(join(place.ws, ".superself"), "demo");
+    return { work, meta: eventsIn(file).find((event) => event.type === "report.added").payload.artifacts[0] };
+}
+
+test("cell 55: a member path climbing out of the bundle is one untrusted-event signal, and no such file is read", () =>
+{
+    const place = freshMachine();
+    const secret = join(place.box.root, "outside-the-store.txt");
+    writeFileSync(secret, "not the bundle's\n");
+    const { meta } = hostileBundle(place, (artifact) =>
+    {
+        artifact.members.push({ path: `../../../../${relative(realpathSync(place.box.root), realpathSync(secret))}`, digest: "0".repeat(64) });
+    });
+    const status = must(place.box, place.demo, ["status"]).out;
+    assert.ok(status.includes(`artifact ${meta.id}`), `no signal named the artifact:\n${status}`);
+    assert.match(status, /is recorded outside the bundle it belongs to — the event naming it cannot be trusted/);
+    assert.ok(!status.includes("no longer matches the digest"), "the file outside the bundle was hashed");
+    assert.equal(status.split("cannot be trusted").length - 1, 1, "one bad member raised more than one signal");
+});
+
+test("cell 56: an entry climbing out of the store refuses artifact open, and launches nothing", () =>
+{
+    const place = freshMachine();
+    const { meta } = hostileBundle(place, (artifact) => { artifact.entry = "../../../../../../etc/passwd"; });
+    const refused = selfIn(place.box, place.demo, ["artifact", "open", meta.id], { SUPERSELF_SESSION: "s" });
+    assert.equal(refused.code, 1, refused.out);
+    assert.match(refused.out, /is recorded at a path outside this store's artifacts — the event naming it cannot be trusted/);
+    assert.ok(!refused.out.includes("/etc/passwd"), "the refusal printed the path it refused to open");
+});
+
+test("cell 57: one directory reached by two spellings is one path, and containment reads the followed path", () =>
+{
+    const root = tree("dist", { "index.html": "i" });
+    const link = join(dirname(root), "link-to-dist");
+    symlinkSync(root, link);
+    const twice = attach(["--artifact", root, "--artifact", link]);
+    assert.equal(twice.code, 1, twice.out);
+    assert.match(twice.out, /is declared twice in this report/);
+    const inside = attach(["--artifact", link, "--artifact", join(root, "index.html")]);
+    assert.equal(inside.code, 1, inside.out);
+    assert.match(inside.out, /which this report attaches as a bundle/);
+});
+
+test("cell 58: --entry passed twice is refused by name, not silently narrowed to the last", () =>
+{
+    const root = tree("site", { "a.html": "a", "b.html": "b" });
+    const { work, code, out } = attach(["--artifact", root, "--entry", "a.html", "--entry", "b.html"]);
+    assert.equal(code, 1, out);
+    assert.match(out, /--entry names one member and was passed 2 times/);
+    assert.equal(reportFor(work), undefined, "a refused report reached the log");
+    // One --entry is unchanged.
+    assert.equal(entryOf("site", { "a.html": "a", "b.html": "b" }, ["--entry", "b.html"]).entry, "b.html");
+});
+
+test("cell 59: the workspace page states each artifact exactly as its project page does", () =>
+{
+    const view = join(reading.ws, ".superself", "view");
+    const workspace = readFileSync(join(view, "workspace.html"), "utf8");
+    const project = readFileSync(join(view, "demo.html"), "utf8");
+    for (const meta of [readingBundle.bundle, readingBundle.file])
+    {
+        const rows = [...project.matchAll(/<a class="dr-art"[\s\S]*?<\/a>/g)]
+            .map((match) => match[0]).filter((row) => row.includes(meta.id));
+        assert.equal(rows.length, 1, `the project page did not state ${meta.id} once`);
+        // Both pages sit in the view root and reach the store the same way, so
+        // the one difference a workspace row may have is whose project it is:
+        // it names the slug where the project page names the work unit.
+        const expected = rows[0].replace(`· ${readingBundle.work}`, "· demo");
+        assert.ok(workspace.includes(expected), `the workspace row for ${meta.id} differs from the project row:\n${expected}`);
+    }
+    assert.ok(workspace.includes("dist/ (12 files)"), "the workspace page lost the bundle's file count");
+    assert.ok(workspace.includes("af-dir") || workspace.includes("dr-dir"), "the workspace page lost the folder plate");
+    assert.ok(workspace.includes(`${readingBundle.bundle.path}/index.html`), "the workspace page linked the directory, not the entry");
+    assert.ok(workspace.includes(`${readingBundle.file.path}"`), "a single-file row's link changed on the workspace page");
 });
