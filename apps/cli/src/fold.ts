@@ -647,7 +647,9 @@ export function renderWorkDetails(work: WorkState, model: ProjectModel, verdicts
 
 export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
 {
-    return (renderWorkDetails(work, model, verdicts, supersedes) + workReportLines(work).join("\n"))
+    const details = renderWorkDetails(work, model, verdicts, supersedes);
+    const reports = workReportLines(work);
+    return (reports.length === 0 ? details : details + "\n" + reports.join("\n"))
         .replace(/\n+$/, "\n");
 }
 

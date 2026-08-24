@@ -217,6 +217,7 @@ usage: self <command>
   work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]
                                              retire the unit itself: its outcome was given up or moved, not reached
                                              history stays inspectable; the unit stops counting as open work
+  handoff <work-id> [--project <slug>]       compile one deterministic, self-contained read-only packet for a fresh agent
   undo <event-id> --why "<why the retirement was wrong>"
   apply <file>                               run a reviewed file of record-destroying commands on one confirmation
                                              (nothing is recorded until the whole set is confirmed at a terminal)
