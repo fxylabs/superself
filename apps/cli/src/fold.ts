@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { designNote } from "./design.js";
-import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, planNote, ProjectModel, unshippedBranches, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, planNote, ProjectModel, reportProjection, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
@@ -268,7 +268,7 @@ function proposalLines(decisions: DecisionState[]): string[]
 
 function workLine(work: WorkState): string
 {
-    const latest = work.reports[work.reports.length - 1];
+    const latest = reportProjection(work.reports)[0];
     const report = latest === undefined ? "" : ` — ${latest.text}`;
     const next = work.next === undefined ? "" : ` (next: ${work.next})`;
     return `- **${work.id}** ${work.outcome}${report}${next}`;
@@ -533,7 +533,7 @@ function workUnshippedLines(work: WorkState, verdicts: Record<string, Verdict>):
 }
 
 // Where the unit stands: status, what it contributes to, and what stopped it.
-function workStandingLines(work: WorkState, model: ProjectModel, supersedes: string[]): string[]
+function workStandingLines(work: WorkState, model: ProjectModel, supersedes: string[], portable = false): string[]
 {
     const lines: string[] = [`- Status: ${work.status}`, ...planLines(work)];
     const contributes = contributionLines(work, model);
@@ -550,7 +550,7 @@ function workStandingLines(work: WorkState, model: ProjectModel, supersedes: str
     {
         lines.push(`- Next action: ${work.next}`);
     }
-    if (work.process !== undefined)
+    if (!portable && work.process !== undefined)
     {
         // Last-reported only: this render becomes a synced canonical file, so
         // the machine-local liveness judgment stays on `self status`.
@@ -610,7 +610,7 @@ function workReportLines(work: WorkState): string[]
         return [];
     }
     const lines: string[] = ["## Reports (latest first)", ""];
-    for (const report of [...work.reports].reverse())
+    for (const report of reportProjection(work.reports))
     {
         const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
         // A design report says what it implements and whether a person ruled
@@ -630,20 +630,27 @@ function workReportLines(work: WorkState): string[]
     return lines;
 }
 
-export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
+export function renderWorkDetails(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = [], portable = false): string
 {
     const requirements = requirementLines(work);
     const lines: string[] = [
         `# ${work.id} — ${work.outcome}`,
         "",
-        ...workStandingLines(work, model, supersedes),
+        ...workStandingLines(work, model, supersedes, portable),
         ...workEvidenceLines(work, verdicts),
         ...completionLines(work),
         "",
-        ...(requirements.length === 0 ? [] : ["## Requirements", "", ...requirements.map((item) => `- ${item}`), ""]),
-        ...workReportLines(work)
+        ...(requirements.length === 0 ? [] : ["## Requirements", "", ...requirements.map((item) => `- ${item}`), ""])
     ];
     return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+export function renderWorkBody(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = []): string
+{
+    const details = renderWorkDetails(work, model, verdicts, supersedes);
+    const reports = workReportLines(work);
+    return (reports.length === 0 ? details : details + "\n" + reports.join("\n"))
+        .replace(/\n+$/, "\n");
 }
 
 function day(ts: string): string

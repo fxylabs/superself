@@ -21,7 +21,7 @@ import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
-import { buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, reviewRefusal, workScope, workspaceModels, WorkState } from "./model.js";
+import { applicableConventions, buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, reviewRefusal, workScope, workspaceModels, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -36,6 +36,7 @@ import {
     MARKER_FILE,
     ProjectContext,
     projectStateDir,
+    projectArchive,
     readRegistry,
     readScope,
     readScopes,
@@ -78,7 +79,7 @@ import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { bold, countCharacters, dim, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS } from "./pretty.js";
-import { contextOutput, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
+import { contextOutput, handoffContextLines, handoffOutput, HandoffSnapshot, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
 import { APP_COMMAND, registerHostVerbs } from "./app.js";
 import { LOGIN_COMMAND, LOGOUT_COMMAND, WHOAMI_COMMAND, clientTag } from "./login.js";
 import { resolveProfileName } from "./credentials.js";
@@ -586,6 +587,8 @@ const SEARCH_OPTIONS = {
 // on the verb that already names the record.
 const HISTORY_OPTIONS = { ...SCOPE_OPTIONS, history: { type: "boolean" }, page: { type: "string" } } as const;
 
+const HANDOFF_OPTIONS = { ...SCOPE_OPTIONS } as const;
+
 // The shared execution grammar (#207 B14): a work verb records the same
 // `entity.*` fact the raw state verbs record, whichever kind of unit it moves.
 // `start` is not among these: it hands over the brief as well as recording the
@@ -1089,6 +1092,22 @@ export const COMMANDS: Command[] = [
             refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|revise|accept|decline`,
             children: WORK_CHILDREN
         })
+    },
+    {
+        name: "handoff",
+        usage: [{
+            syntax: "handoff <work-id> [--project <slug>]",
+            description: ["compile one deterministic, self-contained read-only packet for a fresh agent"],
+            verbs: [""]
+        }],
+        detail: [
+            "compile the fixed common protocol, applicable conventions, bounded project",
+            "context, complete work and report history, and location-correct recovery.",
+            "The packet is read-only and uses exact work ids; it has no --workspace mode.",
+            "",
+            "  --project <slug>  read the exact owning project, including an explicitly named archived target"
+        ],
+        node: leaf("", HANDOFF_OPTIONS, 1, cmdHandoff)
     },
     {
         name: "undo",
@@ -2481,6 +2500,90 @@ function cmdWorkShow({ values, positionals }: CommandInput<typeof HISTORY_OPTION
     return values.history === true
         ? workHistory(ctx, found, values.project, values.page)
         : workPage(ctx, found);
+}
+
+function cmdHandoff({ values, positionals }: CommandInput<typeof HANDOFF_OPTIONS>): CommandOutput
+{
+    const wanted = requireText(positionals[0], "handoff <work-id> [--project <slug>]");
+    const ctx = requireWorkspace(process.cwd());
+    return handoffOutput(captureHandoff(ctx, wanted, values.project));
+}
+
+function captureHandoff(ctx: CliContext, wanted: string, project: string | undefined): HandoffSnapshot
+{
+    if (project !== undefined)
+    {
+        requireRegistered(ctx.storeDir, project);
+    }
+    const readAtDate = new Date();
+    const models = orderedSlugs(ctx).map((slug) => buildModel(ctx.storeDir, slug, readAtDate));
+    const found = resolveHandoffWork(ctx, wanted, project, models);
+    const archived = projectArchive(ctx.storeDir, found.slug) !== undefined;
+    if (archived && project === undefined && ctx.project !== found.slug)
+    {
+        throw new CliError(`project "${found.slug}" is archived — pass --project ${found.slug} to address it explicitly`);
+    }
+    const sources = handoffSourceModels(ctx.storeDir, found.slug, models);
+    const conventions = applicableConventions(found.slug, sources);
+    const verdicts = readVerdicts(ctx.storeDir, found.slug);
+    return {
+        readAt: readAtDate.toISOString(), packetProject: ctx.project, targetProject: found.slug,
+        targetModel: found.model, work: found.work, supersedes: handoffSupersededSources(found.slug, found.work, models),
+        sourceModels: sources, conventions,
+        contextLines: handoffContextLines(ctx.storeDir, found.model, sources,
+            new Set(conventions.map((item) => item.id)), verdicts),
+        verdicts, archived, ownerCheckoutAvailable: handoffCheckoutAvailable(ctx, found.slug)
+    };
+}
+
+function resolveHandoffWork(ctx: CliContext, wanted: string, project: string | undefined,
+    models: ProjectModel[]): FoundWork
+{
+    const candidates = models.filter((model) => project === undefined || model.slug === project);
+    const matches = candidates.flatMap((model) => model.works.filter((work) => work.id === wanted)
+        .map((work) => ({ slug: model.slug, model, work })));
+    if (matches.length === 0)
+    {
+        const prefix = candidates.flatMap((model) => model.works.filter((work) => work.id.startsWith(wanted)));
+        if (prefix.length > 0)
+        {
+            throw new CliError(`handoff requires the exact work id "${wanted}" — prefix matching is not supported`);
+        }
+        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list open ids`);
+    }
+    const current = matches.find((match) => match.slug === ctx.project);
+    if (current !== undefined)
+    {
+        return current;
+    }
+    if (matches.length > 1)
+    {
+        throw new CliError(`work id "${wanted}" exists in more than one project (${matches.map((m) => m.slug).join(", ")}) — pass --project <slug>`);
+    }
+    return matches[0];
+}
+
+function handoffSourceModels(storeDir: string, target: string, models: ProjectModel[]): ProjectModel[]
+{
+    return models.filter((model) => model.slug === target || projectArchive(storeDir, model.slug) === undefined);
+}
+
+function handoffSupersededSources(target: string, work: WorkState, models: ProjectModel[]): string[]
+{
+    return models.flatMap((model) => model.works
+        .filter((item) => item.status === "retired" && item.successor?.work === work.id
+            && item.successor.project === target)
+        .map((item) => `${item.id} (${model.slug}) — ${item.retiredWhy}`));
+}
+
+function handoffCheckoutAvailable(ctx: CliContext, target: string): boolean
+{
+    if (ctx.project === target && ctx.projectDir !== undefined && existsSync(ctx.projectDir))
+    {
+        return true;
+    }
+    const path = resolveProjectPath(ctx.storeDir, target);
+    return path !== null && existsSync(path);
 }
 
 // One unit's own events, paged (#212 R3). The unit was already resolved, so

@@ -116,6 +116,14 @@ function renderMachineBlock(): string
     ].join("\n");
 }
 
+// The fixed protocol is shared by managed files and handoff packets. Keeping
+// conventions out of this source lets the packet frame the complete closure
+// separately without duplicating or raising its authority.
+export function commonProtocolLines(): string[]
+{
+    return [...BLOCK_BODY, ...TOPICS.map((topic) => `- \`self help ${topic.name}\` — ${topic.summary}`)];
+}
+
 // The managed block's fixed text. It is content, not logic: the reader of this
 // file is an agent session, and the wording is reviewed as prose.
 const BLOCK_BODY: readonly string[] = [
@@ -173,11 +181,7 @@ const BLOCK_BODY: readonly string[] = [
 
 function renderBlock(model: ProjectModel): string
 {
-    const lines: string[] = [marker(BEGIN), ...BLOCK_BODY];
-    for (const topic of TOPICS)
-    {
-        lines.push(`- \`self help ${topic.name}\` — ${topic.summary}`);
-    }
+    const lines: string[] = [marker(BEGIN), ...commonProtocolLines()];
     const conventions = currentConventions(model.conventions);
     if (conventions.length > 0)
     {
