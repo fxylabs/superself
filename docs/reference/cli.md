@@ -27,7 +27,7 @@ prints them during the same run.
 | Approving a reviewed set | `apply <file>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
-| Reusable procedures | `runbook add "<name>" --stage s`, `runbook show <id|name>`, `runbook revise <id> --stage s --why w`, `runbook start <id> --instance <key>`, `runbook advance <key> --why w` |
+| Reusable procedures | `runbook add "<name>" --stage s`, `runbook show <id|name>`, `runbook revise <id> --stage s --why w`, `runbook start <id> --instance <key>`, `runbook advance <key> --why w`, `runbook hold\|approve\|stop\|resume\|link <key>` |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `handoff <work-id> [--project <slug>]`, `artifact ...` |
 | Store size and maintenance | `store size [--json]`, `store compact` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
@@ -222,6 +222,11 @@ self runbook revise <id> --stage plan --stage review --why "a review step was mi
 self runbook start <id> --instance E001
 self runbook advance E001 --why "the assets are made"
 self runbook advance E001 --to review --why "the cut was reviewed"
+self runbook hold E001 --why "the final cut needs a look"
+self runbook approve E001 --by <person>       # a person, at their own terminal
+self runbook link E001 --work <work-id>
+self runbook stop E001 --why "the story was dropped"
+self runbook resume E001
 ```
 
 - **No new event type exists for any of this.** A definition is an entity
@@ -249,9 +254,24 @@ self runbook advance E001 --to review --why "the cut was reviewed"
   `self state done <id> --report "<what verifiably happened>"` closes the run;
   `runbook advance` prints that exact command. A wrapper would be a second
   implementation of the evidence gate, free to disagree with it.
-- `list` and `show` read, so they take `--project <slug>`. `add`, `revise`,
-  `start` and `advance` write, so they take no read-scope flag and record into
-  the project they run in.
+- **A human checkpoint is a block, and the release is the person's own act.**
+  `runbook hold` parks the run — `entity.blocked` marked `on: "approval"` — and
+  `advance` refuses until it is released. `runbook approve` is the release: it
+  needs an interactive terminal with no agent marker on it and the run's key
+  typed back, and the typed value is recorded in the event. `--by` records who
+  approved and **gates nothing**; no flag, environment variable or payload
+  stands in for the terminal. A held run renders in `## Waiting on you` with
+  the command that releases it, in both the piped and the terminal render.
+- The two state refusals — already held, not held — are the sentences
+  `state block` and `state unblock` already write, called from where they are
+  written rather than copied.
+- `runbook stop` gives a run up (`entity.retired`, so it is terminal and a new
+  run is started rather than the old one resumed); `runbook resume` picks a
+  parked one back up. `runbook link <key> --work <id>` states which work unit
+  is carrying the run, and a run may name more than one.
+- `list` and `show` read, so they take `--project <slug>`. Every other verb
+  writes, so it takes no read-scope flag and records into the project it runs
+  in.
 
 ### Outcome and work commands
 

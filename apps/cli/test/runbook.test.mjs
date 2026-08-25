@@ -27,7 +27,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, git, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 /* ── the floor every cell stands on ────────────────────────────────── */
 
@@ -616,6 +616,45 @@ test("C9: a stage already passed is refused — a stage is passed once", () =>
     assert.match(refused.out, /already passed "plan"/);
 });
 
+test("C10: link states which work unit is carrying the run", () =>
+{
+    const ground = floor();
+    const id = addRunbook(ground, "content loop", ["plan", "draft"]);
+    const run = startRun(ground, id, "E001");
+    const work = workIdIn(must(ground.box, ground.demo, ["work", "add", "cut the video"]).out);
+    const linked = must(ground.box, ground.demo, ["runbook", "link", "E001", "--work", work]);
+    assert.match(linked.out, new RegExp(`E001 is carried by ${work}`));
+    const event = events(ground.ws).find((item) => item.type === "entity.linked" && item.payload.entity === run);
+    assert.deepEqual(event.payload.link, { type: "relates", target: work });
+    assert.match(must(ground.box, ground.demo, ["runbook", "show", id]).out, new RegExp(`carried by ${work}`));
+});
+
+test("C11: link naming a work unit the log does not hold is refused", () =>
+{
+    const ground = floor();
+    const id = addRunbook(ground, "content loop", ["plan"]);
+    startRun(ground, id, "E001");
+    const refused = ground.self(["runbook", "link", "E001", "--work", "w-zzzzz"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /w-zzzzz/);
+});
+
+test("C12: a run may name more than one work unit, and naming the same one twice is refused", () =>
+{
+    const ground = floor();
+    const id = addRunbook(ground, "content loop", ["plan"]);
+    startRun(ground, id, "E001");
+    const first = workIdIn(must(ground.box, ground.demo, ["work", "add", "cut the video"]).out);
+    const second = workIdIn(must(ground.box, ground.demo, ["work", "add", "write the caption"]).out);
+    must(ground.box, ground.demo, ["runbook", "link", "E001", "--work", first]);
+    must(ground.box, ground.demo, ["runbook", "link", "E001", "--work", second]);
+    const shown = must(ground.box, ground.demo, ["runbook", "show", id]).out;
+    assert.match(shown, new RegExp(`carried by ${first}, ${second}`));
+    const repeated = ground.self(["runbook", "link", "E001", "--work", first]);
+    assert.notEqual(repeated.code, 0);
+    assert.match(repeated.out, /one edge is one link/);
+});
+
 test("C13: show lists every run of the procedure with the stage each is on", () =>
 {
     const ground = floor();
@@ -650,6 +689,128 @@ test("C15: the fold renders a page per live run, showing which stages are passed
     assert.match(page, /Stage: 2\/2 draft/);
     assert.match(page, /\[x\] plan — \d{4}-\d{2}-\d{2}, the assets are made/);
     assert.match(page, /\[ \] draft/);
+});
+
+/* ── group E: stopping and resuming ────────────────────────────────── */
+
+// A run part-way through the procedure, which is where every stop cell starts.
+function running(ground, stages = ["plan", "draft", "publish"])
+{
+    const id = addRunbook(ground, "content loop", stages);
+    const run = startRun(ground, id, "E001");
+    must(ground.box, ground.demo, ["runbook", "advance", "E001", "--why", "planned it"]);
+    return { id, run };
+}
+
+test("E1: stop gives the run up, and it leaves the runbook section", async () =>
+{
+    const ground = floor();
+    const { run } = running(ground);
+    const stopped = await approvedIn(ground.box, ground.demo,
+        ["runbook", "stop", "E001", "--why", "the story was dropped"], run);
+    assert.equal(stopped.code, 0, stopped.out);
+    assert.equal(events(ground.ws).some((event) => event.type === "entity.retired"), true);
+    assert.equal(runbookBlock(must(ground.box, ground.demo, ["context"]).out).trim(), "");
+});
+
+test("E2: a stopped run is not resumed — giving up an outcome is terminal", async () =>
+{
+    const ground = floor();
+    const { run } = running(ground);
+    await approvedIn(ground.box, ground.demo, ["runbook", "stop", "E001", "--why", "dropped"], run);
+    const refused = ground.self(["runbook", "resume", "E001"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /E001 is stopped — its working state is terminal/);
+});
+
+test("E3: a stopped run passes no further stage", async () =>
+{
+    const ground = floor();
+    const { run } = running(ground);
+    await approvedIn(ground.box, ground.demo, ["runbook", "stop", "E001", "--why", "dropped"], run);
+    const refused = ground.self(["runbook", "advance", "E001", "--why", "carrying on"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /terminal/);
+});
+
+test("E4: a stop with no --why is refused by the gate that names every missing option", () =>
+{
+    const ground = floor();
+    running(ground);
+    const refused = ground.self(["runbook", "stop", "E001"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /needs --why/);
+});
+
+test("E5: a held run can still be given up", async () =>
+{
+    const ground = floor();
+    const { run } = running(ground);
+    must(ground.box, ground.demo, ["runbook", "hold", "E001", "--why", "waiting on legal"]);
+    const stopped = await approvedIn(ground.box, ground.demo,
+        ["runbook", "stop", "E001", "--why", "legal said no"], run);
+    assert.equal(stopped.code, 0, stopped.out);
+});
+
+test("E6: a closed run is not stopped — its working state is already terminal", () =>
+{
+    const ground = floor();
+    const id = addRunbook(ground, "content loop", ["plan"]);
+    const run = startRun(ground, id, "E001");
+    must(ground.box, ground.demo, ["runbook", "advance", "E001", "--why", "planned"]);
+    must(ground.box, ground.demo, ["state", "done", run, "--report", "it shipped"]);
+    const refused = ground.self(["runbook", "stop", "E001", "--why", "too late"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /E001 is closed — its working state is terminal/);
+});
+
+test("E7: show marks the stopped run as stopped", async () =>
+{
+    const ground = floor();
+    const { id, run } = running(ground);
+    await approvedIn(ground.box, ground.demo, ["runbook", "stop", "E001", "--why", "dropped"], run);
+    assert.match(must(ground.box, ground.demo, ["runbook", "show", id]).out, /E001 \(e-[0-9a-z]{5}\) — .*retired/);
+});
+
+test("E8: the stop reads back on the log", async () =>
+{
+    const ground = floor();
+    const { run } = running(ground);
+    await approvedIn(ground.box, ground.demo, ["runbook", "stop", "E001", "--why", "the story was dropped"], run);
+    assert.match(must(ground.box, ground.demo, ["log", "-n", "5"]).out, /entity\.retired/);
+});
+
+test("E9: a fresh session reads the stage, the next action and the inspect command out of context alone", () =>
+{
+    const ground = floor();
+    const { id } = running(ground);
+    const block = runbookBlock(must(ground.box, ground.demo, ["context"]).out);
+    assert.match(block, /E001 · content loop v1 · 2\/3 draft · next: publish/);
+    assert.match(block, new RegExp(`self runbook show ${id}`));
+});
+
+test("E10: a run that has passed no stage yet is stopped like any other", async () =>
+{
+    const ground = floor();
+    const id = addRunbook(ground, "content loop", ["plan", "draft"]);
+    const run = startRun(ground, id, "E001");
+    const stopped = await approvedIn(ground.box, ground.demo,
+        ["runbook", "stop", "E001", "--why", "started by mistake"], run);
+    assert.equal(stopped.code, 0, stopped.out);
+});
+
+test("E11: resume picks a parked run back up, and a held one says approve instead", async () =>
+{
+    const ground = floor();
+    const { run } = running(ground);
+    const resumed = ground.self(["runbook", "resume", "E001"]);
+    assert.equal(resumed.code, 0, resumed.out);
+    assert.match(resumed.out, /E001 is moving again/);
+    must(ground.box, ground.demo, ["runbook", "hold", "E001", "--why", "waiting on legal"]);
+    const refused = ground.self(["runbook", "resume", "E001"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, new RegExp(`${run} is already blocked`));
+    assert.match(refused.out, /self runbook approve E001/);
 });
 
 /* ── group F: editions and drift ───────────────────────────────────── */

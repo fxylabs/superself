@@ -18,9 +18,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
+import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
+import { wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels } from "./model.js";
 import { notice } from "./output.js";
 import { readScopes, requireProject, SCOPE_OPTIONS } from "./paths.js";
+import { makeEvent, recordEvent } from "./pipeline.js";
+import { recordRetirement, retirementIntent } from "./retirement.js";
+import { bold } from "./style.js";
 import {
     currentStage,
     instanceDefinition,
@@ -35,7 +40,7 @@ import {
     runbookVersion,
     stageDigest
 } from "./runbooks.js";
-import { composedEntityAdd, recordCoverage } from "./state.js";
+import { alreadyBlocked, composedEntityAdd, notBlocked, recordCoverage } from "./state.js";
 import { CliError, CommandOutput } from "./types.js";
 
 const RUNBOOK_USAGE = 'usage: self runbook | add "<name>" --stage s | show <id|name> | revise <id> --stage s --why w'
@@ -58,11 +63,21 @@ const START_OPTIONS = { instance: { type: "string" }, demote: { type: "string", 
 
 const ADVANCE_OPTIONS = { to: { type: "string" }, why: { type: "string" } } as const;
 
+const WHY_OPTION = { why: { type: "string" } } as const;
+
+// `--by` records who approved, and is not the gate: the gate is the terminal.
+const APPROVE_OPTIONS = { by: { type: "string" } } as const;
+
+const LINK_OPTIONS = { work: { type: "string" } } as const;
+
 // What each verb cannot run without, declared once for the gate that refuses
 // them together and for the help page that states them.
 const REVISE_WHY: Requirement = { flags: ["why"], hint: "why the procedure changed" };
 const START_INSTANCE: Requirement = { flags: ["instance"], value: "<key>", hint: "the key this run is named by, such as E001" };
 const ADVANCE_WHY: Requirement = { flags: ["why"], hint: "what was done to pass this stage" };
+const HOLD_WHY: Requirement = { flags: ["why"], hint: "what a person is being asked to approve" };
+const STOP_WHY: Requirement = { flags: ["why"], hint: "why the run was given up" };
+const LINK_WORK: Requirement = { flags: ["work"], value: "<id>", hint: "the work unit this run's stage is being done in" };
 
 // Where a runbook and a run render (R5): one index line each. Module-local,
 // never a row in `BUILTIN_ROWS` — `BUILTIN_VERBS` is that table's key set, so
@@ -106,6 +121,26 @@ export const RUNBOOK_COMMAND: Command = {
             syntax: 'runbook advance <key> --why "<what was done>" [--to "<stage>"]',
             description: ["pass the run's current stage; --to names it, and skipping one is refused"],
             verbs: ["advance"]
+        },
+        {
+            syntax: 'runbook hold <key> --why "<what a person is being asked to approve>"',
+            description: ["park the run on a person; it waits in context until they answer at a terminal"],
+            verbs: ["hold"]
+        },
+        {
+            syntax: "runbook approve <key> [--by <person>]",
+            description: ["release a held run — a person at a terminal, typing the key back"],
+            verbs: ["approve"]
+        },
+        {
+            syntax: 'runbook stop <key> --why "<why it was given up>" | resume <key>',
+            description: ["give the run up, or pick a parked one back up"],
+            verbs: ["stop", "resume"]
+        },
+        {
+            syntax: "runbook link <key> --work <id>",
+            description: ["state which work unit is carrying this run; one or more"],
+            verbs: ["link"]
         }
     ],
     detail: [
@@ -138,13 +173,23 @@ export const RUNBOOK_COMMAND: Command = {
         "there is no completion verb here, because done already carries the evidence",
         "gate that a second one would have to implement twice.",
         "",
+        "hold parks a run on a person: it waits in context, and advance refuses",
+        "until it is released. approve is the release, and it is the person's own",
+        "act — it needs an interactive terminal with no agent marker on it, and the",
+        "run's key typed back. --by records who approved and gates nothing; no flag,",
+        "environment variable or payload substitutes for the terminal.",
+        "",
         "  --stage <text>        one stage of the procedure, repeatable; declaration order",
         "                        is the order the run passes them in",
         "  --file <path>         read the stages from the first markdown list in this file",
         "                        instead; the path is read now and never recorded",
         "  --instance <key>      the key this run is named by, such as E001",
         "  --to <stage>          the stage `advance` is passing, stated rather than implied",
-        "  --why <text>          why the procedure changed, or what was done to pass a stage",
+        "  --by <person>         who approved a held run — recorded beside the approval, and",
+        "                        never the gate: the approval itself happens at a terminal",
+        "  --work <id>           the work unit carrying this run; repeat the verb to name more",
+        "  --why <text>          why the procedure changed, what was done to pass a stage,",
+        "                        what a hold asks a person to approve, or why a run was stopped",
         "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
         "                        moving one tier down (full → index, index → search); repeatable",
         "  --project <slug>      read this registered project instead of this directory's"
@@ -160,7 +205,12 @@ export const RUNBOOK_COMMAND: Command = {
             leaf("show", SCOPE_OPTIONS, 1, runbookShow),
             leaf("revise", REVISE_OPTIONS, 1, runbookRevise, { requires: [REVISE_WHY] }),
             leaf("start", START_OPTIONS, 1, runbookStart, { requires: [START_INSTANCE] }),
-            leaf("advance", ADVANCE_OPTIONS, 1, runbookAdvance, { requires: [ADVANCE_WHY] })
+            leaf("advance", ADVANCE_OPTIONS, 1, runbookAdvance, { requires: [ADVANCE_WHY] }),
+            leaf("hold", WHY_OPTION, 1, runbookHold, { requires: [HOLD_WHY] }),
+            leaf("approve", APPROVE_OPTIONS, 1, runbookApprove),
+            leaf("stop", WHY_OPTION, 1, runbookStop, { requires: [STOP_WHY] }),
+            leaf("resume", {}, 1, runbookResume),
+            leaf("link", LINK_OPTIONS, 1, runbookLink, { requires: [LINK_WORK] })
         ]
     })
 };
@@ -354,6 +404,138 @@ function requireNamedStage(run: EntityState, open: string[], wanted: string): st
     return wanted;
 }
 
+/* ── the approval checkpoint (§2.4) ────────────────────────────────── */
+
+// Parking the run on a person. An agent calls this — asking for an approval
+// destroys nothing and needs no gate of its own — and what it writes is the
+// block the entity grammar already has, marked `on: "approval"` so the render
+// that lists approval waits can find it.
+function runbookHold({ values, positionals }: CommandInput<typeof WHY_OPTION>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const run = requireLiveRun(model, positionals[0], "hold");
+    // The refusal is `state block`'s own, from the one place it is written.
+    const standing = alreadyBlocked(run);
+    if (standing !== undefined)
+    {
+        throw new CliError(standing);
+    }
+    const why = required(values.why);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.blocked", { entity: run.id, on: "approval", why }), run.text);
+    return [{ kind: "receipt", text: `${instanceKey(run)} waits on a person: ${why}` }];
+}
+
+// Releasing it, which is the person's own act. The gate is the interactive
+// terminal, exactly as it is for a destruction and for a design approval:
+// `--by` is a name recorded beside the approval, and no flag, environment
+// variable or payload stands in for the keyboard.
+function runbookApprove({ values, positionals }: CommandInput<typeof APPROVE_OPTIONS>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const run = requireLiveRun(model, positionals[0], "approve");
+    const clear = notBlocked(run);
+    if (clear !== undefined)
+    {
+        throw new CliError(clear);
+    }
+    const key = instanceKey(run);
+    const payload: Record<string, unknown> = { entity: run.id, confirmation: approveRun(run, key) };
+    if (values.by !== undefined)
+    {
+        payload.by = values.by;
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.unblocked", payload, undefined, true), run.text);
+    return [{ kind: "receipt", text: `${key} is approved and moving again` }];
+}
+
+// The same refusal shape `retirement.ts` gives a process with no person behind
+// it: the agent is handed the exact line for a person to run, rather than a
+// rule it cannot satisfy. The challenge is the run's key — short enough to
+// read and type, and specific enough that typing it states which run is being
+// approved.
+function approveRun(run: EntityState, key: string): HumanConfirmation
+{
+    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    {
+        throw new CliError(`approving ${key} is a person's call, and this process has no terminal to make it at`
+            + ` — nothing was recorded\n\n  ${run.execution?.why ?? run.text}\n\n`
+            + `  a person runs this in their own terminal:\n    self runbook approve ${key}`);
+    }
+    const confirmed = confirmHuman(`${bold(`approve ${key}?`)}\n\n  ${run.execution?.why ?? run.text}`, key,
+        `type ${bold(key)} to approve exactly this run`);
+    if ("code" in confirmed)
+    {
+        throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
+    }
+    return confirmed;
+}
+
+/* ── giving a run up, and picking one back up ──────────────────────── */
+
+// Stopping is `entity.retired` — the working state's own way of saying an
+// outcome was given up — so it is terminal by the transition matrix, and E2
+// holds that: a stopped run is not resumed, a new one is started.
+function runbookStop({ values, positionals }: CommandInput<typeof WHY_OPTION>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const run = requireLiveRun(model, positionals[0], "stop");
+    const why = required(values.why);
+    recordRetirement(ctx, retirementIntent(model, "retire", [run.id], { why }), model,
+        (confirmation) => [makeEvent(ctx.project, "entity.retired", { entity: run.id, why, confirmation })],
+        run.text);
+    return [{ kind: "receipt", text: `${instanceKey(run)} was stopped: ${why}` }];
+}
+
+// Resume is the working state's `started`, so it answers to the same matrix:
+// a stopped or finished run refuses, a held one is released by `approve`
+// rather than by picking it back up.
+function runbookResume({ positionals }: CommandInput): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const run = requireLiveRun(model, positionals[0], "resume");
+    const standing = alreadyBlocked(run);
+    if (standing !== undefined)
+    {
+        throw new CliError(`${standing} — release it with \`self runbook approve ${instanceKey(run)}\``);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.started", { entity: run.id }), run.text);
+    return [{ kind: "receipt", text: `${instanceKey(run)} is moving again` }];
+}
+
+/* ── the work carrying a run ───────────────────────────────────────── */
+
+// One edge per call, `relates` rather than `member-of`: a run is not part of a
+// work unit and a work unit is not part of a run — they are two records about
+// the same effort, and a run may name more than one.
+function runbookLink({ values, positionals }: CommandInput<typeof LINK_OPTIONS>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const run = requireRun(model, positionals[0]);
+    const work = requireLinkedWork(model, required(values.work));
+    if (run.links.some((link) => link.type === "relates" && link.target === work))
+    {
+        throw new CliError(`${instanceKey(run)} already names ${work} — one edge is one link`);
+    }
+    recordEvent(ctx, makeEvent(ctx.project, "entity.linked",
+        { entity: run.id, link: { type: "relates", target: work } }, undefined, true), run.text);
+    return [{ kind: "receipt", text: `${instanceKey(run)} is carried by ${work}` }];
+}
+
+function requireLinkedWork(model: ProjectModel, wanted: string): string
+{
+    const work = model.works.find((item) => item.id === wanted || item.id.startsWith(wanted));
+    if (work === undefined)
+    {
+        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
+    }
+    return work.id;
+}
+
 /* ── resolving what a verb was pointed at ──────────────────────────── */
 
 // A procedure is named by any id in its chain — the root's, which is the
@@ -392,16 +574,31 @@ function matchDefinition(model: ProjectModel, id: string): EntityState | undefin
 // advance, and each of those says which it is.
 function requireMovableRun(model: ProjectModel, wanted: string | undefined): EntityState
 {
-    const run = requireRun(model, wanted);
-    if (!isCurrent(run))
+    const run = requireLiveRun(model, wanted, "advance");
+    const standing = alreadyBlocked(run);
+    if (standing !== undefined)
     {
-        throw new CliError(`${instanceKey(run)} is ${run.execution?.status ?? run.status}`
-            + " — its working state is terminal, so there is no stage left to pass");
+        throw new CliError(`${standing} — approve it with \`self runbook approve ${instanceKey(run)}\``
+            + " before passing another stage");
     }
-    if (run.execution?.status === "blocked")
+    return run;
+}
+
+// A run a working-state verb may still move: terminal states refuse, and each
+// says which one it is in. `advance` adds the block check on top of this;
+// `approve` and `resume` judge the block themselves.
+function requireLiveRun(model: ProjectModel, wanted: string | undefined, verb: string): EntityState
+{
+    const run = requireRun(model, wanted);
+    const status = run.execution?.status;
+    if (status === "done" || status === "retired")
     {
-        throw new CliError(`${instanceKey(run)} is blocked — ${run.execution.why ?? "it waits on someone"}`
-            + `; clear it with \`self state unblock ${run.id}\` before passing another stage`);
+        throw new CliError(`${instanceKey(run)} is ${status === "done" ? "closed" : "stopped"}`
+            + ` — its working state is terminal, so there is nothing left to ${verb}`);
+    }
+    if (!isLive(run))
+    {
+        throw new CliError(`${instanceKey(run)} was ${run.status} — a withdrawn record has no working state to move`);
     }
     return run;
 }
@@ -504,8 +701,10 @@ function runLine(model: ProjectModel, run: EntityState): string
 {
     const reading = readInstance(model.entities, run);
     const state = run.execution?.status ?? (isCurrent(run) ? "in-progress" : run.status);
+    const carried = run.links.filter((link) => link.type === "relates").map((link) => link.target);
     return `- ${reading.key} (${run.id}) — following v${reading.version}, ${reading.at}/${reading.of}`
-        + ` ${currentStage(run) ?? "every stage passed"}, ${state}`;
+        + ` ${currentStage(run) ?? "every stage passed"}, ${state}`
+        + (carried.length === 0 ? "" : `, carried by ${carried.join(", ")}`);
 }
 
 /* ── reading a stage list out of a file (§2.3) ─────────────────────── */
