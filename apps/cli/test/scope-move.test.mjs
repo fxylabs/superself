@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 // Three projects, because a move needs a source, a destination, and a third
 // project that must never see the record. Named rather than reusing the
