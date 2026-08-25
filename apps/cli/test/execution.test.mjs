@@ -291,6 +291,15 @@ test("execution on a preset record refuses toward its own verbs", () =>
 
 /* ── B. the done evidence gate on the work layer ───────────────────── */
 
+// This section is also group D of #305's case table
+// (docs/maintainers/case-tables/305-legacy-work-fold.md), which asks what the
+// gate answers once the fold has stopped reading `work.*`. Its cells D1 to D5
+// are the five evidence cells below, unchanged: they were the regression net
+// the removal had to leave passing, so they are cited rather than restated —
+// D1 no reports and no done-time text, D2 bare summary, D3 commit evidence,
+// D4 an artifact, D5 a done-time report. D6 and D7 are new, and follow the
+// entity-criteria cell.
+//
 // A separate machine so the scratch repository's commit history is under the
 // section's control: no commits until the commit-evidence cell needs one.
 const boxB = machine();
@@ -360,31 +369,36 @@ test("B: uncovered criteria refuse done with the uncovered ones named", () =>
     assert.match(result.out, /"docs updated"/);
 });
 
-test("B: criteria all covered with evidence present allows done", () =>
+// #305 D6. `work.required` declared a criterion in the pre-cutover grammar and
+// no verb writes one today. The line stays in the log and the gate no longer
+// reads it, so the evidence rule is the whole rule.
+test("B: a `work.required` line in the log does not gate a unit recorded today", () =>
 {
-    // The criteria surface of the work layer arrives folded from history —
-    // no current verb declares one — so the covered pair is appended as a
-    // legacy log would carry it, and the gate reads the fold.
-    const work = workIdIn(must(boxB, demoB, ["work", "add", "criteria covered"]).out);
-    const lines = [
-        { id: "01hz00000000000000000000b1", ts: "2025-03-01T00:00:00.000Z", type: "work.required", project: "demo", payload: { work, requirement: "r1", text: "proof case exists" }, refs: {}, origin: {} },
-        { id: "01hz00000000000000000000b2", ts: "2025-03-01T00:01:00.000Z", type: "work.covered", project: "demo", payload: { work, requirement: "r1", why: "proof case landed", requirementRevision: 1 }, refs: {}, origin: {} }
-    ];
-    appendFileSync(join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl"),
-        lines.map((line) => JSON.stringify(line) + "\n").join(""));
-    const done = selfIn(boxB, demoB, ["work", "done", work, "--report", "criterion covered and verified"]);
+    const work = workIdIn(must(boxB, demoB, ["work", "add", "close beside a legacy criterion"]).out);
+    const line = { id: "01hz00000000000000000000d6", ts: "2025-03-01T00:00:00.000Z", type: "work.required", project: "demo", payload: { work, requirement: "r1", text: "a criterion nobody covered" }, refs: {}, origin: {} };
+    appendFileSync(join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl"), JSON.stringify(line) + "\n");
+    const done = selfIn(boxB, demoB, ["work", "done", work, "--report", "closed on a stated fact"]);
     assert.equal(done.code, 0, done.out);
 });
 
-test("extra: an uncovered work criterion from history refuses done by name", () =>
+// #305 D7. The entity criteria gate is `self state done`'s — the cell above
+// this pair is its coverage. `self work done` reaches the evidence gate alone,
+// so a work unit carrying uncovered entity criteria closes on evidence.
+test("B: uncovered entity criteria do not gate `work done`, which reaches the evidence gate alone", () =>
 {
-    const work = workIdIn(must(boxB, demoB, ["work", "add", "criteria open"]).out);
-    const line = { id: "01hz00000000000000000000b3", ts: "2025-03-01T00:02:00.000Z", type: "work.required", project: "demo", payload: { work, requirement: "r1", text: "second proof case" }, refs: {}, origin: {} };
-    appendFileSync(join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl"), JSON.stringify(line) + "\n");
-    const result = selfIn(boxB, demoB, ["work", "done", work, "--report", "done anyway"]);
-    assert.notEqual(result.code, 0);
-    assert.match(result.out, /uncovered criteria/);
-    assert.match(result.out, /r1 second proof case/);
+    const path = join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl");
+    const seed = workIdIn(must(boxB, demoB, ["work", "add", "the shape a work entity is recorded in"]).out);
+    const template = readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+        .findLast((event) => event.type === "entity.confirmed" && event.payload.entity === seed);
+    const work = "w-d7cr1";
+    appendFileSync(path, JSON.stringify({
+        ...template, id: "01hz00000000000000000000d7", ts: "2025-03-01T00:01:00.000Z",
+        payload: { ...template.payload, entity: work, text: "close with a criterion nobody covered", criteria: ["a criterion nobody covered"] }
+    }) + "\n");
+    must(boxB, demoB, ["fold"]);
+    assert.match(must(boxB, demoB, ["state", "show", work]).out, /a criterion nobody covered/);
+    const done = selfIn(boxB, demoB, ["work", "done", work, "--report", "closed on a stated fact"]);
+    assert.equal(done.code, 0, done.out);
 });
 
 /* ── C. the context live-state render ──────────────────────────────── */
@@ -458,17 +472,6 @@ test("C: done and retired work render nowhere, not even in the count", async () 
 });
 
 /* ── D. legacy history is never refused ────────────────────────────── */
-
-test("D: a legacy evidence-free work.done keeps folding as done", () =>
-{
-    const work = workIdIn(must(box, demo, ["work", "add", "closed by an older binary"]).out);
-    const line = { id: "01hz00000000000000000000d1", ts: "2025-03-02T00:00:00.000Z", type: "work.done", project: "demo", payload: { work }, refs: {}, origin: {} };
-    appendFileSync(log, JSON.stringify(line) + "\n");
-    must(box, demo, ["fold"]);
-    const shown = must(box, demo, ["work", "show", work]).out;
-    assert.ok(shown.includes("- Status: done"), `the fold refused a legacy done:\n${shown}`);
-    assert.ok(!shown.includes("Not done yet"), "a legacy done unit reads as still owing evidence");
-});
 
 test("D: malformed and out-of-order execution lines fold without refusal", () =>
 {

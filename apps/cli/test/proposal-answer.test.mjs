@@ -1,10 +1,10 @@
 // What answering a work proposal changes for the person who answered it
-// (#301). Every case here is a cell of the issue's table, run against both
-// kinds of proposal — one made after the preset write cutover (#207 B13), one
-// folded from a legacy `work.proposed` event — because that is the state
-// variable the table first left out: `work accept` and `work decline` record
-// `entity.*` events, a legacy proposal is not an entity, and every cell passed
-// on the native kind while the legacy kind answered nothing at all.
+// (#301). Every case here is a cell of the issue's table.
+//
+// The table was first drawn over two kinds of proposal, one made by today's
+// verb and one folded from a legacy `work.proposed` event, because the legacy
+// kind answered nothing at all. #305 stopped folding that event, so there is
+// one kind left and the loop below runs it alone.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { demoWorkspace, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
@@ -37,14 +37,6 @@ function native(cwd, outcome, target)
         "--confidence", BRIEF.confidence, "--expires", BRIEF.expires]).out);
 }
 
-// The proposal a store made before the cutover, written as the log line that
-// version appended. A fixture, not a way past a gate: the verb that wrote this
-// shape no longer exists, and every store that ran it still carries the line.
-function legacy(cwd, outcome, target, project = "demo")
-{
-    return retireFixture(box, ws, project, "work.proposed", { outcome, objective: target, ...BRIEF }, { branch: "main" });
-}
-
 // The line the log would carry if the answer had been given by an older clone
 // and pulled in — the replay reading, with no verb of this version involved.
 function retractionFixture(id, why)
@@ -52,7 +44,7 @@ function retractionFixture(id, why)
     return retireFixture(box, ws, "demo", "entity.retracted", { entity: id, why }, { declines: id });
 }
 
-const KINDS = [{ name: "native", make: native }, { name: "legacy", make: legacy }];
+const KINDS = [{ name: "native", make: native }];
 
 function context(cwd = demo)
 {
@@ -64,11 +56,8 @@ function waitingCount()
     return Number(must(box, demo, ["status"]).out.match(/waiting on you: (\d+)/)[1]);
 }
 
-// Keyed on the outcome, never on the id: the waiting row prints a legacy
-// proposal's id truncated to eight characters, which is the ULID's timestamp
-// alone, so every proposal recorded inside the same quarter-second answers to
-// the same prefix. Two cells passed locally and failed on the runner for
-// exactly that reason, which is a property of the id, not of the case.
+// Keyed on the outcome, never on the id, so a case never depends on how the
+// row spells the record it describes.
 function waitingBlock(text, outcome)
 {
     const lines = text.split("\n");
@@ -153,10 +142,8 @@ for (const kind of KINDS)
 }
 
 // Cell 8 was isolated in a project of its own while the waiting row printed a
-// legacy proposal's id cut to eight characters, because four proposals from
-// one burst answered to one prefix and the ambiguity masked what the cell was
-// drawn to catch. The row prints the whole id since #304, so the cell runs
-// where the others do.
+// legacy proposal's id cut to eight characters (#304). It runs where the
+// others do now.
 for (const kind of KINDS)
 {
     test(`${kind.name} cell 8: the accept line context prints resolves where context was read`, () =>

@@ -9,20 +9,9 @@ fixture project
 - [convention] four spaces, semicolons
 - [convention] events only
 
-## Work in progress
-
-- 2 more open work items; run `self work --project 'demo'`
-
 ## Waiting on you
 
 - objective o-93cg3 is proposed and not confirmed: later maybe
-- w-0q8c9 is waiting on a decision: pricing undecided
-- work proposal 01kz41h2: a proposed direction
-  toward o-yfxat · value: closes the gap
-  success: it ships · stop: if superseded
-  depends: nothing · risk: low
-  capacity: one round · evidence plan: a recorded run
-  confidence: high · expires 2099-01-01 — `self work accept 01kz41h2`
 - proposed placement of e-cyxv4: exposure index (too broad for full) (confirm with `self state confirm e-cyxv4`)
 - proposed entity e-qfffb: proposed raw (confirm with `self state confirm e-qfffb`)
 

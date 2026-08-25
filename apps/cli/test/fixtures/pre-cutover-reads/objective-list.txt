@@ -1,5 +1,5 @@
-o-yfxat  on-track  reach preview · quarter 2099-01-01 [1 work unit(s)]
-  m-48nbn  on-track  suite green — 1 of 2 exit criteria covered across 1 work unit(s)
+o-yfxat  on-track  reach preview · quarter 2099-01-01 [no work linked]
+  m-48nbn  unstarted  suite green — no work linked yet
   m-5fcfn  unstarted  docs shipped — no work linked yet
 o-93cg3  unstarted  later maybe [no work linked]
 o-tvmtf  unstarted  old target · target 2099-06-30 [no work linked]

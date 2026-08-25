@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, idIn, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 /* ── scratch machines ──────────────────────────────────────────────── */
 
@@ -132,12 +132,6 @@ must(a.box, a.narrow, ["work", "block", t38, "--on", "dependency", "--why", "the
 const t311 = workIdIn(must(a.box, a.narrow, ["work", "add", "T3-11 the unit carrying an artifact"]).out);
 writeFileSync(join(a.narrow, "t3-11-evidence.txt"), "T3-11 artifact bytes\n");
 must(a.box, a.narrow, ["report", t311, "T3-11 evidence attached", "--artifact", join(a.narrow, "t3-11-evidence.txt")]);
-const t312 = workIdIn(must(a.box, a.narrow, ["work", "add", "T3-12 the unit carrying a requirement"]).out);
-// Requirements fold from the pre-cutover `work.required` grammar and no verb
-// writes them today, so the event is seeded and the store refolded.
-retireFixture(a.box, a.ws, "narrow", "work.required",
-    { work: t312, requirement: "r1", text: "T3-12 the requirement carried by its unit" });
-
 // T4: shape.
 const t43 = ["one", "two", "three"].map((word) =>
     entityIn(must(a.box, a.narrow, ["state", "add", `T4-3 the ${word} matching record`]).out));
@@ -360,12 +354,6 @@ test("T3.11: an artifact is no row of its own; it resolves to the record carryin
 {
     const row = oneRow("t3-11-evidence.txt");
     assert.match(row, new RegExp(`work\\s+${t311}`));
-});
-
-test("T3.12: a requirement resolves to its work unit, not a row of its own", () =>
-{
-    const row = oneRow("T3-12 the requirement carried by its unit");
-    assert.match(row, new RegExp(`work\\s+${t312}`));
 });
 
 /* ── T4 — output shape ─────────────────────────────────────────────── */

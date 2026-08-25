@@ -1,10 +1,10 @@
 # m-48nbn — suite green
 
 - Objective: o-yfxat reach preview
-- State: on-track — 1 of 2 exit criteria covered across 1 work unit(s)
+- State: unstarted — no work linked yet
 - Revision: 1 (objective revision 1)
 - Critical path: no
-- Work: w-2hcs1
+- Work: none linked
 
 ## Exit criteria
 

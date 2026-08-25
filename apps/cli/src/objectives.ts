@@ -473,57 +473,6 @@ function newCoverage(event: SelfEvent): Coverage
     };
 }
 
-export function applyProposal(goals: GoalState, event: SelfEvent): void
-{
-    if (event.type === "work.proposed")
-    {
-        goals.proposals.push(newProposal(event));
-        return;
-    }
-    const proposal = goals.proposals.find((item) => item.id === event.payload.proposal);
-    if (proposal === undefined)
-    {
-        return;
-    }
-    // Answered once. A proposal that was accepted and then reaches a stale
-    // decline from another clone's log keeps the answer that was given.
-    if (proposal.status !== "open")
-    {
-        return;
-    }
-    if (event.type === "work.accepted")
-    {
-        proposal.status = "accepted";
-        proposal.work = String(event.payload.work);
-        return;
-    }
-    proposal.status = "declined";
-    proposal.declinedWhy = str(event.payload.why);
-}
-
-function newProposal(event: SelfEvent): WorkProposal
-{
-    const payload = event.payload;
-    return {
-        id: event.id,
-        ts: event.ts,
-        outcome: String(payload.outcome),
-        objective: str(payload.objective),
-        milestone: str(payload.milestone),
-        value: String(payload.value),
-        success: list(payload.success),
-        stop: list(payload.stop),
-        depends: list(payload.depends),
-        risk: String(payload.risk),
-        capacity: String(payload.capacity),
-        evidencePlan: String(payload.evidencePlan),
-        confidence: String(payload.confidence),
-        expires: String(payload.expires),
-        status: "open",
-        expired: false
-    };
-}
-
 /* ── derivation ────────────────────────────────────────────────────── */
 
 export function deriveGoals(goals: GoalState, works: LinkedWork[], now: Date, zone: string): string[]

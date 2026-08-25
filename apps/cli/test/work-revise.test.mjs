@@ -31,7 +31,6 @@
 // | 21 | v2 current                              | `revise` same text  | refused; nothing recorded |
 // | 22 | a done unit                             | `revise`            | refused: already done |
 // | 23 | a retired unit                          | `revise`            | refused with the retirement's reason |
-// | 24 | a legacy `work.*` unit                  | `revise`            | refused, naming the successor spelling |
 // | 25 | a declined proposal                     | `revise`            | refused: already declined |
 // | 26 | accepted, started, then blocked         | `revise`            | refused — the freeze is not the status |
 // | 27 | v3 awaiting review                      | listing and count   | one row, counted once |
@@ -40,12 +39,11 @@
 // | 30 | a revision naming a withdrawn record    | fold                | folds to nothing |
 // | 31 | v2 accepted, a confirm naming v1 merged | fold                | still accepted |
 // | 32 | a unit awaiting review                  | `report --design`   | allowed |
-// | 33 | a pre-cutover `work.proposed` proposal   | `accept`            | answers as it did |
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, logFixture, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = demoWorkspace(box);
@@ -375,16 +373,6 @@ test("23: a retired unit refuses a revision with the reason it was retired for",
     assert.match(refused.out, new RegExp(`self work show ${id}`));
 });
 
-test("24: a unit folded from pre-cutover history refuses a revision, naming the successor path", () =>
-{
-    const legacy = "w-lega1";
-    retireFixture(box, ws, "demo", "work.created", { work: legacy, outcome: "24: an outcome from before entities" });
-    const refused = selfIn(box, demo, ["work", "revise", legacy, "24: a new plan", "--why", "a correction"]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /was recorded before plans were revisable/);
-    assert.match(refused.out, new RegExp(`--supersedes ${legacy} --why w`));
-});
-
 test("25: a declined proposal refuses a revision, saying it is declined", () =>
 {
     const id = propose("25: cut the timeout to 5s");
@@ -479,22 +467,4 @@ test("32: a design report is admitted on a unit awaiting review — a design pre
     const reported = must(box, demo, ["report", id, "32: the design for the timeout", "--design", "--implements", decision]);
     assert.match(reported.out, /design report/);
     assert.ok(reported.out.includes(decision), `the receipt did not echo the cited decision:\n${reported.out}`);
-});
-
-test("33: a proposal folded from a pre-cutover work.proposed event still answers to accept", () =>
-{
-    const objective = must(box, demo, ["objective", "add", "33: a measurable outcome", "--target", "2099-01-01"])
-        .out.match(/\bo-[0-9a-z]{5}\b/)[0];
-    const legacy = retireFixture(box, ws, "demo", "work.proposed", {
-        outcome: "33: an outcome proposed before the cutover", objective,
-        value: "closes the gap", success: ["it ships"], stop: ["if superseded"], depends: [],
-        risk: "low", capacity: "one round", evidencePlan: "a recorded run", confidence: "high", expires: "2099-01-01"
-    }, { branch: "main" });
-    must(box, demo, ["work", "accept", legacy]);
-    const listed = must(box, demo, ["work"]).out;
-    assert.ok(listed.includes("33: an outcome proposed before the cutover"),
-        `the legacy proposal never became a unit:\n${listed}`);
-    const again = selfIn(box, demo, ["work", "accept", legacy]);
-    assert.equal(again.code, 1);
-    assert.match(again.out, /is already accepted/);
 });
