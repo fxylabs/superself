@@ -17,6 +17,7 @@ import {
     WorkProposal
 } from "./objectives.js";
 import { activeProjects, readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
+import { plural } from "./style.js";
 import { ArtifactMeta, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
@@ -136,6 +137,11 @@ export interface ReportEntry
     // validation summary, a reviewer's name. Kept and shown, never resolved.
     notes: string[];
     artifacts: ArtifactMeta[];
+    // What differed from expectation, one sentence per occurrence (#380). A
+    // list rather than one string: a session hits more than one, and each has
+    // to stay its own sentence for anything reading them later. Empty on every
+    // report written before the flag existed, and on every one that omits it.
+    friction: string[];
     // The branch these commits were reported from — what lets the fold tell a
     // discarded branch from a squash-merged one.
     branch?: string;
@@ -1748,6 +1754,7 @@ function applyReport(model: ProjectModel, event: SelfEvent): void
     const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts as ArtifactMeta[] : [];
     work.reports.push({
         id: event.id, ts: event.ts, text: String(event.payload.text), commits, notes, artifacts,
+        friction: stringList(event.payload.friction),
         branch: branchRef(event), repository: repositoryRef(event),
         design: event.payload.design === true, implements: stringList(event.refs?.implements)
     });
@@ -1852,9 +1859,34 @@ function deriveWorkSignals(model: ProjectModel, work: WorkState, now: Date): voi
     }
 }
 
+// The pair of the ruling that friction stays optional (#380 R3). Nothing is
+// refused at capture, so the only place a project can learn it has stopped
+// saying what differed is here — one line, and only once the silent reports
+// outnumber the ones that spoke.
+//
+// Deliberately worded "this project's": it counts one project's reports, while
+// the sweep that reads the same field counts a whole workspace's. Both say
+// "last 30 days", and a reader who took one number for the other would draw
+// the wrong conclusion from either.
+const FRICTION_WINDOW_DAYS = 30;
+
+function frictionSignals(model: ProjectModel, now: Date): string[]
+{
+    const recent = model.works.flatMap((work) => work.reports)
+        .filter((report) => ageDays(report.ts, now) <= FRICTION_WINDOW_DAYS);
+    const silent = recent.filter((report) => report.friction.length === 0).length;
+    if (silent * 2 <= recent.length)
+    {
+        return [];
+    }
+    return [`no friction on ${silent} of this project's ${plural(recent.length, "report")}`
+        + ` in the last ${FRICTION_WINDOW_DAYS} days — self report … --friction "<what differed>"`];
+}
+
 function deriveSignals(model: ProjectModel, now: Date): void
 {
     model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
+    model.health.push(...frictionSignals(model, now));
     noteProposedObjectives(model);
     expireProposedDecisions(model, now);
     for (const work of model.works)

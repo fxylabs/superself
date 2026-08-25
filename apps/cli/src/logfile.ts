@@ -65,6 +65,10 @@ export function eventSummary(event: SelfEvent): string
     const payload = event.payload;
     const parts = [payload.work, payload.objective, payload.milestone, payload.proposal, payload.criterion,
         payload.attempt, payload.text ?? payload.outcome ?? payload.why ?? payload.as ?? payload.detail,
+        // What differed from expectation, on the report's own line (#380).
+        // The log is where a reader scans for it, and a friction sentence that
+        // only the raw JSON carried would be typed capture nobody reads.
+        frictionNote(payload.friction),
         // A revision states the new plan and why it changed, and the reason is
         // readable nowhere else: the record keeps only the text it now states
         // (#356), so the unit's own history is where that reason lives.
@@ -72,4 +76,17 @@ export function eventSummary(event: SelfEvent): string
         .filter((value) => value !== undefined)
         .map((value) => String(value));
     return parts.join(" ");
+}
+
+// Marked rather than run together with the summary text, so a scan can tell
+// the report from the surprise it met. Read defensively: the log is a file
+// other clones wrote, and a shape it did not promise is skipped, never thrown
+// over — a malformed line must not take the whole listing down with it.
+function frictionNote(value: unknown): string | undefined
+{
+    if (!Array.isArray(value) || value.length === 0)
+    {
+        return undefined;
+    }
+    return `(friction: ${value.map((sentence) => String(sentence)).join("; ")})`;
 }

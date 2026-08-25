@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { designNote } from "./design.js";
-import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, planNote, ProjectModel, reportProjection, unshippedBranches, WorkState } from "./model.js";
+import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, planNote, ProjectModel, ReportEntry, reportProjection, unshippedBranches, WorkState } from "./model.js";
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
@@ -594,7 +594,6 @@ function workEvidenceLines(work: WorkState, verdicts: Record<string, Verdict>): 
     return lines;
 }
 
-// A multi-line report gets a heading of its own; a one-liner stays a bullet.
 function workReportLines(work: WorkState): string[]
 {
     if (work.reports.length === 0)
@@ -604,22 +603,31 @@ function workReportLines(work: WorkState): string[]
     const lines: string[] = ["## Reports (latest first)", ""];
     for (const report of reportProjection(work.reports))
     {
-        const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
-        // A design report says what it implements and whether a person ruled
-        // on it, because that pair is what decides whether the unit can be
-        // picked up at all (#316).
-        const design = designNote(report);
-        if (report.text.includes("\n"))
-        {
-            lines.push(`### ${day(report.ts)}${design}${commits}`, "", report.text, "");
-        }
-        else
-        {
-            lines.push(`- ${day(report.ts)}${design} — ${report.text}${commits}`);
-        }
+        lines.push(...oneReportLines(report));
     }
     lines.push("");
     return lines;
+}
+
+// A multi-line report gets a heading of its own; a one-liner stays a bullet.
+// Friction follows either, one line per sentence (#380): what differed from
+// expectation is read beside the report that met it, and this page is the one
+// a later session opens.
+function oneReportLines(report: ReportEntry): string[]
+{
+    const commits = report.commits.length > 0 ? ` [${report.commits.join(", ")}]` : "";
+    // A design report says what it implements and whether a person ruled on
+    // it, because that pair is what decides whether the unit can be picked up
+    // at all (#316).
+    const design = designNote(report);
+    const friction = report.friction.map((sentence) => `- friction: ${sentence}`);
+    if (report.text.includes("\n"))
+    {
+        return [`### ${day(report.ts)}${design}${commits}`, "", report.text, "",
+            ...(friction.length === 0 ? [] : [...friction, ""])];
+    }
+    return [`- ${day(report.ts)}${design} — ${report.text}${commits}`,
+        ...friction.map((line) => `  ${line}`)];
 }
 
 export function renderWorkDetails(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = [], portable = false): string
