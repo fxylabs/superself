@@ -70,8 +70,13 @@ async function fixture()
     await approved(["milestone", "drop", m5, "--why", "not needed"], m5);
     const ma = milestoneIdIn(run(["milestone", "add", "ma superseded", "--objective", old, "--exit", "g"]));
     const mb = milestoneIdIn((await approved(["milestone", "revise", ma, "--why", "widened", "--exit", "h"], ma)).printed);
+    const pages = {};
+    for (const id of [m1, m2, m3, m4, m5, ma, mb])
+    {
+        pages[id] = run(["milestone", "show", id]);
+    }
     const before = {
-        pages: Object.fromEntries([m1, m2, m3, m4, m5, ma, mb].map((id) => [id, run(["milestone", "show", id])])),
+        pages,
         confirmed: eventsOf(ws).filter((event) => event.type === "entity.confirmed" && /^m-/.test(String(event.payload.entity)))
     };
     const receipt = (await approved(["objective", "revise", old, "--why", "wording after discussion", "--outcome", "plan v2"], old)).printed;

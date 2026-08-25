@@ -98,17 +98,30 @@ const VERBS = [
     },
     {
         name: "decide confirm",
-        make: (cwd, text) => idIn(must(box, cwd, ["decide", text, "--why", "it was weighed", "--proposed"]).out),
+        make: (cwd, text) => decisionIn(cwd, text),
         answer: (id) => ["decide", "confirm", id],
         again: /is not a proposed decision/
     },
     {
         name: "state confirm",
-        make: (cwd, text) => entityIn(must(box, cwd, ["state", "add", text, "--proposed"]).out),
+        make: (cwd, text) => recordIn(cwd, text),
         answer: (id) => ["state", "confirm", id],
         again: /already confirmed/
     }
 ];
+
+// Named rather than written inline in the table above: a driver call inside an
+// object property is a call site nothing follows, and the structure check reads
+// a file's own named wrappers (#371).
+function decisionIn(cwd, text)
+{
+    return idIn(must(box, cwd, ["decide", text, "--why", "it was weighed", "--proposed"]).out);
+}
+
+function recordIn(cwd, text)
+{
+    return entityIn(must(box, cwd, ["state", "add", text, "--proposed"]).out);
+}
 
 function proposalIn(cwd, outcome)
 {
@@ -205,12 +218,12 @@ test("cell 17: from the workspace root, an id no project holds is refused by nam
 test("cell 18: inside a project, an id it does not hold keeps the verb's own refusal", () =>
 {
     const refusals = [/no work proposal matches/, /no work proposal matches/, /is not a decision/, /unknown entity/];
-    VERBS.forEach((verb, index) =>
+    for (const [index, verb] of VERBS.entries())
     {
         const refused = selfIn(box, alpha, verb.answer("e-zzzzz"));
         assert.notEqual(refused.code, 0, `${verb.name} answered for an id nothing holds`);
         assert.match(refused.out, refusals[index]);
-    });
+    }
 });
 
 // The prefix is computed from the two ids rather than raced for: a ULID's

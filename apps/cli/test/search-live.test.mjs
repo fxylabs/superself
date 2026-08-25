@@ -133,8 +133,11 @@ const t311 = workIdIn(must(a.box, a.narrow, ["work", "add", "T3-11 the unit carr
 writeFileSync(join(a.narrow, "t3-11-evidence.txt"), "T3-11 artifact bytes\n");
 must(a.box, a.narrow, ["report", t311, "T3-11 evidence attached", "--artifact", join(a.narrow, "t3-11-evidence.txt")]);
 // T4: shape.
-const t43 = ["one", "two", "three"].map((word) =>
-    entityIn(must(a.box, a.narrow, ["state", "add", `T4-3 the ${word} matching record`]).out));
+const t43 = [];
+for (const word of ["one", "two", "three"])
+{
+    t43.push(entityIn(must(a.box, a.narrow, ["state", "add", `T4-3 the ${word} matching record`]).out));
+}
 const t47 = entityIn(must(a.box, a.narrow, ["state", "add", "T4-7 first line\nT4-7 second line"]).out);
 must(a.box, a.roomy, ["state", "add", "T4-8 the record in this project", "--exposure", "search"]);
 must(a.box, a.narrow, ["state", "add", "T4-8 the record in that project"]);

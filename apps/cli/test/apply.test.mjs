@@ -93,7 +93,10 @@ test("a wrong answer at the terminal records nothing from the plan", async () =>
     const wrong = await approvedIn(box, demo, ["apply", path], "yes");
     assert.equal(wrong.code, 1);
     assert.equal(events().length, before, "a refused confirmation still wrote to the log");
-    ids.forEach((id) => assert.match(must(box, demo, ["state", "show", id]).out, /confirmed/));
+    for (const id of ids)
+    {
+        assert.match(must(box, demo, ["state", "show", id]).out, /confirmed/);
+    }
 });
 
 test("two ids are short enough to type back, so the challenge is still the ids themselves", async () =>
@@ -262,7 +265,10 @@ test("a line the writer refuses after the confirmation leaves every earlier line
     assert.match(refused.printed, /absolute path under this machine's home directory/);
     assert.equal(events().length, before, "a refused set still wrote to the log");
     assert.equal(commits(), commitsBefore, "a refused set still committed");
-    ids.forEach((id) => assert.match(must(box, demo, ["state", "show", id]).out, /confirmed/));
+    for (const id of ids)
+    {
+        assert.match(must(box, demo, ["state", "show", id]).out, /confirmed/);
+    }
 });
 
 test("a set that is approved lands as one append and one commit", async () =>
@@ -292,7 +298,10 @@ test("a set whose project was archived after the plan was written records nothin
     assert.match(refused.printed, /is archived, so nothing more is recorded into it/);
     assert.equal(events().length, before);
     must(box, ws, ["project", "restore", "demo", "--why", "back to work"]);
-    ids.forEach((id) => assert.match(must(box, demo, ["state", "show", id]).out, /confirmed/));
+    for (const id of ids)
+    {
+        assert.match(must(box, demo, ["state", "show", id]).out, /confirmed/);
+    }
 });
 
 /* ── nothing outside the reviewed set runs at all ──────────────────── */

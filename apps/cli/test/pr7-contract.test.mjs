@@ -488,7 +488,10 @@ test("cell 117: a machine with no credential and no plugins behaves as 0.6.x did
         ["log"],
         ["search", "ship"]
     ];
-    workflow.forEach((argv) => assert.equal(selfIn(it, it.demo, argv).code, 0, `self ${argv.join(" ")} broke`));
+    for (const argv of workflow)
+    {
+        assert.equal(selfIn(it, it.demo, argv).code, 0, `self ${argv.join(" ")} broke`);
+    }
 });
 
 test("cell 118: 0.6.x ignores the plugin directory and the credential file", () =>

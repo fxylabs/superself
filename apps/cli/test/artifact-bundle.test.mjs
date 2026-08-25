@@ -654,7 +654,10 @@ function freshMachine()
 
 const reading = freshMachine();
 
-const readingBundle = (() =>
+// A named function rather than an expression that calls itself: a driver call
+// inside an anonymous one is a call site nothing follows, and the structure
+// check reads a file's own named wrappers (#371).
+function readingFixture()
 {
     const root = join(reading.box.root, "trees", "dist");
     mkdirSync(join(root, "assets"), { recursive: true });
@@ -675,7 +678,9 @@ const readingBundle = (() =>
     const metas = eventsIn(join(reading.ws, ".superself", "projects", "demo", "log.jsonl"))
         .find((event) => event.type === "report.added" && event.refs.work === work).payload.artifacts;
     return { work, bundle: metas[0], file: metas[1] };
-})();
+}
+
+const readingBundle = readingFixture();
 
 test("cell 34: artifact list states a bundle as one row with its file count, and counts artifacts", () =>
 {
