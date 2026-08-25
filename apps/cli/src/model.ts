@@ -1,13 +1,4 @@
-import {
-    applyCompletion,
-    applyWorkReview,
-    approvalPending,
-    completionRefusal,
-    CompletionState,
-    deriveCompletion,
-    emptyCompletion,
-    isCompletionEvent
-} from "./completion.js";
+import { completionRefusal } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
 import { applyEntity, awaitsReview, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
@@ -15,7 +6,6 @@ import { readEvents } from "./logfile.js";
 import {
     applyMilestone,
     applyObjective,
-    applyProposal,
     applySupersededObjectives,
     Coverage,
     deriveGoals,
@@ -32,9 +22,10 @@ import { ArtifactMeta, SelfEvent } from "./types.js";
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
 
-// Work proposals carry no `work` id of their own, so they are routed before
-// the transition verbs that look one up.
-const PROPOSAL_EVENTS = ["work.proposed", "work.accepted", "work.declined"];
+// The two `work.*` types a current binary still writes: a run's process
+// transitions. Everything else under that namespace is pre-cutover history,
+// which #305 stopped folding to state.
+const PROCESS_EVENTS = ["work.run-started", "work.run-exited"];
 
 export interface DecisionState
 {
@@ -221,10 +212,6 @@ export interface WorkState
     // there is nothing else to fold. It discloses and never refuses — a second
     // session reads who holds the unit and decides for itself.
     claim?: { session?: string; ts: string };
-    // What this unit has to cover, who has to approve it, and what its
-    // implementation had to be — the semantic half of done, which no attempt
-    // and no transition ever settles on its own.
-    completion: CompletionState;
     // Why this unit may not be called done yet, or undefined when nothing
     // stands in the way. One check, derived here so every surface reads the
     // same answer the `work done` verb is refused by.
@@ -604,11 +591,9 @@ function reconcileEntityView(model: ProjectModel, entityFold: EntityFold, events
     // agrees with the entity view; native preset entities project into the
     // legacy read shapes, so those surfaces answer for post-cutover records.
     syncLegacyRecords(model);
-    const answered = answerLegacyProposals(model, entityFold);
     const nativeWorks = projectNativeRecords(model, creations);
     carryLegacyMilestones(model);
-    routeEntityWorkFacts(model, entityFold);
-    replayDeferred(model, events, new Set([...nativeWorks, ...answered]));
+    replayDeferred(model, events, nativeWorks);
 }
 
 function deriveVerdictReads(model: ProjectModel, storeDir: string, slug: string): void
@@ -633,8 +618,9 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
 }
 
 // Which project a work unit renders in. The placement lives on the unit's
-// entity (#181 D1); a unit still folded from the pre-cutover `work.*` events
-// has no entity and renders at home, exactly as it always did.
+// entity (#181 D1). Since #305 every folded unit is projected from an entity,
+// so the lookup does not fail; home stays the answer for a miss rather than a
+// throw, because a render is not the place to discover a fold invariant.
 export function workScope(model: ProjectModel, work: WorkState): EntityScope
 {
     return model.entities.find((item) => item.id === work.id)?.scope ?? HOME_SCOPE;
@@ -773,22 +759,13 @@ function emptyModel(storeDir: string, slug: string): ProjectModel
 
 type Reducer = (model: ProjectModel, event: SelfEvent) => void;
 
-// A receipt bound to a change set that named a work unit is still a statement
-// about that unit in an old log.
-function applyReview(model: ProjectModel, event: SelfEvent): void
-{
-    const reviewed = model.works.find((item) => item.id === event.refs?.work);
-    if (reviewed !== undefined)
-    {
-        applyWorkReview(reviewed.completion, event);
-    }
-}
-
 // Exact types first, then namespaces. An event matching neither folds to
 // nothing, which is what the retired namespaces (changeset.*, lease.*, merge.*,
-// promotion.*, spec.*, …) now do.
+// promotion.*, spec.*, …) do — and, since #305, what every `work.*` type but
+// the two process transitions does.
 const EXACT_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
-    ["review.received", applyReview],
+    ["work.run-started", applyProcess],
+    ["work.run-exited", applyProcess],
     ["goal.set", (model, event) => { model.goal = String(event.payload.text); }],
     ["report.added", applyReport],
     ["report.confirmed", applyReportConfirmed]
@@ -798,7 +775,6 @@ const NAMESPACE_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
     ["decision.", applyDecision],
     ["objective.", (model, event) => applyObjective(model.goals, event)],
     ["milestone.", (model, event) => applyMilestone(model.goals, event)],
-    ["work.", applyWork],
     ["run.", applyAttempt],
     ["convention.", applyConvention]
 ];
@@ -809,11 +785,6 @@ function applyEvent(model: ProjectModel, event: SelfEvent): void
     if (exact !== undefined)
     {
         exact[1](model, event);
-        return;
-    }
-    if (PROPOSAL_EVENTS.includes(event.type))
-    {
-        applyProposal(model.goals, event);
         return;
     }
     NAMESPACE_REDUCERS.find(([prefix]) => event.type.startsWith(prefix))?.[1](model, event);
@@ -1483,8 +1454,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         branches: creation?.refs?.branch === undefined ? [] : [String(creation.refs.branch)],
         ...memberLinks(model, entity),
         gatedBy: [],
-        attempts: [],
-        completion: emptyCompletion()
+        attempts: []
     };
 }
 
@@ -1570,211 +1540,12 @@ function projectProposal(entity: EntityState, creation: SelfEvent)
     };
 }
 
-// The same answers, aimed at a proposal made before the cutover (#301).
-// `work accept` and `work decline` record `entity.confirmed` and
-// `entity.retracted` whatever kind of proposal they answer, and a proposal
-// folded from a legacy `work.proposed` event is not an entity, so neither
-// answer reached a record: it kept rendering as waiting on you, an accepted
-// one never became a unit, and a second answer was never refused. The answers
-// route onto the legacy proposal here, the same way execution events route
-// onto a legacy work unit — over the settled proposal set, because a merged
-// log can carry the answer before the proposal it answers.
-//
-// Only legacy proposals are reachable: `projectNativeRecords` pushes the
-// native ones afterwards, reading these same answers off their own entity.
-// Answers the units this created, so the deferred replay attaches their
-// reports and process history the way it does a native unit's.
-function answerLegacyProposals(model: ProjectModel, fold: EntityFold): Set<string>
-{
-    const accepted = new Set<string>();
-    for (const answer of legacyAnswers(fold))
-    {
-        const proposal = model.goals.proposals.find((item) => item.id === answer.id);
-        if (proposal === undefined || proposal.status !== "open")
-        {
-            continue;
-        }
-        if (!answer.accept)
-        {
-            proposal.status = "declined";
-            proposal.declinedWhy = answer.why;
-            continue;
-        }
-        proposal.status = "accepted";
-        proposal.work = proposal.id;
-        model.works.push(unitFromProposal(model, proposal, answer.ts));
-        accepted.add(proposal.id);
-    }
-    return accepted;
-}
+/* ── the deferred replay ───────────────────────────────────────────── */
 
-// Both answers as one list in the order they were given — timestamp, then
-// event id — so two clones of one store settle one lifecycle, and the first
-// answer is the one that happened. An undone retraction is dropped here for
-// the reason `applyRetractions` drops it: an undo is a fact about the event
-// it names, not a position in the log.
-function legacyAnswers(fold: EntityFold): { id: string; ts: string; why?: string; accept: boolean }[]
-{
-    return [
-        ...fold.confirms.map((item) => ({ event: item.event, ts: item.ts, id: item.confirms, accept: true })),
-        ...fold.retractions.filter((item) => !fold.annulled.has(item.event))
-            .map((item) => ({ event: item.event, ts: item.ts, id: item.entity, why: item.why, accept: false }))
-    ].sort((left, right) => left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
-}
-
-// Accept is confirm (#207 B13) for a legacy proposal too: the unit takes the
-// proposal's own id, so the whole lifecycle stays under one id. The outcome it
-// contributes to is read off the proposal rather than off the `entity.linked`
-// line the accept also records, because that edge lands in the entity view,
-// which carries no record for this proposal — the two name the same target.
-function unitFromProposal(model: ProjectModel, proposal: WorkProposal, ts: string): WorkState
-{
-    const milestone = proposal.milestone === undefined ? undefined : findMilestone(model.goals, proposal.milestone);
-    return {
-        ...emptyWork(proposal.id, proposal.outcome, proposal.ts),
-        lastEventTs: ts,
-        objectives: model.goals.objectives.some((item) => item.id === proposal.objective) ? [proposal.objective as string] : [],
-        milestones: milestone === null || milestone === undefined ? [] : [proposal.milestone as string]
-    };
-}
-
-/* ── entity work facts on legacy units, and the deferred replay ────── */
-
-// Post-cutover, `work start` and its siblings record `entity.*` execution
-// events whatever kind of unit they move. On a native unit the entity view
-// already carries them; a legacy unit is not an entity, so its events route
-// here, in the same timestamp order and with the same terminal guards the
-// entity fold applies.
-function routeEntityWorkFacts(model: ProjectModel, fold: EntityFold): void
-{
-    const entityIds = new Set(model.entities.map((entity) => entity.id));
-    const works = new Map(model.works.map((work) => [work.id, work]));
-    const executions = [...fold.executions].sort((left, right) =>
-        left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
-    for (const event of executions)
-    {
-        const work = works.get(event.entity);
-        if (!entityIds.has(event.entity) && work !== undefined)
-        {
-            applyExecutionToWork(work, event);
-        }
-    }
-    const links = [...fold.links].sort((left, right) =>
-        left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
-    for (const event of links)
-    {
-        // The same annul skip the entity fold applies (#244 D5): an undone
-        // link leaves the legacy-routed units too.
-        const work = fold.annulled.has(event.event) ? undefined : works.get(event.entity);
-        if (work !== undefined && !entityIds.has(event.entity) && event.link.type === "member-of")
-        {
-            applyMemberOf(model, work, event.link, event.add);
-        }
-    }
-}
-
-function applyExecutionToWork(work: WorkState, event: { ts: string; type: string; session?: string; on?: string; why?: string; successor?: string; successorProject?: string }): void
-{
-    if (work.status === "done" || work.status === "retired")
-    {
-        return;
-    }
-    work.lastEventTs = event.ts;
-    // The newest start is the claim, whatever it does to the status: a start
-    // against a blocked unit changes no state and still says a session picked
-    // the work up, which is the fact a second session reads before choosing.
-    if (event.type === "entity.started")
-    {
-        work.claim = { session: event.session, ts: event.ts };
-    }
-    applyBlockTransition(work, event);
-    if (event.type === "entity.done")
-    {
-        work.status = "done";
-    }
-    if (event.type === "entity.retired")
-    {
-        retireWorkFromExecution(work, event);
-    }
-}
-
-// Starting, unblocking and blocking, each guarded on where the unit stands: a
-// start never overrides a block, and neither transition fires twice.
-function applyBlockTransition(work: WorkState, event: { type: string; on?: string; why?: string }): void
-{
-    if (event.type === "entity.started" && work.status !== "blocked")
-    {
-        work.status = "active";
-    }
-    if (event.type === "entity.unblocked" && work.status === "blocked")
-    {
-        work.status = "active";
-        work.blockedOn = undefined;
-        work.blockedWhy = undefined;
-    }
-    if (event.type === "entity.blocked" && work.status !== "blocked")
-    {
-        work.status = "blocked";
-        work.blockedOn = event.on ?? "dependency";
-        work.blockedWhy = event.why;
-    }
-}
-
-function retireWorkFromExecution(work: WorkState, event: { why?: string; successor?: string; successorProject?: string }): void
-{
-    work.status = "retired";
-    work.blockedOn = undefined;
-    work.blockedWhy = undefined;
-    work.retiredWhy = event.why ?? "retired";
-    work.successor = event.successor === undefined ? undefined
-        : { work: event.successor, project: event.successorProject };
-}
-
-function applyMemberOf(model: ProjectModel, work: WorkState, link: EntityLink, add: boolean): void
-{
-    // A qualified link names another project's objective (#244), which this
-    // fold's goal tree can never resolve — it is carried, not looked up.
-    if (link.project !== undefined)
-    {
-        work.foreignObjectives = add
-            ? dedupeForeign([...work.foreignObjectives, { id: link.target, project: link.project }])
-            : work.foreignObjectives.filter((item) => item.id !== link.target);
-        return;
-    }
-    const target = link.target;
-    const field = model.goals.objectives.some((item) => item.id === target) ? "objectives"
-        : findMilestone(model.goals, target) !== null ? "milestones" : null;
-    if (field === null)
-    {
-        return;
-    }
-    work[field] = add
-        ? [...new Set([...work[field], target])]
-        : work[field].filter((item) => item !== target);
-}
-
-// The edge's identity is the target id, as it is for a local link: adding it
-// twice keeps one, and removing it removes it whatever slug it was recorded
-// under.
-function dedupeForeign(links: ForeignObjectiveLink[]): ForeignObjectiveLink[]
-{
-    const seen = new Set<string>();
-    const kept: ForeignObjectiveLink[] = [];
-    for (const link of links)
-    {
-        if (!seen.has(link.id))
-        {
-            seen.add(link.id);
-            kept.push(link);
-        }
-    }
-    return kept;
-}
-
-// Reports, process transitions and completion history keep their own event
-// types (#207 B14). In the first pass they attach to nothing when they name a
-// unit the projection had not created yet, so the lines naming a native unit
-// run once more here — everything else already attached, and runs zero times.
+// Reports and process transitions keep their own event types (#207 B14). In
+// the first pass they attach to nothing when they name a unit the projection
+// had not created yet, so the lines naming a native unit run once more here —
+// everything else already attached, and runs zero times.
 function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: Set<string>): void
 {
     if (nativeWorks.size === 0)
@@ -1793,11 +1564,11 @@ function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: S
 
 function attachedWorkOf(event: SelfEvent): string | undefined
 {
-    if (event.type.startsWith("report.") || event.type === "review.received" || event.type.startsWith("run."))
+    if (event.type.startsWith("report.") || event.type.startsWith("run."))
     {
         return event.refs?.work === undefined ? undefined : String(event.refs.work);
     }
-    if (event.type.startsWith("work.") && event.type !== "work.created" && !PROPOSAL_EVENTS.includes(event.type))
+    if (PROCESS_EVENTS.includes(event.type))
     {
         return typeof event.payload.work === "string" ? event.payload.work : undefined;
     }
@@ -1889,132 +1660,21 @@ function noteBranch(work: WorkState, event: SelfEvent): void
     }
 }
 
-function newWork(event: SelfEvent): WorkState
-{
-    return { ...emptyWork(String(event.payload.work), String(event.payload.outcome), event.ts), branches: branchOf(event) };
-}
-
-// A unit at the moment it was created: named, dated, and carrying nothing yet.
-// One shape, because a unit minted from an accepted legacy proposal starts
-// life exactly where one minted by `work.created` does.
-function emptyWork(id: string, outcome: string, ts: string): WorkState
-{
-    return {
-        id,
-        outcome,
-        ts,
-        lastEventTs: ts,
-        status: "next",
-        reports: [],
-        evidence: [],
-        notes: [],
-        artifacts: [],
-        branches: [],
-        objectives: [],
-        milestones: [],
-        foreignObjectives: [],
-        gatedBy: [],
-        attempts: [],
-        completion: emptyCompletion()
-    };
-}
-
 // A run event says where the unit's process is, which is machine state rather
-// than a position in the lifecycle, so it never touches status. Answers
-// whether it consumed the event.
-function applyRun(work: WorkState, event: SelfEvent): boolean
+// than a position in the lifecycle, so it never touches status. The two
+// `work.run-*` types are the only ones under that namespace a current binary
+// writes, and #305 left them their own reducer when the legacy `work.*` fold
+// went: routed through it they kept two side effects the projection needs.
+//
+// `lastEventTs` moves because a run is the unit saying it just moved, and the
+// stall signal reads that timestamp. `noteBranch` runs because the branch a
+// run carried belongs in the same union of refs every other event feeds — the
+// unit page's `- Branches:` line and the HTML chip read it.
+//
+// A retirement guard is deliberately absent: it stopped status transitions,
+// and a process fact about a retired unit is still a fact.
+function applyProcess(model: ProjectModel, event: SelfEvent): void
 {
-    if (event.type === "work.run-started")
-    {
-        work.process = { state: "running", at: event.ts };
-        return true;
-    }
-    if (event.type === "work.run-exited")
-    {
-        work.process = {
-            state: "exited",
-            code: typeof event.payload.code === "number" ? event.payload.code : undefined,
-            at: event.ts
-        };
-        return true;
-    }
-    return false;
-}
-
-function applyRetired(work: WorkState, event: SelfEvent): void
-{
-    work.status = "retired";
-    work.blockedOn = undefined;
-    work.blockedWhy = undefined;
-    work.retiredWhy = String(event.payload.why);
-    if (typeof event.payload.successor === "string")
-    {
-        work.successor = {
-            work: event.payload.successor,
-            project: typeof event.payload.successorProject === "string" ? event.payload.successorProject : undefined
-        };
-    }
-}
-
-function applyWorkStatus(work: WorkState, event: SelfEvent): void
-{
-    if (event.type === "work.started" || event.type === "work.unblocked")
-    {
-        work.status = "active";
-        work.blockedOn = undefined;
-        work.blockedWhy = undefined;
-    }
-    if (event.type === "work.blocked")
-    {
-        work.status = "blocked";
-        work.blockedOn = String(event.payload.on);
-        work.blockedWhy = event.payload.why === undefined ? undefined : String(event.payload.why);
-    }
-    if (event.type === "work.done")
-    {
-        work.status = "done";
-    }
-    if (event.type === "work.retired")
-    {
-        applyRetired(work, event);
-    }
-}
-
-// Completion and links are their own subjects with their own reducers, so the
-// router hands the event over rather than reading it. Answers whether it did.
-function applyDelegated(work: WorkState, event: SelfEvent): boolean
-{
-    if (isCompletionEvent(event.type))
-    {
-        applyCompletion(work.completion, event);
-        return true;
-    }
-    if (event.type === "work.linked" || event.type === "work.unlinked")
-    {
-        applyLink(work, event);
-        return true;
-    }
-    return false;
-}
-
-// Retirement is terminal, the way a retracted decision and a dropped milestone
-// are. `requireOpenWork` already refuses every transition on a retired unit, so
-// nothing this CLI wrote can reach here — what can is a stale line merged from
-// a clone that had not pulled the retirement yet. Done is deliberately not
-// terminal: reopening a finished unit is real work, and only the withdrawal is
-// the end of the record.
-function isAfterRetirement(work: WorkState, event: SelfEvent): boolean
-{
-    return work.status === "retired" && event.type !== "work.retired";
-}
-
-function applyWork(model: ProjectModel, event: SelfEvent): void
-{
-    if (event.type === "work.created")
-    {
-        model.works.push(newWork(event));
-        return;
-    }
     const work = model.works.find((item) => item.id === event.payload.work);
     if (work === undefined)
     {
@@ -2022,30 +1682,9 @@ function applyWork(model: ProjectModel, event: SelfEvent): void
     }
     work.lastEventTs = event.ts;
     noteBranch(work, event);
-    if (applyDelegated(work, event) || isAfterRetirement(work, event) || applyRun(work, event))
-    {
-        return;
-    }
-    applyWorkStatus(work, event);
-}
-
-// One unit may contribute to more than one outcome, and one outcome may be
-// supported by several units, so a link is added to a set rather than
-// replacing what is there.
-function applyLink(work: WorkState, event: SelfEvent): void
-{
-    const add = event.type === "work.linked";
-    for (const field of ["objectives", "milestones"] as const)
-    {
-        const id = event.payload[field.slice(0, -1)];
-        if (typeof id !== "string")
-        {
-            continue;
-        }
-        work[field] = add
-            ? [...new Set([...work[field], id])]
-            : work[field].filter((item) => item !== id);
-    }
+    work.process = event.type === "work.run-started"
+        ? { state: "running", at: event.ts }
+        : { state: "exited", code: typeof event.payload.code === "number" ? event.payload.code : undefined, at: event.ts };
 }
 
 const ATTEMPT_STATES: Record<string, AttemptSummary["state"]> = {
@@ -2183,11 +1822,9 @@ function expireProposedDecisions(model: ProjectModel, now: Date): void
 
 function deriveWorkSignals(model: ProjectModel, work: WorkState, now: Date): void
 {
-    deriveCompletion(work.completion);
-    // Derived for open units only. A closed unit was judged — done through the
-    // gate, or legacy history the fold never refuses (#205 table D) — and
-    // re-deriving what it owes would mark every evidence-free legacy done
-    // "not done yet" on a page that says it is.
+    // Derived for open units only. A closed unit was already judged by the
+    // gate when it was closed, and asking again on a page that says it is done
+    // would answer a question nobody can act on.
     if (work.status !== "done" && work.status !== "retired")
     {
         work.owes = completionRefusal(work) ?? undefined;

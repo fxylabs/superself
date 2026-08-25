@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { refreshBlocks } from "./connect.js";
 import { designNote } from "./design.js";
@@ -51,12 +51,31 @@ export function foldProject(storeDir: string, slug: string): void
             writeGenerated(dir, hashes, rel, renderWork(work, model, verdicts));
         }
     }
+    sweepWorkPages(dir, hashes, model);
     foldObjectives(dir, hashes, model);
     writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
     writeViews(storeDir, model, readStoreConfig(storeDir), verdicts);
     if (projectDir !== null && existsSync(projectDir))
     {
         refreshBlocks(projectDir, model);
+    }
+}
+
+// A page whose unit is no longer in the model is not stale — it is a claim
+// about a unit the tool cannot answer for any more. #305 dropped whole units
+// from the fold, so the loop above never reaches them and `drop` never ran:
+// sweep by directory instead. `drop` takes the file and its hash entry
+// together, so no orphan is left for the next fold to warn about. No
+// hand-edit notice: that is the warning for overwriting, and this is a delete.
+function sweepWorkPages(dir: string, hashes: Record<string, string>, model: ProjectModel): void
+{
+    const kept = new Set(model.works.map((work) => `${work.id}.md`));
+    for (const name of readdirSync(join(dir, "work")))
+    {
+        if (name.endsWith(".md") && !kept.has(name))
+        {
+            drop(dir, hashes, join("work", name));
+        }
     }
 }
 
@@ -420,49 +439,14 @@ function coverageLine(coverage: Coverage): string
 }
 
 // The semantic half of done, on the page a person reads before closing a unit:
-// what it still owes, whether a human has answered, and what its implementation
-// had to be. Every line is derived — none of it is asserted by a transition.
-function completionLines(work: WorkState): string[]
+// what it still owes. Derived by the completion gate — never asserted by a
+// transition.
+//
+// A retired unit owes nothing: its outcome was given up, and the advice the
+// owes line carries is refused on it anyway.
+function owesLines(work: WorkState): string[]
 {
-    const completion = work.completion;
-    const lines: string[] = [];
-    if (completion.approvalRequired !== undefined)
-    {
-        const granted = completion.approvals.find((item) => item.humanConfirmed);
-        lines.push(`- Approval: ${granted === undefined
-            ? `required and not granted${completion.approvalRequired.why === undefined ? "" : ` — ${completion.approvalRequired.why}`}`
-            : `granted ${day(granted.ts)} by ${granted.by} (${granted.method})`}`);
-    }
-    if (completion.policy !== undefined)
-    {
-        const parts = [
-            completion.policy.model === undefined ? "" : `model ${completion.policy.model}`,
-            completion.policy.freshReview ? "fresh-session review" : ""
-        ].filter((part) => part !== "");
-        lines.push(`- Completion policy: ${parts.join(", ")}`);
-    }
-    // A retired unit owes nothing: its outcome was given up, and the advice
-    // the owes line carries (`work met`, approval) is refused on it anyway.
-    if (work.owes !== undefined && work.status !== "retired")
-    {
-        lines.push(`- Not done yet: ${work.owes}`);
-    }
-    return lines;
-}
-
-function requirementLines(work: WorkState): string[]
-{
-    const completion = work.completion;
-    return completion.requirements.map((requirement) =>
-    {
-        const covered = completion.coverage.filter((item) => item.requirement === requirement.id);
-        const latest = covered[covered.length - 1];
-        const state = requirement.retired === true ? "retired"
-            : latest === undefined ? "uncovered"
-            : latest.revision === requirement.revision ? `covered ${day(latest.ts)} — ${latest.why}`
-            : `covered at revision ${latest.revision}, now revision ${requirement.revision} — recheck it`;
-        return `${requirement.id} — ${requirement.text} _(${state})_`;
-    });
+    return work.owes === undefined || work.status === "retired" ? [] : [`- Not done yet: ${work.owes}`];
 }
 
 function contributionLines(work: WorkState, model: ProjectModel): string[]
@@ -639,15 +623,13 @@ function workReportLines(work: WorkState): string[]
 
 export function renderWorkDetails(work: WorkState, model: ProjectModel, verdicts: Record<string, Verdict> = {}, supersedes: string[] = [], portable = false): string
 {
-    const requirements = requirementLines(work);
     const lines: string[] = [
         `# ${work.id} — ${work.outcome}`,
         "",
         ...workStandingLines(work, model, supersedes, portable),
         ...workEvidenceLines(work, verdicts),
-        ...completionLines(work),
-        "",
-        ...(requirements.length === 0 ? [] : ["## Requirements", "", ...requirements.map((item) => `- ${item}`), ""])
+        ...owesLines(work),
+        ""
     ];
     return lines.join("\n").replace(/\n+$/, "\n");
 }

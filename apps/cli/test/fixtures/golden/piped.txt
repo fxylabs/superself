@@ -331,8 +331,8 @@ spells a correction.
 done is the judgment that the outcome was reached, and the claim must
 carry evidence: a report with a commit or an artifact, or a done-time
 --report stating what verifiably happened — a bare summary never
-satisfies. Declared criteria additionally gate it. Done is allowed
-while blocked: completion is a judgment on the outcome, not the block.
+satisfies. Done is allowed while blocked: completion is a judgment
+on the outcome, not the block.
 
 a plan an agent wrote is reviewed before it is worked: `work propose
 "<plan>"` records the plan as work waiting on a person, and `work accept`

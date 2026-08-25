@@ -1,9 +1,0 @@
-# w-8x0th — already delivered
-
-- Status: done
-- Evidence notes: checksum abc123
-
-## Reports (latest first)
-
-- 2026-08-03 — delivered and verified
-- 2026-08-03 — delivered as planned

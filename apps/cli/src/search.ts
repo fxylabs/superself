@@ -233,7 +233,6 @@ function carried(work: WorkState | undefined): string
     }
     return [
         ...work.reports.map((report) => report.text),
-        ...work.completion.requirements.map((requirement) => requirement.text),
         ...work.artifacts.map((artifact) => artifactSearchText(artifact)),
         ...work.notes,
         work.next ?? "",

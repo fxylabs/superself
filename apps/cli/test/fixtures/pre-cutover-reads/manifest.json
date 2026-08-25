@@ -24,26 +24,6 @@
     ]
   ],
   [
-    "work-show-done",
-    [
-      "work",
-      "show",
-      "w-8x0th",
-      "--project",
-      "demo"
-    ]
-  ],
-  [
-    "work-show-retired",
-    [
-      "work",
-      "show",
-      "w-ea6vf",
-      "--project",
-      "demo"
-    ]
-  ],
-  [
     "objective-list",
     [
       "objective",

@@ -273,10 +273,10 @@ through reports (`report.added`); the process transitions that do sync
 the pid. This keeps a syncable company record from becoming a copy of every
 provider transcript or host detail.
 
-## Legacy records read as entities
+## How legacy records are read
 
 The log is append-only, so the cutover to the entity grammar rewrote nothing.
-The fold reads the pre-cutover record kinds as entities:
+The fold reads the pre-cutover record kinds as entities — every kind but one:
 
 | Legacy event | Reads as |
 | --- | --- |
@@ -285,11 +285,18 @@ The fold reads the pre-cutover record kinds as entities:
 | `convention.added` / `convention.dropped` | entity(convention, full) / retracted |
 | `objective.created` | entity(objective, full) with its target |
 | `milestone.created` | entity(milestone, index) with its criteria |
-| `work.created` / `work.started` / … | entity(work) plus execution facts |
+| `work.created` / `work.started` / … | nothing — read on `self log` only |
 | `report.added` | unchanged |
 
-These legacy names are read forever and written by no verb. A workspace whose
-log holds them keeps folding; the CLI emits only the entity grammar.
+The four kinds above the work row are read forever and written by no verb. A
+workspace whose log holds them keeps folding; the CLI emits only the entity
+grammar.
+
+Work is the exception, and it was ended rather than kept: those events never
+folded to entities, and the second projection they did fold to was dropped in
+full. A store that holds them still prints every line on `self log`, and no
+line is rewritten or deleted — what ended is that they count as state. A unit
+someone still wants is set up again with `self work add`.
 
 ## What the alpha proves — and what it does not
 

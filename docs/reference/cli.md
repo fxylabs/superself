@@ -216,8 +216,7 @@ work, or a free-labeled entity — folds into one record kind with placement:
   path. `work done` is the judgment that the outcome was reached, and the
   claim must carry evidence: a report with a commit or an artifact, or a
   done-time `--report` stating what verifiably happened. A bare claim is
-  refused, and declared criteria gate done until each carries a coverage
-  claim.
+  refused.
 - `work propose "<plan>"` records work for a person to review. The plan text
   alone is enough; naming `--objective` or `--milestone` makes it a gap
   proposal, which owes the full brief. `work accept` confirms it under the

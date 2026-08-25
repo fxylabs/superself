@@ -1271,8 +1271,8 @@ function cmdWorkRevise({ values, positionals }: CommandInput<typeof REVISE_OPTIO
 
 // The record a revision names, and the log that owns it — the same resolution
 // `work start` makes, so a unit scoped in from another project is revised
-// where its record lives (#181 D3). A legacy unit is not a record here, and
-// says so rather than reading as an unknown id.
+// where its record lives (#181 D3). Since #305 every folded unit is a record
+// here, so a pre-cutover id reads as the unknown id it now is.
 function requireRevisable(ctx: ProjectContext, wanted: string): { entity: EntityState; owner: string }
 {
     for (const model of workspaceModels(ctx.storeDir, ctx.project))
@@ -1282,14 +1282,6 @@ function requireRevisable(ctx: ProjectContext, wanted: string): { entity: Entity
         {
             refuseUnrevisable(entity);
             return { entity, owner: model.slug };
-        }
-        // A unit still folded from pre-cutover `work.*` history is no record
-        // here, and only ever renders at home — so this is asked of the home
-        // project alone, and never of a record another project renders.
-        if (entity === undefined && model.slug === ctx.project && model.works.some((item) => item.id === wanted))
-        {
-            throw new CliError(`${wanted} was recorded before plans were revisable — correct it with a successor: `
-                + supersedeSpelling("work", wanted));
         }
     }
     throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
