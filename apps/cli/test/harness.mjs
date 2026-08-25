@@ -2,6 +2,7 @@
 // config and git identity live under one temp root, so a test can never reach
 // the real workspace. Mirrors what proof/lib.sh established for the shell
 // suites the fast tier replaces.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,13 +44,48 @@ export function machine()
     return { root, env };
 }
 
-// Runs the built CLI and reports what a caller can assert on: exit code and
-// the merged output, because a refusal's text is part of the contract.
+// ── the drivers ──────────────────────────────────────────────────────────
+//
+// Two of them, reporting the same thing: exit code and merged output, because
+// a refusal's text is part of the contract. `drive` runs the command in this
+// process; `spawnIn` starts the real binary as a child. The child is what the
+// whole suite used to do, and what a handful of cells still have to do —
+// #371's 4-3 table names them, and they say so by calling `spawnIn` or
+// `mustSpawn` rather than by a flag somewhere else.
 //
 // `extra` overrides environment for this call alone. Two sessions against one
 // workspace is a real case the CLI answers differently (#230), and the only
 // thing that separates them is what the environment says the session is.
+
+// Whichever driver this run selected. The default is the child, so nothing
+// changes under a file until it is ready; `SELF_TEST_DRIVER=inprocess` runs the
+// same file the way the suite will run it after the switchover. Read per call,
+// not once at load, because `drive` replaces the whole environment while a
+// command runs and the next call has to read the runner's own again.
+function inProcessSelected()
+{
+    return process.env.SELF_TEST_DRIVER === "inprocess";
+}
+
+// Deliberately not `async`. An `async` function returns a promise under either
+// driver, and every one of the suite's call sites would have to grow an `await`
+// in the same commit that introduced the driver. `await` in front of a plain
+// value is a no-op, so leaving the child path synchronous is what lets a file
+// grow its `await`s one commit at a time while the suite keeps running the way
+// it does today. The last commit of this series makes these plainly `async`.
 export function selfIn(box, cwd, args, extra = {})
+{
+    return inProcessSelected() ? drive(box, cwd, args, { extra }) : spawnIn(box, cwd, args, extra);
+}
+
+// Continue whichever of the two shapes came back, without turning a synchronous
+// one into a promise.
+function after(result, then)
+{
+    return result instanceof Promise ? result.then(then) : then(result);
+}
+
+export function spawnIn(box, cwd, args, extra = {})
 {
     const env = { ...box.env, ...extra };
     try
@@ -62,6 +98,190 @@ export function selfIn(box, cwd, args, extra = {})
     }
 }
 
+export function mustSpawn(box, cwd, args, extra = {})
+{
+    return refuseFailure(spawnIn(box, cwd, args, extra), args);
+}
+
+// The command running here rather than in a child of its own. What it must
+// reproduce is not "roughly the same" but the child's exact observation, so
+// each of the three things `execFileSync` was given — cwd, a complete `env`,
+// and non-terminal stdio — is set here and restored afterwards.
+//
+// `options` is `{ extra, tty, answer }`. `tty` is false unless a caller asks
+// for it: the child ran with `stdio: ["ignore", "pipe", "pipe"]` and therefore
+// never had a terminal, while this process may well have one, and three test
+// files set `isTTY` at their top level on purpose.
+export async function drive(box, cwd, args, options = {})
+{
+    const restore = enterInvocation(box, cwd, args, options);
+    const sink = captureOutput();
+    try
+    {
+        return await runCaptured(args, sink);
+    }
+    finally
+    {
+        sink.restore();
+        restore();
+    }
+}
+
+// One command at a time. The driver replaces `process.env`, the working
+// directory, `isTTY` and the console for the length of a call, so two calls
+// overlapping is not a slow test — it is two commands sharing one set of
+// globals. It is also exactly the shape a forgotten `await` takes: the call
+// that was not waited for is still running when the next one starts.
+let driving = null;
+
+function enterInvocation(box, cwd, args, options)
+{
+    refuseUndrivable(args);
+    // `enterCwd` is the one step that can refuse — a directory that is not
+    // there — so it goes first, while nothing has been changed to undo.
+    // `driving` is claimed only once every step has succeeded, which is still
+    // before any `await` and therefore still before another call could start.
+    const undo = [enterCwd(cwd), replaceEnv({ ...box.env, ...options.extra }), enterTty(options.tty === true), enterExit()];
+    const typedWas = options.answer === undefined ? null : useTypedAnswer(() => options.answer);
+    driving = args.join(" ");
+    return () =>
+    {
+        driving = null;
+        if (typedWas !== null)
+        {
+            useTypedAnswer(typedWas);
+        }
+        undo.reverse().forEach((step) => step());
+    };
+}
+
+// Both ways this driver cannot do its job, each with the sentence that names
+// the fix. A worker-thread runner has no `chdir` at all, and `node --test`
+// could be asked for one by a future flag; an overlap is a call somewhere that
+// was not awaited.
+function refuseUndrivable(args)
+{
+    if (typeof process.chdir !== "function")
+    {
+        throw new Error("the in-process driver needs process.chdir, which a worker thread does not have — run the suite with one process per test file");
+    }
+    if (driving !== null)
+    {
+        throw new Error(`a self call was not awaited: \`self ${driving}\` is still running and \`self ${args.join(" ")}\` started on top of it`);
+    }
+}
+
+// A child was handed a complete environment, so the driver replaces rather than
+// adds: `machine()` deleting `SUPERSELF_SESSION` has to reach the command, or a
+// suite run from inside an agent session takes a different path here than on
+// the runner, where that variable does not exist.
+function replaceEnv(next)
+{
+    const was = { ...process.env };
+    Object.keys(process.env).forEach((key) => delete process.env[key]);
+    Object.assign(process.env, next);
+    return () =>
+    {
+        Object.keys(process.env).forEach((key) => delete process.env[key]);
+        Object.assign(process.env, was);
+    };
+}
+
+function enterCwd(cwd)
+{
+    const was = process.cwd();
+    process.chdir(cwd);
+    return () => process.chdir(was);
+}
+
+function enterTty(on)
+{
+    const inWas = process.stdin.isTTY;
+    const outWas = process.stdout.isTTY;
+    process.stdin.isTTY = on;
+    process.stdout.isTTY = on;
+    return () =>
+    {
+        process.stdin.isTTY = inWas;
+        process.stdout.isTTY = outWas;
+    };
+}
+
+// `runCli` sets the exit code and never puts it back, which in a child was the
+// process ending. Here it would fail the test file that ran the command.
+function enterExit()
+{
+    const was = process.exitCode;
+    process.exitCode = 0;
+    return () => { process.exitCode = was; };
+}
+
+// Set for the length of a command and for everything that command's own
+// asynchrony leads to, and for nothing else. This process is also the test
+// runner, and the runner reports itself on the same stdout: its records are
+// buffered and flush whenever the loop turns, which inside a driven command
+// means during one. Redirecting stdout wholesale ate them — the report of a
+// case went into the string a case was asserting on. Whose write it is has to
+// be asked per write, and the async context is what answers it.
+const commandOutput = new AsyncLocalStorage();
+
+// The four places a command can speak. `structure.mjs` forbids `console.log`
+// and `process.stdout.write` outside the render gate and the interaction
+// prompt, so no fifth one can appear without that check failing first;
+// `process.stderr.write` is not that rule's subject and three modules use it
+// for a warning, which a child's piped stderr collected.
+function captureOutput()
+{
+    const write = process.stdout.write.bind(process.stdout);
+    const errWrite = process.stderr.write.bind(process.stderr);
+    const log = console.log;
+    const err = console.error;
+    const sink = { out: "", printed: "" };
+    const mine = () => commandOutput.getStore() !== undefined;
+    process.stdout.write = (chunk, ...rest) => (mine() ? wrote(sink, chunk) : write(chunk, ...rest));
+    process.stderr.write = (chunk, ...rest) => (mine() ? wrote(sink, chunk) : errWrite(chunk, ...rest));
+    console.log = (...parts) => (mine() ? said(sink, parts) : log(...parts));
+    console.error = (...parts) => (mine() ? said(sink, parts) : err(...parts));
+    sink.restore = () =>
+    {
+        process.stdout.write = write;
+        process.stderr.write = errWrite;
+        console.log = log;
+        console.error = err;
+    };
+    return sink;
+}
+
+function wrote(sink, chunk)
+{
+    sink.out += chunk;
+    return true;
+}
+
+function said(sink, parts)
+{
+    sink.out += `${parts.join(" ")}\n`;
+    sink.printed += `${parts.join(" ")}\n`;
+}
+
+// The disclosure and the command's own result both land on stdout, so they are
+// kept apart: `printed` is what the command said, `out` is everything the
+// person saw. An error `runCli` re-throws is one it had no sentence for — node
+// printed the stack and exited 1 for the child, and that is the observation
+// reproduced here rather than a thrown exception a caller would have to catch.
+async function runCaptured(args, sink)
+{
+    try
+    {
+        await commandOutput.run(sink, () => runCli(args));
+        return { code: process.exitCode ?? 0, out: sink.out, printed: sink.printed };
+    }
+    catch (error)
+    {
+        return { code: 1, out: `${sink.out}${error?.stack ?? error}\n`, printed: sink.printed };
+    }
+}
+
 // The same command line a person types, driven where a keyboard can be stood
 // in for. Destroying a record needs someone at a terminal (#173), so the only
 // place the approved path can run is in-process: the command line, the
@@ -70,46 +290,7 @@ export function selfIn(box, cwd, args, extra = {})
 // terminal check, which is why the refusals are asserted through selfIn.
 export async function approvedIn(box, cwd, args, answer)
 {
-    const env = { ...process.env };
-    const cwdWas = process.cwd();
-    const inWas = process.stdin.isTTY;
-    const outWas = process.stdout.isTTY;
-    Object.assign(process.env, box.env);
-    process.chdir(cwd);
-    process.stdin.isTTY = true;
-    process.stdout.isTTY = true;
-    const typedWas = useTypedAnswer(() => answer);
-    process.exitCode = 0;
-    // Same shape selfIn reports, because a refusal's text is part of the
-    // contract. The disclosure and the command's own result both land on
-    // stdout, so they are kept apart: `printed` is what the command said,
-    // `out` is everything the person saw.
-    let out = "";
-    let printed = "";
-    const write = process.stdout.write.bind(process.stdout);
-    const log = console.log;
-    const err = console.error;
-    process.stdout.write = (chunk) => { out += chunk; return true; };
-    console.log = (...parts) => { out += `${parts.join(" ")}\n`; printed += `${parts.join(" ")}\n`; };
-    console.error = (...parts) => { out += `${parts.join(" ")}\n`; printed += `${parts.join(" ")}\n`; };
-    try
-    {
-        await runCli(args);
-        return { code: process.exitCode ?? 0, out, printed };
-    }
-    finally
-    {
-        process.stdout.write = write;
-        console.log = log;
-        console.error = err;
-        useTypedAnswer(typedWas);
-        process.stdin.isTTY = inWas;
-        process.stdout.isTTY = outWas;
-        process.chdir(cwdWas);
-        Object.keys(process.env).forEach((key) => delete process.env[key]);
-        Object.assign(process.env, env);
-        process.exitCode = 0;
-    }
+    return drive(box, cwd, args, { tty: true, answer });
 }
 
 // Destroying a record needs a person at a terminal (#173), and a test has no
@@ -154,15 +335,21 @@ export function demoWorkspace(box)
     const ws = join(box.root, "ws");
     const demo = join(ws, "demo");
     mkdirSync(demo, { recursive: true });
-    must(box, ws, ["init"]);
-    git(box, demo, ["init", "-q", "-b", "main"]);
-    must(box, demo, ["project", "init", "--name", "demo", "--desc", "fast tier project"]);
-    return { ws, demo };
+    return after(must(box, ws, ["init"]), () =>
+    {
+        git(box, demo, ["init", "-q", "-b", "main"]);
+        const named = must(box, demo, ["project", "init", "--name", "demo", "--desc", "fast tier project"]);
+        return after(named, () => ({ ws, demo }));
+    });
 }
 
 export function must(box, cwd, args, extra = {})
 {
-    const result = selfIn(box, cwd, args, extra);
+    return after(selfIn(box, cwd, args, extra), (result) => refuseFailure(result, args));
+}
+
+function refuseFailure(result, args)
+{
     if (result.code !== 0)
     {
         throw new Error(`self ${args.join(" ")} failed:\n${result.out}`);

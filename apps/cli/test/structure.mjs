@@ -497,6 +497,388 @@ function sourcesOf(tree)
     return tree.paths.filter((path) => path.startsWith(`${sourceDirectory}/`));
 }
 
+function testsOf(tree)
+{
+    return tree.paths.filter((path) => path.startsWith("test/") && path.endsWith(".mjs"));
+}
+
+// ------------------------------------------------- one invocation's state
+
+// The entry point that forgets everything one command remembered, and the
+// module it lives in. Every module-level cache in src/ has to be reachable from
+// it — a cache that is not is one a second `runCli` in the same process would
+// answer from, which is how a suite driving the CLI in-process (#371) turns a
+// stale probe into a test that fails for no reason a reader can see.
+export const invocationEntry = { file: "src/main.ts", name: "resetInvocation" };
+
+// State that is deliberately not reset, and why. Three kinds and no others:
+// something a test injects and puts back itself, something the dispatcher
+// registers once at module load and never changes, and something every use of
+// it sets before reading.
+export const invocationStateExemptions = [
+    { file: "src/credentials.ts", name: "clock", why: "injected by useClock, and the injector restores it" },
+    { file: "src/human.ts", name: "typed", why: "injected by useTypedAnswer, and the injector restores it" },
+    { file: "src/rail.ts", name: "backoff", why: "injected by useBackoff, and the injector restores it" },
+    { file: "src/aliases.ts", name: "reservedVerbs", why: "registered once at module load by main.ts, identical for every invocation" },
+    { file: "src/aliases.ts", name: "pluginClaims", why: "registered once at module load by main.ts, identical for every invocation" },
+    { file: "src/app.ts", name: "builtinVerbs", why: "registered once at module load by main.ts, identical for every invocation" },
+    { file: "src/app.ts", name: "aliasClaims", why: "registered once at module load by main.ts, identical for every invocation" },
+    { file: "src/retirement.ts", name: "retiringLeaves", why: "marks command declarations at module load; there is nothing per-invocation in it" },
+    { file: "src/view.ts", name: "LANG", why: "writeViews sets all three from the store config before any render reads them" },
+    { file: "src/view.ts", name: "THEME", why: "writeViews sets all three from the store config before any render reads them" },
+    { file: "src/view.ts", name: "USER_THEME", why: "writeViews sets all three from the store config before any render reads them" }
+];
+
+const collectionKinds = new Set(["Map", "Set", "WeakMap", "WeakSet"]);
+
+// What counts as state a command can leave behind: a top-level binding that can
+// be reassigned, and a top-level collection created empty. A `new Set([...])`
+// with contents is a constant table — `RETRYABLE_STATUS`, `LOCAL_HOSTS` — and a
+// `Record` constant or an array literal is not a collection at all, so none of
+// them is this rule's subject and none needs an exemption.
+export function moduleState(source)
+{
+    return source.statements.filter(ts.isVariableStatement).flatMap((statement) =>
+    {
+        const mutable = (statement.declarationList.flags & ts.NodeFlags.Const) === 0;
+        return statement.declarationList.declarations
+            .filter((declaration) => ts.isIdentifier(declaration.name) && (mutable || emptyCollection(declaration.initializer)))
+            .map((declaration) => ({ name: declaration.name.getText(), line: lineOf(source, declaration.getStart()) }));
+    });
+}
+
+function emptyCollection(initializer)
+{
+    return Boolean(initializer) && ts.isNewExpression(initializer)
+        && collectionKinds.has(initializer.expression.getText())
+        && (initializer.arguments ?? []).length === 0;
+}
+
+export function invocationStateViolations(tree)
+{
+    const reset = resetReach(tree);
+    const exempt = new Set(invocationStateExemptions.map((entry) => `${entry.file}#${entry.name}`));
+    return sourcesOf(tree).flatMap((path) => moduleState(parseSource(tree, path))
+        .filter((state) => !reset.has(`${path}#${state.name}`) && !exempt.has(`${path}#${state.name}`))
+        .map((state) => ({
+            file: path,
+            line: state.line,
+            rule: "invocation-state",
+            detail: `${state.name} outlives one invocation — clear it from ${invocationEntry.name}(), or name it in invocationStateExemptions with the reason it needs no reset`
+        })));
+}
+
+// Every module-level name written by anything `resetInvocation` reaches, found
+// by following calls from it until nothing new turns up. Written means assigned
+// or `.clear()`ed, which is the whole vocabulary the resets use.
+function resetReach(tree)
+{
+    const cleared = new Set();
+    const seen = new Set();
+    const queue = [[invocationEntry.file, invocationEntry.name]];
+    while (queue.length > 0)
+    {
+        const [path, name] = queue.pop();
+        if (seen.has(`${path}#${name}`) || !tree.paths.includes(path))
+        {
+            continue;
+        }
+        seen.add(`${path}#${name}`);
+        const source = parseSource(tree, path);
+        const body = topLevelFunctions(source).get(name);
+        if (body !== undefined)
+        {
+            writesIn(body).forEach((written) => cleared.add(`${path}#${written}`));
+            callsIn(body).forEach((called) => queue.push(...targetsOf(tree, path, source, called)));
+        }
+    }
+    return cleared;
+}
+
+function targetsOf(tree, path, source, called)
+{
+    if (topLevelFunctions(source).has(called))
+    {
+        return [[path, called]];
+    }
+    const imported = importBindings(tree, path, source).get(called);
+    return imported === undefined ? [] : [[imported.target, imported.exported]];
+}
+
+export function topLevelFunctions(source)
+{
+    const found = new Map();
+    for (const statement of source.statements)
+    {
+        if (ts.isFunctionDeclaration(statement) && statement.name)
+        {
+            found.set(statement.name.getText(), statement);
+        }
+        if (ts.isVariableStatement(statement))
+        {
+            statement.declarationList.declarations
+                .filter((declaration) => ts.isIdentifier(declaration.name) && isFunctionLike(declaration.initializer))
+                .forEach((declaration) => found.set(declaration.name.getText(), declaration.initializer));
+        }
+    }
+    return found;
+}
+
+function isFunctionLike(node)
+{
+    return Boolean(node) && (ts.isArrowFunction(node) || ts.isFunctionExpression(node));
+}
+
+// Local name to the module and exported name behind it, so a call can be
+// followed across a file boundary the way a reader follows the import line.
+export function importBindings(tree, path, source)
+{
+    const bound = new Map();
+    for (const statement of source.statements)
+    {
+        const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
+        const target = bindings && ts.isNamedImports(bindings) ? resolveSpecifier(tree, path, statement.moduleSpecifier.text) : undefined;
+        if (target)
+        {
+            bindings.elements.forEach((element) => bound.set(element.name.getText(),
+                { target, exported: (element.propertyName ?? element.name).getText() }));
+        }
+    }
+    return bound;
+}
+
+function writesIn(node)
+{
+    const written = [];
+    const visit = (child) =>
+    {
+        if (ts.isBinaryExpression(child) && child.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(child.left))
+        {
+            written.push(child.left.getText());
+        }
+        if (ts.isCallExpression(child) && ts.isPropertyAccessExpression(child.expression)
+            && child.expression.name.getText() === "clear" && ts.isIdentifier(child.expression.expression))
+        {
+            written.push(child.expression.expression.getText());
+        }
+        ts.forEachChild(child, visit);
+    };
+    ts.forEachChild(node, visit);
+    return written;
+}
+
+function callsIn(node)
+{
+    const called = [];
+    const visit = (child) =>
+    {
+        if (ts.isCallExpression(child) && ts.isIdentifier(child.expression))
+        {
+            called.push(child.expression.getText());
+        }
+        ts.forEachChild(child, visit);
+    };
+    ts.forEachChild(node, visit);
+    return called;
+}
+
+// ------------------------------------------------- awaiting the driver
+
+// The test files whose harness calls have been given their `await`. It grows
+// one migration commit at a time, and the commit that makes the in-process
+// driver the only driver replaces it with every file that imports the harness.
+export const awaitedTestFiles = [];
+
+// The harness exports that run a command. `spawnIn` and `mustSpawn` are
+// deliberately absent: they start a child and are synchronous, which is the
+// whole reason a cell that needs a real process says so by calling them.
+export const driverExports = ["selfIn", "must", "demoWorkspace", "approvedIn", "drive"];
+
+const HARNESS = "./harness.mjs";
+
+export function awaitedDriverViolations(tree, files = awaitedTestFiles)
+{
+    return files.filter((path) => tree.paths.includes(path))
+        .flatMap((path) => driverCallViolations(tree, path, parseSource(tree, path)));
+}
+
+// A missing `await` is silent: the assertion runs before the command it is
+// about. So the rule refuses anything it cannot follow rather than passing it —
+// a wrapper has to be a plain binding whose body reaches a driver call, and a
+// driver name used as a value has no call site this check could look at.
+function driverCallViolations(tree, path, source)
+{
+    const seeds = seedSet(tree, path, source);
+    if (seeds.size === 0)
+    {
+        return [];
+    }
+    const violations = reboundWrappers(path, source, seeds);
+    const visit = (node) =>
+    {
+        if (ts.isIdentifier(node) && seeds.has(node.getText()))
+        {
+            violations.push(...siteViolation(path, source, node));
+        }
+        ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(source, visit);
+    return violations;
+}
+
+// A wrapper held in a binding that can be reassigned is one this check has no
+// fixed body for: what it calls at one call site is not what it calls at the
+// next.
+function reboundWrappers(path, source, seeds)
+{
+    const found = [];
+    const visit = (node) =>
+    {
+        if (ts.isVariableStatement(node) && (node.declarationList.flags & ts.NodeFlags.Const) === 0)
+        {
+            node.declarationList.declarations
+                .filter((declaration) => ts.isIdentifier(declaration.name) && seeds.has(declaration.name.getText()))
+                .forEach((declaration) => found.push(violation371(path, source, declaration.name, "untraceable-driver",
+                    `${declaration.name.getText()} wraps a command runner in a binding that can be reassigned — declare it const, or inline the call`)));
+        }
+        ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(source, visit);
+    return found;
+}
+
+function siteViolation(path, source, name)
+{
+    const parent = name.parent;
+    if (ts.isImportSpecifier(parent) || parent.name === name)
+    {
+        return [];
+    }
+    if (!(ts.isCallExpression(parent) && parent.expression === name))
+    {
+        return [violation371(path, source, name, "untraceable-driver",
+            `${name.getText()} is used as a value, so this check cannot see where the command runs — call it directly`)];
+    }
+    return handedOver(parent) ? [] : [violation371(path, source, name, "awaited-driver",
+        `${name.getText()} runs a command and its result is not awaited — put \`await\` in front of it`)];
+}
+
+// Waited for here, or handed to a caller that will wait: `return`, an arrow's
+// own expression body, or a `Promise.all` the caller awaits.
+function handedOver(call)
+{
+    const parent = call.parent;
+    if (ts.isAwaitExpression(parent) || ts.isReturnStatement(parent) || ts.isArrowFunction(parent))
+    {
+        return true;
+    }
+    const outer = ts.isArrayLiteralExpression(parent) ? parent.parent : parent;
+    return ts.isCallExpression(outer) && outer.expression.getText() === "Promise.all";
+}
+
+function violation371(path, source, node, rule, detail)
+{
+    return { file: path, line: lineOf(source, node.getStart()), rule, detail };
+}
+
+// The driver names this file imported, plus every local binding that reaches
+// one, until no more turn up. 32 files wrap the harness in a one-line local
+// helper, and the wrapper's call sites are where the `await` is actually
+// missing.
+function seedSet(tree, path, source)
+{
+    const seeds = new Set(harnessNames(source));
+    if (seeds.size === 0)
+    {
+        return seeds;
+    }
+    const named = namedFunctions(source);
+    let grown = true;
+    while (grown)
+    {
+        grown = false;
+        named.forEach((body, name) =>
+        {
+            if (!seeds.has(name) && callsIn(body).some((called) => seeds.has(called)))
+            {
+                seeds.add(name);
+                grown = true;
+            }
+        });
+    }
+    return seeds;
+}
+
+// Every named function in the file, at any depth. A wrapper written inside a
+// case's own callback wraps the driver exactly as a file-level one does, and
+// leaving it out is how the check would pass a file whose calls are all behind
+// one. Names are taken as written, so a name reused in two scopes is followed
+// as one — which over-reports rather than under-reports.
+export function namedFunctions(source)
+{
+    const found = new Map();
+    const visit = (node) =>
+    {
+        if (ts.isFunctionDeclaration(node) && node.name)
+        {
+            found.set(node.name.getText(), node);
+        }
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && isFunctionLike(node.initializer))
+        {
+            found.set(node.name.getText(), node.initializer);
+        }
+        ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(source, visit);
+    return found;
+}
+
+function harnessNames(source)
+{
+    return source.statements.flatMap((statement) =>
+    {
+        const bindings = ts.isImportDeclaration(statement) && statement.moduleSpecifier.text === HARNESS
+            ? statement.importClause?.namedBindings
+            : undefined;
+        return bindings && ts.isNamedImports(bindings)
+            ? bindings.elements.filter((element) => driverExports.includes((element.propertyName ?? element.name).getText()))
+                .map((element) => element.name.getText())
+            : [];
+    });
+}
+
+// A test file's cases run one after another, and the in-process driver relies
+// on it: it swaps `process.env`, the working directory and the console for the
+// length of a call. `{ concurrency: true }` would overlap two of them.
+export function testConcurrencyViolations(tree)
+{
+    return testsOf(tree).flatMap((path) =>
+    {
+        const source = parseSource(tree, path);
+        return concurrencyOptions(source).map((line) => ({
+            file: path,
+            line,
+            rule: "test-concurrency",
+            detail: "a concurrency option overlaps two cases, and the in-process CLI driver owns process-wide state for the length of a call"
+        }));
+    });
+}
+
+function concurrencyOptions(source)
+{
+    const found = [];
+    const visit = (node) =>
+    {
+        if (ts.isPropertyAssignment(node) && node.name.getText() === "concurrency")
+        {
+            found.push(lineOf(source, node.getStart()));
+        }
+        ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(source, visit);
+    return found;
+}
+
 // ---------------------------------------------------------------- the diff
 
 // A check with no base silently passes everything, which reads as a clean
@@ -581,7 +963,10 @@ export function runStructure(options = {})
             ...importDirectionViolations(head),
             ...credentialIsolationViolations(head),
             ...functionLengthViolations(head, changed, limit),
-            ...printSiteViolations(head)
+            ...printSiteViolations(head),
+            ...invocationStateViolations(head),
+            ...awaitedDriverViolations(head),
+            ...testConcurrencyViolations(head)
         ],
         dead,
         deadBefore,

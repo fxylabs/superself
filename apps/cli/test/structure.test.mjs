@@ -11,6 +11,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    awaitedDriverViolations,
     changedLines,
     deadExports,
     diskTree,
@@ -18,6 +19,7 @@ import {
     functionSpans,
     importDirectionViolations,
     interactionPrompt,
+    invocationStateViolations,
     credentialIsolationViolations,
     credentialModules,
     memoryTree,
@@ -26,7 +28,8 @@ import {
     printSiteViolations,
     rootKeyViolations,
     rootKeysModule,
-    resolveBase
+    resolveBase,
+    testConcurrencyViolations
 } from "./structure.mjs";
 
 // The gate reads no environment variable at all, so a case below fires — or
@@ -311,6 +314,167 @@ test("a module importing its own export does not thereby keep it alive", () =>
 {
     const tree = memoryTree({ "src/self.ts": "import { loop } from \"./self.js\";\nexport function loop() { return loop; }\n" });
     assert.deepEqual(deadExports(tree).map((entry) => entry.name), ["loop"]);
+});
+
+// ---------------------------------------------------------------- invocation state
+
+// A tree with a `main.ts` whose `resetInvocation` clears whatever the case
+// hands it, and one other module holding the state under test.
+function withReset(module, source, reset)
+{
+    return memoryTree({
+        "src/main.ts": `import { wipe } from "./${module.replace(/\.ts$/, ".js")}";\n`
+            + `function resetInvocation()\n{\n${reset}\n}\n`,
+        [`src/${module}`]: source
+    });
+}
+
+test("a cache the invocation reset never clears is a violation that names the reset", () =>
+{
+    const tree = withReset("probe.ts", "const seen = new Map();\nexport function ask() { return seen; }\n", "");
+    const violations = invocationStateViolations(tree);
+    assert.deepEqual(violations.map((one) => one.file), ["src/probe.ts"]);
+    assert.equal(violations[0].rule, "invocation-state");
+    assert.match(violations[0].detail, /resetInvocation\(\)/);
+});
+
+test("a cache the reset clears through the export it imported is not a violation", () =>
+{
+    const tree = withReset("probe.ts",
+        "const seen = new Map();\nexport function wipe() { seen.clear(); }\n", "    wipe();");
+    assert.deepEqual(invocationStateViolations(tree), []);
+});
+
+test("the reset is followed through a helper of its own, not only through its first call", () =>
+{
+    const tree = memoryTree({
+        "src/main.ts": "import { wipe } from \"./probe.js\";\nfunction resetInvocation()\n{\n    every();\n}\nfunction every() { wipe(); }\n",
+        "src/probe.ts": "const seen = new Map();\nexport function wipe() { seen.clear(); }\n"
+    });
+    assert.deepEqual(invocationStateViolations(tree), []);
+});
+
+test("a reassignable binding the reset assigns is not a violation", () =>
+{
+    const tree = withReset("mode.ts",
+        "let on = false;\nexport function wipe() { on = false; }\nexport function reads() { return on; }\n", "    wipe();");
+    assert.deepEqual(invocationStateViolations(tree), []);
+});
+
+// The predicate is "state a command can leave behind", not "anything that
+// looks like a table". These are the shapes the review named as false-positive
+// candidates, and none of them is this rule's subject.
+test("constant tables, arrays and populated collections are not invocation state", () =>
+{
+    const tree = withReset("tables.ts",
+        "const LABELS: Record<string, string> = { a: \"b\" };\n"
+        + "const RULES = [/x/, /y/];\n"
+        + "const RETRYABLE = new Set([429, 503]);\n"
+        + "const SPLITTER = new Intl.Segmenter(\"en\");\n"
+        + "export function reads() { return [LABELS, RULES, RETRYABLE, SPLITTER]; }\n", "");
+    assert.deepEqual(invocationStateViolations(tree), []);
+});
+
+test("a `let` inside a template string is not invocation state", () =>
+{
+    const tree = withReset("page.ts",
+        "const PAGE = `<script>let lastActivity = 0;</script>`;\nexport function reads() { return PAGE; }\n", "");
+    assert.deepEqual(invocationStateViolations(tree), []);
+});
+
+// ---------------------------------------------------------------- awaiting the driver
+
+// A test file and the harness it imports, which is all the rule reads.
+function suite(source)
+{
+    return memoryTree({ "test/harness.mjs": "export function must() {}\n", "test/case.test.mjs": source });
+}
+
+const listed = ["test/case.test.mjs"];
+
+test("a harness call whose result is awaited is not a violation", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\nawait must(1);\n");
+    assert.deepEqual(awaitedDriverViolations(tree, listed), []);
+});
+
+test("a harness call left unawaited is named at its own line", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\nmust(1);\n");
+    const violations = awaitedDriverViolations(tree, listed);
+    assert.deepEqual(violations.map((one) => [one.rule, one.line]), [["awaited-driver", 2]]);
+    assert.match(violations[0].detail, /put `await` in front of it/);
+});
+
+// Cell 35: the wrapper case. 32 files in the suite put a one-line local helper
+// in front of the harness, and every call of the helper is a call of the
+// harness.
+test("cell 35: a call through a file's own wrapper is followed to the wrapper's call sites", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\n"
+        + "const run = (args) => must(args);\n"
+        + "run([\"status\"]);\n");
+    const violations = awaitedDriverViolations(tree, listed);
+    assert.deepEqual(violations.map((one) => [one.rule, one.line]), [["awaited-driver", 3]]);
+});
+
+test("the wrapper chain is followed until it stops growing, not one link deep", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\n"
+        + "const run = (args) => must(args);\n"
+        + "const twice = (args) => run(args);\n"
+        + "twice([\"status\"]);\n");
+    assert.deepEqual(awaitedDriverViolations(tree, listed).map((one) => one.line), [4]);
+});
+
+test("a wrapper written inside a case's own callback is followed the same way", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\n"
+        + "test(\"x\", async () => {\n"
+        + "    const run = (args) => must(args);\n"
+        + "    run([\"status\"]);\n"
+        + "});\n");
+    assert.deepEqual(awaitedDriverViolations(tree, listed).map((one) => one.line), [4]);
+});
+
+// Cell 36: refused rather than passed. What the rule cannot follow it says so
+// about, because the failure it exists to prevent is silent.
+test("cell 36: a driver handed over as a value is refused as untraceable", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\nconst run = later ? must : other;\n");
+    const violations = awaitedDriverViolations(tree, listed);
+    assert.deepEqual(violations.map((one) => one.rule), ["untraceable-driver"]);
+    assert.match(violations[0].detail, /used as a value/);
+});
+
+test("a wrapper in a binding that can be reassigned is refused as untraceable", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\nlet run = (args) => must(args);\nawait run(1);\n");
+    const violations = awaitedDriverViolations(tree, listed);
+    assert.deepEqual(violations.map((one) => one.rule), ["untraceable-driver"]);
+    assert.match(violations[0].detail, /declare it const/);
+});
+
+test("a file that is not on the list is not read at all", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\nmust(1);\n");
+    assert.deepEqual(awaitedDriverViolations(tree, []), []);
+});
+
+test("a result handed straight to the caller is awaited by the caller", () =>
+{
+    const tree = suite("import { must } from \"./harness.mjs\";\n"
+        + "const run = (args) => must(args);\n"
+        + "async function both() { return Promise.all([run(1), run(2)]); }\n"
+        + "await both();\n");
+    assert.deepEqual(awaitedDriverViolations(tree, listed), []);
+});
+
+test("a case declared with a concurrency option is a violation", () =>
+{
+    const tree = memoryTree({ "test/case.test.mjs": "test(\"x\", { concurrency: true }, () => {});\n" });
+    const violations = testConcurrencyViolations(tree);
+    assert.deepEqual(violations.map((one) => one.rule), ["test-concurrency"]);
 });
 
 // ---------------------------------------------------------------- the base

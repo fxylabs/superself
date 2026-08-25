@@ -228,8 +228,16 @@ interface CredentialFile
 
 // POSIX modes mean nothing on Windows, so the check is skipped there with one
 // warning rather than refusing to run for a property that platform cannot
-// express (§9 Q13). The warning is emitted once per process.
+// express (§9 Q13). The warning is emitted once per invocation.
 let warnedWindows = false;
+
+// Said once per invocation rather than once per process: a second `runCli` in
+// one process is a second command, and a command that skipped a check owes its
+// caller the line saying so even when an earlier one already said it.
+export function resetCredentialWarnings(): void
+{
+    warnedWindows = false;
+}
 
 function checkMode(path: string): void
 {

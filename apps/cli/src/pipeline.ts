@@ -27,6 +27,17 @@ export function holdAppends(on: boolean): void
     heldForApproval = on;
 }
 
+// A hold is closed by the collector that opened it, and an exception thrown
+// between the two leaves it open. Inside one process that was the end of the
+// run and nothing noticed; across two invocations it is a log that refuses
+// every append the next command makes. Cleared on entry to `runCli` for the
+// same reason the caches are: a hold belongs to one invocation.
+export function resetPipeline(): void
+{
+    machineMode = false;
+    heldForApproval = false;
+}
+
 export function makeEvent(
     project: string,
     type: string,

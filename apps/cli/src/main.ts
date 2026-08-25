@@ -15,7 +15,7 @@ import { entityCharacters, EntityState, Exposure, isEntityCreation, isLive, payl
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
-import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, topOf } from "./gitutil.js";
+import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, resetProbes, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
@@ -49,6 +49,7 @@ import {
     requireProject,
     requireRegistered,
     requireWorkspace,
+    resetProcessNotices,
     resolveProjectPath,
     SCOPE_OPTIONS,
     siblingSlug,
@@ -59,10 +60,11 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { notice, renderOutput } from "./output.js";
-import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { makeEvent, recordEvent, recordEvents, resetPipeline } from "./pipeline.js";
+import { resetHomeRule } from "./redact.js";
 import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
-import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
+import { dropCollected, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
@@ -86,12 +88,12 @@ import { RENDER_OPTIONS } from "./pretty.js";
 import { contextOutput, handoffContextLines, handoffOutput, HandoffSnapshot, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
 import { APP_COMMAND, registerHostVerbs } from "./app.js";
 import { LOGIN_COMMAND, LOGOUT_COMMAND, WHOAMI_COMMAND, clientTag } from "./login.js";
-import { resolveProfileName } from "./credentials.js";
+import { resetCredentialWarnings, resolveProfileName } from "./credentials.js";
 import {
     InstalledPlugin, LoadContext, assertDevPluginMode, devPluginDir, installedPlugins,
     loadDevPlugin, loadPlugin, pluginVerbs, resolveRailMajor
 } from "./plugins.js";
-import { loadTrustDocument } from "./trust.js";
+import { loadTrustDocument, resetVerifierCalls } from "./trust.js";
 import { jsonMode, renderFailure, selectJsonMode } from "./output.js";
 import { suppressJournal } from "./rail.js";
 import { CliError, CommandOutput, EventRefs, OutputBlock, SelfEvent } from "./types.js";
@@ -3677,8 +3679,36 @@ function restoredBy(event: SelfEvent): string
         : String(event.payload.entity ?? "");
 }
 
+// Everything this process remembers between commands, forgotten. The caches are
+// each memoized because one command asks the same question repeatedly; none of
+// them is a claim about the machine that outlives the command, and `paths.ts`
+// already states the lifetime that way — "until the next append or the next
+// tick", never "until this process ends".
+//
+// A second `runCli` in one process is a second command. It may stand in a
+// different directory, under a different HOME, against a repository the first
+// one's caller created in between; it starts from disk, not from what its
+// predecessor found there. The structure check's `invocation-state` rule holds
+// this list complete: a new module-level cache is a violation until a reset
+// here covers it or an exemption names why it needs none.
+function resetInvocation(): void
+{
+    resetProbes();
+    invalidateResolution();
+    resetProcessNotices();
+    resetHomeRule();
+    resetPipeline();
+    dropCollected();
+    resetVerifierCalls();
+    resetCredentialWarnings();
+    selectJsonMode(false);
+    suppressJournal(false);
+}
+
 export async function runCli(argv: string[]): Promise<void>
 {
+    resetInvocation();
+    process.exitCode = 0;
     try
     {
         await main(argv);

@@ -262,6 +262,21 @@ export function checkoutTops(dir: string): string[]
     return worktrees.get(dir) ?? [];
 }
 
+// Every probe above answers "what is on disk at this path", and each memoizes
+// because one command asks the same handful of paths over and over. The bound
+// on that memory is one invocation, not one process: a caller that runs `self`
+// twice can create a repository between the two calls, and the second call must
+// not answer from what the first found. `runCli` calls this on entry, which is
+// the only place that knows one invocation has ended and another begun.
+export function resetProbes(): void
+{
+    commons.clear();
+    tops.clear();
+    real.clear();
+    identities.clear();
+    worktrees.clear();
+}
+
 // A detached HEAD reports the literal "HEAD"; record nothing rather than a
 // name that points at no branch.
 export function currentBranch(dir: string): string | null
