@@ -13,6 +13,7 @@ project "demo" registered
 $ self work add stage 1 lands the render gate and its pilot   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
 <w-id>
+no objective yet? `self objective add "<outcome>" --proposed`, then `self objective confirm <id>`
 
 $ self decide the render gate is the one path to stdout --why one print path   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
