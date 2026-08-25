@@ -1,4 +1,4 @@
-// Design §7.2 — the device-flow client. Cells 22–35 and 136.
+// Design §7.2 — the device-flow client. Cells 22–35, 136 and 173–178.
 //
 // The rail here is a real loopback server, so the poll pacing these cells are
 // about is the pacing the shipped transport actually produces. The interval is
@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { demoWorkspace, machine } from "./harness.mjs";
@@ -402,6 +403,90 @@ test("cell 136: a transport failure consumes its slot, never resets the timer, a
     {
         await rail.close();
     }
+});
+
+/* ── cells 173–178: the device-start body on the wire (#366) ───────── */
+
+// A rail that refuses the device-start whenever `veto` says its body is wrong.
+// Cells 176 and 177 each pass one condition, so a failure names which half of
+// the contract broke rather than lighting up both.
+async function pickyLogin(it, veto)
+{
+    const device = deviceRail({ poll: () => approved() });
+    const rail = await railServer((call, index) =>
+    {
+        if (call.path === "/api/device/start" && veto(call.body ?? {}))
+        {
+            return { status: 400, body: { code: "invalid_request", message: "the device-start body is not the contract's" } };
+        }
+        return device.handler(call, index);
+    });
+    try
+    {
+        return await selfAsync(it, it.demo, ["login", "--json", "--no-open", ...base(rail)], railEnv(rail));
+    }
+    finally
+    {
+        await rail.close();
+    }
+}
+
+test("cell 173: the device-start body is exactly { device_label, scopes }", async () =>
+{
+    const it = box();
+    const result = await login(it, ["--json", "--no-open"], { poll: () => approved() });
+    assert.equal(result.code, 0, result.all);
+    const body = result.device.start.body;
+    assert.deepEqual(Object.keys(body).sort(), ["device_label", "scopes"], "the device-start body is not the two contract keys");
+    assert.equal("label" in body, false, "the retired short key is still on the wire");
+    assert.equal(typeof body.device_label, "string");
+    assert.ok(body.device_label.endsWith(`@${hostname()}`), "the default label is not user@host");
+});
+
+test("cell 174: --label travels as device_label", async () =>
+{
+    const it = box();
+    const result = await login(it, ["--json", "--no-open", "--label", "my box"], { poll: () => approved() });
+    assert.equal(result.code, 0, result.all);
+    assert.equal(result.device.start.body.device_label, "my box");
+    assert.equal("label" in result.device.start.body, false, "the retired short key is still on the wire");
+});
+
+test("cell 175: --scopes narrows the scopes and leaves device_label in place", async () =>
+{
+    const it = box();
+    const result = await login(it, ["--json", "--no-open", "--scopes", "email.send"], {
+        poll: () => approved({ scopes: ["email.send"] })
+    });
+    assert.equal(result.code, 0, result.all);
+    assert.deepEqual(result.device.start.body.scopes, ["email.send"]);
+    assert.ok(result.device.start.body.device_label.length > 0, "narrowing the scopes dropped the label");
+});
+
+test("cell 176: a rail that requires device_label completes the login", async () =>
+{
+    const it = box();
+    const result = await pickyLogin(it, (body) => typeof body.device_label !== "string");
+    assert.equal(result.code, 0, result.all);
+    assert.equal(existsSync(credentialsFile(it)), true, "a contract rail refused the login");
+});
+
+test("cell 177: a rail that refuses a bare label completes the login", async () =>
+{
+    const it = box();
+    const result = await pickyLogin(it, (body) => "label" in body);
+    assert.equal(result.code, 0, result.all);
+    assert.equal(existsSync(credentialsFile(it)), true, "a rail that rejects the old key refused the login");
+});
+
+test("cell 178: the label sent and the label stored are one value", async () =>
+{
+    const it = box();
+    const result = await login(it, ["--json", "--no-open", "--label", "my box"], { poll: () => approved() });
+    assert.equal(result.code, 0, result.all);
+    const file = JSON.parse(readFileSync(credentialsFile(it), "utf8"));
+    assert.equal(file.profiles.default.device_label, "my box");
+    assert.equal(file.profiles.default.device_label, result.device.start.body.device_label);
 });
 
 test("a login with no --profile writes `default`, whatever the file's own default points at", async () =>

@@ -94,9 +94,12 @@ function count(body: Record<string, JsonValue>, key: string, fallback: number): 
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+// The wire field is `device_label`, not `label`: that is the contract's name for
+// it, and it is the same name this file stores the value under (`device_label`
+// in `profileFrom`). One vocabulary, on the wire and on disk.
 async function startDevice(base: string, session: RailSession, label: string, scopes: string[]): Promise<DeviceStart>
 {
-    const answer = await publicPost(base, "/api/device/start", { label, scopes }, session);
+    const answer = await publicPost(base, "/api/device/start", { device_label: label, scopes }, session);
     const body = asRecord(answer.body);
     if (answer.status !== 200)
     {
