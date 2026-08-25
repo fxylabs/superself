@@ -27,6 +27,7 @@ Scrubbing rules applied to every text file: internal git host → `<internal-git
 | `tapes/intro.tape.in` → `intro.gif`, `intro.mp4` | the 2-minute intro: `self context`, `self work`, `self decide confirm`, `self work start`, `self report … --evidence <commit>`, `self work show`, `self status`, in one run against the scratch workspace | vhs; ids and the evidence commit are filled in by `record.sh` from the scratch run |
 | `voices.md` | eleven public statements of the drift-or-stop problem, with date, signal, verbatim quote and URL (GitHub issues, Hacker News, Reddit) | `gh`, HN Algolia API, Reddit JSON through the browser session, 2026-08-23 |
 | `state-after.txt` | the real project's open-work list filtered to the six units, as it stood when the materials were collected | `self work --project superself --plain`, 2026-08-23 |
+| `cli/no-evidence-done.txt` | current completion refusal used in step 6 | isolated throwaway workspace, `self` 0.7.0, 2026-08-23 |
 
 Notes
 

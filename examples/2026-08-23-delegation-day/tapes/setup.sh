@@ -15,7 +15,7 @@ command -v self >/dev/null || { echo "self is not on PATH"; exit 1; }
 )
 cd scratch/ws/delegation-day
 git init -q .
-git -c user.name=operator -c user.email=operator@example.invalid commit -q --allow-empty -m "delegation day: six briefs reviewed"
+git -c user.name=operator -c user.email=operator.invalid commit -q --allow-empty -m "delegation day: six briefs reviewed"
 git rev-parse --short HEAD > ../../evidence-sha
 self project init --name delegation-day --desc "Throwaway project for the tutorial-one tapes" >/dev/null
 # The real goal of the project, shortened to one line.

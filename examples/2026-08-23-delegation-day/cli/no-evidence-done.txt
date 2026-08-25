@@ -1,0 +1,4 @@
+self 0.7.0, run 2026-08-23 in an isolated throwaway workspace.
+
+$ self work done w-n21cx
+error: w-n21cx has no evidence for done — attach a report first (`self report w-n21cx "<summary>" --evidence <commit>` or `--artifact <path>`), or state what verifiably happened with `self work done w-n21cx --report "<what happened>"`
