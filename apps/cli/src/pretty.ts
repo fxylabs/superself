@@ -29,6 +29,7 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
+import { artifactPointer } from "./entities.js";
 import { claimNote } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
@@ -841,7 +842,8 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push("", ...unshippedSection(model));
     lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)));
     lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
-    lines.push("", ...listSection("CONVENTIONS", currentConventions(model.conventions).map((item) => item.text),
+    lines.push("", ...listSection("CONVENTIONS",
+        currentConventions(model.conventions).map((item) => `${item.text}${artifactPointer(item.artifact)}`),
         scoped("self search --type convention", project)));
     lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
     return lines;

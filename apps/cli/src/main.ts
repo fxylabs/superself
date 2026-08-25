@@ -5,13 +5,13 @@ import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, 
 import { applyCommand } from "./apply.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
-import { ARTIFACT_COMMAND, artifactDigest, commitStaged, stageArtifacts } from "./artifact.js";
+import { ARTIFACT_COMMAND, artifactDigest, commitStaged, resolveArtifactRef, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
 import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitations } from "./design.js";
-import { EntityState, Exposure, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
+import { entityCharacters, EntityState, Exposure, isEntityCreation, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
@@ -78,7 +78,7 @@ import {
     tierOf
 } from "./state.js";
 import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
-import { bold, countCharacters, dim, markdownHeadings, styled } from "./style.js";
+import { bold, dim, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS } from "./pretty.js";
 import { contextOutput, handoffContextLines, handoffOutput, HandoffSnapshot, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
@@ -564,6 +564,10 @@ const CONVENTION_OPTIONS = {
     why: { type: "string" },
     workspace: { type: "boolean" },
     public: { type: "boolean" },
+    // Taken as repeatable so a second one is refused by name (#238): a rule
+    // points at one document, and a single option would let the parser keep
+    // the last value and drop the first without a word.
+    artifact: { type: "string", multiple: true },
     demote: { type: "string", multiple: true }
 } as const;
 
@@ -1228,13 +1232,17 @@ export const COMMANDS: Command[] = [
     {
         name: "convention",
         usage: [
-            { syntax: 'convention add "<text>" [--supersedes <event-id>] [--workspace] [--public]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
+            { syntax: 'convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] [--artifact <id|path>]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
             { syntax: 'convention drop <event-id> --why "<reason>"', description: ["retire a convention with nothing replacing it"], verbs: ["drop"] }
         ],
         detail: [
             "record a rule this project works by, or retire one by its event id.",
             "",
             "  --supersedes <id>     the convention this one replaces, repeatable",
+            "  --artifact <id|path>  the guide this rule points at: an `a-` id this project stores,",
+            "                        or a path registered now. One per rule, and context renders a",
+            "                        pointer to it — the pointer counts against the retention cap,",
+            "                        the document does not, so a rule may point at a long guide",
             "  --why <text>          why a dropped rule no longer holds; every withdrawal carries one",
             "  --workspace           record at workspace scope: the rule renders in every",
             "                        project's context; its record stays in this project's store",
@@ -1253,7 +1261,8 @@ export const COMMANDS: Command[] = [
         node: branch({
             name: "convention",
             unnamed: "refuse",
-            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] | drop <event-id> --why w',
+            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] [--artifact <id|path>]'
+                + " | drop <event-id> --why w",
             children: [
                 retiring(leaf("add", CONVENTION_OPTIONS, 1, conventionAdd)),
                 retiring(leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop, { requires: [WHY_REQUIRED] }))
@@ -2190,7 +2199,7 @@ function presetDemotions(ctx: ProjectContext, models: ProjectModel[], verb: stri
     const target = payload.scope === "workspace" ? "workspace" : ctx.project;
     const usage = verb === "decide" ? 'decide "<text>"' : `${verb} add "<text>"`;
     return admittingDemotions(ctx, models, values, tierOf(target, exposure),
-        usage, countCharacters(text), supersedeTargets(payload));
+        usage, entityCharacters({ text, artifact: payloadArtifact(payload) }), supersedeTargets(payload));
 }
 
 function presetEntityEvent(ctx: ProjectContext, models: ProjectModel[], verb: string, text: string,
@@ -3323,7 +3332,16 @@ function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_O
     }
     const ctx = requireProject(process.cwd());
     const models = workspaceModels(ctx.storeDir, ctx.project);
-    presetEntityEvent(ctx, models, "convention", text, conventionExtra(models[0], values), undefined, { demote: values.demote });
+    const extra = conventionExtra(models[0], values);
+    // Last, after every other refusal: a path is registered here, and the
+    // registration is one event of its own that a later refusal cannot take
+    // back (#238).
+    const artifact = resolveArtifactRef(ctx, values.artifact);
+    if (artifact !== undefined)
+    {
+        extra.artifact = artifact;
+    }
+    presetEntityEvent(ctx, models, "convention", text, extra, undefined, { demote: values.demote });
 }
 
 // Everything the flags say about a rule beyond its text: what it replaces,
@@ -3374,6 +3392,11 @@ function refuseStatingFlags(values: CommandInput<typeof CONVENTION_OPTIONS>["val
     if (values.public === true)
     {
         throw new CliError("convention drop takes no --public — a rule is dropped wherever it renders; --public states a new rule's visibility");
+    }
+    if (values.artifact !== undefined)
+    {
+        throw new CliError('convention drop takes no --artifact — a rule points at a guide when it is stated; to change what it points at, '
+            + 'restate the rule with `convention add "<text>" --supersedes <event-id> --artifact <id|path>`');
     }
 }
 

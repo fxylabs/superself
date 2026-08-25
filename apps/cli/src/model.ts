@@ -83,6 +83,10 @@ export interface ConventionState
     // files (#276). Absent means internal, which is what every rule recorded
     // before the key existed reads as.
     visibility?: "public";
+    // The registered artifact the rule points at, by id (#238). Carried here
+    // because the terminal render reads this projection and not the entity —
+    // dropping it here would render a rule without the guide it names.
+    artifact?: string;
 }
 
 // The rules that hold now. One site answers it, so no two renderers can
@@ -97,6 +101,9 @@ export interface HandoffConvention
     id: string;
     ts: string;
     text: string;
+    // The artifact the rule points at (#238), for the same reason
+    // `ConventionState` carries it: the packet renders from this projection.
+    artifact?: string;
 }
 
 // The packet's convention closure follows the same placement graph as context:
@@ -113,7 +120,7 @@ export function applicableConventions(target: string, models: ProjectModel[]): H
         {
             if (!found.has(entity.id))
             {
-                found.set(entity.id, { id: entity.id, ts: entity.ts, text: entity.text });
+                found.set(entity.id, { id: entity.id, ts: entity.ts, text: entity.text, artifact: entity.artifact });
             }
         }
     }
@@ -1247,7 +1254,8 @@ function projectConvention(entity: EntityState): ConventionState
             : entity.status === "superseded" ? "superseded" : "dropped",
         supersedes: supersedesOf(entity),
         closedWhy: entity.closedWhy,
-        visibility: entity.visibility
+        visibility: entity.visibility,
+        artifact: entity.artifact
     };
 }
 

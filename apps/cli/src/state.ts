@@ -5,10 +5,12 @@
 // same record kind, folded by `entities.ts` into one view.
 
 import { required, requireText, Requirement } from "./args.js";
+import { resolveArtifactRef } from "./artifact.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import {
     DEMOTION_TARGET,
+    entityCharacters,
     EntityLink,
     EntitySource,
     EntityState,
@@ -54,14 +56,15 @@ import {
 import { notice } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
-import { countCharacters, tokensOf } from "./style.js";
+import { tokensOf } from "./style.js";
 import { CliError, CommandOutput, EventRefs, SelfEvent } from "./types.js";
 import { historyOutput } from "./views.js";
 
 const STATE_USAGE = 'usage: self state add "<text>" | show <id> | list | place <id> | confirm <id> | retract <id> --why w'
     + ' | cover <id> --criterion c --why w | start <id> | block <id> | unblock <id> | done <id> --report r | retire <id> --why w';
 const ADD_USAGE = 'state add "<text>" [--label l] [--priority n] [--exposure full|index|search] [--scope <slug>|workspace] '
-    + "[--target YYYY-MM-DD] [--criteria c] [--supersedes <id>] [--link [type:]<id>] [--why w] [--proposed] [--demote <id>]";
+    + "[--target YYYY-MM-DD] [--criteria c] [--artifact <id|path>] [--supersedes <id>] [--link [type:]<id>] [--why w] "
+    + "[--proposed] [--demote <id>]";
 const PLACE_USAGE = "state place <id> [--priority <n>] [--exposure full|index|search] [--scope <slug>|workspace] "
     + '[--why "<reason>"] [--proposed] [--demote <id>]';
 const RETRACT_USAGE = 'state retract <id> --why "<why it no longer holds>"';
@@ -74,6 +77,10 @@ const ADD_OPTIONS = {
     scope: { type: "string" },
     target: { type: "string" },
     criteria: { type: "string", multiple: true },
+    // Taken as repeatable so a second one is refused by name (#238). A record
+    // references one artifact, and a single option would let the parser keep
+    // the last value and drop the first without a word.
+    artifact: { type: "string", multiple: true },
     supersedes: { type: "string", multiple: true },
     link: { type: "string", multiple: true },
     why: { type: "string" },
@@ -226,6 +233,9 @@ export const STATE_COMMAND: Command = {
         "                        context); caps count per destination",
         "  --target <date>       a YYYY-MM-DD deadline for the derived views to judge",
         "  --criteria <text>     an exit criterion that gates done claims, repeatable",
+        "  --artifact <id|path>  a registered artifact this record points at: an `a-` id this",
+        "                        project stores, or a path registered now. One per record; the",
+        "                        pointer counts against the cap and the document does not",
         "  --criterion <c>       the declared criterion a coverage claim answers — its text, or cN",
         "  --evidence <commit>   a commit recorded with the coverage claim, repeatable",
         "  --work <id>           the work unit whose evidence covers the criterion",
@@ -322,22 +332,35 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     const exposure = values.exposure !== undefined ? validExposure(values.exposure) : row?.exposure ?? "index";
     const target = values.scope === undefined ? ctx.project : validScope(ctx, values.scope);
     const id = entityId();
-    const proposed = values.proposed === true;
-    const payload = { ...addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row), ...reserved };
+    // Resolved before the record's own event and after every other check: a
+    // path registers here, and an artifact nothing points at is the only
+    // wreckage a failure between the two can leave (#238).
+    const artifact = resolveArtifactRef(ctx, values.artifact);
+    const payload = { ...addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row),
+        ...(artifact === undefined ? {} : { artifact }), ...reserved };
     const demotions = admittingDemotions(ctx, models, values, tierOf(target, exposure),
-        usageText, countCharacters(text), supersedeTargets(payload));
-    // A proposal displaces nothing: its supersedes links wait for the confirm
-    // that makes them real, so the gate belongs there rather than here.
+        usageText, entityCharacters({ text, artifact }), supersedeTargets(payload));
+    recordAdd(ctx, models, { id, text, payload }, demotions, values.proposed === true);
+    return [{ kind: "receipt", text: id }];
+}
+
+// The write itself, once the cap has admitted it. A proposal displaces
+// nothing: its supersedes links wait for the confirm that makes them real, so
+// the gate belongs there rather than here.
+function recordAdd(ctx: ProjectContext, models: ProjectModel[],
+    record: { id: string; text: string; payload: Record<string, unknown> },
+    demotions: Placed[], proposed: boolean): void
+{
+    const payload = record.payload;
     const displaced = proposed ? [] : supersedeTargets(payload);
     recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced,
         { successor: supersedingRecord(payload) }), models[0],
         (confirmation) => [
             makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
                 confirmation === undefined ? payload : { ...payload, confirmation }, undefined, !proposed),
-            ...demotionEvents(demotions, id, proposed)
+            ...demotionEvents(demotions, record.id, proposed)
         ],
-        `${id} ${text}`);
-    return [{ kind: "receipt", text: id }];
+        `${record.id} ${record.text}`);
 }
 
 // What the cap gate reads off a verb's arguments: the demotions it names, and
@@ -380,7 +403,7 @@ function vacatedTokens(records: Placed[], displaced: string[], entered: CappedTi
     }
     const leaving = records.filter((item) => displaced.includes(item.entity.id)
         && occupiesTier(item.entity, item.owner, entered.target, entered.tier));
-    return tokensOf(leaving.reduce((sum, item) => sum + countCharacters(item.entity.text), 0), scale.perCharacter);
+    return tokensOf(leaving.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
 }
 
 function addPayload(
@@ -480,7 +503,7 @@ function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>)
     const scale = tokenScale(config);
     const usage = usageReader(models, scale);
     const demotions = demotionsFor(records, values.demote ?? [], move.entered, found.entity.id, PLACE_USAGE, ctx.project);
-    requireRoom(usage, caps, move.entered, countCharacters(found.entity.text), demotions, scale, ctx.project, 0, false);
+    requireRoom(usage, caps, move.entered, entityCharacters(found.entity), demotions, scale, ctx.project, 0, false);
     const from = scopeTarget(found.entity, found.owner);
     requireDemotionRoom(usage, caps, move.entered?.target ?? from, demotions, vacatedSeat(found, move.entered), scale, ctx.project);
     const proposed = values.proposed === true;
@@ -514,7 +537,7 @@ function requestedPlacement(ctx: ProjectContext, found: Placed, values: CommandI
 function vacatedSeat(found: Placed, entered: CappedTier | undefined): number
 {
     return entered !== undefined && scopeTarget(found.entity, found.owner) === entered.target
-        && found.entity.exposure === "index" ? countCharacters(found.entity.text) : 0;
+        && found.entity.exposure === "index" ? entityCharacters(found.entity) : 0;
 }
 
 // The scope as the owning log records it: the home sentinel when the record
@@ -718,7 +741,7 @@ function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
             + `\`--demote <id>\` (that ${entered.tier} entity moves to ${DEMOTION_TARGET[entered.tier]}), or demote `
             + `first with \`self state place <id> --exposure ${DEMOTION_TARGET[entered.tier]} --why "<reason>"\``);
     }
-    const freed = tokensOf(demotions.reduce((sum, item) => sum + countCharacters(item.entity.text), 0), scale.perCharacter);
+    const freed = tokensOf(demotions.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
     if (held - freed + adding > cap)
     {
         throw new CliError(`still ${held - freed + adding - cap} tokens over the ${cap}-token ${entered.tier} cap `
@@ -746,7 +769,7 @@ function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, target: st
     {
         return;
     }
-    const entering = tokensOf(arriving.reduce((sum, item) => sum + countCharacters(item.entity.text), 0), scale.perCharacter);
+    const entering = tokensOf(arriving.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
     const after = usage(target, "index") + entering - tokensOf(vacates, scale.perCharacter);
     if (after > caps.index)
     {
@@ -771,7 +794,7 @@ function unitMoves(unit: ConfirmMember[], home: string): SeatMove[]
 {
     return unit.flatMap((member): SeatMove[] =>
     {
-        const characters = countCharacters(member.entity.text);
+        const characters = entityCharacters(member.entity);
         const entity = member.entity;
         const at = scopeTarget(entity, home);
         if (member.kind === "record")
@@ -1441,6 +1464,7 @@ function renderEntity(found: Placed): string
     optional(lines, "from", entity.from);
     optional(lines, "why", entity.why);
     optional(lines, "target", entity.target);
+    optional(lines, "artifact", entity.artifact);
     entity.criteria.forEach((criterion) => lines.push(`criterion: ${criterion}`));
     entity.covered.forEach((claim) =>
         lines.push(`covered: ${claim.criterion} — ${claim.why} (${claim.actor} ${claim.ts.slice(0, 10)}${claim.work === undefined ? "" : `, ${claim.work}`})`));

@@ -5,9 +5,11 @@ import { validDate } from "./dates.js";
 import {
     awaitsReview,
     EntityState,
+    entityCharacters,
     Exposure,
     isCurrent,
     isWorkProposal,
+    payloadArtifact,
     requireSupersedeKind,
     rendersIn,
     scopeTarget,
@@ -39,7 +41,7 @@ import {
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
-import { countCharacters, dim, errYellow, markdownHeadings, plural, styled } from "./style.js";
+import { dim, errYellow, markdownHeadings, plural, styled } from "./style.js";
 import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
@@ -384,7 +386,7 @@ function presetGate(ctx: ProjectContext, models: ProjectModel[], usage: string, 
 {
     const target = payload.scope === "workspace" ? "workspace" : ctx.project;
     return admittingDemotions(ctx, models, values, tierOf(target, exposure),
-        usage, countCharacters(outcome), supersedeTargets(payload));
+        usage, entityCharacters({ text: outcome, artifact: payloadArtifact(payload) }), supersedeTargets(payload));
 }
 
 // The horizon enum was removed as structure and kept as optional metadata

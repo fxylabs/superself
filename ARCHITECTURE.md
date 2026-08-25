@@ -28,14 +28,14 @@ it. The layers, lowest first:
 | Credential | `credentials.ts` | the credential file: read, atomic write, mode enforcement, the per-profile lock and pending marker, profile selection, and the default rail a profile points at. Imports `types.ts` only |
 | Rail | `rail.ts` | HTTP: TLS policy, the bearer header, refresh under the lock, retry classification, timeouts, error normalization, the response cap, the call key and the call journal. Imports `credentials.ts` and `types.ts` |
 | Trust | `trust.ts` | the plugin trust document: one unauthenticated fetch, root-signature verification, expiry and monotonicity, and the `0600` cache beside the credential file. Imports `rail.ts`, `credentials.ts`, `rootkeys.ts` and `types.ts` |
-| Storage | `paths.ts`, `logfile.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`) |
+| Storage | `paths.ts`, `logfile.ts`, `registry.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`); `registry.ts` is the derived artifact registry — what the log says the store holds — and it sits here rather than in `artifact.ts` because the fold's reachability check has to look an artifact id up while `artifact.ts` reaches the pipeline to record `artifact add`, and the two meeting would be this tree's first import cycle |
 | Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
 | Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
 | Render | `view.ts`, `views.ts`, `pretty.ts`, `output.ts`, `reachability.ts` | HTML and terminal rendering of a folded model; `output.ts` is the render gate — the one function that puts a command's blocks on stdout, and the `notice` a lower layer's message is printed through; the block shapes themselves are declared in `types.ts` |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
 | Command support | `artifact.ts`, `retirement.ts` | what more than one command surface shares: artifact staging (`artifact.ts` also holds the `artifact` verb), and the disclosure-and-approval path every destructive verb takes (`retirement.ts`, read by `main.ts`, `goals.ts` and `state.ts`) |
-| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `apply.ts`, `search.ts`, `setup.ts`, `store.ts`, `sync.ts`, `plugins.ts`, `login.ts`, `app.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `apply.ts` owns `self apply` — the one human action that covers a reviewed set of gated calls (#312), which takes the root command list as a thunk from `main.ts` rather than importing the list it is composed into; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, and the `--archived` listing; `store.ts` owns `self store` — how large the store is and the one act that packs it down, which reads the artifact registry through `artifact.ts` and never writes |
+| Commands | `main.ts`, `goals.ts`, `state.ts`, `derivation.ts`, `archive.ts`, `aliases.ts`, `apply.ts`, `search.ts`, `setup.ts`, `store.ts`, `sync.ts`, `plugins.ts`, `login.ts`, `app.ts` | argument parsing, refusals, dispatch; `aliases.ts` owns the alias table the preset verbs read their defaults from and the dispatch of table-resolved verbs; `apply.ts` owns `self apply` — the one human action that covers a reviewed set of gated calls (#312), which takes the root command list as a thunk from `main.ts` rather than importing the list it is composed into; `derivation.ts` owns the one relation between projects — the `project from` leaf `main.ts` splices in, and the resolution both directions of `self project` read; `archive.ts` owns setting a project aside and picking it back up — the `project archive` and `project restore` leaves `main.ts` splices in, and the `--archived` listing; `store.ts` owns `self store` — how large the store is and the one act that packs it down, which reads the artifact registry through `registry.ts` and never writes |
 
 The append path and the imports run the same way, from higher layers to lower
 ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
@@ -127,7 +127,15 @@ concern.
 | `project.archived`, `project.restored` | the project's own two-state lifecycle (#283); `paths.ts` owns the fold, beside the store's other per-project state, because the scope resolver and the model enumeration both read it | `archive.ts` |
 | `work.run-started`, `work.run-exited` | the process transitions | `main.ts` |
 | `report.*` | work reports, and the ruling a person makes on one — `report.added`, `report.confirmed` (#316) | `main.ts` |
+| `artifact.registered` | bytes stored with no report behind them (#238); `registry.ts` owns the fold, beside the registry the store's other artifact readings derive from | `artifact.ts` |
 | `goal.*`, `decision.*`, `convention.*`, `objective.*`, `milestone.*`, the rest of `work.*` | the pre-cutover record kinds — read forever (#197 §8), written by no verb | nothing |
+
+`artifact.registered` is a namespace about stored bytes rather than about a
+record, which is why it is its own and not an extension of `report.*`: a
+report is a claim about a work unit and this is not one, which is exactly the
+property that keeps a registration from satisfying the completion gate. It
+carries no lifecycle either — an artifact is immutable once ingested, and
+removing one is `artifact prune`'s question, not a withdrawal of a statement.
 
 `project.*` is a namespace about a project rather than about a record, which
 is why it is its own and not an extension of `entity.*`. `derivation.ts`

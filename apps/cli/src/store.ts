@@ -22,10 +22,11 @@
 // them the two-week grace `gc` gives them.
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { artifactDigest, listArtifacts } from "./artifact.js";
+import { artifactDigest } from "./artifact.js";
 import { branch, Command, leaf } from "./contract.js";
 import { git } from "./gitutil.js";
 import { readRegistry, requireWorkspace } from "./paths.js";
+import { listArtifacts } from "./registry.js";
 import { plural } from "./style.js";
 import { ArtifactMeta, CliError, CommandOutput, JsonValue } from "./types.js";
 
