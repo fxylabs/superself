@@ -1179,10 +1179,24 @@ function requireNovel(model: ProjectModel, outcome: string, payload: Record<stri
 // clash with every other. Compared against the plans still awaiting review;
 // a plan someone already accepted is a unit, and proposing it again is a
 // different mistake from queuing the same review twice.
+//
+// The condition is a function of its own, and exported, because a second
+// caller needs the answer without the refusal: `self sweep --record` composes
+// several proposals in one append, and a gate that throws would stop the whole
+// append at the first cluster somebody already proposed (#381). The two
+// alternatives are both worse — a `try/catch` per cluster uses an exception for
+// control flow and would swallow whatever else this gate learns to refuse
+// later, and a re-check inside the sweep is the duplicated gate condition
+// ARCHITECTURE.md forbids. One condition, one implementation, two callers.
+export function clashingPlan(model: ProjectModel, key: string): WorkState | undefined
+{
+    return model.works.find((work) => work.status === "review" && normalize(work.outcome) === key
+        && work.objectives.length === 0 && work.milestones.length === 0);
+}
+
 function requireNovelPlan(model: ProjectModel, key: string): void
 {
-    const clash = model.works.find((work) => work.status === "review" && normalize(work.outcome) === key
-        && work.objectives.length === 0 && work.milestones.length === 0);
+    const clash = clashingPlan(model, key);
     if (clash !== undefined)
     {
         throw new CliError(`proposal ${clash.id} already proposes this plan — accept, decline or revise it instead`);
@@ -1195,7 +1209,11 @@ function requireNovelPlan(model: ProjectModel, key: string): void
 // every language nobody thought to add, and text that loses all its characters
 // stops comparing as itself and starts comparing as everything else. NFC is
 // applied first so the same word typed decomposed keys the same way.
-function normalize(text: string): string
+//
+// Exported since #381: the sweep keys its clusters the same way this gate keys
+// its proposals, and a second normalization beside this one would let a cluster
+// key that the gate calls novel be the very text it already refuses.
+export function normalize(text: string): string
 {
     return text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }

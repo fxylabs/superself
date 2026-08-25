@@ -67,6 +67,7 @@ import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { setupOutput } from "./setup.js";
+import { SWEEP_COMMAND } from "./sweep.js";
 import { STORE_COMMAND } from "./store.js";
 import {
     admittingDemotions,
@@ -1412,6 +1413,7 @@ export const COMMANDS: Command[] = [
         detail: ["rebuild state files, work briefs, and HTML views from the event log."],
         node: leaf("", {}, 0, cmdFold)
     },
+    SWEEP_COMMAND,
     LOGIN_COMMAND,
     LOGOUT_COMMAND,
     WHOAMI_COMMAND,
