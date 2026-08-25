@@ -7,7 +7,7 @@ import { branchLabel, branchTotals, buildModel, currentConventions, DecisionStat
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
-import { artifactSignals, askedRepositories, evidenceOf, updateVerdicts, verdictSignals } from "./reachability.js";
+import { artifactSignals, askedRepositories, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
 import { artifactName } from "./types.js";
 import { chromeStale, claimChrome, writeViews } from "./view.js";
@@ -66,6 +66,7 @@ function judgeEvidence(storeDir: string, slug: string, model: ProjectModel): Rec
 {
     const verdicts = updateVerdicts(storeDir, slug, resolveProjectPaths(storeDir, slug), evidenceOf(model.works));
     model.health.push(...verdictSignals(model.works, verdicts, askedRepositories(storeDir, slug)),
+        ...frozenVerdictSignals(storeDir, slug, model.unshipped.length),
         ...artifactSignals(storeDir, model.works));
     return verdicts;
 }
@@ -112,12 +113,17 @@ export function foldEveryProject(storeDir: string): void
 
 // Pruning is stated, never quiet: the link is gone from resolution from here
 // on, and the one way back is the same re-link the stale-link warning names.
+// It is named for the checkout that moved rather than the one that might come
+// back — a project that simply lives somewhere else now is the case where the
+// old wording pointed at an action nobody would ever take, and until the
+// re-link happens its verdicts are frozen wherever they stood (#308).
 function reportPruned(pruned: PrunedLink[]): void
 {
     for (const link of pruned)
     {
-        notice(`pruned the link to ${link.path} — no checkout there any more; ` +
-            `run \`self project link ${link.slug} --here\` in it if it comes back`);
+        notice(`pruned the link to ${link.path} — no checkout of "${link.slug}" there any more; ` +
+            "until one is linked again its evidence verdicts stay frozen — " +
+            `run \`self project link ${link.slug} --here\` wherever the checkout is now`);
     }
 }
 

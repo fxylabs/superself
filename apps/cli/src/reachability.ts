@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { EntityState, isLive, scopeTarget } from "./entities.js";
 import { checkoutTops, git, realPath, refListing, repositoryIdentity, resolveCommits, revListExcept } from "./gitutil.js";
-import { EvidenceHead, ProjectRepositories, projectArchive, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
+import { EvidenceHead, linkedPaths, ProjectRepositories, projectArchive, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
 import { WorkState } from "./model.js";
 import { digestFile } from "./repo.js";
 import { ArtifactMember, ArtifactMeta } from "./types.js";
@@ -480,6 +480,28 @@ function vanished(asked: string[]): string
     }
     return `no longer resolves in any linked repository (asked: ${asked.join(", ")}) — ` +
         "history may have been rewritten, or the repository holding it is not linked on this machine";
+}
+
+// Whether a verdict can be recomputed on this machine at all. It asks the
+// condition `updateVerdicts` returns at — no repository opened — without
+// opening one: the machine link ledger and `existsSync`, no git process, so a
+// read surface may ask it too (#128).
+export function verdictsFrozen(storeDir: string, slug: string): boolean
+{
+    return linkedPaths(storeDir, slug).length === 0;
+}
+
+// Said only where frozen verdicts are still claiming something. The stored
+// verdicts are left exactly as they stand — not demoting evidence this
+// machine cannot check is the correct half of #128, and the defect was the
+// silence over it, not the guard (#308). An empty band claims nothing, so
+// there is nothing to say: on a machine sharing a store, every project not
+// checked out here would otherwise raise a line.
+export function frozenVerdictSignals(storeDir: string, slug: string, unshipped: number): string[]
+{
+    return unshipped === 0 || !verdictsFrozen(storeDir, slug) ? [] :
+        [`no checkout of "${slug}" is linked on this machine, so these unshipped rows are the last verdicts `
+            + `this machine could compute — run \`self project link ${slug} --here\` in the checkout`];
 }
 
 // Artifacts are the other evidence class this module verifies, against the

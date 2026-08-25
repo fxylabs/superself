@@ -60,6 +60,7 @@ import {
 } from "./paths.js";
 import { notice, renderOutput } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
+import { verdictsFrozen } from "./reachability.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
@@ -3395,12 +3396,19 @@ function blockReceipt(files: string[]): CommandOutput
     return [{ kind: "receipt", text: `managed block rendered into ${files.join(", ")} — commit them so every agent tool loads it` }];
 }
 
+// A fold that could recompute nothing says so instead of claiming success.
+// The band is not consulted here the way the health signal consults it: the
+// receipt answers what this command did, and skipping the recomputation is
+// what it did whether or not anything was left unshipped (#308).
 function cmdFold(): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     foldWorkspace(ctx.storeDir, ctx.project);
     commitAll(ctx.storeDir, `fold ${ctx.project}: manual refold`);
-    return [{ kind: "receipt", text: `refolded ${ctx.project}` }];
+    return [{ kind: "receipt", text: verdictsFrozen(ctx.storeDir, ctx.project)
+        ? `folded ${ctx.project}'s pages — evidence verdicts were not recomputed: no checkout of `
+            + `"${ctx.project}" is linked on this machine; run \`self project link ${ctx.project} --here\` in it`
+        : `refolded ${ctx.project}` }];
 }
 
 function requireText(value: string | undefined, usage: string): string
