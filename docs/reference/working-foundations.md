@@ -60,9 +60,9 @@ disagree, the implementation-owned `--help` output wins.
   the project's HEAD commit as evidence;
 - `self project init` renders an agent-onboarding block into `AGENTS.md` and
   `CLAUDE.md` — the instruction files agent tools already read — so any
-  terminal agent learns the protocol and current conventions; the block
-  refreshes on every fold, `self connect` re-renders it, and `--no-connect`
-  skips it;
+  terminal agent learns the protocol and the conventions recorded with
+  `--public`; the block refreshes on every fold, `self connect` re-renders it,
+  and `--no-connect` skips it;
 - `self init` offers to write a short block into this machine's own agent
   instruction files (`self connect --global` does it later), so agents notice
   self in projects that are not registered yet and ask you once — they are

@@ -182,7 +182,10 @@ const BLOCK_BODY: readonly string[] = [
 function renderBlock(model: ProjectModel): string
 {
     const lines: string[] = [marker(BEGIN), ...commonProtocolLines()];
-    const conventions = currentConventions(model.conventions);
+    // These two files are normally tracked, so the block is repository content
+    // and a rule reaches it only when its author said so (#276). Everything
+    // else stays in the store, where `self context` still renders it.
+    const conventions = currentConventions(model.conventions).filter((convention) => convention.visibility === "public");
     if (conventions.length > 0)
     {
         lines.push("", "### Conventions", "");

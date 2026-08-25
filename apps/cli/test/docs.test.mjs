@@ -275,10 +275,12 @@ test("event names the documents mention are the vocabulary the CLI writes", asyn
 
 /* ── proof 4: the block connect writes has one shape, in both files ── */
 
-// This repository stops tracking AGENTS.md and CLAUDE.md, because the block
-// carries the project's conventions and this repository is public. The subject
-// is therefore what `connect` writes into a scratch project, not what is
-// checked in here.
+// This repository stops tracking AGENTS.md and CLAUDE.md, because the CLI
+// rewrites them on every fold and an unrelated commit would carry whatever
+// they picked up. The subject is therefore what `connect` writes into a
+// scratch project, not what is checked in here. Since #276 a convention
+// reaches the block only when it was recorded `--public`, which is what the
+// recorded rule below holds the shape to.
 
 // The marker carries the version that rendered it (#221), so a block is found
 // by its prefix — a pinned literal would only match one release.
@@ -297,11 +299,12 @@ test("connect writes one managed block, of a fixed shape, to both instruction fi
 {
     const box = machine();
     const { demo } = demoWorkspace(box);
+    must(box, demo, ["convention", "add", "an internal rule the block must not carry"]);
     const blocks = ["AGENTS.md", "CLAUDE.md"]
         .map((name) => ({ name, block: managedBlock(name, readFileSync(join(demo, name), "utf8")) }));
     assert.equal(blocks[0].block, blocks[1].block,
         "AGENTS.md and CLAUDE.md carry different managed blocks — the fold writes one block to both");
     const sections = [...blocks[0].block.matchAll(/^#{2,3} .+$/gm)].map((m) => m[0]);
     assert.deepEqual(sections, ["## Project state (superself)"],
-        "the managed block of a project with no conventions holds a section beyond project state");
+        "the managed block holds a section beyond project state after a convention was recorded");
 });

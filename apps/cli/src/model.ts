@@ -79,6 +79,10 @@ export interface ConventionState
     // Why the rule was dropped. Absent on a supersession, which says why by
     // naming the rule that replaced it.
     closedWhy?: string;
+    // Whether the rule renders into the repository's tracked instruction
+    // files (#276). Absent means internal, which is what every rule recorded
+    // before the key existed reads as.
+    visibility?: "public";
 }
 
 // The rules that hold now. One site answers it, so no two renderers can
@@ -1226,7 +1230,8 @@ function projectConvention(entity: EntityState): ConventionState
         status: entity.status === "confirmed" || entity.status === "proposed" ? "current"
             : entity.status === "superseded" ? "superseded" : "dropped",
         supersedes: supersedesOf(entity),
-        closedWhy: entity.closedWhy
+        closedWhy: entity.closedWhy,
+        visibility: entity.visibility
     };
 }
 

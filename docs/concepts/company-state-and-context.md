@@ -198,7 +198,7 @@ Different consumers still need different amounts of the same state:
 
 | Surface | What it provides |
 | --- | --- |
-| Managed `AGENTS.md` and `CLAUDE.md` block | Stable operating protocol plus current conventions |
+| Managed `AGENTS.md` and `CLAUDE.md` block | Stable operating protocol plus the conventions recorded with `--public` |
 | `self context` inside a registered project | That project's placed entities plus live state |
 | `self context` outside a registered project | A workspace overview: each registered project's goal, work-status counts, and health-signal count |
 | `self work show <id>` | The full recovery line for one unit: outcome, current status, reports, evidence |
