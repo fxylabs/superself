@@ -1301,13 +1301,31 @@ function stateStart({ positionals }: CommandInput): void
     noteSessionSeen(mine, new Date().toISOString());
 }
 
+// The two conditions the block axis judges, and the words each is refused in.
+// Lifted out of the verbs below so a surface that blocks for a reason of its
+// own — `runbook hold` and `runbook approve` (#171) — refuses in the same
+// sentence rather than in a second copy of it that can drift from this one.
+// Each returns the refusal or nothing, so the caller decides what to add.
+export function alreadyBlocked(entity: EntityState): string | undefined
+{
+    return entity.execution?.status === "blocked"
+        ? `${entity.id} is already blocked${entity.execution.why === undefined ? "" : ` — ${entity.execution.why}`}`
+        : undefined;
+}
+
+export function notBlocked(entity: EntityState): string | undefined
+{
+    return entity.execution?.status === "blocked" ? undefined : `${entity.id} is not blocked — there is nothing to unblock`;
+}
+
 function stateBlock({ values, positionals }: CommandInput<typeof BLOCK_OPTIONS>): void
 {
     const { ctx, entity } = executionTarget(positionals[0], 'state block <id> [--on <what>] [--why "<reason>"]');
     requireMovable(entity, "block");
-    if (entity.execution?.status === "blocked")
+    const standing = alreadyBlocked(entity);
+    if (standing !== undefined)
     {
-        throw new CliError(`${entity.id} is already blocked${entity.execution.why === undefined ? "" : ` — ${entity.execution.why}`}`);
+        throw new CliError(standing);
     }
     const payload: Record<string, unknown> = { entity: entity.id };
     if (values.on !== undefined)
@@ -1325,9 +1343,10 @@ function stateUnblock({ positionals }: CommandInput): void
 {
     const { ctx, entity } = executionTarget(positionals[0], "state unblock <id>");
     requireMovable(entity, "unblock");
-    if (entity.execution?.status !== "blocked")
+    const clear = notBlocked(entity);
+    if (clear !== undefined)
     {
-        throw new CliError(`${entity.id} is not blocked — there is nothing to unblock`);
+        throw new CliError(clear);
     }
     recordEvent(ctx, makeEvent(ctx.project, "entity.unblocked", { entity: entity.id }), entity.text);
 }

@@ -271,6 +271,12 @@ usage: self <command>
   runbook start <id|name> --instance <key>   start a run of the procedure under a key such as E001
   runbook advance <key> --why "<what was done>" [--to "<stage>"]
                                              pass the run's current stage; --to names it, and skipping one is refused
+  runbook hold <key> --why "<what a person is being asked to approve>"
+                                             park the run on a person; it waits in context until they answer at a terminal
+  runbook approve <key> [--by <person>]      release a held run — a person at a terminal, typing the key back
+  runbook stop <key> --why "<why it was given up>" | resume <key>
+                                             give the run up, or pick a parked one back up
+  runbook link <key> --work <id>             state which work unit is carrying this run; one or more
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
   view [slug]                                open the live workspace or project view in the browser at a terminal

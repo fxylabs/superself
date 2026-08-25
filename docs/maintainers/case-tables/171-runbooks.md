@@ -17,11 +17,15 @@ Where the tests live:
 | C — advancing a run | 13 (C1–C9, C8b, C13–C15) | 1 | `apps/cli/test/runbook.test.mjs` |
 | C — linking work | 3 (C10–C12) | 2 | `apps/cli/test/runbook.test.mjs` |
 | D — the approval checkpoint | 14 | 2 | `apps/cli/test/runbook-approval.test.mjs` |
-| E — stopping and resuming | 10 | 2 | `apps/cli/test/runbook.test.mjs` |
+| E — stopping and resuming | 11 | 2 | `apps/cli/test/runbook.test.mjs` |
 | F — editions and drift | 10 | 1 | `apps/cli/test/runbook.test.mjs` |
 | G — project scope | 5 | 1 | `apps/cli/test/runbook.test.mjs` |
 
-**91 cells.** 64 in part 1, 27 in part 2.
+**91 designed cells, 92 as shipped.** 64 in part 1, 28 in part 2.
+
+E11 is the one cell added during implementation: the designed table checked
+`resume` only where it is refused (E2), leaving the verb's own success path
+unproven. It is recorded here rather than left as an untabled test.
 
 ## The problem
 
@@ -48,6 +52,7 @@ reserved metadata key, no new row in `BUILTIN_ROWS`.**
 | Passing a stage | one `entity.covered` through the writer `self state cover` already uses |
 | Closing a run | `self state done <id> --report r` — no completion verb of its own |
 | Withdrawing either | `self state retract <id> --why w` |
+| Giving a run up | `entity.retired` through the retirement gate — a person at a terminal, exactly as `state retire` |
 
 ### Why `entity.revised` cannot be the revision
 
@@ -173,7 +178,7 @@ recorded here as corrected rather than silently dropped:
 
 | Cell | Run | Action | Expected |
 |---|---|---|---|
-| E1 | 2/11 | `runbook stop E001 --why w` | `entity.retired`; leaves `## Runbooks` |
+| E1 | 2/11 | `runbook stop E001 --why w` | `entity.retired`; leaves `## Runbooks`. Goes through the retirement gate, so a person confirms it at a terminal — giving up a run destroys a live outcome, and `state retire` and `work retire` are gated for the same reason |
 | E2 | stopped | `runbook resume E001` | refused — retirement is terminal |
 | E3 | stopped | `advance --why w` | refused — terminal |
 | E4 | 2/11 | `stop` with no `--why` | refused by the requirement gate |
@@ -183,6 +188,7 @@ recorded here as corrected rather than silently dropped:
 | E8 | stopped | `self log` | the retirement reads back |
 | E9 | in progress, a fresh session | `self context` | stage, next action and the inspect command are all there |
 | E10 | started, no stage passed | `stop --why w` | stopped |
+| E11 | in progress, then held | `resume` | picks a parked run back up; a held one is refused, naming `runbook approve` |
 
 ## Group F — editions and drift
 

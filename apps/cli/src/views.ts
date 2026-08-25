@@ -42,7 +42,7 @@ import {
     workspacePointer
 } from "./pretty.js";
 import { archivedScopeSignals, artifactSignals, askedRepositories, entityArtifactSignals, frozenVerdictSignals, verdictSignals } from "./reachability.js";
-import { isRunbookRun, readInstance, runbookInstances, runbookRow } from "./runbooks.js";
+import { instanceKey, isRunbookRun, readInstance, runbookInstances, runbookRow } from "./runbooks.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 import { renderWorkDetails } from "./fold.js";
@@ -574,7 +574,8 @@ function liveSections(model: ProjectModel, project: string, linked: ForeignObjec
         },
         {
             header: "## Waiting on you",
-            rows: [...waitingItems(model), ...entityWaitingItems(model)].map((item) => `- ${item.full}`),
+            rows: [...waitingItems(model), ...entityWaitingItems(model), ...runbookWaitingItems(model)]
+                .map((item) => `- ${item.full}`),
             omission: (count) => `- … ${plural(count, "waiting item")} omitted; run \`${scoped("self status", project)}\``
         },
         runbookSection(model, project),
@@ -648,6 +649,35 @@ function movingRuns(model: ProjectModel): EntityState[]
 function lastMoved(run: EntityState): string
 {
     return run.covered.length === 0 ? run.ts : run.covered[run.covered.length - 1].ts;
+}
+
+// A run parked on a person (#171 §2.4). `entityWaitingItem` answers for a
+// proposal and a pending placement and is left exactly as it was: the block
+// axis of a confirmed record reaches no waiting row today, and widening that
+// rule would change the render of records this issue never made — whose
+// release command is `self state unblock`, not this one.
+//
+// Built as items rather than lines because both renders read them: the piped
+// block sentences them, and the terminal block prints the command on a line of
+// its own. Joined into both assemblies, because they are separate compositions
+// and fixing one alone is how the two drift.
+function runbookWaitingItems(model: ProjectModel): WaitingItem[]
+{
+    return runbookInstances(model.entities)
+        .filter((run) => isCurrent(run) && run.execution?.status === "blocked" && run.execution.on === "approval")
+        .map((run): WaitingItem => approvalWait(run, instanceKey(run)));
+}
+
+function approvalWait(run: EntityState, key: string): WaitingItem
+{
+    const lead = `${key} ${oneLine(run.text)} waits on your approval: ${oneLine(run.execution?.why ?? "no reason recorded")}`;
+    return {
+        full: `${lead} (approve with \`self runbook approve ${key}\`)`,
+        lead,
+        identity: `${key} approval`,
+        recovery: { verb: "runbook-show", id: run.id },
+        action: `self runbook approve ${key}`
+    };
 }
 
 // The entity grammar's own approval waits: a proposed entity, and a placement
@@ -880,7 +910,7 @@ function scopedIn(models: ProjectModel[], viewer: string): EntityState[]
 function unrankedWaitingRows(model: ProjectModel): WaitingRow[]
 {
     const project = shellArgument(model.slug);
-    return [...model.waiting, ...workProposalItems(model), ...entityWaitingItems(model)]
+    return [...model.waiting, ...workProposalItems(model), ...entityWaitingItems(model), ...runbookWaitingItems(model)]
         .map((item) => ({ text: item.lead ?? item.full, action: item.action ?? recoveryCommand(item.recovery, project) }));
 }
 
