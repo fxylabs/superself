@@ -687,7 +687,11 @@ function callsIn(node)
 // The test files whose harness calls have been given their `await`. It grows
 // one migration commit at a time, and the commit that makes the in-process
 // driver the only driver replaces it with every file that imports the harness.
-export const awaitedTestFiles = [];
+export const awaitedTestFiles = [
+    "test/context.test.mjs",
+    "test/project-init.test.mjs",
+    "test/required.test.mjs"
+];
 
 // The harness exports that run a command. `spawnIn` and `mustSpawn` are
 // deliberately absent: they start a child and are synchronous, which is the
