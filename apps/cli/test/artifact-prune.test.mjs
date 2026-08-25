@@ -615,21 +615,25 @@ test("cell 62: a record naming a path inside another project is refused, and tha
         path: victim.path,
         digest: victim.digest
     };
-    // A line no verb writes: gamma's log naming demo's stored bytes. It reaches
+    const delta = join(ws, "delta");
+    mkdirSync(delta, { recursive: true });
+    git(box, delta, ["init", "-q", "-b", "main"]);
+    must(box, delta, ["project", "init", "--name", "delta", "--desc", "the project holding a crafted path"]);
+    // A line no verb writes: delta's log naming demo's stored bytes. It reaches
     // this store the way every foreign line does — through a shared remote — so
     // the delete path refuses it rather than following it.
-    logFixture(ws, "gamma", {
+    logFixture(ws, "delta", {
         id: ulid(),
         ts: new Date().toISOString(),
         type: "artifact.registered",
         origin: { actor: "agent", confirmed: false },
-        project: "gamma",
+        project: "delta",
         payload: { artifacts: [crafted], why: "a path pointing into another project" },
         refs: { artifacts: [crafted.id] }
     });
-    const refused = refuse(crafted.id, ["--project", "gamma"], ws);
+    const refused = refuse(crafted.id, ["--project", "delta"], ws);
     assert.equal(refused.code, 1, refused.out);
-    assert.match(refused.out, new RegExp(`is recorded at ${victim.path}, which is not inside project "gamma"`));
+    assert.match(refused.out, new RegExp(`is recorded at ${victim.path}, which is not inside project "delta"`));
     assert.equal(existsSync(stored(victim)), true, "another project's bytes were removed by a crafted path");
 });
 
