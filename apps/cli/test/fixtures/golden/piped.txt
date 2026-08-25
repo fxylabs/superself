@@ -262,6 +262,15 @@ usage: self <command>
   alias set <verb> [--label l] [--priority n] [--exposure e]
                                              override a row's defaults — built-in preset rows included
   alias drop <verb>                          remove a custom verb, or restore an overridden built-in's shipped default
+  runbook [--project <slug>]                 list the procedures this project has registered, and how many runs follow each
+  runbook add "<name>" --stage "<first>" --stage "<second>" [--why w]
+                                             register a procedure; --file <path> reads the stages from a markdown list instead
+  runbook show <id|name> [--project <slug>]  print a procedure, its editions, its stages, and the runs following it
+  runbook revise <id> --stage "<first>" --stage "<second>" --why "<what changed>"
+                                             propose a new edition of the procedure; a person lands it with `self state confirm`
+  runbook start <id|name> --instance <key>   start a run of the procedure under a key such as E001
+  runbook advance <key> --why "<what was done>" [--to "<stage>"]
+                                             pass the run's current stage; --to names it, and skipping one is refused
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
   view [slug]                                open the live workspace or project view in the browser at a terminal

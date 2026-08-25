@@ -8,6 +8,8 @@ import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectiv
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
 import { artifactSignals, askedRepositories, entityArtifactSignals, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
+import { EntityState, isCurrent } from "./entities.js";
+import { readInstance, runbookChain, runbookDefinitions, runbookInstances, runbookVersion, stageDigest } from "./runbooks.js";
 import { errYellow } from "./style.js";
 import { artifactName } from "./types.js";
 import { chromeStale, claimChrome, writeViews } from "./view.js";
@@ -39,6 +41,24 @@ export function foldProject(storeDir: string, slug: string): void
     ensureDir(join(dir, "work"));
     const hashes = readHashes(dir);
     writeGenerated(dir, hashes, "state.md", renderState(model));
+    foldWorkPages(dir, hashes, model, verdicts);
+    sweepWorkPages(dir, hashes, model);
+    foldObjectives(dir, hashes, model);
+    foldRunbooks(dir, hashes, model);
+    writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
+    writeViews(storeDir, model, readStoreConfig(storeDir), verdicts);
+    if (projectDir !== null && existsSync(projectDir))
+    {
+        refreshBlocks(projectDir, model);
+    }
+}
+
+// A unit keeps a page while it is open; a done or retired one loses it,
+// together with the hash entry that would otherwise leave an orphan for the
+// next fold to warn about.
+function foldWorkPages(dir: string, hashes: Record<string, string>, model: ProjectModel,
+    verdicts: Record<string, Verdict>): void
+{
     for (const work of model.works)
     {
         const rel = join("work", `${work.id}.md`);
@@ -50,14 +70,6 @@ export function foldProject(storeDir: string, slug: string): void
         {
             writeGenerated(dir, hashes, rel, renderWork(work, model, verdicts));
         }
-    }
-    sweepWorkPages(dir, hashes, model);
-    foldObjectives(dir, hashes, model);
-    writeFileSync(join(dir, ".hashes.json"), JSON.stringify(hashes, null, 2) + "\n");
-    writeViews(storeDir, model, readStoreConfig(storeDir), verdicts);
-    if (projectDir !== null && existsSync(projectDir))
-    {
-        refreshBlocks(projectDir, model);
     }
 }
 
@@ -170,6 +182,93 @@ function foldObjectives(dir: string, hashes: Record<string, string>, model: Proj
             drop(dir, hashes, rel);
         }
     }
+}
+
+// A runbook keeps a canonical page per procedure and per live run (#171). A
+// project that has never registered one returns before a directory is made, so
+// its state directory stays byte-identical to what it was — the same rule
+// `foldObjectives` follows, and the reason a fold costs nothing for a surface
+// nobody uses.
+function foldRunbooks(dir: string, hashes: Record<string, string>, model: ProjectModel): void
+{
+    const definitions = runbookDefinitions(model.entities);
+    const runs = runbookInstances(model.entities);
+    if (definitions.length === 0 && runs.length === 0)
+    {
+        return;
+    }
+    ensureDir(join(dir, "runbook"));
+    ensureDir(join(dir, "runbook-run"));
+    // One page per procedure, named by the chain's root — the stable workflow
+    // id — so a new edition rewrites the page a reader already has open rather
+    // than leaving one page per edition behind.
+    const kept = new Set<string>();
+    for (const definition of definitions)
+    {
+        const chain = runbookChain(model.entities, definition.id);
+        kept.add(`${chain[0].id}.md`);
+        writeGenerated(dir, hashes, join("runbook", `${chain[0].id}.md`),
+            GENERATED_NOTE + "\n\n" + renderRunbookBody(chain, definition));
+    }
+    sweepPages(dir, hashes, "runbook", kept);
+    foldRuns(dir, hashes, model, runs);
+}
+
+function foldRuns(dir: string, hashes: Record<string, string>, model: ProjectModel, runs: EntityState[]): void
+{
+    for (const run of runs)
+    {
+        const rel = join("runbook-run", `${run.id}.md`);
+        if (isCurrent(run))
+        {
+            writeGenerated(dir, hashes, rel, GENERATED_NOTE + "\n\n" + renderRunBody(model, run));
+        }
+        else
+        {
+            drop(dir, hashes, rel);
+        }
+    }
+}
+
+// A page whose procedure was retracted is not stale — it is a claim the tool
+// can no longer answer for, so it goes together with its hash entry.
+function sweepPages(dir: string, hashes: Record<string, string>, folder: string, kept: Set<string>): void
+{
+    for (const name of readdirSync(join(dir, folder)))
+    {
+        if (name.endsWith(".md") && !kept.has(name))
+        {
+            drop(dir, hashes, join(folder, name));
+        }
+    }
+}
+
+function renderRunbookBody(chain: EntityState[], definition: EntityState): string
+{
+    const lines = [`# ${chain[0].id} — ${definition.text}`, "",
+        `- Edition: v${runbookVersion(chain, definition.id)} (${definition.id})`,
+        `- Stages fingerprint: ${stageDigest(definition.criteria)}`, ""];
+    bullets(lines, "Stages", definition.criteria);
+    bullets(lines, "Editions", chain.map((edition, at) =>
+        `v${at + 1} ${edition.id} — ${edition.status}, fingerprint ${stageDigest(edition.criteria)}`));
+    return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+function renderRunBody(model: ProjectModel, run: EntityState): string
+{
+    const reading = readInstance(model.entities, run);
+    const lines = [`# ${reading.key} — ${reading.name}`, "",
+        `- Runbook: ${reading.root}, following v${reading.version}${reading.drifted ? ` (the definition is on v${reading.head})` : ""}`,
+        `- Stage: ${reading.at}/${reading.of} ${reading.stage ?? "every stage passed"}`,
+        `- Working state: ${run.execution?.status ?? "in-progress"}`, ""];
+    bullets(lines, "Stages", run.criteria.map((stage) => stagePassed(run, stage)));
+    return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+function stagePassed(run: EntityState, stage: string): string
+{
+    const claim = run.covered.find((item) => item.criterion === stage);
+    return claim === undefined ? `[ ] ${stage}` : `[x] ${stage} — ${day(claim.ts)}, ${claim.why}`;
 }
 
 // A change set keeps a file while it is in the train. Merging or closing it
