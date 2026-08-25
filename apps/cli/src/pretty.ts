@@ -29,7 +29,8 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
-import { artifactPointer } from "./entities.js";
+import { artifactPointer, isCurrent } from "./entities.js";
+import { readInstance, runbookInstances, runbookRow } from "./runbooks.js";
 import { claimNote } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
@@ -344,6 +345,14 @@ export function pointerTo(target: RecoveryTarget, project: string): Pointer
         return usableId(target.id)
             ? `self work show ${target.id} --project ${project}` as Pointer
             : scoped("self work", project);
+    }
+    if (target.verb === "runbook-show")
+    {
+        // Same rule as the work page: an id the parser would refuse falls back
+        // to the listing, which is a command the reader can still act on.
+        return usableId(target.id)
+            ? `self runbook show ${target.id} --project ${project}` as Pointer
+            : scoped("self runbook", project);
     }
     if (target.verb === "log")
     {
@@ -840,13 +849,34 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push("", ...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)),
         scoped("self work", project)));
     lines.push("", ...unshippedSection(model));
-    lines.push("", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)));
-    lines.push("", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)));
-    lines.push("", ...listSection("CONVENTIONS",
-        currentConventions(model.conventions).map((item) => `${item.text}${artifactPointer(item.artifact)}`),
-        scoped("self search --type convention", project)));
-    lines.push("", ...listSection("HEALTH", model.health, scoped("self status", project), red));
+    lines.push(...standingSections(model, project));
     return lines;
+}
+
+// The blocks below the work roll-up, each one a list with the command that
+// prints the rest of it: what procedures are running, what the project is
+// working toward, what it has ruled, how it works, and what is wrong.
+function standingSections(model: ProjectModel, project: string): string[]
+{
+    return [
+        "", ...listSection("RUNBOOKS", runbookLines(model), scoped("self runbook", project)),
+        "", ...listSection("OBJECTIVES", objectiveLines(model), scoped("self objective", project)),
+        "", ...listSection("DECISIONS", decisionLines(model), scoped("self search --type decision", project)),
+        "", ...listSection("CONVENTIONS",
+            currentConventions(model.conventions).map((item) => `${item.text}${artifactPointer(item.artifact)}`),
+            scoped("self search --type convention", project)),
+        "", ...listSection("HEALTH", model.health, scoped("self status", project), red)
+    ];
+}
+
+// The same sentence the piped context prints, said to a person (#171). The
+// row body is composed once in `runbooks.ts` so the two renders of one run can
+// never disagree about which stage it is on.
+function runbookLines(model: ProjectModel): string[]
+{
+    return runbookInstances(model.entities)
+        .filter((run) => isCurrent(run) && run.status === "confirmed")
+        .map((run) => runbookRow(readInstance(model.entities, run)));
 }
 
 function objectiveLines(model: ProjectModel): string[]

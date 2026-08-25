@@ -42,6 +42,7 @@ import {
     workspacePointer
 } from "./pretty.js";
 import { archivedScopeSignals, artifactSignals, askedRepositories, entityArtifactSignals, frozenVerdictSignals, verdictSignals } from "./reachability.js";
+import { isRunbookRun, readInstance, runbookInstances, runbookRow } from "./runbooks.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 import { renderWorkDetails } from "./fold.js";
@@ -434,7 +435,10 @@ function projectContextSections(model: ProjectModel, foreign: EntityState[], all
         ...model.entities.filter((item) => item.status === "confirmed" && isCurrent(item)
             && rendersIn(item, model.slug, model.slug)),
         ...foreign
-    ].filter((item) => item.source !== "work" && !excluded.has(item.id)));
+        // A runbook run is absent for the same reason a work record is: the
+        // live-state section below is the render it gets, and a record printed
+        // in two blocks of one page is one record read twice (#171).
+    ].filter((item) => item.source !== "work" && !isRunbookRun(item) && !excluded.has(item.id)));
     return {
         head: [`# ${model.slug}`, ""],
         sections: [
@@ -573,6 +577,17 @@ function liveSections(model: ProjectModel, project: string, linked: ForeignObjec
             rows: [...waitingItems(model), ...entityWaitingItems(model)].map((item) => `- ${item.full}`),
             omission: (count) => `- … ${plural(count, "waiting item")} omitted; run \`${scoped("self status", project)}\``
         },
+        runbookSection(model, project),
+        ...standingLiveSections(model, project, linked)
+    ];
+}
+
+// The tail of the live state: what is due, what has not shipped, and what is
+// wrong. Split from the block above only to keep each function inside the
+// length the structure gate holds every function to.
+function standingLiveSections(model: ProjectModel, project: string, linked: ForeignObjectiveView): ContextSection[]
+{
+    return [
         {
             header: "## Deadlines",
             rows: deadlineRows(model, linked),
@@ -601,6 +616,38 @@ function otherOpenRows(model: ProjectModel, project: string): string[]
     const other = model.works.filter((work) => work.status === "next"
         || (work.status === "blocked" && work.blockedOn !== "decision")).length;
     return other === 0 ? [] : [`- ${plural(other, "more open work item")}; run \`${scoped("self work", project)}\``];
+}
+
+// The resume point of every procedure this project is part-way through (#171):
+// the run's key, the procedure and the edition it follows, how far it has got,
+// what comes next, and the command that prints the whole runbook. A session
+// that has just started reads its next move off this section alone, which is
+// the whole point of recording a procedure once.
+//
+// Most recently moved first, so the budget keeps the runs someone is actually
+// on when a project has more of them than the section can hold.
+function runbookSection(model: ProjectModel, project: string): ContextSection
+{
+    const runs = movingRuns(model);
+    return {
+        header: "## Runbooks",
+        rows: runs.map((run) => `- ${runbookRow(readInstance(model.entities, run))}`
+            + ` · \`${pointerTo({ verb: "runbook-show", id: readInstance(model.entities, run).root }, project)}\``),
+        ids: runs.map((run) => run.id),
+        omission: (count) => `- … ${plural(count, "runbook run")} omitted; run \`${scoped("self runbook", project)}\``
+    };
+}
+
+function movingRuns(model: ProjectModel): EntityState[]
+{
+    return runbookInstances(model.entities)
+        .filter((run) => isCurrent(run) && run.status === "confirmed" && rendersIn(run, model.slug, model.slug))
+        .sort((left, right) => lastMoved(right).localeCompare(lastMoved(left)));
+}
+
+function lastMoved(run: EntityState): string
+{
+    return run.covered.length === 0 ? run.ts : run.covered[run.covered.length - 1].ts;
 }
 
 // The entity grammar's own approval waits: a proposed entity, and a placement

@@ -27,6 +27,7 @@ prints them during the same run.
 | Approving a reviewed set | `apply <file>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
+| Reusable procedures | `runbook add "<name>" --stage s`, `runbook show <id|name>`, `runbook revise <id> --stage s --why w`, `runbook start <id> --instance <key>`, `runbook advance <key> --why w` |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `handoff <work-id> [--project <slug>]`, `artifact ...` |
 | Store size and maintenance | `store size [--json]`, `store compact` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
@@ -38,7 +39,7 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone tokens project remote sync clone
-goal objective milestone decide work handoff report artifact store convention state alias
+goal objective milestone decide work handoff report artifact store convention state alias runbook
 undo apply
 connect view context status setup
 log search fold
@@ -200,6 +201,57 @@ work, or a free-labeled entity — folds into one record kind with placement:
   context budget both read through it.
 - `alias` prints and edits the table the preset verbs read their label and
   default placement from; built-in rows can be overridden and restored.
+
+### Reusable procedures
+
+A runbook is a procedure this project repeats — plan, draft, review, publish,
+measure — kept as one record instead of scattered across decisions and
+reports. Every run of it carries its own place in the procedure, so a session
+that has just started reads the resume point out of `self context` alone.
+
+**Registering a runbook schedules nothing and dispatches nothing.** No verb
+advances a stage on its own and there is no timer: a person starts a run, and
+a person — or the agent they asked — passes each stage explicitly.
+
+```text
+self runbook                                        # the procedures registered here
+self runbook add "content loop" --stage plan --stage draft --stage publish
+self runbook add "content loop" --file docs/loops/content.md
+self runbook show <id|name>
+self runbook revise <id> --stage plan --stage review --why "a review step was missing"
+self runbook start <id> --instance E001
+self runbook advance E001 --why "the assets are made"
+self runbook advance E001 --to review --why "the cut was reviewed"
+```
+
+- **No new event type exists for any of this.** A definition is an entity
+  labelled `runbook` whose stages are its reserved `criteria`; a run is an
+  entity labelled `runbook-run` that copied those stages and links `member-of`
+  the edition it started under; passing a stage is one `entity.covered`. So
+  `state show`, `search`, `log` and the retention caps all answer for a runbook
+  exactly as they answer for every other record.
+- **The record is the authority, not the file.** `--file` reads the first
+  markdown list in a document once, at the moment of the add, and the path is
+  never recorded. Editing that file afterwards changes nothing; changing the
+  procedure means `runbook revise`.
+- **An edition is a place in the supersedes chain, derived and never stored.**
+  `runbook revise` proposes a new record carrying the new stages and a
+  `supersedes` link; `self state confirm <id>` is what makes it hold. The
+  chain's root id is the **stable workflow id** — every render points at it,
+  whatever edition is current.
+- **A run copies its stages**, so a later edition can never silently change
+  what a run in flight means. Where the two differ, context says which edition
+  the run is following — `v1 (the definition is on v2)` — and the run keeps
+  advancing. A revision is something to see, not something that stops the work,
+  and an edition that only renamed the procedure raises no note at all, because
+  the stages' fingerprint did not move.
+- **There is no completion verb here.** Once every stage is passed,
+  `self state done <id> --report "<what verifiably happened>"` closes the run;
+  `runbook advance` prints that exact command. A wrapper would be a second
+  implementation of the evidence gate, free to disagree with it.
+- `list` and `show` read, so they take `--project <slug>`. `add`, `revise`,
+  `start` and `advance` write, so they take no read-scope flag and record into
+  the project they run in.
 
 ### Outcome and work commands
 

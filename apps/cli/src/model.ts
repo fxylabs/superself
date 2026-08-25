@@ -255,6 +255,7 @@ export type ScopableVerb =
     | "self context"
     | "self log"
     | "self state"
+    | "self runbook"
     | "self search --type decision"
     | "self search --type convention";
 
@@ -267,6 +268,7 @@ export type ScopableVerb =
 // leaves the caller nothing to malform: `pretty.ts` `pointerTo` writes it.
 export type RecoveryTarget =
     | { verb: "work-show"; id: string }
+    | { verb: "runbook-show"; id: string }
     | { verb: "search"; id?: string; type?: string }
     | LogPage;
 

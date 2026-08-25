@@ -61,6 +61,7 @@ import {
 import { notice, renderOutput } from "./output.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { verdictsFrozen } from "./reachability.js";
+import { RUNBOOK_COMMAND } from "./runbook.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
@@ -1271,6 +1272,7 @@ export const COMMANDS: Command[] = [
     },
     STATE_COMMAND,
     ALIAS_COMMAND,
+    RUNBOOK_COMMAND,
     {
         name: "connect",
         usage: [

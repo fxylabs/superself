@@ -310,6 +310,12 @@ interface ComposedValues
     why?: string;
     supersedes?: string[];
     demote?: string[];
+    // Whether the composed record is proposed rather than asserted. A verb
+    // that replaces a standing record on a person's say-so — `runbook revise`
+    // (#171) — records the successor as a proposal so nothing is displaced
+    // until the confirm, which is the same propose/confirm timing the raw add
+    // already has rather than a second one.
+    proposed?: boolean;
 }
 
 // The add path a verb runs when it composes the record itself (#75): the
