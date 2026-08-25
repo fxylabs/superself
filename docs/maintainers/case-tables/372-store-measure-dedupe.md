@@ -6,9 +6,11 @@ below, named by its cell number, and asserts that cell's stated outcome. The
 table is the review surface: a cell the table lacks is a path nothing proves.
 
 Cell numbers are the ones the #239 design gave them, so the removal half — the
-`artifact prune` cells, numbered 30 to 60 there — keeps its numbering when it
-lands. **Cell 9 is the one cell of this table with no test here**: it names a
-withdrawn artifact, and nothing withdraws one yet.
+`artifact prune` cells, numbered 30 to 60 there — kept its numbering when it
+landed, in [`239-artifact-prune.md`](239-artifact-prune.md) and
+`apps/cli/test/artifact-prune.test.mjs`. **Cell 9 had no test here when this
+table shipped**: it names a pruned artifact, and nothing pruned one yet. It
+runs in this suite now that `artifact prune` records it.
 
 ## The defect
 
@@ -113,7 +115,7 @@ deletes a stored byte.
 | 6 | a stored bundle whose manifest hashes the same | ingest a directory | whole bundle reused, members recorded from the stored manifest |
 | 7 | one member differs | ingest a directory | manifest hash differs — copied whole |
 | 8 | a matching record, one member missing from the store | ingest a directory | no reuse — copied whole |
-| 9 | the matching record has been withdrawn | ingest a file | no reuse — a withdrawn record is out of the index. **Deferred: no event withdraws one yet, so the cell lands with the verb that writes it** |
+| 9 | the matching record has been pruned | ingest a file | no reuse — a pruned record is out of the index, so the bytes are stored again rather than hung off a record whose removal is recorded |
 
 ### Reuse — inside one report, and what it must not break
 

@@ -80,7 +80,12 @@ interface StoreSize
 function storeSize(storeDir: string): StoreSize
 {
     const records = listArtifacts(storeDir, readRegistry(storeDir).map((entry) => entry.slug));
-    const named = new Set(records.map((record) => record.path));
+    // Live records only. A pruned record still names the path it was stored at,
+    // and counting that as "named" would hide the exact state the removal order
+    // exists to survive: the event is durable and the bytes were not removed
+    // (#239 §3.5). Where another live record shares the path, that record names
+    // it and nothing is orphaned.
+    const named = new Set(records.filter((record) => record.pruned === undefined).map((record) => record.path));
     const files = walkFiles(join(storeDir, "artifacts"), "artifacts/");
     const owned = files.filter((file) => named.has(ownerPath(file.path)));
     return {
@@ -99,9 +104,10 @@ function storeSize(storeDir: string): StoreSize
 
 // Bytes under `artifacts/` that no record of any registered project names.
 // Two states produce them and neither is a defect this module may act on: a
-// process killed between an ingest's copies and its event, and — once records
-// can be withdrawn — a withdrawal whose byte removal did not complete. Both
-// are surplus rather than loss, and both are reported until someone decides.
+// process killed between an ingest's copies and its event, and an `artifact
+// prune` whose event was recorded and whose byte removal then failed (#239).
+// Both are surplus rather than loss, and both are reported until someone
+// decides.
 //
 // Not deleted here, and no verb deletes them: bytes another command is staging
 // this second look exactly like these.

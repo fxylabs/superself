@@ -514,7 +514,16 @@ export function artifactSignals(storeDir: string, works: WorkState[]): string[]
     const signals: string[] = [];
     for (const work of works.filter((item) => item.status !== "done" && item.status !== "retired"))
     {
-        for (const meta of work.artifacts)
+        // A pruned record names bytes a person had removed on purpose, so the
+        // file being absent is the recorded outcome rather than a defect.
+        //
+        // Defensive, not load-bearing: `artifact prune` refuses an artifact
+        // whose work is anything but done or retired, which is exactly the set
+        // this loop skips, so no ordinary path brings a pruned record here. It
+        // guards a log edited by hand or written by another version — where
+        // without it every fold would tell the reader to run `self sync` for a
+        // file nothing will ever send them.
+        for (const meta of work.artifacts.filter((item) => item.pruned === undefined))
         {
             const failure = artifactFailure(storeDir, meta);
             if (failure !== null)
@@ -658,6 +667,14 @@ function referenceFailure(storeDir: string, metas: Map<string, ArtifactMeta>, en
 {
     const id = entity.artifact as string;
     const meta = metas.get(id);
+    // The same guard `artifactSignals` carries, for the same reason: prune
+    // refuses an artifact a live record points at, so this is reachable only
+    // from a log this CLI did not write — and saying "run `self sync`" about
+    // bytes somebody removed on purpose is worse than saying nothing.
+    if (meta?.pruned !== undefined)
+    {
+        return [];
+    }
     if (meta === undefined)
     {
         return [`${entity.id} names artifact ${id}, which this project's log does not record — `

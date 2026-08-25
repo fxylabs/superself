@@ -1207,10 +1207,17 @@ function artifactRows(model: ProjectModel): ArtifactRow[]
     return model.works.flatMap(workArtifactRows).sort((a, b) => b.ts.localeCompare(a.ts));
 }
 
+// A pruned artifact has no row here (#239). Every card and every thumbnail on
+// these pages is a link to the bytes, and a record whose bytes were removed on
+// purpose has nothing to link to — the gallery would show a broken door. The
+// record itself is not hidden: `self artifact list` keeps its row and marks it,
+// which is the surface that answers what the log holds rather than what a
+// reader can open.
 function workArtifactRows(work: WorkState): ArtifactRow[]
 {
-    return work.reports.flatMap((report) =>
-        report.artifacts.map((meta) => ({ ...rowOf(meta), workId: work.id, ts: report.ts })));
+    return work.reports.flatMap((report) => report.artifacts
+        .filter((meta) => meta.pruned === undefined)
+        .map((meta) => ({ ...rowOf(meta), workId: work.id, ts: report.ts })));
 }
 
 function rowOf(meta: ArtifactMeta): Pick<ArtifactRow, "id" | "name" | "path" | "entry" | "files">

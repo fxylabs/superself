@@ -4,10 +4,11 @@
 // number. The table is the review surface: a cell it lacks is a path nothing
 // proves.
 //
-// Cell 9 — a stored artifact that has been withdrawn is not a reuse candidate —
-// is the one cell of the table this suite does not run. Withdrawal is the
-// removal half of #239 and no event records it yet, so the cell lands with the
-// verb that makes the state reachable.
+// Cell 9 — a stored artifact whose record has been pruned is not a reuse
+// candidate — waited for the verb that makes the state reachable, and runs here
+// now that `artifact prune` records it (#239 C). The removal cells themselves
+// are their own table and their own suite: docs/maintainers/case-tables/
+// 239-artifact-prune.md and apps/cli/test/artifact-prune.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -209,6 +210,22 @@ test("cell 8: a stored bundle missing one member is not reused", () =>
     const two = attached(second.work)[0];
     assert.notEqual(two.path, one.path, "a bundle with a missing member was reused");
     assert.equal(readFileSync(join(store, two.path, "b.txt"), "utf8"), "eight too");
+});
+
+test("cell 9: a pruned record is out of the index, so the same bytes are stored again", async () =>
+{
+    const body = "cell 9 bytes\n";
+    const first = attach(["--artifact", fileAt("cell9-first.md", body)]);
+    const one = attached(first.work)[0];
+    must(box, demo, ["work", "done", first.work]);
+    const removed = await approvedIn(box, demo,
+        ["artifact", "prune", one.id, "--why", "the output is rebuildable from its commit"], one.id);
+    assert.equal(removed.code, 0, removed.out);
+    const second = attach(["--artifact", fileAt("cell9-second.md", body)]);
+    assert.equal(second.code, 0, second.out);
+    const two = attached(second.work)[0];
+    assert.notEqual(two.path, one.path, "a pruned record was adopted as a place to hang new bytes off");
+    assert.equal(readFileSync(join(store, two.path), "utf8"), body);
 });
 
 /* ── 10–13: two artifacts in one report, and what a share must not do ─ */

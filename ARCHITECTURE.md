@@ -127,7 +127,7 @@ concern.
 | `project.archived`, `project.restored` | the project's own two-state lifecycle (#283); `paths.ts` owns the fold, beside the store's other per-project state, because the scope resolver and the model enumeration both read it | `archive.ts` |
 | `work.run-started`, `work.run-exited` | the process transitions | `main.ts` |
 | `report.*` | work reports, and the ruling a person makes on one — `report.added`, `report.confirmed` (#316) | `main.ts` |
-| `artifact.registered` | bytes stored with no report behind them (#238); `registry.ts` owns the fold, beside the registry the store's other artifact readings derive from | `artifact.ts` |
+| `artifact.registered`, `artifact.pruned` | bytes stored with no report behind them (#238), and bytes removed under a person's confirmation (#239); `registry.ts` owns the fold, beside the registry the store's other artifact readings derive from | `artifact.ts` |
 | `goal.*`, `decision.*`, `convention.*`, `objective.*`, `milestone.*`, the rest of `work.*` | the pre-cutover record kinds — read forever (#197 §8), written by no verb | nothing |
 
 `artifact.registered` is a namespace about stored bytes rather than about a
@@ -135,7 +135,11 @@ record, which is why it is its own and not an extension of `report.*`: a
 report is a claim about a work unit and this is not one, which is exactly the
 property that keeps a registration from satisfying the completion gate. It
 carries no lifecycle either — an artifact is immutable once ingested, and
-removing one is `artifact prune`'s question, not a withdrawal of a statement.
+`artifact.pruned` is not a withdrawal of a statement: the record it names stays
+exactly where it is and keeps rendering, marked, so that a `done` claim resting
+on that evidence is still auditable after the file is gone (#239). What the
+event removes is bytes, which is why it belongs to the namespace about stored
+bytes rather than to the record lifecycle.
 
 `project.*` is a namespace about a project rather than about a record, which
 is why it is its own and not an extension of `entity.*`. `derivation.ts`

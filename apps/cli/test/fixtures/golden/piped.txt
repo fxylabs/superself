@@ -90,7 +90,7 @@ demo — the render gate scenario  (this directory)
 1 project
 
 $ self artifact   (in project, exit 1)
-error: usage: self artifact add <path> [--entry <file>] [--why <text>] | list [--work id] [--project slug] | search <query> | open <id> [--project slug]
+error: usage: self artifact add <path> [--entry <file>] [--why <text>] | list [--work id] [--project slug] | search <query> | open <id> [--project slug] | prune <id> --why "<reason>" [--project slug]
 
 $ self objective   (in project, exit 0)
 no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`
@@ -237,6 +237,8 @@ usage: self <command>
                                              list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact, or open it with the OS default app at a terminal
+  artifact prune <id> --why "<reason>" [--project slug]
+                                             remove a stored artifact's bytes, keeping the record that names them
   store size [--json]                        how large the store is, and what is driving it
   store compact                              pack the store's git history with `git gc`
   convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] [--artifact <id|path>]

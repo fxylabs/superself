@@ -94,6 +94,21 @@ export interface ArtifactMeta
     members?: ArtifactMember[];
     // The one member a person is meant to open.
     entry?: string;
+    // Derived, never recorded (#239). An `artifact.pruned` event marks the
+    // record it names wherever that record is read, and every reader answers
+    // from the mark rather than from whether the file is still on the disk:
+    // two records can share one stored path, so bytes outliving the record
+    // that was pruned is an ordinary state and not a reason to open it.
+    pruned?: PrunedMark;
+}
+
+// Why an artifact's bytes were removed, and when. The record itself is never
+// removed — a `done` claim that rests on it stays auditable — so this is what
+// a reader is told in place of the file.
+export interface PrunedMark
+{
+    ts: string;
+    why?: string;
 }
 
 // One row per artifact, everywhere (#362). A bundle states what it holds where
