@@ -599,7 +599,10 @@ test("cell 32: report confirm on a bundle challenges with the derived manifest d
 // is exactly that: the walk reads it, and the copy is refused with
 // ENAMETOOLONG. It sorts last of the three, so two members are already in the
 // store when it fails.
-const PATH_LIMIT = 1024;
+// PATH_MAX differs by platform — 1024 on macOS, 4096 on Linux — and a member
+// sized for the smaller limit copies happily on the larger one, turning this
+// cell's refusal into a success (CI caught exactly that).
+const PATH_LIMIT = process.platform === "darwin" ? 1024 : 4096;
 
 // A relative path of exactly `total` characters, split into components no
 // filesystem calls too long. Rounding it up to whole components instead would
