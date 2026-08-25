@@ -195,6 +195,27 @@ self report w-xxxxx \
 Replace the paths with files the work produced; missing files are refused. Run
 `self artifact list --work w-xxxxx` to retrieve their stored ids.
 
+When the result is a directory rather than a file — a built site, a report and
+the charts it references — attach the directory itself and it becomes one
+artifact:
+
+```bash
+self report w-xxxxx \
+  "The launch review site is built and published" \
+  --artifact dist \
+  --entry summary.html
+```
+
+It lists as one row, not one per file:
+
+```text
+a-4k2pq  2026-08-25  my-project  w-xxxxx  dist/ (12 files)
+```
+
+and `self artifact open a-4k2pq` opens `summary.html` — the member `--entry`
+named. Leave `--entry` off and the entry is `index.html`, `index.md` or
+`README.md` at the directory's root, or an index the CLI generates there.
+
 ```bash
 self work done w-xxxxx
 ```

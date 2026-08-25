@@ -6,7 +6,7 @@ import { checkoutTops, git, realPath, refListing, repositoryIdentity, resolveCom
 import { EvidenceHead, ProjectRepositories, projectArchive, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
 import { WorkState } from "./model.js";
 import { digestFile } from "./repo.js";
-import { ArtifactMeta } from "./types.js";
+import { ArtifactMember, ArtifactMeta } from "./types.js";
 
 interface Evidence
 {
@@ -503,10 +503,9 @@ export function artifactSignals(storeDir: string, works: WorkState[]): string[]
     return signals;
 }
 
-// An artifact ingested before digests were recorded carries none, so absence
-// of a digest is silence, not a mismatch. Every answer here is a signal, never
-// an exception: this runs inside every fold, status and context, and one file
-// the store will not hand over may not take those commands down with it.
+// A bundle's health is its members' (#362). Everything else is unchanged: a
+// path outside the store is refused before it is read, and a single file
+// answers exactly as it did.
 function artifactFailure(storeDir: string, meta: ArtifactMeta): string | null
 {
     const file = storedPath(storeDir, meta.path);
@@ -514,17 +513,52 @@ function artifactFailure(storeDir: string, meta: ArtifactMeta): string | null
     {
         return "is recorded at a path outside this store's artifacts — the event naming it cannot be trusted";
     }
+    return meta.members === undefined ? fileFailure(file, meta.digest) : bundleFailure(file, meta.members);
+}
+
+// The first member that fails is the signal, named by its path relative to the
+// bundle. A store that never synced this bundle would otherwise print one line
+// per file it holds, which says nothing the first line did not.
+//
+// A member path is event data and holds the same trust as the artifact path
+// above it: none. A synced line naming `../../../../etc/passwd` as a member
+// would otherwise have every fold, status and context on the reader's machine
+// hash a file a peer chose, and say whether it had changed.
+function bundleFailure(dir: string, members: ArtifactMember[]): string | null
+{
+    for (const member of members)
+    {
+        const file = containedPath(dir, member.path);
+        if (file === null)
+        {
+            return `member ${member.path} is recorded outside the bundle it belongs to — the event naming it cannot be trusted`;
+        }
+        const failure = fileFailure(file, member.digest);
+        if (failure !== null)
+        {
+            return `member ${member.path} ${failure}`;
+        }
+    }
+    return null;
+}
+
+// An artifact ingested before digests were recorded carries none, so absence
+// of a digest is silence, not a mismatch. Every answer here is a signal, never
+// an exception: this runs inside every fold, status and context, and one file
+// the store will not hand over may not take those commands down with it.
+function fileFailure(file: string, digest: string | undefined): string | null
+{
     if (!existsSync(file))
     {
         return "is missing from this store — run `self sync` to fetch it";
     }
-    if (meta.digest === undefined)
+    if (digest === undefined)
     {
         return null;
     }
     try
     {
-        return digestFile(file) === meta.digest
+        return digestFile(file) === digest
             ? null
             : "no longer matches the digest recorded when it was attached";
     }
@@ -554,11 +588,23 @@ function unreadable(error: unknown): string
 // or matches a digest a peer chose, is not a question status may answer.
 function storedPath(storeDir: string, path: string): string | null
 {
-    const root = join(storeDir, "artifacts");
     const file = resolve(storeDir, typeof path === "string" ? path : "");
+    return within(join(storeDir, "artifacts"), file) ? file : null;
+}
+
+// The same reading, for a path named relative to a directory rather than to
+// the store: one rule about what an event may point at, so the manifest half
+// cannot drift into trusting what the artifact half refuses.
+function containedPath(dir: string, path: string): string | null
+{
+    const file = resolve(dir, typeof path === "string" ? path : "");
+    return within(dir, file) ? file : null;
+}
+
+function within(root: string, file: string): boolean
+{
     const step = relative(root, file);
-    const escapes = step === "" || step === ".." || step.startsWith(".." + sep) || isAbsolute(step);
-    return escapes ? null : file;
+    return step !== "" && step !== ".." && !step.startsWith(".." + sep) && !isAbsolute(step);
 }
 
 // The third thing that can render nowhere, beside a vanished commit and a

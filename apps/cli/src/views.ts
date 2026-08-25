@@ -42,7 +42,7 @@ import {
 } from "./pretty.js";
 import { archivedScopeSignals, artifactSignals, askedRepositories, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
-import { CliError, CommandOutput, SelfEvent } from "./types.js";
+import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 import { renderWorkDetails } from "./fold.js";
 
 // What one piped render may spend (#213). A cap measures what a store may
@@ -306,9 +306,9 @@ function optionalReportRow(prefix: string, label: string, values: string[]): Han
     return values.length === 0 ? [] : [row(prefix, `${label}: ${values.join("; ")}`)];
 }
 
-function artifactLabel(artifact: { id: string; name: string; digest?: string }): string
+function artifactLabel(artifact: ArtifactMeta): string
 {
-    return `${artifact.id} ${artifact.name}${artifact.digest === undefined ? "" : ` (${artifact.digest})`}`;
+    return `${artifact.id} ${artifactName(artifact)}${artifact.digest === undefined ? "" : ` (${artifact.digest})`}`;
 }
 
 function approvalLabel(approval: { ts: string; digest?: string }): string

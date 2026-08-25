@@ -5,7 +5,7 @@ import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, 
 import { applyCommand } from "./apply.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
-import { ARTIFACT_COMMAND, commitStaged, stageArtifacts } from "./artifact.js";
+import { ARTIFACT_COMMAND, artifactDigest, commitStaged, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
@@ -545,6 +545,10 @@ const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --
 const REPORT_OPTIONS = {
     evidence: { type: "string", multiple: true },
     artifact: { type: "string", multiple: true },
+    // Taken as repeatable so that a second one is refused by name rather than
+    // silently dropped: it names a member of one bundle, and with two bundles
+    // nothing in the flag says which (#362).
+    entry: { type: "string", multiple: true },
     next: { type: "string" },
     file: { type: "string" },
     design: { type: "boolean" },
@@ -1149,7 +1153,7 @@ export const COMMANDS: Command[] = [
         name: "report",
         usage: [
             {
-                syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--next n]',
+                syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n]',
                 description: ["add --design --implements <decision-id> to submit a design or scope proposal,", "which is refused unless every decision it cites still holds"],
                 verbs: [""]
             },
@@ -1169,8 +1173,14 @@ export const COMMANDS: Command[] = [
             "  --file <path>       read the summary from a file instead of the argument",
             "  --evidence <v>      record evidence, repeatable: a revision this repo",
             "                      resolves, else a note; commit:<v>/note:<v> force it",
-            "  --artifact <path>   copy a file into the store and attach it, repeatable",
-            "                      (a design report carries exactly one: the design)",
+            "  --artifact <path>   copy a file into the store and attach it, repeatable;",
+            "                      a directory attaches as one bundle — every file it",
+            "                      holds, under one id (a design report carries exactly",
+            "                      one artifact: the design)",
+            "  --entry <file>      the member of that bundle a person is meant to open,",
+            "                      named relative to the directory's own root; without",
+            "                      it, index.html, index.md or README.md at that root,",
+            "                      else a generated index",
             "  --next <text>       what the next session should pick up",
             "  --design            this report proposes a design or a scope, not history",
             "  --implements <id>   the decisions the design implements, repeatable and",
@@ -3023,7 +3033,7 @@ function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>)
     // Before a byte is staged: a design citing a decision that no longer holds
     // must leave the store exactly as it found it.
     const cited = designCitations(ctx, owner, values, refs, payload);
-    const staged = stageArtifacts(ctx.storeDir, owner, values.artifact);
+    const staged = stageArtifacts(ctx.storeDir, owner, values.artifact, values.entry);
     if (staged.artifacts.length > 0)
     {
         payload.artifacts = staged.artifacts;
@@ -3090,7 +3100,10 @@ function cmdReportConfirm({ positionals }: CommandInput<Record<string, never>>):
     const ctx = requireProject(process.cwd());
     const wanted = requireText(positionals[0], "report confirm <report-id> — `self work show <work-id>` lists a unit's reports");
     const found = requireDesignReport(ctx, wanted);
-    const digest = found.report.artifacts[0]?.digest;
+    // A bundle stores no digest of its own, so the challenge is derived from
+    // its manifest (#362): a stored hash could contradict the member list, and
+    // a derived one cannot.
+    const digest = artifactDigest(found.report.artifacts[0]);
     if (digest === undefined)
     {
         throw new CliError(`${found.report.id} carries no artifact digest, so there is nothing for an approval to bind to — resubmit the design with --artifact <path>`);

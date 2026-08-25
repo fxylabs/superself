@@ -64,6 +64,17 @@ export interface SelfEvent
     refs?: EventRefs;
 }
 
+// One regular file copied out of a bundle's tree, named by its path relative
+// to that tree's root. `generated` marks the index this CLI wrote when the
+// directory carried no front door of its own: it is a member like any other —
+// stored, digested, counted — and this is what says no reporter wrote it.
+export interface ArtifactMember
+{
+    path: string;
+    digest: string;
+    generated?: true;
+}
+
 export interface ArtifactMeta
 {
     id: string;
@@ -71,8 +82,53 @@ export interface ArtifactMeta
     path: string;
     // sha256 of the bytes as they were ingested. Optional: artifacts attached
     // before digests were recorded verify by existence alone, and folding an
-    // existing store must not invent a digest for them.
+    // existing store must not invent a digest for them. A bundle carries none
+    // at all — its hash is derived from the manifest where something needs it,
+    // because a stored field could contradict the manifest and a derived one
+    // cannot.
     digest?: string;
+    // Present exactly when this artifact's bytes are a directory tree, which
+    // is what makes the manifest its own discriminator: no event written
+    // before bundles needs a field it does not carry, and no migration is
+    // written. Sorted by the members' UTF-8 bytes.
+    members?: ArtifactMember[];
+    // The one member a person is meant to open.
+    entry?: string;
+}
+
+// One row per artifact, everywhere (#362). A bundle states what it holds where
+// a single file states its name, and every surface that prints an artifact
+// reads this rather than deciding for itself what a directory looks like.
+export function artifactName(meta: ArtifactMeta): string
+{
+    return countedName(meta.name, meta.members?.length);
+}
+
+// The same row from the manifest's size alone, for the one reader that has the
+// size without the manifest: the HTML summary a workspace page is drawn from
+// carries how many members a bundle holds rather than which, because a page
+// showing four artifacts must not write four thousand member digests into a
+// file every fold rewrites. One row, one spelling, whichever half asks for it.
+export function countedName(name: string, files: number | undefined): string
+{
+    return files === undefined ? name : `${name}/ (${files} file${files === 1 ? "" : "s"})`;
+}
+
+// Encoded a segment at a time, so the separators survive and everything else
+// does not: `encodeURI` leaves `#` and `?` alone, and a member named `a#b.txt`
+// linked through it sends the reader to the directory with a fragment rather
+// than to the file (#362 review round 2).
+export function encodedPath(path: string): string
+{
+    return path.split("/").map(encodeURIComponent).join("/");
+}
+
+// What a query is matched against. A member path joins the haystack because
+// the manifest is the machine-readable answer to what a bundle holds; a hit on
+// one still shows the bundle's row, since a member has no id of its own.
+export function artifactSearchText(meta: ArtifactMeta): string
+{
+    return [meta.name, ...(meta.members ?? []).map((member) => member.path)].join(" ");
 }
 
 export interface RegistryEntry
