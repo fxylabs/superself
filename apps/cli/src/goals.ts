@@ -8,6 +8,7 @@ import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
 import {
     allMilestones,
+    contributionsOf,
     findMilestone,
     isTerminalObjective,
     MilestoneState,
@@ -32,6 +33,13 @@ import { countCharacters, dim, errYellow, markdownHeadings, plural, styled } fro
 import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
+
+// What to do when the project has nothing to attach to yet. Two surfaces say
+// it — the proposal gate, which refuses without a gap, and `work add`, which
+// refuses nothing — so it is one sentence in one place rather than two
+// spellings of the same advice.
+export const NO_OBJECTIVE_HINT =
+    'no objective yet? `self objective add "<outcome>" --proposed`, then `self objective confirm <id>`';
 
 // What each verb cannot run without, declared once: the parse gate refuses
 // every missing one in a single answer and the help page states them, so an
@@ -879,7 +887,7 @@ const GAP_PROPOSAL_REQUIRED: Requirement[] = [
         flags: ["objective", "milestone"],
         value: "<id>",
         hint: "the gap this proposal closes",
-        unblock: 'no objective yet? `self objective add "<outcome>" --proposed`, then `self objective confirm <id>`'
+        unblock: NO_OBJECTIVE_HINT
     }
 ];
 
@@ -1238,6 +1246,76 @@ function refuseClosedPlan(entity: EntityState): void
 }
 
 /* ── console output ────────────────────────────────────────────────── */
+
+// What `self work add` prints under the new id (#286). The CLI has always
+// believed a unit contributes to something — `work propose` refuses without
+// the gap it closes — and `add` was the one path that never said so, which is
+// why work created in the ordinary way is unattached by construction.
+//
+// It names targets and spells out the command; it refuses nothing. The unit is
+// already recorded by the time this renders, and superself forces no
+// methodology.
+export function attachmentListing(model: ProjectModel, work: string, superseded?: WorkState): ListingBlock
+{
+    const objectives = openObjectives(model.goals);
+    const rows = [
+        ...carriedLinks(model, work, superseded),
+        ...(objectives.length === 0
+            ? [NO_OBJECTIVE_HINT]
+            : objectives.flatMap((objective) => attachmentRows(objective, work)))
+    ];
+    return {
+        kind: "listing",
+        rows,
+        // A person at a terminal is reading the receipt, not this: the whole
+        // block is dim so it reads as an offer under the answer.
+        pretty: () => rows.map((row) => dim(row)),
+        // The objectives, not the lines: a checkpoint, a link command and a
+        // carry-over row all render under an objective, and counting those
+        // would tell a reader they have more outcomes than they have.
+        total: objectives.length,
+        noun: "open objective"
+    };
+}
+
+// One objective and its checkpoints, each under the command that attaches this
+// unit to it. Proposed objectives are offered too, because `work link` accepts
+// one — an offer the tool would refuse is worse than no offer.
+function attachmentRows(objective: ObjectiveState, work: string): string[]
+{
+    return [
+        `${objective.id}  ${stateMark(objective.state)}  ${objective.outcome}`,
+        `    self work link ${work} --objective ${objective.id}`,
+        ...objective.milestones.flatMap((milestone) => [
+            `  ${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome}`,
+            `      self work link ${work} --milestone ${milestone.id}`
+        ])
+    ];
+}
+
+// What the unit being replaced was attached to, so a correction does not
+// silently drop it. Cross-project links are read separately: `contributionsOf`
+// resolves ids in this project's own goal tree, and a foreign objective's id
+// is not in it (#244), so reading only that would report "attached to nothing"
+// for a unit that was attached all along.
+function carriedLinks(model: ProjectModel, work: string, superseded?: WorkState): string[]
+{
+    if (superseded === undefined)
+    {
+        return [];
+    }
+    const carried = [
+        ...contributionsOf(model.goals, superseded).flatMap((item) => [
+            `  ${item.id}  ${item.outcome}`,
+            `    self work link ${work} --${item.kind} ${item.id}`
+        ]),
+        ...superseded.foreignObjectives.flatMap((link) => [
+            `  ${link.id} (${link.project})`,
+            `    self work link ${work} --objective ${link.id} --objective-project ${link.project}`
+        ])
+    ];
+    return carried.length === 0 ? [] : [`${superseded.id} was attached to these, and this unit is not yet:`, ...carried, ""];
+}
 
 // The size is the objectives, not the lines: a checkpoint renders indented
 // under the objective it belongs to, and counting those rows would tell a

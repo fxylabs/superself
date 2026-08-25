@@ -14,7 +14,7 @@ import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitatio
 import { EntityState, Exposure, isEntityCreation, isLive, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
-import { MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
+import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
 import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
@@ -2453,7 +2453,13 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
             return events;
         },
         `${id} ${outcome}`);
-    return [{ kind: "receipt", text: id }];
+    // The unit is recorded and what it contributes to is still nobody's
+    // statement (#286). The model is the one read before the append, which is
+    // all this needs: the objectives it names are not changed by the unit.
+    const superseded = retirement === undefined
+        ? undefined
+        : model.works.find((work) => work.id === retirement.payload.entity);
+    return [{ kind: "receipt", text: id }, attachmentListing(model, id, superseded)];
 }
 
 function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<string, unknown>

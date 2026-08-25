@@ -18,6 +18,7 @@ const { COMMANDS } = await import("../dist/main.js");
 const { buildModel } = await import("../dist/model.js");
 const { renderOutput } = await import("../dist/output.js");
 const { renderWorkList } = await import("../dist/pretty.js");
+const { NO_OBJECTIVE_HINT } = await import("../dist/goals.js");
 const { bold, dim, green, styled } = await import("../dist/style.js");
 
 const box = machine();
@@ -69,6 +70,8 @@ test("cell 8: at a styled terminal, an event verb prints today's ✓ line", asyn
 // same bytes at a terminal as in a pipe. What the terminal changes is the
 // announce line above it, which `pipeline.ts` still composes — so this cell is
 // the two of them together, in the order they have always been printed in.
+// Since #286 the attachment offer follows the id, dim, and this project has no
+// objective, so the offer is the one line that says how to record one.
 test("stage 2 cell 2: at a terminal, `self work add` styles the announce line and leaves the id alone", async () =>
 {
     const outcome = "the receipts answer through the gate";
@@ -77,7 +80,9 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
     const [announced, id] = answer.printed.split("\n");
     const event = announced.match(/\[([0-9abcdefghjkmnpqrstvwxyz]{26})\]/)[1];
     assert.equal(announced, `${green("✓")} ${bold("entity.confirmed")}  ${dim(`${id} ${outcome}`)}  ${dim(`[${event}]`)}`);
-    assert.match(answer.printed, /\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n$/);
+    assert.match(answer.printed, /\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n/);
+    assert.equal(answer.printed.endsWith(`\n${dim(NO_OBJECTIVE_HINT)}\n`), true,
+        `the attachment offer is not the dim last line:\n${JSON.stringify(answer.printed)}`);
 });
 
 /* ── stage 3 cell 13: the size line is a plain-render line ─────────── */

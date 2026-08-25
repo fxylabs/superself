@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NO_OBJECTIVE_HINT } from "../dist/goals.js";
 import { git, machine, must, selfIn } from "./harness.mjs";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
@@ -25,13 +26,24 @@ must(box, ws, ["init"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 must(box, demo, ["project", "init", "--name", "demo", "--desc", "the receipt migration", "--no-connect"]);
 
+// Since #286 the id is followed by what the unit could attach to. This project
+// has no objective, so that is the one line `work propose` prints in the same
+// situation — and the receipt itself is still the bare id on its own line,
+// directly under the announce line, which is what this cell has always been
+// about.
 test("stage 2 cell 1: a piped `self work add` answers with the bare id, under the announce line", () =>
 {
     const answer = selfIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
     assert.equal(answer.code, 0, answer.out);
     assert.match(answer.out,
-        /^entity\.confirmed recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n$/);
+        new RegExp(`^entity\\.confirmed recorded \\[[0-9abcdefghjkmnpqrstvwxyz]{26}\\]`
+            + `\\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\\n${escaped(NO_OBJECTIVE_HINT)}\\n$`));
 });
+
+function escaped(text)
+{
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // The table calls this one `self project add`, which is the verb #251 removed;
 // `self project init` is the registration it was replaced by, and it is the
