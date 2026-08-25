@@ -207,6 +207,12 @@ export interface WorkState
     retiredWhy?: string;
     successor?: { work: string; project?: string };
     reports: ReportEntry[];
+    // The `report.added` ids a swept proposal cited as its evidence (#381),
+    // read off the creation event's `refs.friction`. Empty on every unit that
+    // was not proposed by `self sweep --record`. Named apart from
+    // `ReportEntry.friction`, which holds sentences: these are the ids of the
+    // reports those sentences were written on.
+    frictionEvidence: string[];
     evidence: string[];
     notes: string[];
     artifacts: ArtifactMeta[];
@@ -1465,6 +1471,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         claim: entity.claim,
         plan: entity.plan,
         reports: [],
+        frictionEvidence: stringList(creation?.refs?.friction),
         evidence: [],
         notes: [],
         artifacts: [],

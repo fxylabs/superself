@@ -32,6 +32,7 @@ prints them during the same run.
 | Store size and maintenance | `store size [--json]`, `store compact` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
+| Recurring friction | `sweep [--since <window>] [--record]` |
 | Agent instructions | `connect [--global]` |
 | Paid work APIs | `login`, `logout`, `whoami [--verify]`, `app install\|list\|update\|remove\|trust` |
 
@@ -42,7 +43,7 @@ init workspace lang theme timezone tokens project remote sync clone
 goal objective milestone decide work handoff report artifact store convention state alias runbook
 undo apply
 connect view context status setup
-log search fold
+log search fold sweep
 login logout whoami app
 ```
 
@@ -432,6 +433,36 @@ record. History is per record and explicit — `self state show <id> --history`
 and `self work show <id> --history` page over one record's own events, and
 there is no global history search. `self log` prints recent events, and
 `self fold` re-derives canonical files and views from the event log.
+
+### Reading back the friction that recurs
+
+`self report --friction "<what differed>"` records what surprised a session as
+a field on the report rather than as prose inside it. `self sweep` is what
+reads those fields back. It collects the friction sentences recorded in every
+active project in the workspace over a window — `--since 30d` by default,
+written as a whole number of days or weeks — groups the sentences that say the
+same thing, and prints each group with the report ids that make its case.
+
+Grouping is arithmetic and calls no model: sentences are normalized the way
+every other record text is, common function words are dropped, and two
+sentences are the same complaint when they share half their remaining words or
+more. A group of three sentences or more is a candidate, and a sentence that
+says only "as expected" is never one. Both numbers are constants in
+`apps/cli/src/sweep.ts` rather than flags.
+
+`self sweep` prints and records nothing. `self sweep --record` writes each
+group as a standalone work proposal — the same `entity.proposed` record `self
+work propose` writes — carrying the group's report ids as evidence, so it is
+accepted, declined or revised through the unchanged verbs and appears in the
+`## Waiting on you` section of `self context`. Every group in a run is written
+in one append. A group is skipped when an open proposal already cites one of
+its reports, or already carries the same plan text; a *declined* proposal
+skips nothing, because friction that keeps recurring is meant to keep being
+asked about.
+
+Nothing schedules this. There is no timer, no daemon, and an unattended run is
+an external cron calling `self sweep --record`. The proposal is recorded into
+the project the command runs in, even when the evidence spans several.
 
 ## Canonical and derived records
 

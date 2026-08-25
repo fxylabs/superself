@@ -296,6 +296,7 @@ usage: self <command>
   search [query] [--type <kind>] [--exposure <tier>|--all] [--project p]
                                              find live records context does not show (query optional with a narrowing flag)
   fold                                       re-derive canonical files from the log
+  sweep [--since <window>] [--record]        cluster the friction reports recorded lately, and propose what recurs
   login [--label text] [--scopes csv] [--no-open] [--timeout s] [--profile name] [--api-base url] [--json]
                                              obtain an agent credential through a device approval a person confirms
   logout [--profile name] [--all] [--json]   delete the local credential; the server-side credential stays valid until it expires

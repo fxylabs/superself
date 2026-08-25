@@ -47,6 +47,13 @@ export interface EventRefs
     // than payload text because these are record ids that have to resolve: the
     // gate reads them back and refuses a design whose decision stopped holding.
     implements?: string[];
+    // The `report.added` events whose friction a swept proposal was built from
+    // (#381). A ref for the same reason `implements` is one: these are record
+    // ids a reader follows back to the reports that made the case, not payload
+    // text. It is also the dedupe key that survives the text drifting — a
+    // cluster whose evidence an open proposal already cites has been asked
+    // about, whatever sentence that proposal ended up carrying.
+    friction?: string[];
     // On a paired demotion (#202): the record the demotion makes room for.
     // The confirm surface reads it back, so a cap-driven pair is one
     // confirmable unit rather than two halves that can deadlock.
