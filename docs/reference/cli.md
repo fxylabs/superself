@@ -311,6 +311,13 @@ self runbook resume E001
 - `report` attaches a progress report, optional commit evidence, and optional
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
+- `report --friction "<what differed>"` records what went other than expected,
+  repeatable, one sentence each. It is stored as a field rather than written
+  into the summary prose, so a later reader can collect it. `--next` is what a
+  later session should pick up; `--friction` is what already surprised this
+  one. The flag is optional — nothing is refused for leaving it off — but
+  `self context` adds a `## Health` line once more than half of a project's
+  reports in the last 30 days carry none.
 - `report --artifact <dir>` attaches a whole directory as one artifact — a
   bundle — instead of one `--artifact` per file. It lists as one row,
   `dist/ (12 files)`, and `artifact open` opens its entry.
@@ -468,6 +475,7 @@ A report may carry:
 - commit revisions, which are resolved against the project repository;
 - descriptive notes, which are retained but never treated as Git revisions;
 - attached artifacts;
+- friction sentences — what differed from expectation, one per sentence;
 - the next action for a later session; and
 - on a design report, the decisions it implements and the approval bound to
   its artifact hash.

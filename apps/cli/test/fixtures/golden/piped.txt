@@ -44,6 +44,10 @@ the render gate scenario
 
 - <w-id> stage 1 lands the render gate and its pilot — latest report: the fixture was generated (full: `self work show <w-id> --project 'demo'`)
 
+## Health
+
+- no friction on 1 of this project's 1 report in the last 30 days — self report … --friction "<what differed>"
+
 ## Index
 
 - [decision] the render gate is the one path to stdout — one print path
@@ -55,7 +59,7 @@ work: 1 active, 0 blocked, 0 next, 0 done
 objectives: 0 open, 0 of 0 milestones reached, 0 of 0 exit criteria covered
 waiting on you: 0
 unshipped: nothing waiting to ship
-health: ok
+health: no friction on 1 of this project's 1 report in the last 30 days — self report … --friction "<what differed>"
 
 $ self work   (in project, exit 0)
 <w-id>  active  stage 1 lands the render gate and its pilot  — 1 report(s), see `self work show <w-id> --project 'demo'`
@@ -106,10 +110,10 @@ $ self log   (in project, exit 0)
 5 events
 
 $ self status   (in workspace, exit 0)
-demo — (no goal) (1 active, 0 blocked, 0 next, 0 done)
+demo — (no goal) (1 active, 0 blocked, 0 next, 0 done) [1 health signal(s)]
 
 $ self status   (in outside, exit 0)
-demo — (no goal) (1 active, 0 blocked, 0 next, 0 done)
+demo — (no goal) (1 active, 0 blocked, 0 next, 0 done) [1 health signal(s)]
 
 $ self lang   (in outside, exit 0)
 en
@@ -223,7 +227,7 @@ usage: self <command>
   undo <event-id> --why "<why the retirement was wrong>"
   apply <file>                               run a reviewed file of record-destroying commands on one confirmation
                                              (nothing is recorded until the whole set is confirmed at a terminal)
-  report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n]
+  report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n] [--friction f]
                                              add --design --implements <decision-id> to submit a design or scope proposal,
                                              which is refused unless every decision it cites still holds
   report confirm <report-id>                 approve a design at a terminal, binding the approval to the artifact's hash

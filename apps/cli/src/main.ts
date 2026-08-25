@@ -553,6 +553,10 @@ const REPORT_OPTIONS = {
     // nothing in the flag says which (#362).
     entry: { type: "string", multiple: true },
     next: { type: "string" },
+    // What differed from expectation, one sentence per occurrence (#380).
+    // Repeatable because a session hits more than one, and each is its own
+    // sentence: joining them would make a later sweep read two pains as one.
+    friction: { type: "string", multiple: true },
     file: { type: "string" },
     design: { type: "boolean" },
     implements: { type: "string", multiple: true }
@@ -1168,7 +1172,7 @@ export const COMMANDS: Command[] = [
         name: "report",
         usage: [
             {
-                syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n]',
+                syntax: 'report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n] [--friction f]',
                 description: ["add --design --implements <decision-id> to submit a design or scope proposal,", "which is refused unless every decision it cites still holds"],
                 verbs: [""]
             },
@@ -1197,6 +1201,10 @@ export const COMMANDS: Command[] = [
             "                      it, index.html, index.md or README.md at that root,",
             "                      else a generated index",
             "  --next <text>       what the next session should pick up",
+            "  --friction <text>   one sentence on what differed from expectation,",
+            "                      repeatable; --next is what happens later, --friction",
+            "                      is what already went other than planned. Optional —",
+            "                      `self context` says so when a project stops writing it",
             "  --design            this report proposes a design or a scope, not history",
             "  --implements <id>   the decisions the design implements, repeatable and",
             "                      comma-separable; every one must exist, still hold, and",
@@ -3073,6 +3081,25 @@ function attachEvidence(ctx: ProjectContext, values: CommandInput<typeof REPORT_
     }
 }
 
+// What differed from expectation, moved out of report prose and into a key a
+// later reader can collect (#380). Optional by ruling: a report with no
+// friction records exactly as it always did, and only `self context` remarks
+// on a project that has stopped writing it. Blank is refused rather than
+// stored — an empty sentence records the flag without recording the fact, and
+// the writer passing it meant to state one.
+function attachFriction(sentences: string[] | undefined, payload: Record<string, unknown>): void
+{
+    const stated = (sentences ?? []).map((sentence) => sentence.trim());
+    if (stated.some((sentence) => sentence === ""))
+    {
+        throw new CliError('--friction takes one sentence saying what differed from expectation — pass --friction "the root suite took 25 minutes, not the 12 CONTRIBUTING states", or leave the flag off');
+    }
+    if (stated.length > 0)
+    {
+        payload.friction = stated;
+    }
+}
+
 function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
@@ -3084,6 +3111,7 @@ function cmdReport({ values, positionals }: CommandInput<typeof REPORT_OPTIONS>)
     const refs: EventRefs = { work: work.id };
     const payload: Record<string, unknown> = { text };
     attachEvidence(ctx, values, refs, payload);
+    attachFriction(values.friction, payload);
     // Before a byte is staged: a design citing a decision that no longer holds
     // must leave the store exactly as it found it.
     const cited = designCitations(ctx, owner, values, refs, payload);

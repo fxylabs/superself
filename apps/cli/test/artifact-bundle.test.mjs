@@ -860,7 +860,10 @@ test("cell 45: a bundle event read without its manifest lists as one directory r
     writeFileSync(join(root, "index.html"), "hi");
     writeFileSync(join(root, "assets", "app.js"), "j");
     const work = workIdIn(must(place.box, place.demo, ["work", "add", "older reader"]).out);
-    must(place.box, place.demo, ["report", work, "attached", "--artifact", root]);
+    // The friction sentence keeps this cell's subject the unread manifest
+    // (#380): a project whose only report records none raises a health line of
+    // its own, and what is asserted below is that the manifest raises none.
+    must(place.box, place.demo, ["report", work, "attached", "--artifact", root, "--friction", "예상대로"]);
     const placeLog = join(place.ws, ".superself", "projects", "demo", "log.jsonl");
     const report = eventsIn(placeLog).find((event) => event.type === "report.added");
     forgetManifest(place, report.id);

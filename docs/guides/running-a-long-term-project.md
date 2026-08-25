@@ -111,8 +111,16 @@ Report state-changing progress, friction, and the next action:
 ```bash
 self report w-xxxxx \
   "The critical flow passes locally; the release-candidate run remains" \
+  --friction "The suite took 25 minutes, not the 12 the contributing guide states" \
   --next "Build the candidate and run the proof against its exact commit"
 ```
+
+`--friction` is what already went other than planned, one sentence and
+repeatable; `--next` is what a later session should pick up. Writing friction
+into the summary prose instead leaves it where nothing can collect it later, so
+it goes in the flag. Nothing refuses a report that omits it, but `self context`
+says so under `## Health` once more than half of a project's reports in the last
+30 days carry none.
 
 When the linked checkout has a git `HEAD`, `self report` records it by default.
 Use `--evidence` when the report must name another commit explicitly. Add

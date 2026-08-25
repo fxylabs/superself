@@ -301,6 +301,10 @@ function reportRowsFor(report: ReportEntry): HandoffRow[]
         ...optionalReportRow(prefix, "branch", report.branch === undefined ? [] : [report.branch]),
         ...optionalReportRow(prefix, "repository", report.repository === undefined ? [] : [report.repository]),
         ...optionalReportRow(prefix, "approval", report.approval === undefined ? [] : [approvalLabel(report.approval)]),
+        // What differed from expectation travels with the packet (#380): a
+        // session picking this work up needs the surprise the last one hit,
+        // and it is the half of a report the summary text no longer carries.
+        ...optionalReportRow(prefix, "friction", report.friction),
         row(prefix, `text:\n${report.text}`)
     ];
 }
