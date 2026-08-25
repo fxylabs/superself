@@ -1,6 +1,14 @@
 // The read-scope contract the shell suite proved: one resolver behind every
 // read verb — current project by default, --project for another, --workspace
-// where aggregation is meaningful — and writes take no scope flag at all.
+// where aggregation is meaningful — and a write verb takes no *read* scope
+// flag: it records into the project it runs in, and `--project` on a write is
+// refused by name.
+//
+// `--workspace` on a write is a different flag with the same spelling, and has
+// been since #207 D6: on `convention add`, `goal add` and `objective add` it
+// states a placement — where the new record renders — while the record itself
+// still lands in this project's store. The cells below are about the read
+// resolver; the placement flag's own cells are in workspace-direction.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { demoWorkspace, machine, must, selfIn } from "./harness.mjs";
@@ -31,11 +39,16 @@ test("naming a project and the workspace at once is two different asks", () =>
     assert.match(result.out, /pass one of them/);
 });
 
-test("a write declares no scope flag, so --project on it is named as a mistake", () =>
+test("a write declares no read scope flag, so --project on it is named as a mistake", () =>
 {
     const result = self(demo, ["work", "add", "elsewhere", "--project", "demo"]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /unknown option '--project'/);
+    // The same holds for a write that does declare `--workspace`: that flag
+    // states where the record renders, and it buys no read scope with it.
+    const placed = self(demo, ["objective", "add", "elsewhere", "--workspace", "--project", "demo"]);
+    assert.notEqual(placed.code, 0);
+    assert.match(placed.out, /unknown option '--project'/);
 });
 
 test("context outside a project answers for the workspace instead of refusing", () =>

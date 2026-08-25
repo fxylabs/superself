@@ -445,3 +445,19 @@ test("a union-merged log folds the link even when it sits above the unit's creat
     const shown = must(a.box, a.alpha, ["work", "show", "w-aaaaa"]).out;
     assert.ok(shown.includes(`${aObjBeta} (beta)`), shown);
 });
+
+// #287 cell B16. Work stays where it happens and direction is what it serves,
+// so a company objective needs no new link grammar: the cross-project link
+// #254 built resolves a workspace-scoped objective exactly as it resolves any
+// other project's. Reconfirmation, not new behaviour — the cell exists so a
+// change to workspace scope cannot quietly take it away.
+test("cell B16 (#287): a unit links to another project's workspace objective, and the unit does not move", () =>
+{
+    const company = objectiveIdIn(must(a.box, a.beta, ["objective", "add", "the company reaches a hundred teams", "--workspace"]).out);
+    const work = aWork("b16 alpha's contribution to the company objective");
+    must(a.box, a.alpha, ["work", "link", work, "--objective", company]);
+    assert.ok(must(a.box, a.alpha, ["work", "show", work]).out.includes(`${company} (beta)`));
+    // The unit is still alpha's, and the objective still beta's.
+    assert.ok(must(a.box, a.alpha, ["work"]).out.includes(work));
+    assert.ok(must(a.box, a.beta, ["objective", "show", company]).out.includes(`${work} (alpha)`));
+});

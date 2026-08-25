@@ -22,7 +22,7 @@ prints them during the same run.
 | --- | --- |
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
 | Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path|--here] [--force]`, `project unlink [slug] <path|--here> [--force]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
-| Outcomes | `goal add "<text>" [--supersedes <id>]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
+| Outcomes | `goal add "<text>" [--supersedes <id>] [--workspace]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace] [--public]`, `convention drop <event-id>` |
 | Approving a reviewed set | `apply <file>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
@@ -197,6 +197,13 @@ work, or a free-labeled entity — folds into one record kind with placement:
 - `goal add` records a long-term project outcome. A project holds as many as
   it means to: recording one displaces nothing, the goal a new one replaces is
   named with `--supersedes <id>`, and `goal retract` withdraws one.
+- `goal add --workspace` and `objective add --workspace` record the whole
+  workspace's direction rather than one project's. The record stays in the
+  store of the project it was recorded in, and it renders in every registered
+  project's context — a workspace objective above that project's own — and once
+  above the project lines of the workspace context. Its retention cap is the
+  workspace tier's, not any project's, and a project holding one cannot be
+  archived until the record is withdrawn or closed.
 - `objective` manages time-boxed outcomes under the goal. Its states explain
   why an objective is open, confirmed, revised, reached, or dropped.
 - `milestone` manages checkpoints and exit criteria under an objective. A

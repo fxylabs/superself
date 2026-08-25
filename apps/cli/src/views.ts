@@ -15,6 +15,7 @@ import {
     foreignToward,
     otherGoals,
     planNote,
+    projectGoalLine,
     ProjectModel,
     HandoffConvention,
     ReportEntry,
@@ -388,7 +389,10 @@ function workspaceContextOutput(ctx: CliContext): CommandOutput
     return [{
         kind: "document",
         plain: () => lines(renderWorkspaceContext(models, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))))),
-        pretty: models.length === 0 ? undefined : () => renderWorkspace(models)
+        // The same direction lines the plain render says, so the two forms of
+        // one command state the same facts (#287): `self status` shares this
+        // renderer and passes none, which is why the block is an argument.
+        pretty: models.length === 0 ? undefined : () => renderWorkspace(models, workspaceDirectionLines(models))
     }];
 }
 
@@ -1027,6 +1031,15 @@ function renderWorkspaceContext(models: ProjectModel[], limit: number): string
     {
         return "no projects registered — run `self project init` inside a project directory";
     }
+    const direction = workspaceDirectionLines(models);
+    return [...direction, workspaceProjectLines(models, limit - countCharacters(direction.join("\n")))].join("\n");
+}
+
+// The per-project summaries, fitted to what the direction block left of the
+// budget: the direction is what a workspace read is for, so it is the last
+// thing a tight budget would cut, not the first.
+function workspaceProjectLines(models: ProjectModel[], limit: number): string
+{
     const full = models.map(workspaceContextLine).join("\n");
     if (countCharacters(full) <= limit)
     {
@@ -1043,10 +1056,36 @@ function renderWorkspaceContext(models: ProjectModel[], limit: number): string
         : kept.join("\n");
 }
 
+// The direction the whole workspace is under (#287): every live workspace-
+// scoped goal and objective, said once above the project lines. Both renders
+// of `self context` take these same lines, and `self status` takes none —
+// there the projects are the answer, and each row is its own project's.
+export function workspaceDirectionLines(models: ProjectModel[]): string[]
+{
+    const direction = models.flatMap((model) => model.entities.filter(isWorkspaceDirection));
+    if (direction.length === 0)
+    {
+        return [];
+    }
+    // Priority puts the goals above the objectives, and it is the comparator
+    // every other placement render sorts through — a second one here would let
+    // this block and a project's context disagree about the same records.
+    return ["## Workspace direction", ...orderEntities(direction).map(fullEntityRow), ""];
+}
+
+function isWorkspaceDirection(entity: EntityState): boolean
+{
+    return (entity.source === "goal" || entity.source === "objective")
+        && entity.scope === "workspace" && entity.status === "confirmed" && isCurrent(entity);
+}
+
 function workspaceContextLine(model: ProjectModel): string
 {
     const health = model.health.length === 0 ? "" : ` [${model.health.length} health signal(s)]`;
-    const goal = detail((model.goal ?? "(no goal)") + otherGoals(model), 500, workspacePointer("self status"));
+    // This project's own goals only: a workspace goal was already said once by
+    // the direction block, and the count behind the first goal is read from the
+    // same set — otherwise the row claims a goal the reader can never find.
+    const goal = detail(projectGoalLine(model), 500, workspacePointer("self status"));
     return `${model.slug} — ${goal} (${countLine(model.works)})${health}`;
 }
 

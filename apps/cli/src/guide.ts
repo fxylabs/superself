@@ -188,8 +188,12 @@ export const TOPICS: Topic[] = [
             "start`, `report` and `work done` all answer for it — and every write about",
             "it lands in its home log. `--scope project` was retired: omit the flag.",
             "",
-            "`--scope workspace` works on the state and alias verbs, and `self convention",
-            "add \"<text>\" --workspace` is the convention spelling."
+            "`--scope workspace` works on the state and alias verbs. The preset verbs",
+            "spell the same placement `--workspace`: `self convention add \"<text>\"",
+            "--workspace` for a rule the whole workspace works by, and `self goal add`",
+            "or `self objective add` with it for direction that is the company's rather",
+            "than one project's — read from inside every registered project, while the",
+            "record itself stays in the store of the project it was recorded in."
         ]
     },
     {

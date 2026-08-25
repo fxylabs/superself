@@ -25,7 +25,8 @@
 
 import { required, Requirement, requireText } from "./args.js";
 import { CommandInput, CommandLeaf, leaf } from "./contract.js";
-import { buildModel } from "./model.js";
+import { isCurrent } from "./entities.js";
+import { buildModel, ProjectModel } from "./model.js";
 import { archivedProjects, CliContext, projectArchive, requireRegistered, requireWorkspace } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { CliError, CommandOutput, ListingBlock } from "./types.js";
@@ -64,7 +65,12 @@ function archiveProject({ values, positionals }: CommandInput<typeof ARCHIVE_OPT
     const ctx = requireWorkspace(process.cwd());
     const slug = requireRegistered(ctx.storeDir, requireText(positionals[0], ARCHIVE_USAGE));
     refuseArchivedAlready(ctx, slug);
-    const open = openUnits(ctx, slug);
+    // One fold answers both questions the archive asks of the project: what
+    // went with it, and whether the company's own direction would go quiet
+    // with it (#287).
+    const model = buildModel(ctx.storeDir, slug, new Date());
+    refuseWorkspaceDirection(model, slug);
+    const open = openUnits(model);
     recordEvent(scopedTo(ctx, slug),
         makeEvent(slug, "project.archived", { project: slug, why: required(values.why) }, undefined, true),
         `archived ${slug}`);
@@ -90,7 +96,7 @@ function restoreProject({ values, positionals }: CommandInput<typeof RESTORE_OPT
     recordEvent(scopedTo(ctx, slug), makeEvent(slug, "project.restored", restorePayload(slug, values.why),
         undefined, true), `restored ${slug}`);
     return [
-        { kind: "receipt", text: `project "${slug}" is back — ${openLine(openUnits(ctx, slug))} came back with it, as it was left` },
+        { kind: "receipt", text: `project "${slug}" is back — ${openLine(openUnits(buildModel(ctx.storeDir, slug, new Date())))} came back with it, as it was left` },
         archivedListing(ctx.storeDir)
     ];
 }
@@ -144,11 +150,42 @@ function refuseArchivedAlready(ctx: CliContext, slug: string): void
 
 // What went with the project, or came back with it. Open is every unit that has
 // not ended: archiving retires nothing, so these are the units whose state the
-// restore has to give back untouched.
-function openUnits(ctx: CliContext, slug: string): number
+// restore has to give back untouched. Takes the fold rather than reading one,
+// so the archive path folds the project once for this count and the direction
+// gate together.
+function openUnits(model: ProjectModel): number
 {
-    return buildModel(ctx.storeDir, slug, new Date())
-        .works.filter((work) => work.status !== "done" && work.status !== "retired").length;
+    return model.works.filter((work) => work.status !== "done" && work.status !== "retired").length;
+}
+
+// A workspace-scoped goal or objective is the whole company's direction, read
+// from inside every project (#287). Archiving the project whose log holds it
+// would take it out of all of them at once, with nothing saying where it went
+// — so the archive is refused where the record still stands, and the refusal
+// names both ways out. Both run with today's verbs.
+//
+// Only confirmed direction gates: a proposal is not a direction the company
+// has taken, and it occupies no tier until someone confirms it (#240 R3).
+function refuseWorkspaceDirection(model: ProjectModel, slug: string): void
+{
+    const held = model.entities.filter((entity) => (entity.source === "goal" || entity.source === "objective")
+        && entity.scope === "workspace" && entity.status === "confirmed" && isCurrent(entity));
+    if (held.length === 0)
+    {
+        return;
+    }
+    throw new CliError([
+        `project "${slug}" holds ${held.length} workspace-scoped record${held.length === 1 ? "" : "s"} — `
+            + "archiving it would take the whole workspace's direction out of every project's context:",
+        ...held.map((entity) => `  ${entity.id}  [${entity.source}] ${entity.text}`),
+        "fold the direction, with the verb its kind takes:",
+        '  self goal retract <id> --why "<why it no longer holds>"',
+        '  self objective close <id> --as dropped --why "<why it was given up>"',
+        "or record it again from a project that stays, then fold the old record here and archive:",
+        `  self goal add "<the same statement>" --workspace      (from the other project)`,
+        `  self objective add "<the same outcome>" --workspace   (from the other project)`,
+        "the restated record gets a new id — lineage does not cross projects, so --supersedes cannot carry it"
+    ].join("\n"));
 }
 
 function openLine(count: number): string

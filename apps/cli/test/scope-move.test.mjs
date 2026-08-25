@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 // Three projects, because a move needs a source, a destination, and a third
 // project that must never see the record. Named rather than reusing the
@@ -818,4 +818,39 @@ test("T6.9: a moved objective keeps the links from work in the source, and that 
     assert.match(must(t6.box, t6.beta, ["state", "show", objective]).out, /placement: beta/);
     assert.ok(must(t6.box, t6.alpha, ["work"]).out.includes(work));
     assert.ok(must(t6.box, t6.alpha, ["work", "show", work]).out.includes(objective));
+});
+
+/* ── T7 — an objective already recorded, moved to workspace scope (#287) ── */
+
+// The migration path for direction filed one level too low: an objective
+// recorded before `--workspace` existed is raised by the placement verb that
+// already moves every other record. No new verb, and no new code — these cells
+// exist because that promise is what let #287 ship without a migration.
+const t7 = trio();
+
+test("D1: state place --scope workspace raises a recorded objective to workspace scope", () =>
+{
+    const objective = entityIn(must(t7.box, t7.alpha, ["objective", "add", "d1 the company's real aim"]).out);
+    assert.ok(!must(t7.box, t7.beta, ["context"]).out.includes("d1 the company's real aim"));
+    must(t7.box, t7.alpha, ["state", "place", objective, "--scope", "workspace", "--why", "it is the company's, not alpha's"]);
+    assert.match(must(t7.box, t7.alpha, ["state", "show", objective]).out, /placement: workspace · full · priority 10/);
+    // D2: and it reaches every other project's context from there.
+    assert.ok(must(t7.box, t7.beta, ["context"]).out.includes("d1 the company's real aim"));
+    // D3: the same verb puts it back under one project alone.
+    must(t7.box, t7.alpha, ["state", "place", objective, "--scope", "alpha", "--why", "alpha's after all"]);
+    assert.ok(!must(t7.box, t7.beta, ["context"]).out.includes("d1 the company's real aim"));
+    assert.ok(must(t7.box, t7.alpha, ["context"]).out.includes("d1 the company's real aim"));
+});
+
+test("D4: revising a raised objective carries the workspace placement to the successor", async () =>
+{
+    const objective = entityIn(must(t7.box, t7.alpha, ["objective", "add", "d4 the company's stated aim"]).out);
+    must(t7.box, t7.alpha, ["state", "place", objective, "--scope", "workspace", "--why", "the company's"]);
+    const printed = (await approvedIn(t7.box, t7.alpha,
+        ["objective", "revise", objective, "--why", "restated", "--outcome", "d4 the company's clearer aim"],
+        objective)).printed;
+    const successor = printed.match(/\bo-[0-9a-z]{5}\b/)[0];
+    assert.notEqual(successor, objective);
+    assert.match(must(t7.box, t7.alpha, ["state", "show", successor]).out, /placement: workspace · full/);
+    assert.ok(must(t7.box, t7.beta, ["context"]).out.includes("d4 the company's clearer aim"));
 });

@@ -332,3 +332,16 @@ test("18: archive, restore and the listing all answer without the project's chec
     assert.match(back.out, /project "alpha" is back/);
     assert.match(must(box, ws, ["project"]).out, /^alpha/m);
 });
+
+// #287 cell B19. A project holding live workspace-scoped direction cannot be
+// archived, because archiving it would take that direction out of every
+// project's context at once. A *proposal* is not direction the company has
+// taken — it occupies no tier until someone confirms it (#240 R3) — so the
+// gate reads confirmed records only, and this archive goes through.
+test("cell B19 (#287): a proposed workspace objective does not hold the archive", () =>
+{
+    const { box, ws, alpha } = two();
+    must(box, alpha, ["objective", "add", "the company might reach a hundred teams", "--workspace", "--proposed"]);
+    const archived = archive(box, ws, "alpha", "nobody is working on it this quarter");
+    assert.match(archived.out, /project "alpha" is archived/);
+});

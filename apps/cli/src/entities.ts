@@ -1136,16 +1136,29 @@ function applyPlacement(target: EntityState, placement: PlacementEvent): void
 
 /* ── placement order and the retention-cap usage ───────────────────── */
 
-// Priority order, ties by recency (#197 §6). An absent priority sorts after
-// every stated one, and the id breaks the remaining tie so two clones of one
-// store render one order. `state list` and the context projection both sort
-// through here — a second comparator would let the two surfaces disagree.
+// Priority order, then scope, then recency (#197 §6, #287). An absent priority
+// sorts after every stated one. At equal priority a record the whole workspace
+// holds sorts above one project's own, so the company's direction and rules
+// read before the project's in every context. The id breaks the remaining tie
+// so two clones of one store render one order. `state list` and the context
+// projection both sort through here — a second comparator would let the two
+// surfaces disagree.
 export function orderEntities(entities: EntityState[]): EntityState[]
 {
     return [...entities].sort((left, right) =>
         (left.priority ?? Number.MAX_SAFE_INTEGER) - (right.priority ?? Number.MAX_SAFE_INTEGER)
+        || scopeRank(left) - scopeRank(right)
         || right.ts.localeCompare(left.ts)
         || left.id.localeCompare(right.id));
+}
+
+// The scope value answers on its own, with no home slug to resolve against:
+// the sentinel `project` never reads as workspace-wide, and no project can be
+// named "workspace" — the slug is reserved precisely so `--scope workspace`
+// cannot mean two things.
+function scopeRank(entity: EntityState): number
+{
+    return entity.scope === "workspace" ? 0 : 1;
 }
 
 // What currently occupies a retention tier (#197 §4): confirmed live records

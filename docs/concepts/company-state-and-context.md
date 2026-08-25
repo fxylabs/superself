@@ -143,8 +143,8 @@ Every entity carries three placement values, each changeable by
 
 | Axis | Values | Meaning |
 | --- | --- | --- |
-| scope | `project` \| `workspace` | which contexts it enters; a workspace-scoped entity renders in every project's context |
-| priority | sparse integer (0, 10, 20, …) | render order; 0 is the top of context, ties break by recency |
+| scope | `project` \| `workspace` | which contexts it enters; a workspace-scoped entity — a goal, an objective, a convention, a raw record — renders in every project's context |
+| priority | sparse integer (0, 10, 20, …) | render order; 0 is the top of context, and a tie breaks by scope first (workspace above project), then by recency |
 | exposure | `full` \| `index` \| `search` | render form: full text / one line / absent with a pointer |
 
 Priority replaces a hardcoded section order with one rule: render in priority
@@ -182,7 +182,7 @@ never refuses.
 
 ```text
 1  collect: workspace-scoped entities + this project's entities
-2  order:   by priority, ties by recency
+2  order:   by priority, ties by scope (workspace first), then by recency
 3  render:  full → full text · index → one line · search → absent with a pointer
 4  anchor:  derived live state after the full block, before the index lines
 ```
@@ -200,7 +200,7 @@ Different consumers still need different amounts of the same state:
 | --- | --- |
 | Managed `AGENTS.md` and `CLAUDE.md` block | Stable operating protocol plus the conventions recorded with `--public` |
 | `self context` inside a registered project | That project's placed entities plus live state |
-| `self context` outside a registered project | A workspace overview: each registered project's goal, work-status counts, and health-signal count |
+| `self context` outside a registered project | The workspace's own direction — its workspace-scoped goals and objectives — then each registered project's goal, work-status counts, and health-signal count |
 | `self work show <id>` | The full recovery line for one unit: outcome, current status, reports, evidence |
 | `self search <query>` | Live records context does not render, across registered projects, with the current project ranked first |
 | `self state show <id> --history` | One record's own events, oldest first — the only path to history |
