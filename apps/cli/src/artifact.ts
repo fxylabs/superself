@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { branch, Command, leaf } from "./contract.js";
 import { artifactId } from "./ids.js";
 import { readEvents } from "./logfile.js";
+import { notice } from "./output.js";
 import { digestFile } from "./repo.js";
 import { activeProjects, CliContext, readRegistry, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
@@ -40,6 +41,16 @@ interface PlannedArtifact extends ArtifactMeta
 {
     source: string;
     members?: PlannedMember[];
+    // Set when this artifact's bytes are already in the store — under another
+    // artifact's path, or under one an earlier item of this same report is
+    // about to write. Nothing is copied for it and nothing is staged in its
+    // name: the rollback of a failed report must never reach bytes another
+    // record points at.
+    reused?: true;
+    // The earlier item of this report whose copy will put those bytes there.
+    // Only that item's copy fills in a digest, so the twin reads its own back
+    // out of it when the event is composed.
+    twin?: PlannedArtifact;
 }
 
 // What this command made, and nothing else. Rollback undoes its own work only:
@@ -71,6 +82,11 @@ export function stageArtifacts(storeDir: string, slug: string, paths: string[] |
     const slugDir = artifactDir(storeDir, slug);
     const planned = planArtifacts(slug, paths);
     assignEntry(planned, entry);
+    // After `assignEntry` and before a byte is written: the entry and — where
+    // one is generated — the whole manifest are settled here, so what the
+    // lookup hashes is what a copy would store, and nothing mutates a reused
+    // item afterwards.
+    adoptStored(storeDir, slug, planned);
     const staging: Staging = { dirs: createDirs(slugDir), files: [] };
     const discard = (): void => removeStaged(staging);
     const failure = copyPlanned(storeDir, planned, staging);
@@ -86,18 +102,23 @@ export function stageArtifacts(storeDir: string, slug: string, paths: string[] |
 // four fields it always did — the shape every reader written before bundles
 // still folds — and a bundle records its manifest and entry in place of the
 // digest it deliberately has none of.
+//
+// Where the digests come from is the one thing a shared path changes: a twin
+// carries no copy of its own, so it reads them off the item whose copy filled
+// them in. The id, the name and the entry stay its own.
 function recorded(item: PlannedArtifact): ArtifactMeta
 {
+    const bytes = item.twin ?? item;
     if (item.members === undefined)
     {
-        return { id: item.id, name: item.name, path: item.path, digest: item.digest };
+        return { id: item.id, name: item.name, path: item.path, digest: bytes.digest };
     }
     return {
         id: item.id,
         name: item.name,
         path: item.path,
         entry: item.entry,
-        members: item.members.map((member) => member.generated === undefined
+        members: (bytes.members ?? item.members).map((member) => member.generated === undefined
             ? { path: member.path, digest: member.digest }
             : { path: member.path, digest: member.digest, generated: member.generated })
     };
@@ -243,6 +264,7 @@ function planOne(slug: string, path: string, source: string): PlannedArtifact
     {
         throw new CliError(`artifact "${path}" cannot be read`);
     }
+    requireFileBound(path, source);
     return { id, name, path: stored, source };
 }
 
@@ -410,6 +432,13 @@ const MAX_MEMBERS = 1000;
 
 const MAX_BYTES = 100 * 1024 * 1024;
 
+// Where an artifact is large enough to be worth saying so and not large enough
+// to refuse. Every clone of the store carries it and its history keeps it after
+// a deletion, so the size is stated once, at the moment there is still a choice
+// about it — and then the report proceeds, because what is worth attaching is
+// the reporter's judgment and not this module's.
+const WARN_BYTES = 10 * 1024 * 1024;
+
 function requireBound(label: string, members: PlannedMember[]): void
 {
     if (members.length > MAX_MEMBERS)
@@ -420,6 +449,31 @@ function requireBound(label: string, members: PlannedMember[]): void
     if (bytes > MAX_BYTES)
     {
         throw new CliError(`artifact "${label}" holds ${bytes} bytes, over the ${MAX_BYTES}-byte bound — package it into one file and attach that instead`);
+    }
+    warnLarge(label, bytes);
+}
+
+// The bound a single file had none of: a directory was capped at 1000 files
+// and 100 MB while one 15 MB database file ingested as readily as a 3 KB
+// report (#239). The same numbers, because the store does not care which
+// shape the bytes arrived in.
+function requireFileBound(label: string, source: string): void
+{
+    const bytes = statSync(source).size;
+    if (bytes > MAX_BYTES)
+    {
+        throw new CliError(`artifact "${label}" is ${bytes} bytes, over the ${MAX_BYTES}-byte bound — compress it and attach the archive, `
+            + "or leave it where it is and record its path in the report");
+    }
+    warnLarge(label, bytes);
+}
+
+function warnLarge(label: string, bytes: number): void
+{
+    if (bytes > WARN_BYTES)
+    {
+        notice(`artifact "${label}" is ${bytes} bytes — every clone of this store carries it, and compacting the history never takes it back out; `
+            + "compress it, or leave it where it is and record its path, if it does not have to be evidence");
     }
 }
 
@@ -552,6 +606,164 @@ function escapeHtml(text: string): string
     return text.replace(/[&<>"]/g, (mark) => HTML_MARKS[mark]);
 }
 
+/* ── bytes the store already holds ─────────────────────────────────── */
+
+// A digest has been computed at every ingest since artifacts had one and never
+// compared with anything, so the same bytes attached twice were stored twice —
+// 83 of one store's 855 files (#239). The second artifact is not refused: that
+// the same output came out twice is itself worth recording, and a report whose
+// evidence is a path some other report owns is a stranger relation than two
+// records sharing a path. So it is stored once and referenced twice — each
+// artifact keeps its own id, its own name and its own entry, and one copy of
+// the bytes carries both.
+//
+// The reuse is per project, deliberately. A store's projects are archived,
+// restored and read separately, and bytes one project's record points at
+// inside another project's directory would make either of those an act on a
+// project nobody named.
+function adoptStored(storeDir: string, slug: string, planned: PlannedArtifact[]): void
+{
+    const stored = storedIndex(storeDir, slug);
+    const twins = new Map<string, PlannedArtifact>();
+    for (const item of planned)
+    {
+        const digest = plannedDigest(item);
+        if (digest === undefined)
+        {
+            continue;
+        }
+        const twin = twins.get(digest);
+        const held = stored.get(digest);
+        if (twin !== undefined)
+        {
+            adoptTwin(item, twin);
+        }
+        else if (held !== undefined && heldBytes(storeDir, held))
+        {
+            adoptHeld(item, held);
+        }
+        else
+        {
+            twins.set(digest, item);
+        }
+    }
+}
+
+// What this project already holds, keyed by the digest of the bytes rather
+// than by any id: what a second ingest asks is whether these bytes are here.
+// A bundle answers with its manifest hash, which is derived where something
+// needs it and never stored. The first record of a digest wins, so a path two
+// records already share is adopted as the one they share.
+function storedIndex(storeDir: string, slug: string): Map<string, ArtifactRecord>
+{
+    const index = new Map<string, ArtifactRecord>();
+    for (const record of listArtifacts(storeDir, [slug]))
+    {
+        const digest = artifactDigest(record);
+        if (digest !== undefined && digest !== "" && !index.has(digest))
+        {
+            index.set(digest, record);
+        }
+    }
+    return index;
+}
+
+// The digest the store would hold if these bytes were copied: a file's own
+// hash, or a bundle's manifest hash over every member's. The generated index
+// is hashed from the text that would be written — it has no source to read,
+// and a manifest computed without it could never equal a stored one.
+//
+// Undefined where a source cannot be read at all. That is not a refusal here:
+// the copy this ingest is about to attempt gives the reporter the error, in
+// the words it already gives it in.
+function plannedDigest(item: PlannedArtifact): string | undefined
+{
+    if (item.members === undefined)
+    {
+        return digestOf(item.source) ?? undefined;
+    }
+    const members = item.members.map((member) => ({ path: member.path, digest: memberSource(member) }));
+    return members.some((member) => member.digest === "")
+        ? undefined
+        : artifactDigest({ id: item.id, name: item.name, path: item.path, members });
+}
+
+function memberSource(member: PlannedMember): string
+{
+    return member.source === undefined
+        ? createHash("sha256").update(member.text ?? "").digest("hex")
+        : digestOf(member.source) ?? "";
+}
+
+// A record is adopted only when the bytes it names are on this machine and
+// still hash to what it recorded. A log travels between clones through a
+// shared remote, so a record alone says nothing about what this store holds:
+// an unsynced store has the line and not the file, and a record whose stored
+// copy no longer matches is the defect `artifactSignals` reports, never a
+// candidate to hang a second artifact off.
+function heldBytes(storeDir: string, record: ArtifactRecord): boolean
+{
+    const root = storedRoot(storeDir, record.path);
+    if (root === null || !existsSync(root))
+    {
+        return false;
+    }
+    if (record.members === undefined)
+    {
+        return record.digest !== undefined && digestOf(root) === record.digest;
+    }
+    return record.members.every((member) => heldMember(root, member));
+}
+
+function heldMember(root: string, member: ArtifactMember): boolean
+{
+    const file = resolve(root, ...member.path.split("/"));
+    return within(root, file) && digestOf(file) === member.digest;
+}
+
+// Never throws: a stored file this machine cannot read is a file this ingest
+// does not reuse, not a report to refuse.
+function digestOf(file: string): string | null
+{
+    try
+    {
+        return digestFile(file);
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+// The stored record's path and manifest, copied onto the planned item. The
+// digests come from the record, which `heldBytes` has just verified against
+// the bytes on disk — the source's own hash is a lookup key and is never
+// recorded, so what the event carries is always the digest of what the store
+// holds. `entry` is not copied: two artifacts may share every byte and still
+// open onto different members, because the manifest hash covers the members
+// alone.
+function adoptHeld(item: PlannedArtifact, record: ArtifactRecord): void
+{
+    item.path = record.path;
+    item.reused = true;
+    if (record.members === undefined)
+    {
+        item.digest = record.digest;
+        return;
+    }
+    item.members = (record.members ?? []).map((member) => ({ ...member }));
+}
+
+// Two sources in one report holding the same bytes: the first is copied and
+// the second points at it. The digest is read off that item when the event is
+// composed, by which time its copy has filled it in from the stored file.
+function adoptTwin(item: PlannedArtifact, twin: PlannedArtifact): void
+{
+    item.path = twin.path;
+    item.reused = true;
+    item.twin = twin;
+}
+
 /* ── the bytes ─────────────────────────────────────────────────────── */
 
 // Hands the first failure back instead of throwing, so the caller can undo the
@@ -562,6 +774,13 @@ function copyPlanned(storeDir: string, planned: PlannedArtifact[], staging: Stag
 {
     for (const item of planned)
     {
+        // Nothing is copied for a reused artifact and nothing is staged in its
+        // name: those bytes are another record's, and a rollback that reached
+        // them would delete evidence this report never wrote.
+        if (item.reused === true)
+        {
+            continue;
+        }
         const failure = item.members === undefined
             ? copyFile(storeDir, item, staging)
             : copyBundle(storeDir, item, staging);
@@ -710,7 +929,10 @@ function capture(action: () => void): Error | null
     }
 }
 
-function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]
+// The derived registry: what the log says this store holds. Exported because
+// the store's own size is answered from it — which stored paths a live record
+// names is the difference between artifact bytes and orphaned ones.
+export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]
 {
     const records: ArtifactRecord[] = [];
     for (const slug of slugs)
@@ -885,13 +1107,33 @@ function requireArtifact(storeDir: string, slugs: string[], wanted: string): Art
 // the bundle, or the event is refused rather than followed.
 function storedFile(storeDir: string, record: ArtifactRecord): string
 {
-    const bundle = resolve(storeDir, record.path);
-    const file = record.entry === undefined ? bundle : resolve(bundle, record.entry);
-    if (!within(join(storeDir, "artifacts"), bundle) || (record.entry !== undefined && !within(bundle, file)))
+    const bundle = storedRoot(storeDir, record.path);
+    const file = bundle === null ? null : entryFile(bundle, record.entry);
+    if (file === null)
     {
         throw new CliError(`artifact ${record.id} is recorded at a path outside this store's artifacts — the event naming it cannot be trusted`);
     }
     return file;
+}
+
+// Where a recorded path lands in this store, or null when it lands anywhere
+// else. Both readers of a stored path go through here — the one that opens it
+// and the one that hashes it to decide whether a second artifact may share it
+// — so the reuse path is held to the same distrust of a foreign log line.
+function storedRoot(storeDir: string, path: string): string | null
+{
+    const root = resolve(storeDir, path);
+    return within(join(storeDir, "artifacts"), root) ? root : null;
+}
+
+function entryFile(bundle: string, entry: string | undefined): string | null
+{
+    if (entry === undefined)
+    {
+        return bundle;
+    }
+    const file = resolve(bundle, entry);
+    return within(bundle, file) ? file : null;
 }
 
 function within(root: string, file: string): boolean

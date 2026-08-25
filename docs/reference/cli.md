@@ -28,6 +28,7 @@ prints them during the same run.
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `handoff <work-id> [--project <slug>]`, `artifact ...` |
+| Store size and maintenance | `store size [--json]`, `store compact` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
 | Inspection and derived files | `context [--pretty\|--plain]`, `status [--pretty\|--plain]`, `search [query]`, `log [-n <count>]`, `fold`, `view [slug]` |
 | Agent instructions | `connect [--global]` |
@@ -37,7 +38,7 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone tokens project remote sync clone
-goal objective milestone decide work handoff report artifact convention state alias
+goal objective milestone decide work handoff report artifact store convention state alias
 undo apply
 connect view context status setup
 log search fold
@@ -231,7 +232,15 @@ work, or a free-labeled entity — folds into one record kind with placement:
   there. Nothing but a `.git` directory is left out of the copy.
 - A bundle is capped at the 1000 files you bring, or 100 MiB, whichever comes
   first, with no flag to lift it. Past that, package the directory into one
-  file and attach that.
+  file and attach that. A single file has the same byte cap, and anything over
+  10 MiB says so once and is attached: every clone of the store carries it, and
+  compacting the history never takes it back out.
+- Attaching bytes the project already stores stores them once and references
+  them twice. The second artifact gets its own id, its own name and its own
+  entry, and shares the first's stored path — so two reports can attach the
+  same output without paying for it twice. The reuse stops at the project
+  boundary, and the stored file is re-hashed before it is shared, so a record
+  whose bytes this machine has not synced is never adopted.
 - `report --design --implements <decision-id>` submits a design or scope
   proposal. It is refused unless every cited decision exists, still holds, and
   renders in the work unit's project, and the receipt prints each cited
@@ -245,6 +254,24 @@ work, or a free-labeled entity — folds into one record kind with placement:
 The full work transitions and flags are in the `work` declaration of
 [`main.ts`](../../apps/cli/src/main.ts), and the completion rules are implemented by
 [`completion.ts`](../../apps/cli/src/completion.ts).
+
+### How large the store is, and packing it down
+
+- `self store size` reports the working tree, the `.git` directory, how many
+  artifacts are recorded against how many distinct contents, the largest
+  projects and files, and git's own loose and packed object counts. `--json`
+  answers the same numbers as an object.
+- It also reports **orphan bytes**: files under `artifacts/` that no record
+  names. It reports them and removes none — a file no event names cannot be
+  told apart from one another report is staging at that moment.
+- `self store compact` runs `git gc` once. Unreachable objects keep git's
+  default two-week grace, and history is never rewritten: the store syncs
+  between machines by rebase, so a rewrite would break every other clone. Bytes
+  an artifact left in the history therefore stay there, and both the receipt
+  and `store size` say so.
+- `self sync` says one line when the loose objects have outgrown the pack,
+  which is the state a store that has never been compacted is in. It reads
+  git's own bookkeeping, so the line costs no tree walk.
 
 ### The process ledger
 

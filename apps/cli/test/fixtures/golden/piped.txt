@@ -230,6 +230,8 @@ usage: self <command>
                                              list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact, or open it with the OS default app at a terminal
+  store size [--json]                        how large the store is, and what is driving it
+  store compact                              pack the store's git history with `git gc`
   convention add "<text>" [--supersedes <event-id>] [--workspace] [--public]
                                              record a rule, optionally replacing ones it corrects
   convention drop <event-id> --why "<reason>"
