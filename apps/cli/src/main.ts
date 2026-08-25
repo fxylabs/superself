@@ -66,6 +66,7 @@ import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { setupOutput } from "./setup.js";
+import { STORE_COMMAND } from "./store.js";
 import {
     admittingDemotions,
     CapGateValues,
@@ -1216,6 +1217,7 @@ export const COMMANDS: Command[] = [
         })
     },
     ARTIFACT_COMMAND,
+    STORE_COMMAND,
     {
         name: "convention",
         usage: [

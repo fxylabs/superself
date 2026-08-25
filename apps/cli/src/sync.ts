@@ -3,7 +3,9 @@ import { join, resolve } from "node:path";
 import { foldEveryProject } from "./fold.js";
 import { commitAll, configureStoreIdentity, excludeLocally, git } from "./gitutil.js";
 import { setMachineWorkspace } from "./machine.js";
+import { notice } from "./output.js";
 import { CliContext, ensureDir, EVIDENCE_HEAD_EXCLUDE, LINKS_FILE, readRegistry, STORE_DIR } from "./paths.js";
+import { compactionSignal } from "./store.js";
 import { CliError, CommandOutput } from "./types.js";
 
 const ATTRIBUTES = [
@@ -84,6 +86,15 @@ function pullAndRefold(storeDir: string, branch: string): void
     }
     foldEveryProject(storeDir);
     commitAll(storeDir, "sync: refold after pull");
+    // Said here and nowhere else: the store's size is a workspace fact, so a
+    // per-project health signal would repeat it once per project, and `sync`
+    // is the deliberate command a person runs with the store in mind. It reads
+    // git's own bookkeeping and walks no tree.
+    const signal = compactionSignal(storeDir);
+    if (signal !== null)
+    {
+        notice(signal);
+    }
 }
 
 function storeName(url: string): string
