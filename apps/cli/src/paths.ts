@@ -61,21 +61,104 @@ function resolveContext(cwd: string): CliContext | null
     {
         throw new CliError(`${workspaceDir} holds no workspace store — run \`self workspace <path>\` to point this machine at one`);
     }
-    if (marker !== null)
-    {
-        return {
-            workspaceDir,
-            storeDir,
-            project: JSON.parse(readFileSync(marker, "utf8")).project,
-            projectDir: dirname(marker)
-        };
-    }
-    // No marker here, so the repository answers instead: registration is one
-    // act per project, not one per checkout of it.
-    const match = checkoutProject(storeDir, cwd);
-    return match === null
+    const at = projectAt(storeDir, cwd, marker);
+    return at === null
         ? { workspaceDir, storeDir }
-        : { workspaceDir, storeDir, project: match.slug, projectDir: match.dir };
+        : { workspaceDir, storeDir, project: at.slug, projectDir: at.dir };
+}
+
+// The project this directory belongs to. The marker that governs the place is
+// the first answer; without one the repository answers instead, and failing
+// that the marker is carried across to this working tree. Registration is one
+// act per project, not one per checkout of it.
+//
+// Exported because `self setup` explains this resolution to a person: asking
+// the same function is what stops the explanation from naming one directory
+// while every other command works in another.
+export function projectAt(storeDir: string, cwd: string, marker: string | null): CheckoutMatch | null
+{
+    const governs = governing(cwd, marker);
+    if (governs !== null)
+    {
+        return { slug: JSON.parse(readFileSync(governs, "utf8")).project, dir: dirname(governs) };
+    }
+    return checkoutProject(storeDir, cwd) ?? relocated(cwd, marker);
+}
+
+// The marker that governs this directory: the nearest `.self` above it, unless
+// another working tree of the same repository stands in between. `.self` is
+// git-excluded, so a worktree made inside a registered checkout carries no
+// marker of its own, and walking past that boundary recorded the parent
+// checkout's HEAD as the evidence for work that is not on it (#235).
+//
+// The file check stands in front of git. With no `.git` in between there is no
+// room for another working tree, and no git process is spawned at all.
+function governing(cwd: string, marker: string | null): string | null
+{
+    if (marker === null)
+    {
+        return null;
+    }
+    const dir = realPath(dirname(marker));
+    if (checkoutBetween(cwd, dir) === null)
+    {
+        return marker;
+    }
+    const here = topOf(cwd);
+    if (here === null || contains(here, dir))
+    {
+        return marker;
+    }
+    const common = commonDir(here);
+    return common !== null && common === commonDir(dir) ? null : marker;
+}
+
+// The root of another working tree standing between this directory and the one
+// the marker sits in. A linked worktree's root holds a `.git` file (`gitdir:
+// …`) and a repository's root a `.git` directory, so this costs file checks
+// alone and spawns no git.
+//
+// The marker's own directory is left out of the walk: a marker beside a `.git`
+// is the ordinary registered root, not a boundary.
+export function checkoutBetween(cwd: string, stop: string): string | null
+{
+    let at = realPath(resolve(cwd));
+    while (at !== stop)
+    {
+        if (existsSync(join(at, ".git")))
+        {
+            return at;
+        }
+        const up = dirname(at);
+        if (up === at)
+        {
+            return null;
+        }
+        at = up;
+    }
+    return null;
+}
+
+// The last answer when the link ledger has none: the place the marker names,
+// carried to the same position inside this working tree. A command run in a
+// worktree after its links were pruned (#308) arrives here.
+function relocated(cwd: string, marker: string | null): CheckoutMatch | null
+{
+    if (marker === null)
+    {
+        return null;
+    }
+    const dir = dirname(marker);
+    const here = topOf(cwd);
+    const top = topOf(dir);
+    if (here === null || top === null)
+    {
+        return null;
+    }
+    const at = join(here, relative(top, dir));
+    return existsSync(at) && contains(at, realPath(resolve(cwd)))
+        ? { slug: JSON.parse(readFileSync(marker, "utf8")).project, dir: at }
+        : null;
 }
 
 // The machine's workspace is the single source. Markers written before that

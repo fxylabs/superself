@@ -1,14 +1,14 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git, realPath } from "./gitutil.js";
 import { machineConfigPath } from "./machine.js";
 import { dim, styled } from "./style.js";
 import {
     checkoutMatches,
-    checkoutProject,
     findUp,
     isStore,
     MARKER_FILE,
+    projectAt,
     readLinks,
     readRegistry,
     readStoreConfig,
@@ -33,22 +33,21 @@ export function setupOutput(cwd: string): CommandOutput
 
 function projectLines(marker: string | null, cwd: string, workspaceDir: string | null): string[]
 {
-    if (marker !== null)
-    {
-        return [
-            row("project", JSON.parse(readFileSync(marker, "utf8")).project),
-            row("", `${dirname(marker)} (via ${MARKER_FILE})`)
-        ];
-    }
     const storeDir = workspaceDir === null ? null : join(workspaceDir, STORE_DIR);
     if (storeDir === null || !isStore(storeDir))
     {
-        return [row("project", "(none) — this directory is not registered; run `self project init`")];
+        return marker === null
+            ? [row("project", "(none) — this directory is not registered; run `self project init`")]
+            : [row("project", JSON.parse(readFileSync(marker, "utf8")).project), row("", `${dirname(marker)} (via ${MARKER_FILE})`)];
     }
-    const match = checkoutProject(storeDir, cwd);
-    if (match !== null)
+    // The same answer every other command works from (#235): a marker above a
+    // worktree of the same repository does not govern it, and explaining the
+    // resolution separately named a directory no command would have used.
+    const at = projectAt(storeDir, cwd, marker);
+    if (at !== null)
     {
-        return [row("project", match.slug), row("", `${match.dir} (via this repository)`)];
+        const how = existsSync(join(at.dir, MARKER_FILE)) ? MARKER_FILE : "this repository";
+        return [row("project", at.slug), row("", `${at.dir} (via ${how})`)];
     }
     const elsewhere = checkoutMatches(storeDir, cwd)[0];
     if (elsewhere !== undefined)
