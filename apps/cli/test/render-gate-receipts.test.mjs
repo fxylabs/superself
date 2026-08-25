@@ -22,18 +22,18 @@ const box = machine();
 const ws = join(box.root, "ws");
 const demo = join(ws, "demo");
 mkdirSync(demo, { recursive: true });
-must(box, ws, ["init"]);
+await must(box, ws, ["init"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
-must(box, demo, ["project", "init", "--name", "demo", "--desc", "the receipt migration", "--no-connect"]);
+await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the receipt migration", "--no-connect"]);
 
 // Since #286 the id is followed by what the unit could attach to. This project
 // has no objective, so that is the one line `work propose` prints in the same
 // situation — and the receipt itself is still the bare id on its own line,
 // directly under the announce line, which is what this cell has always been
 // about.
-test("stage 2 cell 1: a piped `self work add` answers with the bare id, under the announce line", () =>
+test("stage 2 cell 1: a piped `self work add` answers with the bare id, under the announce line", async () =>
 {
-    const answer = selfIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
+    const answer = await selfIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
     assert.equal(answer.code, 0, answer.out);
     assert.match(answer.out,
         new RegExp(`^entity\\.confirmed recorded \\[[0-9abcdefghjkmnpqrstvwxyz]{26}\\]`
@@ -48,12 +48,12 @@ function escaped(text)
 // The table calls this one `self project add`, which is the verb #251 removed;
 // `self project init` is the registration it was replaced by, and it is the
 // sentence receipt this stage moves.
-test("stage 2 cell 3: a piped `self project init` answers with the sentence it always printed", () =>
+test("stage 2 cell 3: a piped `self project init` answers with the sentence it always printed", async () =>
 {
     const other = join(ws, "sentence");
     mkdirSync(other, { recursive: true });
     git(box, other, ["init", "-q", "-b", "main"]);
-    const answer = selfIn(box, other, ["project", "init", "--name", "sentence", "--no-connect"]);
+    const answer = await selfIn(box, other, ["project", "init", "--name", "sentence", "--no-connect"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, "project \"sentence\" registered\n");
 });
@@ -61,17 +61,17 @@ test("stage 2 cell 3: a piped `self project init` answers with the sentence it a
 // A workspace store is a git repository, so it is a url `clone` can be given.
 // The machine this runs on ends up pointing at the clone, which is why the cell
 // gets a machine of its own.
-test("stage 2 cell 4: a piped `self clone` answers with its three lines, in order", () =>
+test("stage 2 cell 4: a piped `self clone` answers with its three lines, in order", async () =>
 {
     const cloneBox = machine();
     const store = join(cloneBox.root, "origin");
     const project = join(store, "app");
     mkdirSync(project, { recursive: true });
-    must(cloneBox, store, ["init"]);
+    await must(cloneBox, store, ["init"]);
     git(cloneBox, project, ["init", "-q", "-b", "main"]);
-    must(cloneBox, project, ["project", "init", "--name", "app", "--no-connect"]);
+    await must(cloneBox, project, ["project", "init", "--name", "app", "--no-connect"]);
     const target = join(cloneBox.root, "copy");
-    const answer = selfIn(cloneBox, cloneBox.root, ["clone", join(store, ".superself"), target]);
+    const answer = await selfIn(cloneBox, cloneBox.root, ["clone", join(store, ".superself"), target]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, `workspace cloned into ${target}\n`
         + "registered projects: app\n"
@@ -83,14 +83,14 @@ test("stage 2 cell 4: a piped `self clone` answers with its three lines, in orde
 // the repository it recorded is gone, so the checkout is re-created under a
 // different root commit — a different message, because two empty commits made
 // in the same second under the same message are the same commit.
-test("stage 2 cell 5: a piped `self project link` prints its disclosure before the recorded line", () =>
+test("stage 2 cell 5: a piped `self project link` prints its disclosure before the recorded line", async () =>
 {
     const moved = join(ws, "moved");
     mkdirSync(moved, { recursive: true });
     rootedRepository(moved, "the repository that was linked");
-    must(box, moved, ["project", "init", "--name", "moved", "--no-connect"]);
+    await must(box, moved, ["project", "init", "--name", "moved", "--no-connect"]);
     rootedRepository(moved, "the repository standing there now");
-    const answer = selfIn(box, moved, ["project", "link", "moved", "--here"]);
+    const answer = await selfIn(box, moved, ["project", "link", "moved", "--here"]);
     assert.equal(answer.code, 0, answer.out);
     // The CLI answers about the directory it resolved, so the expectation is
     // the resolved path: a scratch root on macOS is reached through a symlink.
@@ -109,31 +109,31 @@ function rootedRepository(dir, message)
 // The receipt shape carries an optional next command, and this stage's verbs
 // name none: the equality is what says the gate added no indented line under
 // a receipt that never had one.
-test("stage 2 cell 6: a piped `self connect` answers with one line and nothing under it", () =>
+test("stage 2 cell 6: a piped `self connect` answers with one line and nothing under it", async () =>
 {
-    const answer = selfIn(box, demo, ["connect"]);
+    const answer = await selfIn(box, demo, ["connect"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out,
         "managed block rendered into AGENTS.md, CLAUDE.md — commit them so every agent tool loads it\n");
 });
 
-test("stage 2 cell 7: on a machine with no workspace, `self init` answers with today's receipt", () =>
+test("stage 2 cell 7: on a machine with no workspace, `self init` answers with today's receipt", async () =>
 {
     const bare = machine();
     const store = join(realpathSync(bare.root), ".superself");
-    const answer = selfIn(bare, bare.root, ["init"]);
+    const answer = await selfIn(bare, bare.root, ["init"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, `workspace initialized at ${store} (views in "en")\n`);
-    const again = selfIn(bare, bare.root, ["init"]);
+    const again = await selfIn(bare, bare.root, ["init"]);
     assert.equal(again.out, `workspace already initialized at ${store}\n`);
 });
 
 // A refusal is composed before a handler has anything to answer with, so it
 // never reaches the gate. Standing outside every checkout is where a migrated
 // write verb has to prove that.
-test("stage 2 cell 8: outside the project checkout, a migrated write verb refuses as it did", () =>
+test("stage 2 cell 8: outside the project checkout, a migrated write verb refuses as it did", async () =>
 {
-    const outside = selfIn(box, box.root, ["work", "add", "a unit recorded from nowhere"]);
+    const outside = await selfIn(box, box.root, ["work", "add", "a unit recorded from nowhere"]);
     assert.equal(outside.code, 1, outside.out);
     assert.equal(outside.out, "error: not inside a registered project — run `self project init` here to register it, "
         + "or `self project link <slug> --here` if it is a checkout of a project registered on another machine\n");

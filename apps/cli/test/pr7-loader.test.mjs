@@ -43,17 +43,17 @@ function box()
     return { ...created, demo: created.root };
 }
 
-function workspaceBox()
+async function workspaceBox()
 {
     const created = machine();
-    return { ...created, ...demoWorkspace(created) };
+    return { ...created, ...await demoWorkspace(created) };
 }
 
 /* ── cells 1–2: what a verb costs before anything is loaded ────────── */
 
-test("cell 1: a built-in verb reads nothing in the plugin tree", () =>
+test("cell 1: a built-in verb reads nothing in the plugin tree", async () =>
 {
-    const it = workspaceBox();
+    const it = await workspaceBox();
     // A manifest no reader can parse. Building the verb index would throw on
     // it, so a `work add` that succeeds is a `work add` that never looked.
     installFixture(it, { key: "email" });
@@ -206,16 +206,16 @@ test("cell 12: installing a plugin that claims a built-in verb is refused verb_r
 
 test("cell 13: installing a plugin that claims an alias row is refused verb_conflicts_alias", async () =>
 {
-    const it = workspaceBox();
+    const it = await workspaceBox();
     must(it, it.demo, ["alias", "add", "brief", "--label", "brief"]);
     const result = await installThrough(it, releaseDocument({ key: "brief", verbs: ["brief"] }), ["brief"]);
     assert.equal(result.code, 1);
     assert.match(result.all, /already an alias row/);
 });
 
-test("cell 14: `alias add` is refused for a verb an installed plugin claims", () =>
+test("cell 14: `alias add` is refused for a verb an installed plugin claims", async () =>
 {
-    const it = workspaceBox();
+    const it = await workspaceBox();
     installFixture(it, { key: "email" });
     const result = selfIn(it, it.demo, ["alias", "add", "email", "--label", "email"]);
     assert.equal(result.code, 1);

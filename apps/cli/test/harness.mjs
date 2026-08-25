@@ -142,15 +142,15 @@ function enterInvocation(box, cwd, args, options)
     // `driving` is claimed only once every step has succeeded, which is still
     // before any `await` and therefore still before another call could start.
     const undo = [enterCwd(cwd), replaceEnv({ ...box.env, ...options.extra }), enterTty(options.tty === true), enterExit()];
-    const typedWas = options.answer === undefined ? null : useTypedAnswer(() => options.answer);
+    // Always stubbed, including where the caller named no answer. The real
+    // reader is a blocking read of fd 0, and a command that reaches it with
+    // nobody typing stops the whole file with no output to say why.
+    const typedWas = useTypedAnswer(() => options.answer ?? "");
     driving = args.join(" ");
     return () =>
     {
         driving = null;
-        if (typedWas !== null)
-        {
-            useTypedAnswer(typedWas);
-        }
+        useTypedAnswer(typedWas);
         undo.reverse().forEach((step) => step());
     };
 }
@@ -288,9 +288,13 @@ async function runCaptured(args, sink)
 // resolution, the disclosure and the write all execute, and the typed answer
 // is the one thing supplied. Anything spawned as a child still faces the real
 // terminal check, which is why the refusals are asserted through selfIn.
-export async function approvedIn(box, cwd, args, answer)
+// `extra` is the environment for this call alone, exactly as `selfIn` takes it:
+// the gate reads a session marker as well as the terminal, and a cell about
+// what a runner's process is refused has to name that marker rather than leave
+// one lying in the test process's own environment.
+export async function approvedIn(box, cwd, args, answer, extra = {})
 {
-    return drive(box, cwd, args, { tty: true, answer });
+    return drive(box, cwd, args, { tty: true, answer, extra });
 }
 
 // Destroying a record needs a person at a terminal (#173), and a test has no

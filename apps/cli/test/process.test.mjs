@@ -8,48 +8,48 @@ import { join } from "node:path";
 import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
-const { demo } = demoWorkspace(box);
+const { demo } = await demoWorkspace(box);
 
 test("a started unit shows running while its process lives, stale after it dies", async () =>
 {
-    const work = workIdIn(must(box, demo, ["work", "add", "runs under a live process"]).out);
-    must(box, demo, ["work", "start", work]);
+    const work = workIdIn((await must(box, demo, ["work", "add", "runs under a live process"])).out);
+    await must(box, demo, ["work", "start", work]);
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
     try
     {
-        must(box, demo, ["work", "started", work, "--pid", String(child.pid)]);
-        assert.match(must(box, demo, ["status"]).out, new RegExp(`process ${work}: running \\(pid ${child.pid}\\)`));
+        await must(box, demo, ["work", "started", work, "--pid", String(child.pid)]);
+        assert.match((await must(box, demo, ["status"])).out, new RegExp(`process ${work}: running \\(pid ${child.pid}\\)`));
     }
     finally
     {
         child.kill("SIGKILL");
     }
     await new Promise((resolve) => child.on("exit", resolve));
-    assert.match(must(box, demo, ["status"]).out, new RegExp(`process ${work}: stale`));
+    assert.match((await must(box, demo, ["status"])).out, new RegExp(`process ${work}: stale`));
 });
 
-test("an exited unit reports its code, and the pid never reaches the synced log", () =>
+test("an exited unit reports its code, and the pid never reaches the synced log", async () =>
 {
-    const work = workIdIn(must(box, demo, ["work", "add", "exits cleanly"]).out);
-    must(box, demo, ["work", "start", work]);
-    must(box, demo, ["work", "started", work, "--pid", String(process.pid)]);
-    must(box, demo, ["work", "exited", work, "--code", "0"]);
-    assert.match(must(box, demo, ["work", "show", work]).out, /Process: exited \(code 0\)/);
-    const log = must(box, demo, ["log", "-n", "5"]).out;
+    const work = workIdIn((await must(box, demo, ["work", "add", "exits cleanly"])).out);
+    await must(box, demo, ["work", "start", work]);
+    await must(box, demo, ["work", "started", work, "--pid", String(process.pid)]);
+    await must(box, demo, ["work", "exited", work, "--code", "0"]);
+    assert.match((await must(box, demo, ["work", "show", work])).out, /Process: exited \(code 0\)/);
+    const log = (await must(box, demo, ["log", "-n", "5"])).out;
     assert.ok(!log.includes(String(process.pid)), "the pid leaked into the synced event log");
 });
 
-test("started refuses a missing or malformed pid", () =>
+test("started refuses a missing or malformed pid", async () =>
 {
-    const work = workIdIn(must(box, demo, ["work", "add", "needs a pid"]).out);
-    const bare = selfIn(box, demo, ["work", "started", work]);
+    const work = workIdIn((await must(box, demo, ["work", "add", "needs a pid"])).out);
+    const bare = await selfIn(box, demo, ["work", "started", work]);
     assert.notEqual(bare.code, 0);
     assert.match(bare.out, /--pid/);
-    const mangled = selfIn(box, demo, ["work", "started", work, "--pid", "not-a-pid"]);
+    const mangled = await selfIn(box, demo, ["work", "started", work, "--pid", "not-a-pid"]);
     assert.notEqual(mangled.code, 0);
 });
 
-test("a log holding retired-namespace events still folds", () =>
+test("a log holding retired-namespace events still folds", async () =>
 {
     // What an old workspace looks like: governance events the CLI no longer
     // writes. Appended directly because no current verb can mint them.
@@ -62,7 +62,7 @@ test("a log holding retired-namespace events still folds", () =>
         { id: "01hz0000000000000000000005", ts: "2025-01-01T00:04:00.000Z", type: "spec.applied", project: "demo", payload: { spec: "ws-old01" }, refs: {}, origin: {} }
     ];
     appendFileSync(log, legacy.map((event) => JSON.stringify(event) + "\n").join(""));
-    assert.equal(must(box, demo, ["fold"]).code, 0);
-    assert.equal(must(box, demo, ["context"]).code, 0);
-    assert.equal(must(box, demo, ["status"]).code, 0);
+    assert.equal((await must(box, demo, ["fold"])).code, 0);
+    assert.equal((await must(box, demo, ["context"])).code, 0);
+    assert.equal((await must(box, demo, ["status"])).code, 0);
 });

@@ -11,9 +11,9 @@ import assert from "node:assert/strict";
 import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
-const { demo } = demoWorkspace(box);
-must(box, demo, ["goal", "add", "a direction"]);
-const objective = must(box, demo, ["objective", "add", "a measurable outcome", "--target", "2099-01-01"])
+const { demo } = await demoWorkspace(box);
+await must(box, demo, ["goal", "add", "a direction"]);
+const objective = (await must(box, demo, ["objective", "add", "a measurable outcome", "--target", "2099-01-01"]))
     .out.match(/\bo-[0-9a-z]{5}\b/)[0];
 
 const BRIEF = {
@@ -28,17 +28,17 @@ const BRIEF = {
     expires: "2099-01-01"
 };
 
-function nativeProposal(outcome)
+async function nativeProposal(outcome)
 {
-    return workIdIn(must(box, demo, ["work", "propose", outcome, "--objective", objective,
+    return workIdIn((await must(box, demo, ["work", "propose", outcome, "--objective", objective,
         "--value", BRIEF.value, "--success", BRIEF.success[0], "--stop", BRIEF.stop[0],
         "--risk", BRIEF.risk, "--capacity", BRIEF.capacity, "--evidence-plan", BRIEF.evidencePlan,
-        "--confidence", BRIEF.confidence, "--expires", BRIEF.expires]).out);
+        "--confidence", BRIEF.confidence, "--expires", BRIEF.expires])).out);
 }
 
-function surface(name)
+async function surface(name)
 {
-    return must(box, demo, ["context", name === "terminal" ? "--pretty" : "--plain"]).out;
+    return (await must(box, demo, ["context", name === "terminal" ? "--pretty" : "--plain"])).out;
 }
 
 // The accept command printed for one proposal, found by the outcome beside it
@@ -68,20 +68,20 @@ function advertised(text, outcome)
     return undefined;
 }
 
-test("cell 9: a native proposal is advertised by its own short id", () =>
+test("cell 9: a native proposal is advertised by its own short id", async () =>
 {
     const outcome = "an outcome proposed by today's verb";
-    const id = nativeProposal(outcome);
+    const id = await nativeProposal(outcome);
     assert.match(id, /^w-[0-9a-z]{5}$/);
-    assert.equal(advertised(surface("terminal"), outcome), id);
-    assert.equal(selfIn(box, demo, ["work", "accept", id]).code, 0);
+    assert.equal(advertised(await surface("terminal"), outcome), id);
+    assert.equal((await selfIn(box, demo, ["work", "accept", id])).code, 0);
 });
 
-test("cell 10: a native proposal's row is the row it always was", () =>
+test("cell 10: a native proposal's row is the row it always was", async () =>
 {
     const outcome = "an outcome nobody answers";
-    const id = nativeProposal(outcome);
-    const shown = surface("piped");
+    const id = await nativeProposal(outcome);
+    const shown = await surface("piped");
     assert.ok(shown.includes(`- work proposal ${id}: ${outcome}`), `the row's shape changed:\n${shown}`);
     assert.ok(shown.includes(`expires ${BRIEF.expires} — \`self work accept ${id}\``), "the accept line's shape changed");
 });

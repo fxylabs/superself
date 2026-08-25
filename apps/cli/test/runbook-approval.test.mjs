@@ -24,10 +24,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvedIn, demoWorkspace, machine, must, selfIn } from "./harness.mjs";
 
-function floor()
+async function floor()
 {
     const box = machine();
-    const { ws, demo } = demoWorkspace(box);
+    const { ws, demo } = await demoWorkspace(box);
     return { box, ws, demo, self: (args, extra = {}) => selfIn(box, demo, args, extra) };
 }
 
@@ -46,14 +46,14 @@ function events(ws)
 
 // A project with one procedure and one run of it, part-way through and held on
 // a person — the state every cell below starts from except where it says not.
-function held(why = "the final cut needs a look")
+async function held(why = "the final cut needs a look")
 {
-    const ground = floor();
-    const definition = entityIn(must(ground.box, ground.demo,
-        ["runbook", "add", "content loop", "--stage", "plan", "--stage", "approve", "--stage", "publish"]).out);
-    const run = entityIn(must(ground.box, ground.demo, ["runbook", "start", definition, "--instance", "E001"]).out);
-    must(ground.box, ground.demo, ["runbook", "advance", "E001", "--why", "planned it"]);
-    must(ground.box, ground.demo, ["runbook", "hold", "E001", "--why", why]);
+    const ground = await floor();
+    const definition = entityIn((await must(ground.box, ground.demo,
+        ["runbook", "add", "content loop", "--stage", "plan", "--stage", "approve", "--stage", "publish"])).out);
+    const run = entityIn((await must(ground.box, ground.demo, ["runbook", "start", definition, "--instance", "E001"])).out);
+    await must(ground.box, ground.demo, ["runbook", "advance", "E001", "--why", "planned it"]);
+    await must(ground.box, ground.demo, ["runbook", "hold", "E001", "--why", why]);
     return { ...ground, definition, run };
 }
 
@@ -72,20 +72,20 @@ function waitingBlock(text)
 
 /* ── holding a run ─────────────────────────────────────────────────── */
 
-test("D1: hold parks the run on a person, as a block the entity grammar already has", () =>
+test("D1: hold parks the run on a person, as a block the entity grammar already has", async () =>
 {
-    const ground = held();
+    const ground = await held();
     const blocked = events(ground.ws).filter((event) => event.type === "entity.blocked");
     assert.equal(blocked.length, 1);
     assert.deepEqual({ entity: blocked[0].payload.entity, on: blocked[0].payload.on },
         { entity: ground.run, on: "approval" });
-    assert.match(must(ground.box, ground.demo, ["state", "show", ground.run]).out, /blocked/);
+    assert.match((await must(ground.box, ground.demo, ["state", "show", ground.run])).out, /blocked/);
 });
 
-test("D2: the held run waits on a person in the piped context, with the command that releases it", () =>
+test("D2: the held run waits on a person in the piped context, with the command that releases it", async () =>
 {
-    const ground = held();
-    const block = waitingBlock(must(ground.box, ground.demo, ["context"]).out);
+    const ground = await held();
+    const block = waitingBlock((await must(ground.box, ground.demo, ["context"])).out);
     assert.match(block, /E001 .* waits on your approval: the final cut needs a look/);
     assert.match(block, /approve with `self runbook approve E001`/);
 });
@@ -94,21 +94,21 @@ test("D2: the held run waits on a person in the piped context, with the command 
 // `--pretty` settles the mode whatever `isTTY` and `TERM` say, so this cell
 // asserts the terminal assembly itself instead of whatever the runner's
 // environment happened to resolve to.
-test("D2b: the same wait reaches the terminal render, because both assemblies were joined", () =>
+test("D2b: the same wait reaches the terminal render, because both assemblies were joined", async () =>
 {
-    const ground = held();
+    const ground = await held();
     for (const surface of [["context", "--pretty"], ["status", "--pretty"]])
     {
-        const shown = must(ground.box, ground.demo, surface);
+        const shown = await must(ground.box, ground.demo, surface);
         assert.match(shown.out, /E001/, `${surface[0]} lost the run`);
         assert.match(shown.out, /self runbook approve E001/, `${surface[0]} lost the command that releases it`);
     }
 });
 
-test("D3: a held run passes no stage until it is released", () =>
+test("D3: a held run passes no stage until it is released", async () =>
 {
-    const ground = held();
-    const refused = ground.self(["runbook", "advance", "E001", "--why", "carrying on"]);
+    const ground = await held();
+    const refused = await ground.self(["runbook", "advance", "E001", "--why", "carrying on"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /is already blocked — the final cut needs a look/);
     assert.match(refused.out, /self runbook approve E001/);
@@ -116,10 +116,10 @@ test("D3: a held run passes no stage until it is released", () =>
 
 /* ── the gate ──────────────────────────────────────────────────────── */
 
-test("D4: a piped run cannot approve — the terminal is what makes the approval a person's", () =>
+test("D4: a piped run cannot approve — the terminal is what makes the approval a person's", async () =>
 {
-    const ground = held();
-    const refused = ground.self(["runbook", "approve", "E001", "--by", "rayim"]);
+    const ground = await held();
+    const refused = await ground.self(["runbook", "approve", "E001", "--by", "rayim"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /no terminal to make it at/);
     assert.match(refused.out, /self runbook approve E001/);
@@ -128,27 +128,20 @@ test("D4: a piped run cannot approve — the terminal is what makes the approval
 
 test("D5: a process carrying an agent's mark is refused even where a terminal would answer", async () =>
 {
-    const ground = held();
-    // The mark is read from the environment at the moment of the call, so it
-    // is set for this call alone — the in-process runner is otherwise exactly
-    // the terminal D7 approves at.
-    process.env.SUPERSELF_SESSION = "an agent's process";
-    try
-    {
-        const refused = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E001");
-        assert.notEqual(refused.code, 0, refused.out);
-        assert.match(refused.out, /no terminal to make it at/);
-    }
-    finally
-    {
-        delete process.env.SUPERSELF_SESSION;
-    }
+    const ground = await held();
+    // The mark is named for this call alone — a command is handed the
+    // environment its caller states and nothing else (#371) — and the run is
+    // otherwise exactly the terminal D7 approves at.
+    const refused = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E001",
+        { SUPERSELF_SESSION: "an agent's process" });
+    assert.notEqual(refused.code, 0, refused.out);
+    assert.match(refused.out, /no terminal to make it at/);
     assert.equal(events(ground.ws).some((event) => event.type === "entity.unblocked"), false);
 });
 
 test("D6: a wrong answer at the terminal approves nothing and records nothing", async () =>
 {
-    const ground = held();
+    const ground = await held();
     const before = events(ground.ws).length;
     const refused = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E002");
     assert.notEqual(refused.code, 0, refused.out);
@@ -157,64 +150,64 @@ test("D6: a wrong answer at the terminal approves nothing and records nothing", 
 
 test("D7: the key typed back at a terminal releases the run, and what was typed is in the record", async () =>
 {
-    const ground = held();
+    const ground = await held();
     const approved = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001", "--by", "rayim"], "E001");
     assert.equal(approved.code, 0, approved.out);
     const unblocked = events(ground.ws).find((event) => event.type === "entity.unblocked");
     assert.equal(unblocked.payload.entity, ground.run);
     assert.deepEqual(unblocked.payload.confirmation, { method: "tty", challenge: "E001" });
     assert.equal(unblocked.payload.by, "rayim");
-    assert.equal(waitingBlock(must(ground.box, ground.demo, ["context"]).out).includes("waits on your approval"), false);
+    assert.equal(waitingBlock((await must(ground.box, ground.demo, ["context"])).out).includes("waits on your approval"), false);
 });
 
 test("D8: once released, the run passes its next stage", async () =>
 {
-    const ground = held();
+    const ground = await held();
     await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E001");
-    const passed = ground.self(["runbook", "advance", "E001", "--why", "the cut was approved"]);
+    const passed = await ground.self(["runbook", "advance", "E001", "--why", "the cut was approved"]);
     assert.equal(passed.code, 0, passed.out);
     assert.match(passed.out, /E001 passed "approve" — next: publish/);
 });
 
 /* ── the two state refusals, from one place ────────────────────────── */
 
-test("D9: approving a run nobody held is refused in the words `state unblock` writes", () =>
+test("D9: approving a run nobody held is refused in the words `state unblock` writes", async () =>
 {
-    const ground = floor();
-    const definition = entityIn(must(ground.box, ground.demo,
-        ["runbook", "add", "content loop", "--stage", "plan"]).out);
-    const run = entityIn(must(ground.box, ground.demo, ["runbook", "start", definition, "--instance", "E001"]).out);
-    const refused = ground.self(["runbook", "approve", "E001"]);
+    const ground = await floor();
+    const definition = entityIn((await must(ground.box, ground.demo,
+        ["runbook", "add", "content loop", "--stage", "plan"])).out);
+    const run = entityIn((await must(ground.box, ground.demo, ["runbook", "start", definition, "--instance", "E001"])).out);
+    const refused = await ground.self(["runbook", "approve", "E001"]);
     assert.notEqual(refused.code, 0);
     assert.equal(refused.out.trim(), `error: ${run} is not blocked — there is nothing to unblock`);
     // The same sentence, from the raw verb that owns it.
-    assert.equal(ground.self(["state", "unblock", run]).out.trim(), refused.out.trim());
+    assert.equal((await ground.self(["state", "unblock", run])).out.trim(), refused.out.trim());
 });
 
-test("D10: holding a run that is already held is refused in the words `state block` writes", () =>
+test("D10: holding a run that is already held is refused in the words `state block` writes", async () =>
 {
-    const ground = held();
-    const refused = ground.self(["runbook", "hold", "E001", "--why", "again"]);
+    const ground = await held();
+    const refused = await ground.self(["runbook", "hold", "E001", "--why", "again"]);
     assert.notEqual(refused.code, 0);
     assert.equal(refused.out.trim(), `error: ${ground.run} is already blocked — the final cut needs a look`);
-    assert.equal(ground.self(["state", "block", ground.run]).out.trim(), refused.out.trim());
+    assert.equal((await ground.self(["state", "block", ground.run])).out.trim(), refused.out.trim());
 });
 
 test("D11: the hold and the release both read back on the log", async () =>
 {
-    const ground = held();
+    const ground = await held();
     await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E001");
-    const log = must(ground.box, ground.demo, ["log", "-n", "6"]).out;
+    const log = (await must(ground.box, ground.demo, ["log", "-n", "6"])).out;
     assert.match(log, /entity\.blocked/);
     assert.match(log, /entity\.unblocked/);
 });
 
 /* ── what the surface does not bring back, and does not widen ──────── */
 
-test("D12: the root usage still offers no `approval-required` — the retired name stays retired", () =>
+test("D12: the root usage still offers no `approval-required` — the retired name stays retired", async () =>
 {
-    const ground = floor();
-    const help = must(ground.box, ground.demo, ["--help"]).out;
+    const ground = await floor();
+    const help = (await must(ground.box, ground.demo, ["--help"])).out;
     for (const gone of ["approval-required", "work require", "overnight", "spec apply", "daemon start"])
     {
         assert.ok(!help.includes(gone), `the root usage offers "${gone}"`);
@@ -222,12 +215,12 @@ test("D12: the root usage still offers no `approval-required` — the retired na
     assert.match(help, /runbook hold/);
 });
 
-test("D13: an ordinary entity blocked on approval still raises no waiting row — the gap this issue leaves", () =>
+test("D13: an ordinary entity blocked on approval still raises no waiting row — the gap this issue leaves", async () =>
 {
-    const ground = floor();
-    const note = entityIn(must(ground.box, ground.demo, ["state", "add", "a record someone must sign off"]).out);
-    must(ground.box, ground.demo, ["state", "block", note, "--on", "approval", "--why", "legal has to read it"]);
-    const block = waitingBlock(must(ground.box, ground.demo, ["context"]).out);
+    const ground = await floor();
+    const note = entityIn((await must(ground.box, ground.demo, ["state", "add", "a record someone must sign off"])).out);
+    await must(ground.box, ground.demo, ["state", "block", note, "--on", "approval", "--why", "legal has to read it"]);
+    const block = waitingBlock((await must(ground.box, ground.demo, ["context"])).out);
     assert.equal(block.includes(note), false, `the entity reached the waiting block:\n${block}`);
     assert.equal(block.includes("legal has to read it"), false, block);
 });

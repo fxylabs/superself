@@ -50,27 +50,27 @@ function headHash(box, dir)
     return execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, env: box.env, encoding: "utf8" }).trim().slice(0, 12);
 }
 
-function workspace()
+async function workspace()
 {
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    must(box, ws, ["init"]);
+    await must(box, ws, ["init"]);
     return { box, ws };
 }
 
 // A registered project holding one open work unit. `banded` records a report
 // against a branch commit, which is what puts a row in the unshipped band;
 // without it the project has no evidence at all and the band is empty.
-function project(world, slug, banded)
+async function project(world, slug, banded)
 {
     const dir = join(world.ws, slug);
     mkdirSync(dir, { recursive: true });
     git(world.box, dir, ["init", "-q", "-b", "main"]);
     commit(world.box, dir, "a.txt", `first ${slug}`);
-    must(world.box, dir, ["project", "init", "--name", slug, "--no-connect"]);
-    const work = workIdIn(must(world.box, dir, ["work", "add", `ship ${slug}`]).out);
-    must(world.box, dir, ["work", "start", work]);
+    await must(world.box, dir, ["project", "init", "--name", slug, "--no-connect"]);
+    const work = workIdIn((await must(world.box, dir, ["work", "add", `ship ${slug}`])).out);
+    await must(world.box, dir, ["work", "start", work]);
     if (banded)
     {
         git(world.box, dir, ["checkout", "-q", "-b", "feature"]);
@@ -79,7 +79,7 @@ function project(world, slug, banded)
         // frozen verdicts (#380): a project whose only report records none
         // earns a health line of its own, and these cells count the signals
         // an unjudgeable band raises, not that one.
-        must(world.box, dir, ["report", work, "did the branch work", "--friction", "예상대로"]);
+        await must(world.box, dir, ["report", work, "did the branch work", "--friction", "예상대로"]);
     }
     return { dir, slug, work };
 }
@@ -133,26 +133,26 @@ let quiet = null;
 let pair = null;
 
 // demo, with a band, its link pruned by the fold captured as `pruneFold`.
-function frozenBanded()
+async function frozenBanded()
 {
     if (banded === null)
     {
-        const world = workspace();
-        world.demo = project(world, "demo", true);
-        world.pruneFold = must(world.box, moveAway(world, world.demo), ["fold"]);
+        const world = await workspace();
+        world.demo = await project(world, "demo", true);
+        world.pruneFold = await must(world.box, moveAway(world, world.demo), ["fold"]);
         banded = world;
     }
     return banded;
 }
 
 // The same, with nothing unshipped: one open work unit and no evidence.
-function frozenQuiet()
+async function frozenQuiet()
 {
     if (quiet === null)
     {
-        const world = workspace();
-        world.hush = project(world, "hush", false);
-        world.pruneFold = must(world.box, moveAway(world, world.hush), ["fold"]);
+        const world = await workspace();
+        world.hush = await project(world, "hush", false);
+        world.pruneFold = await must(world.box, moveAway(world, world.hush), ["fold"]);
         quiet = world;
     }
     return quiet;
@@ -160,15 +160,15 @@ function frozenQuiet()
 
 // Two banded projects, one of them moved away, and the fold that runs in the
 // project still standing — so the prune it reports is another project's.
-function prunedNeighbour()
+async function prunedNeighbour()
 {
     if (pair === null)
     {
-        const world = workspace();
-        world.demo = project(world, "demo", true);
-        world.other = project(world, "other", true);
+        const world = await workspace();
+        world.demo = await project(world, "demo", true);
+        world.other = await project(world, "other", true);
         moveAway(world, world.other);
-        world.pruneFold = must(world.box, world.demo.dir, ["fold"]);
+        world.pruneFold = await must(world.box, world.demo.dir, ["fold"]);
         pair = world;
     }
     return pair;
@@ -176,35 +176,35 @@ function prunedNeighbour()
 
 /* ── a linked project answers exactly as it always did ─────────────── */
 
-test("F1: a linked project recomputes and reports refolded", () =>
+test("F1: a linked project recomputes and reports refolded", async () =>
 {
-    const world = workspace();
-    const demo = project(world, "demo", true);
+    const world = await workspace();
+    const demo = await project(world, "demo", true);
     const hash = headHash(world.box, demo.dir);
-    const fold = must(world.box, demo.dir, ["fold"]);
+    const fold = await must(world.box, demo.dir, ["fold"]);
     assert.match(fold.out, /^refolded demo$/m, fold.out);
     assert.equal(verdictsOf(world, "demo")[hash], "provisional", "the branch commit was never judged");
     verdictFiles(world, "demo");
-    const status = must(world.box, demo.dir, ["status"]).out;
+    const status = (await must(world.box, demo.dir, ["status"])).out;
     assert.ok(!status.includes(frozenLine("demo")), `a linked project raised the frozen line:\n${status}`);
 });
 
-test("F2: an empty band changes nothing about a linked fold", () =>
+test("F2: an empty band changes nothing about a linked fold", async () =>
 {
-    const world = workspace();
-    const hush = project(world, "hush", false);
-    const fold = must(world.box, hush.dir, ["fold"]);
+    const world = await workspace();
+    const hush = await project(world, "hush", false);
+    const fold = await must(world.box, hush.dir, ["fold"]);
     assert.match(fold.out, /^refolded hush$/m, fold.out);
-    assert.match(must(world.box, hush.dir, ["status"]).out, /health: ok/);
+    assert.match((await must(world.box, hush.dir, ["status"])).out, /health: ok/);
 });
 
 /* ── the fold receipt stops claiming success ───────────────────────── */
 
-test("F3: a pruned link leaves evidence.json and .evidence-head.json untouched and says so", () =>
+test("F3: a pruned link leaves evidence.json and .evidence-head.json untouched and says so", async () =>
 {
-    const world = frozenBanded();
+    const world = await frozenBanded();
     const before = verdictFiles(world, "demo");
-    const fold = must(world.box, world.demo.dir, ["fold"]);
+    const fold = await must(world.box, world.demo.dir, ["fold"]);
     assert.ok(!fold.out.includes("refolded demo"), `the fold still claimed success:\n${fold.out}`);
     assert.ok(fold.out.includes(frozenReceipt("demo")), fold.out);
     assertUnmoved(before, world, "demo");
@@ -212,44 +212,44 @@ test("F3: a pruned link leaves evidence.json and .evidence-head.json untouched a
     assert.ok(page.includes(frozenLine("demo")), "the fold's own page does not carry the line");
 });
 
-test("F4: the receipt names the skip even when the band is empty", () =>
+test("F4: the receipt names the skip even when the band is empty", async () =>
 {
-    const world = frozenQuiet();
-    const fold = must(world.box, world.hush.dir, ["fold"]);
+    const world = await frozenQuiet();
+    const fold = await must(world.box, world.hush.dir, ["fold"]);
     assert.ok(!fold.out.includes("refolded hush"), `the fold still claimed success:\n${fold.out}`);
     assert.ok(fold.out.includes(frozenReceipt("hush")), fold.out);
 });
 
 /* ── health says it wherever the band claims something ─────────────── */
 
-test("F5: self status does not print health: ok while the band cannot be judged", () =>
+test("F5: self status does not print health: ok while the band cannot be judged", async () =>
 {
-    const world = frozenBanded();
-    const status = must(world.box, world.demo.dir, ["status"]).out;
+    const world = await frozenBanded();
+    const status = (await must(world.box, world.demo.dir, ["status"])).out;
     assert.ok(!status.includes("health: ok"), `health read as ok over frozen verdicts:\n${status}`);
     assert.ok(status.includes(frozenLine("demo")), status);
 });
 
-test("F6: self context carries the same line", () =>
+test("F6: self context carries the same line", async () =>
 {
-    const world = frozenBanded();
-    const context = must(world.box, world.demo.dir, ["context"]).out;
+    const world = await frozenBanded();
+    const context = (await must(world.box, world.demo.dir, ["context"])).out;
     assert.ok(context.includes(frozenLine("demo")), context);
     assert.match(context, /## Health[\s\S]*no checkout of "demo" is linked on this machine/);
 });
 
-test("F7: an empty band on an unlinked project stays health: ok", () =>
+test("F7: an empty band on an unlinked project stays health: ok", async () =>
 {
-    const world = frozenQuiet();
-    const status = must(world.box, world.hush.dir, ["status"]).out;
+    const world = await frozenQuiet();
+    const status = (await must(world.box, world.hush.dir, ["status"])).out;
     assert.match(status, /unshipped: nothing waiting to ship/);
     assert.match(status, /health: ok/, status);
 });
 
-test("F8: the workspace overview counts the signal for that project alone", () =>
+test("F8: the workspace overview counts the signal for that project alone", async () =>
 {
-    const world = prunedNeighbour();
-    const rows = must(world.box, world.ws, ["status", "--workspace"]).out.split("\n");
+    const world = await prunedNeighbour();
+    const rows = (await must(world.box, world.ws, ["status", "--workspace"])).out.split("\n");
     const row = (slug) => rows.find((line) => line.startsWith(`${slug} —`)) ?? "";
     assert.match(row("other"), /\[1 health signal\(s\)\]$/, rows.join("\n"));
     assert.ok(!row("demo").includes("health signal"), `the linked project was counted too:\n${rows.join("\n")}`);
@@ -257,52 +257,52 @@ test("F8: the workspace overview counts the signal for that project alone", () =
 
 /* ── pruning names the checkout that moved ─────────────────────────── */
 
-test("F9: pruning another project's link names relinking wherever it is now", () =>
+test("F9: pruning another project's link names relinking wherever it is now", async () =>
 {
-    const fold = prunedNeighbour().pruneFold;
+    const fold = (await prunedNeighbour()).pruneFold;
     assert.ok(fold.out.includes(pruneNotice("other")), fold.out);
     assert.equal(fold.out.split("pruned the link to").length - 1, 1, `more than one prune reported:\n${fold.out}`);
     assert.match(fold.out, /^refolded demo$/m, fold.out);
 });
 
-test("F10: pruning the active project's own link prunes, freezes and says both", () =>
+test("F10: pruning the active project's own link prunes, freezes and says both", async () =>
 {
-    const world = frozenBanded();
+    const world = await frozenBanded();
     const fold = world.pruneFold;
     assert.ok(fold.out.includes(pruneNotice("demo")), fold.out);
     assert.ok(fold.out.includes(frozenReceipt("demo")), fold.out);
     assert.ok(!fold.out.includes("refolded demo"), `the pruning fold claimed success:\n${fold.out}`);
-    assert.ok(must(world.box, world.demo.dir, ["status"]).out.includes(frozenLine("demo")));
+    assert.ok((await must(world.box, world.demo.dir, ["status"])).out.includes(frozenLine("demo")));
 });
 
 /* ── the way out, and the two neighbours of the frozen state ───────── */
 
-test("F11: relinking then folding moves a squash-merged commit to unknown and clears the band", () =>
+test("F11: relinking then folding moves a squash-merged commit to unknown and clears the band", async () =>
 {
-    const world = workspace();
-    const demo = project(world, "demo", true);
+    const world = await workspace();
+    const demo = await project(world, "demo", true);
     const branchHash = headHash(world.box, demo.dir);
     git(world.box, demo.dir, ["checkout", "-q", "main"]);
     commit(world.box, demo.dir, "b.txt", "squashed");
     git(world.box, demo.dir, ["branch", "-q", "-D", "feature"]);
-    must(world.box, moveAway(world, demo), ["fold"]);
-    must(world.box, demo.dir, ["report", demo.work, "the report made from the default branch"]);
+    await must(world.box, moveAway(world, demo), ["fold"]);
+    await must(world.box, demo.dir, ["report", demo.work, "the report made from the default branch"]);
     const mainHash = headHash(world.box, demo.dir);
     const before = verdictFiles(world, "demo");
-    must(world.box, demo.dir, ["project", "link", "demo", "--here"]);
-    assert.match(must(world.box, demo.dir, ["fold"]).out, /^refolded demo$/m);
+    await must(world.box, demo.dir, ["project", "link", "demo", "--here"]);
+    assert.match((await must(world.box, demo.dir, ["fold"])).out, /^refolded demo$/m);
     assert.equal(verdictsOf(world, "demo")[branchHash], "unknown", "the squash-merged commit was not rejudged");
     assert.equal(verdictsOf(world, "demo")[mainHash], "settled", "the report from the default branch was not judged");
     assert.notEqual(verdictFiles(world, "demo")[1].text, before[1].text, ".evidence-head.json was not rewritten");
-    const status = must(world.box, demo.dir, ["status"]).out;
+    const status = (await must(world.box, demo.dir, ["status"])).out;
     assert.match(status, /unshipped: nothing waiting to ship/, status);
     assert.match(status, /health: ok/, status);
 });
 
-test("F12: a linked path that is no repository keeps the #115 warning and raises no new line", () =>
+test("F12: a linked path that is no repository keeps the #115 warning and raises no new line", async () =>
 {
-    const world = workspace();
-    const broken = project(world, "broken", true);
+    const world = await workspace();
+    const broken = await project(world, "broken", true);
     const before = verdictFiles(world, "broken");
     rmSync(join(broken.dir, ".git"), { recursive: true, force: true });
     const fold = streams(world.box, broken.dir, ["fold"]);
@@ -314,21 +314,21 @@ test("F12: a linked path that is no repository keeps the #115 warning and raises
     assertUnmoved(before, world, "broken");
 });
 
-test("F13: an archived project still says its verdicts are frozen", () =>
+test("F13: an archived project still says its verdicts are frozen", async () =>
 {
-    const world = prunedNeighbour();
-    must(world.box, world.ws, ["project", "archive", "other", "--why", "nobody is on it this quarter"]);
+    const world = await prunedNeighbour();
+    await must(world.box, world.ws, ["project", "archive", "other", "--why", "nobody is on it this quarter"]);
     const status = streams(world.box, world.ws, ["status", "--project", "other"]);
     assert.equal(status.code, 0, status.err);
     assert.match(status.err, /project "other" is archived/, status.err);
     assert.ok(status.out.includes(frozenLine("other")), status.out);
 });
 
-test("F14: an append on an unlinked project records the event and touches no verdict file", () =>
+test("F14: an append on an unlinked project records the event and touches no verdict file", async () =>
 {
-    const world = frozenBanded();
+    const world = await frozenBanded();
     const before = verdictFiles(world, "demo");
-    const report = must(world.box, world.demo.dir, ["report", world.demo.work, "recorded with nothing to judge it"]);
+    const report = await must(world.box, world.demo.dir, ["report", world.demo.work, "recorded with nothing to judge it"]);
     assert.match(report.out, /report\.added recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]/, report.out);
     const log = readFileSync(join(world.ws, ".superself", "projects", "demo", "log.jsonl"), "utf8");
     assert.ok(log.includes("recorded with nothing to judge it"), "the event was not written");

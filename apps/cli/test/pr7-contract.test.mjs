@@ -352,23 +352,23 @@ test("cells 104–105: keys are converted and values are never rewritten", () =>
     assert.deepEqual(toSnake({ note: "campaignId" }), { note: "campaignId" });
 });
 
-test("cell 106: an explicit --json on a leaf with no machine contract is refused by name", () =>
+test("cell 106: an explicit --json on a leaf with no machine contract is refused by name", async () =>
 {
     const created = machine();
-    const it = { ...created, ...demoWorkspace(created) };
-    const result = selfIn(it, it.demo, ["work", "add", "x", "--json"]);
+    const it = { ...created, ...await demoWorkspace(created) };
+    const result = await selfIn(it, it.demo, ["work", "add", "x", "--json"]);
     assert.equal(result.code, 1);
     assert.match(result.out, /no --json contract yet/);
 });
 
-test("cell 157: SUPERSELF_JSON=1 is ignored by a leaf with no machine contract", () =>
+test("cell 157: SUPERSELF_JSON=1 is ignored by a leaf with no machine contract", async () =>
 {
     const created = machine();
-    const it = { ...created, ...demoWorkspace(created) };
+    const it = { ...created, ...await demoWorkspace(created) };
     for (const args of [["work", "add", "an ordinary unit"], ["alias"], ["state", "list"]])
     {
-        const plain = selfIn(it, it.demo, args);
-        const exported = selfIn(it, it.demo, args, { SUPERSELF_JSON: "1" });
+        const plain = await selfIn(it, it.demo, args);
+        const exported = await selfIn(it, it.demo, args, { SUPERSELF_JSON: "1" });
         assert.equal(exported.code, plain.code, `${args.join(" ")} changed its exit code`);
         if (args[0] !== "work")
         {
@@ -379,7 +379,7 @@ test("cell 157: SUPERSELF_JSON=1 is ignored by a leaf with no machine contract",
     }
     // And the flag is still a named refusal on the same command, so 106 and 157
     // are asserting two different selectors rather than one.
-    assert.equal(selfIn(it, it.demo, ["alias", "--json"]).code, 1);
+    assert.equal((await selfIn(it, it.demo, ["alias", "--json"])).code, 1);
 });
 
 test("cell 111: SUPERSELF_JSON=1 selects machine mode on a leaf that carries one", async () =>
@@ -456,16 +456,16 @@ test("cell 107: a command needing confirmation refuses rather than prompting und
 
 /* ── cells 113–118: non-regression ─────────────────────────────────── */
 
-test("cell 113: every pre-existing leaf still resolves and still exits only 0 or 1", () =>
+test("cell 113: every pre-existing leaf still resolves and still exits only 0 or 1", async () =>
 {
     const created = machine();
-    const it = { ...created, ...demoWorkspace(created) };
+    const it = { ...created, ...await demoWorkspace(created) };
     const added = ["login", "logout", "whoami", "app"];
     const leaves = COMMANDS.filter((command) => !added.includes(command.name))
         .flatMap((command) => commandLeaves(command).map((entry) => [command.name, ...entry.verb.split(" ")].filter((word) => word !== "")));
     for (const argv of leaves)
     {
-        const result = selfIn(it, it.demo, argv);
+        const result = await selfIn(it, it.demo, argv);
         assert.ok(result.code === 0 || result.code === 1,
             `self ${argv.join(" ")} exited ${result.code}, outside the 0/1 vocabulary it shipped with`);
     }
@@ -476,10 +476,10 @@ test("cell 114: checkContract over the composed command list is still empty", ()
     assert.deepEqual(checkContract(COMMANDS), []);
 });
 
-test("cell 117: a machine with no credential and no plugins behaves as 0.6.x did", () =>
+test("cell 117: a machine with no credential and no plugins behaves as 0.6.x did", async () =>
 {
     const created = machine();
-    const it = { ...created, ...demoWorkspace(created) };
+    const it = { ...created, ...await demoWorkspace(created) };
     const workflow = [
         ["work", "add", "ship the thing"],
         ["work"],
@@ -490,7 +490,7 @@ test("cell 117: a machine with no credential and no plugins behaves as 0.6.x did
     ];
     for (const argv of workflow)
     {
-        assert.equal(selfIn(it, it.demo, argv).code, 0, `self ${argv.join(" ")} broke`);
+        assert.equal((await selfIn(it, it.demo, argv)).code, 0, `self ${argv.join(" ")} broke`);
     }
 });
 
@@ -855,10 +855,10 @@ test("the call-key material is NUL-separated, so two different calls cannot coll
     assert.notEqual(deriveCallKey("acct_a", "b send", { x: 1 }), deriveCallKey("acct_a b", "send", { x: 1 }));
 });
 
-test("an explicit --json on a leaf with no machine contract is refused IN JSON, on stdout", () =>
+test("an explicit --json on a leaf with no machine contract is refused IN JSON, on stdout", async () =>
 {
     const created = machine();
-    const it = { ...created, ...demoWorkspace(created) };
+    const it = { ...created, ...await demoWorkspace(created) };
     const result = selfSplit(it, it.demo, ["work", "add", "x", "--json"]);
     assert.equal(result.code, 1);
     // An agent that asked for JSON and was handed a sentence on stderr has to

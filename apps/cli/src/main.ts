@@ -64,7 +64,7 @@ import { makeEvent, recordEvent, recordEvents, resetPipeline } from "./pipeline.
 import { resetHomeRule } from "./redact.js";
 import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
-import { dropCollected, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
+import { dropCollected, recordInvocation, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
@@ -3691,8 +3691,9 @@ function restoredBy(event: SelfEvent): string
 // predecessor found there. The structure check's `invocation-state` rule holds
 // this list complete: a new module-level cache is a violation until a reset
 // here covers it or an exemption names why it needs none.
-function resetInvocation(): void
+function resetInvocation(argv: string[]): void
 {
+    recordInvocation(argv);
     resetProbes();
     invalidateResolution();
     resetProcessNotices();
@@ -3707,7 +3708,7 @@ function resetInvocation(): void
 
 export async function runCli(argv: string[]): Promise<void>
 {
-    resetInvocation();
+    resetInvocation(argv);
     process.exitCode = 0;
     try
     {

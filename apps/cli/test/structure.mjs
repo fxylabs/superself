@@ -688,9 +688,71 @@ function callsIn(node)
 // one migration commit at a time, and the commit that makes the in-process
 // driver the only driver replaces it with every file that imports the harness.
 export const awaitedTestFiles = [
+    "test/aliases.test.mjs",
+    "test/apply.test.mjs",
+    "test/archived-scope.test.mjs",
+    "test/artifact-bundle.test.mjs",
+    "test/artifact-prune.test.mjs",
+    "test/artifact-retention.test.mjs",
+    "test/claim.test.mjs",
+    "test/confirm-owner.test.mjs",
     "test/context.test.mjs",
+    "test/convention-visibility.test.mjs",
+    "test/cover.test.mjs",
+    "test/cross-link.test.mjs",
+    "test/cutover.test.mjs",
+    "test/derivation.test.mjs",
+    "test/design-gate.test.mjs",
+    "test/docs.test.mjs",
+    "test/entities.test.mjs",
+    "test/entity-artifact.test.mjs",
+    "test/execution.test.mjs",
+    "test/frozen-verdicts.test.mjs",
+    "test/goal-record.test.mjs",
+    "test/guide.test.mjs",
+    "test/handoff.test.mjs",
+    "test/integrity.test.mjs",
+    "test/legacy-work-fold.test.mjs",
+    "test/lifecycle.test.mjs",
+    "test/multi-repo-evidence.test.mjs",
+    "test/objective-revise-carry.test.mjs",
+    "test/place.test.mjs",
+    "test/pr7-contract.test.mjs",
+    "test/pr7-loader.test.mjs",
+    "test/pr7-login.test.mjs",
+    "test/preset-caps.test.mjs",
+    "test/process.test.mjs",
+    "test/project-archive.test.mjs",
     "test/project-init.test.mjs",
-    "test/required.test.mjs"
+    "test/project-link.test.mjs",
+    "test/project-unlink.test.mjs",
+    "test/proposal-answer.test.mjs",
+    "test/proposal-id.test.mjs",
+    "test/render-gate-documents.test.mjs",
+    "test/render-gate-listings.test.mjs",
+    "test/render-gate-receipts.test.mjs",
+    "test/render-gate-values.test.mjs",
+    "test/render-gate.test.mjs",
+    "test/report-file.test.mjs",
+    "test/report-friction.test.mjs",
+    "test/required.test.mjs",
+    "test/retirement-gate.test.mjs",
+    "test/runbook-approval.test.mjs",
+    "test/runbook.test.mjs",
+    "test/scope-move.test.mjs",
+    "test/scope.test.mjs",
+    "test/search-live.test.mjs",
+    "test/state.test.mjs",
+    "test/supersede.test.mjs",
+    "test/sweep.test.mjs",
+    "test/tokens.test.mjs",
+    "test/waiting-render.test.mjs",
+    "test/work-attachment.test.mjs",
+    "test/work-revise.test.mjs",
+    "test/workspace-direction.test.mjs",
+    "test/workspace-scope.test.mjs",
+    "test/worktree-evidence.test.mjs",
+    "test/wrong-kind-hint.test.mjs"
 ];
 
 // The harness exports that run a command. `spawnIn` and `mustSpawn` are
@@ -754,7 +816,15 @@ function reboundWrappers(path, source, seeds)
 function siteViolation(path, source, name)
 {
     const parent = name.parent;
-    if (ts.isImportSpecifier(parent) || parent.name === name)
+    // `ground.self(…)`: the wrapper lives on an object, and the name at the
+    // call site is the property's. It is checked exactly as a bare call is.
+    if (ts.isPropertyAccessExpression(parent) && parent.name === name)
+    {
+        return ts.isCallExpression(parent.parent) && parent.parent.expression === parent
+            ? awaitedOrNot(path, source, name, parent.parent)
+            : [];
+    }
+    if (ts.isImportSpecifier(parent) || parent.name === name || ts.isShorthandPropertyAssignment(parent))
     {
         return [];
     }
@@ -763,8 +833,34 @@ function siteViolation(path, source, name)
         return [violation371(path, source, name, "untraceable-driver",
             `${name.getText()} is used as a value, so this check cannot see where the command runs — call it directly`)];
     }
-    return handedOver(parent) ? [] : [violation371(path, source, name, "awaited-driver",
-        `${name.getText()} runs a command and its result is not awaited — put \`await\` in front of it`)];
+    return awaitedOrNot(path, source, name, parent);
+}
+
+function awaitedOrNot(path, source, name, call)
+{
+    if (!handedOver(call))
+    {
+        return [violation371(path, source, name, "awaited-driver",
+            `${name.getText()} runs a command and its result is not awaited — put \`await\` in front of it`)];
+    }
+    return passedAlong(call) ? [violation371(path, source, name, "untraceable-driver",
+        `${name.getText()} runs a command inside a callback handed to something else, which may never await it — `
+        + "name the callback, or inline the call")] : [];
+}
+
+// A one-line arrow that runs a command and is handed to another function as an
+// argument. Whether that function awaits it is not readable here, and a
+// callback nobody awaits is the silent shape this whole check exists for. A
+// case's own callback is the exception: the runner awaits it.
+function passedAlong(call)
+{
+    const arrow = call.parent;
+    if (!ts.isArrowFunction(arrow) || !ts.isCallExpression(arrow.parent))
+    {
+        return false;
+    }
+    const outer = arrow.parent.expression.getText();
+    return !/^(test|it|describe)(\.|$)/.test(outer) && outer !== "Promise.all";
 }
 
 // Waited for here, or handed to a caller that will wait: `return`, an arrow's
@@ -828,6 +924,13 @@ export function namedFunctions(source)
             found.set(node.name.getText(), node);
         }
         if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && isFunctionLike(node.initializer))
+        {
+            found.set(node.name.getText(), node.initializer);
+        }
+        // A wrapper kept on an object — `{ self: (args) => selfIn(…) }` — is
+        // reached as `ground.self(…)`, and the name on the property is the name
+        // at the call site.
+        if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && isFunctionLike(node.initializer))
         {
             found.set(node.name.getText(), node.initializer);
         }

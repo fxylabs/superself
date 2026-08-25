@@ -20,7 +20,7 @@ import { commandUsage, rootUsage } from "../dist/help.js";
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 
 const box = machine();
-const { ws, demo } = demoWorkspace(box);
+const { ws, demo } = await demoWorkspace(box);
 
 // A machine that was never initialized: no workspace pointer, no store, no
 // project. The answers that run before a command resolves have to come back
@@ -36,44 +36,6 @@ function spawned(cwd, args, env = box.env)
     return { code: result.status, out: result.stdout, err: result.stderr };
 }
 
-/* ── cells 1-4: the scalar reads ───────────────────────────────────── */
-
-// A machine with no workspace pointer is answered with the sentence that says
-// where to make one. It is the read's value and not a refusal — the exit code
-// is the proof — so it moves behind the gate as a value like the path does.
-test("stage 5 cell 1: `self workspace` prints the pointer, or the wording for a machine with none", () =>
-{
-    const empty = selfIn(bare, bare.root, ["workspace"]);
-    assert.equal(empty.code, 0);
-    assert.equal(empty.out, "no workspace set — run `self init` in the directory that should hold it\n");
-    const receipt = must(box, ws, ["workspace", ws]).out;
-    const pointer = receipt.trim().replace("this machine now uses the workspace at ", "");
-    assert.equal(must(box, ws, ["workspace"]).out, `${pointer}\n`);
-});
-
-test("stage 5 cell 2: `self timezone` prints the default, then what was set", () =>
-{
-    assert.equal(must(box, demo, ["timezone"]).out, "UTC\n");
-    must(box, demo, ["timezone", "Asia/Seoul"]);
-    assert.equal(must(box, demo, ["timezone"]).out, "Asia/Seoul\n");
-});
-
-test("stage 5 cell 3: `self theme` prints the default, then what was set", () =>
-{
-    assert.equal(must(box, demo, ["theme"]).out, "violet\n");
-    must(box, demo, ["theme", "cyan"]);
-    assert.equal(must(box, demo, ["theme"]).out, "cyan\n");
-});
-
-// The scale reads the same number two ways, and the half that differs is which
-// of them it is: a shipped estimate until a measurement replaces it.
-test("stage 5 cell 4: `self tokens` names the shipped estimate, then the measurement", () =>
-{
-    assert.equal(must(box, demo, ["tokens"]).out, "0.25 tokens per character — the shipped estimate\n");
-    must(box, demo, ["tokens", "100", "400"]);
-    assert.equal(must(box, demo, ["tokens"]).out, "0.25 tokens per character — measured\n");
-});
-
 /* ── cells 5-7: the answers with no command behind them ────────────── */
 
 // Read out of the package the binary was built from, which is where the verb
@@ -83,6 +45,63 @@ function packagedVersion()
 {
     return String(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
 }
+
+/* ── cell 9: the brief, under the lines that were said before it ───── */
+
+let seq = 0;
+
+const asSession = (name, pid) => ({ SUPERSELF_SESSION: `${name}-${seq}`, SUPERSELF_SESSION_PID: pid ?? "" });
+
+// A pid this machine had and does not any more, so the holder it stands for
+// reads as ended and the claim moves — which is the case that prints all three
+// kinds of line at once.
+const GONE = String(spawnSync(process.execPath, ["-e", ""]).pid);
+
+const ALIVE = String(process.pid);
+
+async function freshUnit()
+{
+    seq += 1;
+    return workIdIn((await must(box, demo, ["work", "add", `stage five outcome ${seq}`])).out);
+}
+
+/* ── cells 1-4: the scalar reads ───────────────────────────────────── */
+
+// A machine with no workspace pointer is answered with the sentence that says
+// where to make one. It is the read's value and not a refusal — the exit code
+// is the proof — so it moves behind the gate as a value like the path does.
+test("stage 5 cell 1: `self workspace` prints the pointer, or the wording for a machine with none", async () =>
+{
+    const empty = await selfIn(bare, bare.root, ["workspace"]);
+    assert.equal(empty.code, 0);
+    assert.equal(empty.out, "no workspace set — run `self init` in the directory that should hold it\n");
+    const receipt = (await must(box, ws, ["workspace", ws])).out;
+    const pointer = receipt.trim().replace("this machine now uses the workspace at ", "");
+    assert.equal((await must(box, ws, ["workspace"])).out, `${pointer}\n`);
+});
+
+test("stage 5 cell 2: `self timezone` prints the default, then what was set", async () =>
+{
+    assert.equal((await must(box, demo, ["timezone"])).out, "UTC\n");
+    await must(box, demo, ["timezone", "Asia/Seoul"]);
+    assert.equal((await must(box, demo, ["timezone"])).out, "Asia/Seoul\n");
+});
+
+test("stage 5 cell 3: `self theme` prints the default, then what was set", async () =>
+{
+    assert.equal((await must(box, demo, ["theme"])).out, "violet\n");
+    await must(box, demo, ["theme", "cyan"]);
+    assert.equal((await must(box, demo, ["theme"])).out, "cyan\n");
+});
+
+// The scale reads the same number two ways, and the half that differs is which
+// of them it is: a shipped estimate until a measurement replaces it.
+test("stage 5 cell 4: `self tokens` names the shipped estimate, then the measurement", async () =>
+{
+    assert.equal((await must(box, demo, ["tokens"])).out, "0.25 tokens per character — the shipped estimate\n");
+    await must(box, demo, ["tokens", "100", "400"]);
+    assert.equal((await must(box, demo, ["tokens"])).out, "0.25 tokens per character — measured\n");
+});
 
 test("stage 5 cell 5: `self --version` prints the packaged version and nothing else", () =>
 {
@@ -148,29 +167,11 @@ test("stage 5 cell 8: an unknown verb is refused on stderr, with nothing on stdo
         + "    if it is a mini-app, install it with `self app install nosuch`\n");
 });
 
-/* ── cell 9: the brief, under the lines that were said before it ───── */
-
-let seq = 0;
-
-const asSession = (name, pid) => ({ SUPERSELF_SESSION: `${name}-${seq}`, SUPERSELF_SESSION_PID: pid ?? "" });
-
-// A pid this machine had and does not any more, so the holder it stands for
-// reads as ended and the claim moves — which is the case that prints all three
-// kinds of line at once.
-const GONE = String(spawnSync(process.execPath, ["-e", ""]).pid);
-const ALIVE = String(process.pid);
-
-function freshUnit()
+test("stage 5 cell 9: the held note, the append's line and the brief keep their order", async () =>
 {
-    seq += 1;
-    return workIdIn(must(box, demo, ["work", "add", `stage five outcome ${seq}`]).out);
-}
-
-test("stage 5 cell 9: the held note, the append's line and the brief keep their order", () =>
-{
-    const id = freshUnit();
-    must(box, demo, ["work", "start", id], asSession("alpha", GONE));
-    const taken = selfIn(box, demo, ["work", "start", id], asSession("beta", ALIVE));
+    const id = await freshUnit();
+    await must(box, demo, ["work", "start", id], asSession("alpha", GONE));
+    const taken = await selfIn(box, demo, ["work", "start", id], asSession("beta", ALIVE));
     assert.equal(taken.code, 0, taken.out);
     const held = taken.out.indexOf("was held by another session, ended ");
     const announced = taken.out.indexOf("entity.started");
@@ -180,11 +181,11 @@ test("stage 5 cell 9: the held note, the append's line and the brief keep their 
     assert.ok(announced < brief, `the brief moved above the append line:\n${taken.out}`);
 });
 
-test("stage 5 cell 9: a live holder is disclosed above the brief and the claim does not move", () =>
+test("stage 5 cell 9: a live holder is disclosed above the brief and the claim does not move", async () =>
 {
-    const id = freshUnit();
-    must(box, demo, ["work", "start", id], asSession("alpha", ALIVE));
-    const other = selfIn(box, demo, ["work", "start", id], asSession("beta", ALIVE));
+    const id = await freshUnit();
+    await must(box, demo, ["work", "start", id], asSession("alpha", ALIVE));
+    const other = await selfIn(box, demo, ["work", "start", id], asSession("beta", ALIVE));
     assert.equal(other.code, 0, other.out);
     const held = other.out.indexOf("held by another session, running since ");
     const brief = other.out.indexOf(`# ${id} —`);
@@ -199,11 +200,11 @@ test("stage 5 cell 9: a live holder is disclosed above the brief and the claim d
 // nothing, so what comes back is a receipt for the state that stands. The unit
 // is retired through a written event rather than the verb, because destroying
 // a record needs a person at a terminal (#173).
-test("stage 5 cell 10: `self work retire` on a retired unit answers with the line it always printed", () =>
+test("stage 5 cell 10: `self work retire` on a retired unit answers with the line it always printed", async () =>
 {
-    const id = freshUnit();
+    const id = await freshUnit();
     retireFixture(box, ws, "demo", "entity.retired", { entity: id, why: "the outcome moved" });
-    const again = selfIn(box, demo, ["work", "retire", id, "--why", "asked a second time"]);
+    const again = await selfIn(box, demo, ["work", "retire", id, "--why", "asked a second time"]);
     assert.equal(again.code, 0, again.out);
     assert.equal(again.out, `${id} is already retired — the outcome moved\n`);
 });
@@ -246,9 +247,9 @@ test("stage 5 cell 11: no export in the tree has lost its importer", () =>
 // answer is the append's own announce line returns nothing and is unaffected.
 // `self decide` is one, and the assertion is that it still runs and still says
 // exactly what it said.
-test("stage 5 cell 13: a leaf whose run returns void dispatches and prints its announce line alone", () =>
+test("stage 5 cell 13: a leaf whose run returns void dispatches and prints its announce line alone", async () =>
 {
-    const answer = selfIn(box, demo, ["decide", "void stays legal", "--why", "the shapes are what a handler may return, not what it must"]);
+    const answer = await selfIn(box, demo, ["decide", "void stays legal", "--why", "the shapes are what a handler may return, not what it must"]);
     assert.equal(answer.code, 0, answer.out);
     const lines = answer.out.split("\n").filter((line) => line !== "");
     assert.equal(lines.length, 1, answer.out);

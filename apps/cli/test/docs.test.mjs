@@ -118,15 +118,15 @@ function expandTilde(box, word)
 // The floor every document stands on: a scratch machine whose workspace is
 // already initialized and whose starting directory is a repository named
 // my-project — the identity the guides' `--project my-project` reads back.
-function floorState(box)
+async function floorState(box)
 {
     const floor = join(box.env.HOME, "floor-workspace");
     mkdirSync(floor, { recursive: true });
-    must(box, floor, ["init"]);
+    await must(box, floor, ["init"]);
     return { cwd: enteredDir(box, join(box.env.HOME, "my-project")) };
 }
 
-function runSegment(box, state, doc, segment)
+async function runSegment(box, state, doc, segment)
 {
     const command = segment.split(" # ")[0].trim();
     const words = shellWords(command);
@@ -140,7 +140,7 @@ function runSegment(box, state, doc, segment)
         return;
     }
     const expectRefusal = segment.includes(" # refused");
-    const result = selfIn(box, state.cwd, words.slice(1).map((word) => expandTilde(box, word)));
+    const result = await selfIn(box, state.cwd, words.slice(1).map((word) => expandTilde(box, word)));
     if (expectRefusal)
     {
         assert.notEqual(result.code, 0, `${doc}: \`${command}\` should have been refused, and was not`);
@@ -148,40 +148,6 @@ function runSegment(box, state, doc, segment)
     }
     assert.equal(result.code, 0, `${doc}: \`${command}\` failed:\n${result.out}`);
 }
-
-test("every concrete documented command answers as its document claims", () =>
-{
-    for (const doc of TIER1.filter((name) => name.endsWith(".md")))
-    {
-        const lines = exampleLines(tier1(doc));
-        if (!lines.some((line) => line.startsWith("self ") || line.includes("&& self ")))
-        {
-            continue;
-        }
-        const box = machine();
-        const state = floorState(box);
-        for (const line of lines)
-        {
-            for (const segment of line.split("&&").map((part) => part.trim()))
-            {
-                runSegment(box, state, doc, segment);
-            }
-        }
-    }
-});
-
-/* ── proof 2: the cli.md catalogue is the typed contract ───────────── */
-
-test("the cli.md verb catalogue diffs clean against the typed contract", () =>
-{
-    const page = tier1("docs/reference/cli.md");
-    const block = page.match(/top-level verbs:\n\n```text\n([\s\S]*?)```/);
-    assert.ok(block !== null, "cli.md lost its top-level verb catalogue block");
-    const documented = block[1].split(/\s+/).filter((word) => word !== "");
-    const declared = COMMANDS.map((command) => command.name);
-    assert.deepEqual([...documented].sort(), [...declared].sort(),
-        "the cli.md catalogue and the typed command contract disagree");
-});
 
 /* ── proof 3: mentioned event names belong to the written vocabulary ── */
 
@@ -196,37 +162,37 @@ function entityIdIn(text)
 // the store's own log — the oracle is what the CLI wrote, not a list here.
 async function writeCurrentVocabulary(box, demo)
 {
-    must(box, demo, ["goal", "add", "the goal"]);
-    must(box, demo, ["decide", "a first take", "--proposed"]);
-    const decided = idIn(must(box, demo, ["decide", "a second take"]).out);
+    await must(box, demo, ["goal", "add", "the goal"]);
+    await must(box, demo, ["decide", "a first take", "--proposed"]);
+    const decided = idIn((await must(box, demo, ["decide", "a second take"])).out);
     await approvedIn(box, demo, ["decide", "a third take", "--supersedes", decided], decided);
-    const note = entityIdIn(must(box, demo, ["state", "add", "a note", "--label", "note"]).out);
-    must(box, demo, ["state", "place", note, "--priority", "7"]);
+    const note = entityIdIn((await must(box, demo, ["state", "add", "a note", "--label", "note"])).out);
+    await must(box, demo, ["state", "place", note, "--priority", "7"]);
     await approvedIn(box, demo, ["state", "retract", note, "--why", "probe over"], note);
-    const objective = entityIdIn(must(box, demo, ["objective", "add", "an outcome"]).out);
-    const milestone = entityIdIn(must(box, demo, ["milestone", "add", "a checkpoint", "--objective", objective, "--exit", "the proof passes"]).out);
-    const plan = workIdIn(must(box, demo, ["work", "propose", "review the flow before it is worked"]).out);
-    must(box, demo, ["work", "revise", plan, "review the flow, then work it", "--why", "the first plan skipped the review"]);
-    must(box, demo, ["work", "accept", plan]);
-    const unit = workIdIn(must(box, demo, ["work", "add", "the flow works"]).out);
-    must(box, demo, ["work", "link", unit, "--milestone", milestone]);
-    must(box, demo, ["work", "unlink", unit, "--milestone", milestone]);
-    must(box, demo, ["work", "start", unit]);
-    must(box, demo, ["work", "block", unit, "--on", "dependency", "--why", "waiting"]);
-    must(box, demo, ["work", "unblock", unit]);
-    must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "the proof passed"]);
-    must(box, demo, ["report", unit, "progress so far"]);
-    must(box, demo, ["work", "done", unit, "--report", "the flow verifiably works"]);
-    const retiredUnit = workIdIn(must(box, demo, ["work", "add", "a superseded outcome"]).out);
+    const objective = entityIdIn((await must(box, demo, ["objective", "add", "an outcome"])).out);
+    const milestone = entityIdIn((await must(box, demo, ["milestone", "add", "a checkpoint", "--objective", objective, "--exit", "the proof passes"])).out);
+    const plan = workIdIn((await must(box, demo, ["work", "propose", "review the flow before it is worked"])).out);
+    await must(box, demo, ["work", "revise", plan, "review the flow, then work it", "--why", "the first plan skipped the review"]);
+    await must(box, demo, ["work", "accept", plan]);
+    const unit = workIdIn((await must(box, demo, ["work", "add", "the flow works"])).out);
+    await must(box, demo, ["work", "link", unit, "--milestone", milestone]);
+    await must(box, demo, ["work", "unlink", unit, "--milestone", milestone]);
+    await must(box, demo, ["work", "start", unit]);
+    await must(box, demo, ["work", "block", unit, "--on", "dependency", "--why", "waiting"]);
+    await must(box, demo, ["work", "unblock", unit]);
+    await must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "the proof passed"]);
+    await must(box, demo, ["report", unit, "progress so far"]);
+    await must(box, demo, ["work", "done", unit, "--report", "the flow verifiably works"]);
+    const retiredUnit = workIdIn((await must(box, demo, ["work", "add", "a superseded outcome"])).out);
     await approvedIn(box, demo, ["work", "retire", retiredUnit, "--why", "moved elsewhere"], retiredUnit);
-    const undoneUnit = workIdIn(must(box, demo, ["work", "add", "an outcome given up in error"]).out);
+    const undoneUnit = workIdIn((await must(box, demo, ["work", "add", "an outcome given up in error"])).out);
     const undone = await approvedIn(box, demo, ["work", "retire", undoneUnit, "--why", "given up"], undoneUnit);
-    must(box, demo, ["undo", idIn(undone.printed), "--why", "the outcome is still wanted"]);
-    const runUnit = workIdIn(must(box, demo, ["work", "add", "a supervised outcome"]).out);
-    must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
-    must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
+    await must(box, demo, ["undo", idIn(undone.printed), "--why", "the outcome is still wanted"]);
+    const runUnit = workIdIn((await must(box, demo, ["work", "add", "a supervised outcome"])).out);
+    await must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
+    await must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
     writeFileSync(join(demo, "registered-guide.md"), "a guide no report is about\n");
-    const guide = must(box, demo, ["artifact", "add", "registered-guide.md"]).out.match(/\ba-[0-9a-z]{5}\b/)[0];
+    const guide = (await must(box, demo, ["artifact", "add", "registered-guide.md"])).out.match(/\ba-[0-9a-z]{5}\b/)[0];
     // Removing stored bytes is a person's call, so the last verb in the
     // vocabulary is driven the way every other gated one above it is.
     await approvedIn(box, demo, ["artifact", "prune", guide, "--why", "the guide is folded into the rule"], guide);
@@ -243,7 +209,9 @@ async function writtenVocabulary(box, ws, demo)
 // `entity.*` and file names like `main.ts` are not event mentions.
 const NAMESPACES = "entity|work|report|artifact|goal|decision|convention|objective|milestone"
     + "|run|spec|changeset|attempt|lease|merge|promotion|repo|target|main|ci|review";
+
 const EVENT_MENTION = new RegExp(`\\b(?:${NAMESPACES})\\.[a-z][a-z-]*\\b`, "g");
+
 const FILE_SUFFIXES = ["ts", "js", "mjs", "md", "json", "jsonl", "yml", "html", "sh"];
 
 function eventMentions(markdown)
@@ -263,21 +231,6 @@ function eventMentions(markdown)
     return mentions;
 }
 
-test("event names the documents mention are the vocabulary the CLI writes", async () =>
-{
-    const box = machine();
-    const { ws, demo } = demoWorkspace(box);
-    const written = await writtenVocabulary(box, ws, demo);
-    for (const doc of TIER1)
-    {
-        for (const mention of eventMentions(tier1(doc)))
-        {
-            assert.ok(written.has(mention.name) || mention.legacy,
-                `${doc} mentions ${mention.name}, which the CLI does not write, outside a legacy-marked section`);
-        }
-    }
-});
-
 /* ── proof 4: the block connect writes has one shape, in both files ── */
 
 // This repository stops tracking AGENTS.md and CLAUDE.md, because the CLI
@@ -290,6 +243,7 @@ test("event names the documents mention are the vocabulary the CLI writes", asyn
 // The marker carries the version that rendered it (#221), so a block is found
 // by its prefix — a pinned literal would only match one release.
 const BLOCK_BEGIN = "<!-- superself:begin";
+
 const BLOCK_END = "<!-- superself:end -->";
 
 function managedBlock(name, content)
@@ -300,11 +254,60 @@ function managedBlock(name, content)
     return content.slice(from, to + BLOCK_END.length);
 }
 
-test("connect writes one managed block, of a fixed shape, to both instruction files", () =>
+test("every concrete documented command answers as its document claims", async () =>
+{
+    for (const doc of TIER1.filter((name) => name.endsWith(".md")))
+    {
+        const lines = exampleLines(tier1(doc));
+        if (!lines.some((line) => line.startsWith("self ") || line.includes("&& self ")))
+        {
+            continue;
+        }
+        const box = machine();
+        const state = await floorState(box);
+        for (const line of lines)
+        {
+            for (const segment of line.split("&&").map((part) => part.trim()))
+            {
+                await runSegment(box, state, doc, segment);
+            }
+        }
+    }
+});
+
+/* ── proof 2: the cli.md catalogue is the typed contract ───────────── */
+
+test("the cli.md verb catalogue diffs clean against the typed contract", () =>
+{
+    const page = tier1("docs/reference/cli.md");
+    const block = page.match(/top-level verbs:\n\n```text\n([\s\S]*?)```/);
+    assert.ok(block !== null, "cli.md lost its top-level verb catalogue block");
+    const documented = block[1].split(/\s+/).filter((word) => word !== "");
+    const declared = COMMANDS.map((command) => command.name);
+    assert.deepEqual([...documented].sort(), [...declared].sort(),
+        "the cli.md catalogue and the typed command contract disagree");
+});
+
+test("event names the documents mention are the vocabulary the CLI writes", async () =>
 {
     const box = machine();
-    const { demo } = demoWorkspace(box);
-    must(box, demo, ["convention", "add", "an internal rule the block must not carry"]);
+    const { ws, demo } = await demoWorkspace(box);
+    const written = await writtenVocabulary(box, ws, demo);
+    for (const doc of TIER1)
+    {
+        for (const mention of eventMentions(tier1(doc)))
+        {
+            assert.ok(written.has(mention.name) || mention.legacy,
+                `${doc} mentions ${mention.name}, which the CLI does not write, outside a legacy-marked section`);
+        }
+    }
+});
+
+test("connect writes one managed block, of a fixed shape, to both instruction files", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    await must(box, demo, ["convention", "add", "an internal rule the block must not carry"]);
     const blocks = ["AGENTS.md", "CLAUDE.md"]
         .map((name) => ({ name, block: managedBlock(name, readFileSync(join(demo, name), "utf8")) }));
     assert.equal(blocks[0].block, blocks[1].block,

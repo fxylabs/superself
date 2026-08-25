@@ -14,50 +14,50 @@ import assert from "node:assert/strict";
 import { demoWorkspace, machine, must, selfIn } from "./harness.mjs";
 
 const box = machine();
-const { ws, demo } = demoWorkspace(box);
+const { ws, demo } = await demoWorkspace(box);
 const self = (cwd, args) => selfIn(box, cwd, args);
 
-must(box, demo, ["work", "add", "scoped outcome"]);
+await must(box, demo, ["work", "add", "scoped outcome"]);
 
-test("a read answers for the named project from anywhere in the workspace", () =>
+test("a read answers for the named project from anywhere in the workspace", async () =>
 {
-    assert.ok(must(box, ws, ["work", "--project", "demo"]).out.includes("scoped outcome"));
+    assert.ok((await must(box, ws, ["work", "--project", "demo"])).out.includes("scoped outcome"));
 });
 
-test("an unknown project is refused with the registered slugs", () =>
+test("an unknown project is refused with the registered slugs", async () =>
 {
-    const result = self(ws, ["work", "--project", "nope"]);
+    const result = await self(ws, ["work", "--project", "nope"]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /unknown project "nope"/);
     assert.match(result.out, /demo/);
 });
 
-test("naming a project and the workspace at once is two different asks", () =>
+test("naming a project and the workspace at once is two different asks", async () =>
 {
-    const result = self(demo, ["status", "--project", "demo", "--workspace"]);
+    const result = await self(demo, ["status", "--project", "demo", "--workspace"]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /pass one of them/);
 });
 
-test("a write declares no read scope flag, so --project on it is named as a mistake", () =>
+test("a write declares no read scope flag, so --project on it is named as a mistake", async () =>
 {
-    const result = self(demo, ["work", "add", "elsewhere", "--project", "demo"]);
+    const result = await self(demo, ["work", "add", "elsewhere", "--project", "demo"]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /unknown option '--project'/);
     // The same holds for a write that does declare `--workspace`: that flag
     // states where the record renders, and it buys no read scope with it.
-    const placed = self(demo, ["objective", "add", "elsewhere", "--workspace", "--project", "demo"]);
+    const placed = await self(demo, ["objective", "add", "elsewhere", "--workspace", "--project", "demo"]);
     assert.notEqual(placed.code, 0);
     assert.match(placed.out, /unknown option '--project'/);
 });
 
-test("context outside a project answers for the workspace instead of refusing", () =>
+test("context outside a project answers for the workspace instead of refusing", async () =>
 {
-    const result = must(box, ws, ["context"]);
+    const result = await must(box, ws, ["context"]);
     assert.ok(result.out.length > 0);
 });
 
-test("the workspace-wide form answers for every registered project", () =>
+test("the workspace-wide form answers for every registered project", async () =>
 {
-    assert.ok(must(box, ws, ["status", "--workspace"]).out.includes("demo"));
+    assert.ok((await must(box, ws, ["status", "--workspace"])).out.includes("demo"));
 });
