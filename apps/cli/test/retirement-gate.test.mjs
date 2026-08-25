@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, spawnIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = demoWorkspace(box);
@@ -11,7 +11,11 @@ test("the gate refuses a supersede from a process with no terminal, and records 
 {
     const first = idIn(must(box, demo, ["decide", "the first policy"]).out);
     const before = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8").trim().split("\n").length;
-    const refused = selfIn(box, demo, ["decide", "a pointer", "--supersedes", first]);
+    // `spawnIn`, and this cell alone in the file uses it (#371, cell 22). What
+    // is under test is that a process with no terminal is refused, and a
+    // process this suite drives has whatever terminal the driver hands it — the
+    // one place that has to be a real one is here.
+    const refused = spawnIn(box, demo, ["decide", "a pointer", "--supersedes", first]);
     assert.equal(refused.code, 1);
     assert.match(refused.out, /nothing was recorded/);
     assert.match(refused.out, /the first policy/);

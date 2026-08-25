@@ -16,7 +16,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { drive, git, machine, workIdIn } from "./harness.mjs";
 import { holdAppends } from "../dist/pipeline.js";
-import { railEnv, railServer, writeCredential } from "./pr7-lib.mjs";
+import { railEnv, railServer, selfAsync, writeCredential } from "./pr7-lib.mjs";
 
 // The floor state, built the way `demoWorkspace` builds it and for the same
 // reason: this order — a directory, a command, `git init`, another command —
@@ -66,40 +66,52 @@ test("cell 3: a refusal the CLI has a sentence for is exit 1 and says why", asyn
     assert.match(refused.out, /unknown work id "w-nope"/);
 });
 
-test("cell 4: a refusal by policy is exit 2", async () =>
+// The two exit codes that need a rail to answer for them. Each runs the same
+// command under whichever driver it is handed, so cells 4, 5 and 21 assert the
+// same commands and cannot drift apart.
+async function denied(it, run)
 {
-    const { box, demo } = await scratch();
     const rail = await railServer((call) => (call.path === "/api/device/start"
         ? { status: 200, body: { device_code: "dc_x", user_code: "K7QF-2M9X", verification_url: "https://console.example/d", expires_in: 60, interval: 1 } }
         : { status: 400, body: { code: "access_denied", message: "the owner denied this device" } }));
     try
     {
-        const denied = await drive(box, demo, ["login", "--json", "--no-open"],
-            { extra: { ...railEnv(rail), SUPERSELF_API_BASE: rail.url } });
-        assert.equal(denied.code, 2, denied.out);
-        assert.equal(errorIn(denied.out).code, "access_denied");
+        return await run(it, ["login", "--json", "--no-open"], { ...railEnv(rail), SUPERSELF_API_BASE: rail.url });
     }
     finally
     {
         await rail.close();
     }
+}
+
+async function unreachable(it, run)
+{
+    const rail = await railServer((call) => (call.path === "/api/plugins/trust" ? { destroy: true } : { status: 500, body: {} }), { trust: null });
+    try
+    {
+        writeCredential(it.box, { apiBase: rail.url });
+        return await run(it, ["app", "install", "email", "--json"], railEnv(rail));
+    }
+    finally
+    {
+        await rail.close();
+    }
+}
+
+const driven = (it, args, extra) => drive(it.box, it.demo, args, { extra });
+
+test("cell 4: a refusal by policy is exit 2", async () =>
+{
+    const refused = await denied(await scratch(), driven);
+    assert.equal(refused.code, 2, refused.out);
+    assert.equal(errorIn(refused.out).code, "access_denied");
 });
 
 test("cell 5: an unfinished call that is worth retrying is exit 3 and paces the retry", async () =>
 {
-    const { box, demo } = await scratch();
-    const rail = await railServer((call) => (call.path === "/api/plugins/trust" ? { destroy: true } : { status: 500, body: {} }), { trust: null });
-    try
-    {
-        writeCredential(box, { apiBase: rail.url });
-        const held = await drive(box, demo, ["app", "install", "email", "--json"], { extra: railEnv(rail) });
-        assert.equal(held.code, 3, held.out);
-        assert.equal(errorIn(held.out).retry_after_s, 5);
-    }
-    finally
-    {
-        await rail.close();
-    }
+    const held = await unreachable(await scratch(), driven);
+    assert.equal(held.code, 3, held.out);
+    assert.equal(errorIn(held.out).retry_after_s, 5);
 });
 
 test("cell 6: --json on a command that promises it answers parseable JSON", async () =>
@@ -233,6 +245,27 @@ test("cell 19: a failed command does not leave this process exiting non-zero", a
     const { box, demo } = await scratch();
     assert.equal((await drive(box, demo, ["work", "show", "w-nope"])).code, 1);
     assert.equal(process.exitCode ?? 0, 0);
+});
+
+/* ── cell 21: the number a real process leaves behind ──────────────── */
+
+// The driver reads `process.exitCode` after the command sets it. A child turns
+// that same field into the process's exit status, and nothing else in the
+// suite watches the conversion once the cases stop spawning. Every code in the
+// vocabulary is checked, under both drivers, against the same command.
+test("cell 21: each exit code the driver reports is the status a real process exits with", async () =>
+{
+    const it = await scratch();
+    const spawned = (that, args, extra) => selfAsync(that.box, that.demo, args, extra);
+    const pairs = [
+        ["0", await drive(it.box, it.demo, ["--version"]), await selfAsync(it.box, it.demo, ["--version"], {})],
+        ["1", await drive(it.box, it.demo, ["flurb"]), await selfAsync(it.box, it.demo, ["flurb"], {})],
+        ["2", await denied(it, driven), await denied(it, spawned)],
+        ["3", await unreachable(it, driven), await unreachable(it, spawned)]
+    ];
+    assert.deepEqual(pairs.map(([, here]) => String(here.code)), ["0", "1", "2", "3"]);
+    pairs.forEach(([expected, here, there]) => assert.equal(String(there.code), expected,
+        `a child exited ${there.code} where the driver reported ${here.code}: ${there.all ?? there.out}`));
 });
 
 /* ── cell 27: two writes in one process ────────────────────────────── */

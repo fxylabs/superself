@@ -17,26 +17,29 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const { approvedIn, git, machine, must, selfIn } = await import("./harness.mjs");
+// `mustSpawn`/`spawnIn` rather than `must`/`selfIn`, as in the other two files
+// that set `isTTY` above their imports: the styled decision is already made, so
+// a command driven in this process would answer painted (#371, cell 23).
+const { approvedIn, git, machine, mustSpawn, spawnIn } = await import("./harness.mjs");
 const { styled } = await import("../dist/style.js");
 
 const box = machine();
 const ws = join(box.root, "ws");
 const alpha = join(ws, "alpha");
 mkdirSync(alpha, { recursive: true });
-must(box, ws, ["init"]);
+mustSpawn(box, ws, ["init"]);
 git(box, alpha, ["init", "-q", "-b", "main"]);
-must(box, alpha, ["project", "init", "--name", "alpha", "--no-connect"]);
-must(box, alpha, ["goal", "add", "a direction"]);
-const objective = must(box, alpha, ["objective", "add", "a measurable outcome", "--target", "2099-01-01"])
+mustSpawn(box, alpha, ["project", "init", "--name", "alpha", "--no-connect"]);
+mustSpawn(box, alpha, ["goal", "add", "a direction"]);
+const objective = mustSpawn(box, alpha, ["objective", "add", "a measurable outcome", "--target", "2099-01-01"])
     .out.match(/\bo-[0-9a-z]{5}\b/)[0];
 
-must(box, alpha, ["work", "propose", "an outcome a terminal reader is shown", "--objective", objective,
+mustSpawn(box, alpha, ["work", "propose", "an outcome a terminal reader is shown", "--objective", objective,
     "--value", "closes the gap", "--success", "it ships", "--stop", "if superseded", "--risk", "low",
     "--capacity", "one round", "--evidence-plan", "a recorded run", "--confidence", "high",
     "--expires", "2099-01-01"]);
-must(box, alpha, ["decide", "a direction a terminal reader is shown", "--why", "it was weighed", "--proposed"]);
-must(box, alpha, ["state", "add", "a record a terminal reader is shown", "--proposed"]);
+mustSpawn(box, alpha, ["decide", "a direction a terminal reader is shown", "--why", "it was weighed", "--proposed"]);
+mustSpawn(box, alpha, ["state", "add", "a record a terminal reader is shown", "--proposed"]);
 
 const ADVERTISED = /self (work accept [^\s`]+|decide confirm [^\s`]+|state confirm [^\s`]+)/g;
 
@@ -67,7 +70,7 @@ test("cell 26: every line self status --project prints at a terminal runs where 
         `self status --project advertised something other than the two kinds it prints:\n${plain(read.out)}`);
     for (const argv of lines)
     {
-        const ran = selfIn(box, ws, argv);
+        const ran = spawnIn(box, ws, argv);
         assert.equal(ran.code, 0, `\`self ${argv.join(" ")}\` failed where the render was read:\n${ran.out}`);
     }
 });

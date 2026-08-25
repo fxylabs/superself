@@ -2,6 +2,14 @@
 // throwaway workspace. Everything of substance is asserted in the unit tests;
 // this proves the binary starts, resolves a workspace, records state, and
 // refuses what was cut.
+//
+// The rest of the suite drives the CLI inside the test process now (#371), so
+// this file is the only place the shebang, the `bin` mapping and the module
+// resolution of a published install are exercised at all. It spawns on purpose
+// and never stops: the exec count going to zero is the one way this migration
+// could hide a broken binary behind a green suite. The exit-code half of the
+// same guarantee is cell 21 in driver.test.mjs, which runs each code both ways
+// and compares.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

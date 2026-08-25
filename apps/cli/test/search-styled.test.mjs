@@ -15,17 +15,20 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const { approvedIn, git, machine, must } = await import("./harness.mjs");
+// `mustSpawn` rather than `must`, as in the other two files that set `isTTY`
+// above their imports: the styled decision is already made, so a setup command
+// driven in this process would answer painted (#371, cell 23).
+const { approvedIn, git, machine, mustSpawn } = await import("./harness.mjs");
 const { styled } = await import("../dist/style.js");
 
 const box = machine();
 const ws = join(box.root, "ws");
 const project = join(ws, "styled");
 mkdirSync(project, { recursive: true });
-must(box, ws, ["init"]);
+mustSpawn(box, ws, ["init"]);
 git(box, project, ["init", "-q", "-b", "main"]);
-must(box, project, ["project", "init", "--name", "styled", "--no-connect"]);
-must(box, project, ["state", "add", "T4-4 the highlighted phrase", "--exposure", "search"]);
+mustSpawn(box, project, ["project", "init", "--name", "styled", "--no-connect"]);
+mustSpawn(box, project, ["state", "add", "T4-4 the highlighted phrase", "--exposure", "search"]);
 
 test("T4.4: the matched substring is highlighted when the answer is styled", async () =>
 {
