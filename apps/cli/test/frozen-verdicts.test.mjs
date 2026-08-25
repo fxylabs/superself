@@ -75,7 +75,11 @@ function project(world, slug, banded)
     {
         git(world.box, dir, ["checkout", "-q", "-b", "feature"]);
         commit(world.box, dir, "b.txt", "branch work");
-        must(world.box, dir, ["report", work, "did the branch work"]);
+        // The friction sentence is what keeps this fixture's subject the
+        // frozen verdicts (#380): a project whose only report records none
+        // earns a health line of its own, and these cells count the signals
+        // an unjudgeable band raises, not that one.
+        must(world.box, dir, ["report", work, "did the branch work", "--friction", "예상대로"]);
     }
     return { dir, slug, work };
 }
