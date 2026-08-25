@@ -40,7 +40,7 @@ import {
     WaitingRow,
     workspacePointer
 } from "./pretty.js";
-import { archivedScopeSignals, artifactSignals, askedRepositories, verdictSignals } from "./reachability.js";
+import { archivedScopeSignals, artifactSignals, askedRepositories, frozenVerdictSignals, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 import { renderWorkDetails } from "./fold.js";
@@ -79,6 +79,7 @@ function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
 function withVerdicts(storeDir: string, model: ProjectModel): ProjectModel
 {
     model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, model.slug), askedRepositories(storeDir, model.slug)),
+        ...frozenVerdictSignals(storeDir, model.slug, model.unshipped.length),
         ...artifactSignals(storeDir, model.works),
         ...archivedScopeSignals(storeDir, model.slug, model.entities));
     return model;
