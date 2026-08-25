@@ -572,6 +572,7 @@ const CONVENTION_OPTIONS = {
 const GOAL_OPTIONS = {
     supersedes: { type: "string", multiple: true },
     why: { type: "string" },
+    workspace: { type: "boolean" },
     demote: { type: "string", multiple: true }
 } as const;
 
@@ -857,7 +858,7 @@ export const COMMANDS: Command[] = [
     {
         name: "goal",
         usage: [
-            { syntax: 'goal add "<text>" [--supersedes <id>]', description: ["record a long-term goal, replacing ones it corrects"], verbs: ["add"] },
+            { syntax: 'goal add "<text>" [--supersedes <id>] [--workspace]', description: ["record a long-term goal, replacing ones it corrects"], verbs: ["add"] },
             { syntax: 'goal retract <id> --why "<reason>"', description: ["withdraw a goal with nothing replacing it"], verbs: ["retract"] }
         ],
         detail: [
@@ -865,12 +866,18 @@ export const COMMANDS: Command[] = [
             "",
             "  --supersedes <id>     the goal this one replaces, repeatable",
             "  --why <text>          why a withdrawn goal no longer holds; every withdrawal carries one",
+            "  --workspace           record at workspace scope: the goal renders in every",
+            "                        project's context; its record stays in this project's store",
             "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
             "                        moving one tier down (full → index, index → search); repeatable",
             "",
             "a project holds as many goals as it means to: recording one displaces",
             "nothing. Replacing a goal is stated with --supersedes, never implied by",
-            "stating another."
+            "stating another.",
+            "",
+            "a workspace goal is the company's own direction: it is read from inside",
+            "every registered project, and it counts against the workspace retention",
+            "tier rather than any project's."
         ],
         node: branch({
             name: "goal",
@@ -880,7 +887,7 @@ export const COMMANDS: Command[] = [
             // under a spelling that no longer describes what happens.
             refusal: (verb) => verb === "set"
                 ? 'goal set is now `self goal add "<text>"` — the goal it replaces is named with --supersedes <id> rather than implied'
-                : 'usage: self goal add "<text>" [--supersedes <id>] | retract <id> --why w',
+                : 'usage: self goal add "<text>" [--supersedes <id>] [--workspace] | retract <id> --why w',
             children: [
                 retiring(leaf("add", GOAL_OPTIONS, 1, goalAdd)),
                 retiring(leaf("retract", GOAL_OPTIONS, 1, goalRetract, { requires: [WHY_REQUIRED] }))
@@ -2212,14 +2219,20 @@ function presetEntityEvent(ctx: ProjectContext, models: ProjectModel[], verb: st
 
 function goalAdd({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): void
 {
-    const text = requireText(positionals[0], 'goal add "<text>" [--supersedes <id>]');
+    const text = requireText(positionals[0], 'goal add "<text>" [--supersedes <id>] [--workspace]');
     if (values.why !== undefined)
     {
         throw new CliError("goal add takes no --why — the goal is its own statement; --why records why a goal was withdrawn");
     }
     const ctx = requireProject(process.cwd());
     const models = workspaceModels(ctx.storeDir, ctx.project);
-    const model = models[0];
+    presetEntityEvent(ctx, models, "goal", text, goalExtra(models[0], values), undefined, { demote: values.demote });
+}
+
+// Everything the flags say about a goal beyond its text: what it replaces, and
+// where it renders.
+function goalExtra(model: ProjectModel, values: CommandInput<typeof GOAL_OPTIONS>["values"]): Record<string, unknown>
+{
     const extra: Record<string, unknown> = {};
     // What a new goal replaces is named, never inferred from what happens to
     // be standing. A project may aim at several outcomes at once, so stating
@@ -2232,7 +2245,13 @@ function goalAdd({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): vo
             return { type: "supersedes", target: requireGoal(model, prefix).id };
         });
     }
-    presetEntityEvent(ctx, models, "goal", text, extra, undefined, { demote: values.demote });
+    if (values.workspace === true)
+    {
+        // A placement value, not a read scope (#207 D6, #287): the goal renders
+        // in every project's context while its record stays in this store.
+        extra.scope = "workspace";
+    }
+    return extra;
 }
 
 function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>): void
@@ -2240,6 +2259,10 @@ function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>)
     if (values.supersedes !== undefined)
     {
         throw new CliError('goal retract takes no --supersedes — to replace a goal, run `goal add "<text>" --supersedes <id>`');
+    }
+    if (values.workspace === true)
+    {
+        throw new CliError("goal retract takes no --workspace — a goal is withdrawn wherever it renders; --workspace states a new goal's scope");
     }
     refuseWithdrawalDemote("goal retract", values.demote);
     const ctx = requireProject(process.cwd());

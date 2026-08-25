@@ -1183,6 +1183,22 @@ export function otherGoals(model: ProjectModel): string
     return rest > 0 ? ` (+${rest} more)` : "";
 }
 
+// The goals this project holds for itself: the workspace-scoped ones (#287)
+// are the whole workspace's, and the surface that states them once for the
+// workspace reads them from here so a project's row does not say them again.
+export function projectScopedGoals(model: ProjectModel): EntityState[]
+{
+    return liveGoals(model).filter((entity) => entity.scope !== "workspace");
+}
+
+// The same one-line pair as `model.goal` + `otherGoals`, over one project's
+// own goals: the first, and how many of its own stand behind it.
+export function projectGoalLine(model: ProjectModel): string
+{
+    const goals = projectScopedGoals(model);
+    return (goals[0]?.text ?? "(no goal)") + (goals.length > 1 ? ` (+${goals.length - 1} more)` : "");
+}
+
 // `model.goal` is one string that predates goals being ordinary records, and
 // the surfaces with a single slot for it still read it. The newest live goal
 // answers there; `liveGoals` answers everywhere with room for the rest.

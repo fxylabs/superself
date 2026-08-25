@@ -154,12 +154,13 @@ usage: self <command>
   remote add <url>                           connect the workspace store to a git remote
   sync                                       pull, refold, and push the workspace store
   clone <url> [dir]                          clone a workspace store onto a new machine
-  goal add "<text>" [--supersedes <id>]      record a long-term goal, replacing ones it corrects
+  goal add "<text>" [--supersedes <id>] [--workspace]
+                                             record a long-term goal, replacing ones it corrects
   goal retract <id> --why "<reason>"         withdraw a goal with nothing replacing it
   objective [--project <slug>] [--workspace]
                                              list objectives and their milestones
                                              (--project reads another project, --workspace every registered one)
-  objective add "<outcome>" [--horizon week|month|quarter|year] [--target d]
+  objective add "<outcome>" [--horizon week|month|quarter|year] [--target d] [--workspace]
                                              create a time-boxed objective under the goal
   objective show <id> [--project <slug>] | confirm <id>
                                              print an objective, or confirm a proposed one

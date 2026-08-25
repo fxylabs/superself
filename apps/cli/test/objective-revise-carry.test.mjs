@@ -397,3 +397,21 @@ test("cell 29: a legacy milestone carries to the successor like a native one", a
     assert.match(run(["objective", "show", "o-lega1"]), new RegExp(`^- Milestones carried to ${successor}: m-lega1$`, "m"));
     assert.ok(run(["objective", "show", successor]).includes("## Milestone m-lega1"));
 });
+
+// #287 cell A9. A revision keeps the predecessor's placement — `carriedPlacement`
+// already carried scope, exposure and priority — so a workspace objective's
+// successor is workspace-scoped with nothing deciding it a second time. The
+// cell lives here because it is a property of revise, not of the new flag.
+test("cell A9 (#287): revising a workspace objective carries workspace scope to the successor", async () =>
+{
+    const box = machine();
+    const { demo } = demoWorkspace(box);
+    const run = (args) => must(box, demo, args).out;
+    const objective = objectiveIdIn(run(["objective", "add", "the company reaches a hundred teams", "--workspace"]));
+    const printed = (await approvedIn(box, demo,
+        ["objective", "revise", objective, "--why", "restated", "--outcome", "the company reaches two hundred teams"],
+        objective)).printed;
+    const successor = objectiveIdIn(printed);
+    assert.notEqual(successor, objective);
+    assert.match(run(["state", "show", successor]), /placement: workspace · full · priority 10/);
+});

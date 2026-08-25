@@ -23,6 +23,7 @@ import {
     foreignToward,
     LogPage,
     otherGoals,
+    projectGoalLine,
     ProjectModel,
     RecoveryTarget,
     ScopableVerb,
@@ -868,13 +869,18 @@ const PROJECT_COLUMNS: Column[] = [
     { header: "GOAL", min: 12, flex: true }
 ];
 
-export function renderWorkspace(models: ProjectModel[]): string[]
+// One table for two commands. `self context` at the workspace root hands over
+// the direction block its plain render says, so both forms state the same
+// facts; `self status` hands over nothing and prints the table it always did
+// (#287). The GOAL column follows the same rule as the plain project line: a
+// workspace goal is said by the block, so a row states its project's own.
+export function renderWorkspace(models: ProjectModel[], direction: string[] = []): string[]
 {
     const rows = models.map((model): Row => ({
         cells: [
             { text: model.slug, paint: bold },
             { text: workCounts(model) },
-            { text: (model.goal ?? "(no goal)") + otherGoals(model) }
+            { text: direction.length === 0 ? (model.goal ?? "(no goal)") + otherGoals(model) : projectGoalLine(model) }
         ],
         notes: model.health.length === 0
             ? []
@@ -882,9 +888,9 @@ export function renderWorkspace(models: ProjectModel[]): string[]
     }));
     if (rows.length === 0)
     {
-        return [dim("  none")];
+        return [...direction, dim("  none")];
     }
-    return tableLines(PROJECT_COLUMNS, rows, columns());
+    return [...direction, ...tableLines(PROJECT_COLUMNS, rows, columns())];
 }
 
 /* ── timestamps a person reads ─────────────────────────────────────── */

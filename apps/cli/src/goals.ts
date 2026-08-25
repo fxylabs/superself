@@ -2,7 +2,17 @@ import { presetRow } from "./aliases.js";
 import { required, Requirement, requireOptions } from "./args.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
-import { awaitsReview, EntityState, Exposure, isWorkProposal, requireSupersedeKind, rendersIn, supersedeSpelling } from "./entities.js";
+import {
+    awaitsReview,
+    EntityState,
+    Exposure,
+    isCurrent,
+    isWorkProposal,
+    requireSupersedeKind,
+    rendersIn,
+    scopeTarget,
+    supersedeSpelling
+} from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
@@ -83,6 +93,10 @@ const OBJECTIVE_ADD_OPTIONS = {
     stop: { type: "string", multiple: true },
     priority: { type: "string" },
     proposed: { type: "boolean" },
+    // A placement value, not a read scope (#287): `--project` on a write is
+    // still refused by the option table, and this one states where the new
+    // objective renders rather than which project is being read.
+    workspace: { type: "boolean" },
     supersedes: { type: "string", multiple: true },
     demote: { type: "string", multiple: true }
 } as const;
@@ -135,7 +149,7 @@ export const OBJECTIVE_COMMAND: Command = {
             verbs: ["", "list"]
         },
         {
-            syntax: 'objective add "<outcome>" [--horizon week|month|quarter|year] [--target d]',
+            syntax: 'objective add "<outcome>" [--horizon week|month|quarter|year] [--target d] [--workspace]',
             description: ["create a time-boxed objective under the goal"],
             verbs: ["add"]
         },
@@ -166,13 +180,18 @@ export const OBJECTIVE_COMMAND: Command = {
         "",
         "list and show read: without a scope flag they answer for the project this",
         "directory belongs to. add, confirm, revise and close write, so they take no",
-        "scope flag at all and record into the project they run in.",
+        "read scope flag — --project is refused on a write — and record into the",
+        "project they run in. --workspace on add is not a read scope: it states",
+        "where the new objective renders, and its record still lands in this",
+        "project's store.",
         "",
         "an objective answers with linked work from every registered project: a unit",
         "another project linked to it lists with that project's slug beside it.",
         "",
         "  --project <slug>      read this registered project instead of this directory's",
-        "  --workspace           list every registered project's objectives (list only)",
+        "  --workspace           on list, every registered project's objectives; on add,",
+        "                        record at workspace scope: the objective renders in every",
+        "                        project's context, above that project's own objectives",
         "  --horizon <span>      week, month, quarter, or year",
         "  --target <date>       the date the outcome is judged on",
         "  --success <text>      what reached looks like",
@@ -216,11 +235,18 @@ function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>)
     const models = workspaceModels(scopes[0].storeDir, scopes[0].project);
     if (values.workspace !== true)
     {
-        return [objectiveListing(models[0], contributorsTo(scopes[0].project, models))];
+        // The viewer is the project being read — this directory's, or the one
+        // `--project <slug>` named — never the directory the command ran in.
+        const viewer = scopes[0].project;
+        return [objectiveListing(models[0], contributorsTo(viewer, models),
+            foreignRows(foreignWorkspaceObjectives(models, viewer), models))];
     }
     // One block per project, each stating its own size: the workspace form is
     // that many listings printed together, not one listing of everything, and a
     // reader asking how many one project has is answered under its own heading.
+    // Nothing is merged into these: every workspace objective already appears
+    // under the project whose log owns it, and merging would print it again in
+    // every other block.
     return scopes.map((scope, index) =>
     {
         const model = models.find((item) => item.slug === scope.project) as ProjectModel;
@@ -230,19 +256,74 @@ function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>)
     });
 }
 
+// An objective and the fold that owns it, which is not always the fold doing
+// the reading: a workspace-scoped objective renders in every project, and its
+// linked work and contributors are counted against the log that owns it.
+interface OwnedObjective
+{
+    slug: string;
+    model: ProjectModel;
+    objective: ObjectiveState;
+}
+
+// Every other project's live workspace-scoped objectives (#287), owner first
+// by slug and, within one owner, in that project's own listing order — so the
+// rows above a project's own objectives are in one order on every machine.
+function foreignWorkspaceObjectives(models: ProjectModel[], viewer: string): OwnedObjective[]
+{
+    return [...models].filter((model) => model.slug !== viewer)
+        .sort((left, right) => left.slug.localeCompare(right.slug))
+        .flatMap((model) => openObjectives(model.goals)
+            .filter((objective) => isWorkspaceScoped(model, objective.id))
+            .map((objective) => ({ slug: model.slug, model, objective })));
+}
+
+// `ObjectiveState` carries a priority and no placement, so where a record
+// renders is read from the entity of the same id and nowhere else.
+function isWorkspaceScoped(model: ProjectModel, id: string): boolean
+{
+    return model.entities.some((entity) => entity.id === id && entity.source === "objective"
+        && entity.status === "confirmed" && isCurrent(entity)
+        && scopeTarget(entity, model.slug) === "workspace");
+}
+
+// Each row is built from the owning fold, never the viewer's: `objectiveRow`
+// counts the objective's own open units, and counting them in a log that does
+// not hold them would report zero for every workspace objective.
+function foreignRows(foreign: OwnedObjective[], models: ProjectModel[]): string[]
+{
+    return foreign.map((owned) =>
+        `${objectiveRow(owned.model, owned.objective, contributorsTo(owned.slug, models))} (${owned.slug})`);
+}
+
 function objectiveShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
     const scope = readScopes(process.cwd(), values)[0];
     const models = workspaceModels(scope.storeDir, scope.project);
-    const objective = requireObjective(models[0], positionals[0]);
+    const owned = locateObjective(models, scope.project, positionals[0]);
     const linked = [
-        ...openLocalWork(models[0], objective),
-        ...contributorsTo(scope.project, models).get(objective.id) ?? []
+        ...openLocalWork(owned.model, owned.objective),
+        ...contributorsTo(owned.slug, models).get(owned.objective.id) ?? []
     ];
     return [{
         kind: "document",
-        plain: () => markdownHeadings(renderObjectiveBody(objective, linked).trimEnd()).split("\n")
+        plain: () => markdownHeadings(renderObjectiveBody(owned.objective, linked).trimEnd()).split("\n")
     }];
+}
+
+// The objective this read is about, with the fold that owns it: the viewer's
+// own first, then the workspace-scoped ones rendering here from another log.
+// An id neither answers to gets the refusal it always got, so a prefix reads
+// as unknown here exactly as it does locally.
+function locateObjective(models: ProjectModel[], viewer: string, id: string | undefined): OwnedObjective
+{
+    const local = models[0].goals.objectives.find((item) => item.id === id);
+    if (local !== undefined)
+    {
+        return { slug: viewer, model: models[0], objective: local };
+    }
+    return foreignWorkspaceObjectives(models, viewer).find((owned) => owned.objective.id === id)
+        ?? { slug: viewer, model: models[0], objective: requireObjective(models[0], id) };
 }
 
 // The read-time merge (#244): every other project's units that state a
@@ -294,11 +375,15 @@ function scopeModel(scope: ProjectScope): ProjectModel
 
 // The same cap gate `state add` passes (#240 R1): the tier this record
 // enters is judged by the one shared check, `--demote` and the supersession
-// credit included. An objective or milestone is born at project scope.
+// credit included. The tier is read off the payload's own scope, so a
+// workspace objective (#287) is weighed against the workspace tier and a
+// milestone — always project-scoped — against the project's, exactly as
+// `presetDemotions` decides it for goals and conventions.
 function presetGate(ctx: ProjectContext, models: ProjectModel[], usage: string, exposure: Exposure,
     values: { demote?: string[]; proposed?: boolean }, outcome: string, payload: Record<string, unknown>): Placed[]
 {
-    return admittingDemotions(ctx, models, values, tierOf(ctx.project, exposure),
+    const target = payload.scope === "workspace" ? "workspace" : ctx.project;
+    return admittingDemotions(ctx, models, values, tierOf(target, exposure),
         usage, countCharacters(outcome), supersedeTargets(payload));
 }
 
@@ -318,7 +403,7 @@ function objectiveAddPayload(id: string, outcome: string, row: ReturnType<typeof
         }),
         criteria: [],
         exposure: row.exposure,
-        scope: "project",
+        scope: values.workspace === true ? "workspace" : "project",
         priority: row.priority,
         horizon: values.horizon,
         target: values.target === undefined ? undefined : validDate(values.target),
@@ -661,7 +746,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
     const models = workspaceModels(ctx.storeDir, ctx.project);
     const model = models[0];
     const outcome = requireText(positionals[0], 'milestone add "<outcome>" --objective <id> --exit "<criterion>"');
-    const objective = requireObjective(model, required(values.objective));
+    const objective = requireOwnObjective(models, ctx.project, required(values.objective));
     const id = milestoneId();
     const row = presetRow(ctx.storeDir, "milestone");
     const links: Record<string, unknown>[] = [{ type: "member-of", target: objective.id }];
@@ -679,6 +764,22 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         ...demotionEvents(demotions, id, false)],
         `${id} ${outcome}`);
     return [{ kind: "receipt", text: id }];
+}
+
+// A checkpoint is the objective owner's own plan, and it renders in that
+// project alone — a milestone is project-scoped even under a workspace
+// objective. So an objective another project owns is refused by name rather
+// than called unknown: it renders here, which is exactly why it is easy to
+// name here (#287).
+function requireOwnObjective(models: ProjectModel[], viewer: string, id: string): ObjectiveState
+{
+    const foreign = foreignWorkspaceObjectives(models, viewer).find((owned) => owned.objective.id === id);
+    if (foreign !== undefined)
+    {
+        throw new CliError(`${id} is ${foreign.slug}'s objective — a checkpoint belongs to the project whose log owns `
+            + `the objective, so run \`self milestone add\` from ${foreign.slug}`);
+    }
+    return requireObjective(models[0], id);
 }
 
 function refuseMilestoneRevise(milestone: MilestoneState, values: CommandInput<typeof MILESTONE_REVISE_OPTIONS>["values"]): void
@@ -1319,20 +1420,23 @@ function carriedLinks(model: ProjectModel, work: string, superseded?: WorkState)
 
 // The size is the objectives, not the lines: a checkpoint renders indented
 // under the objective it belongs to, and counting those rows would tell a
-// reader they have more outcomes than they have.
-function objectiveListing(model: ProjectModel, contributors: Map<string, string[]>): ListingBlock
+// reader they have more outcomes than they have. The workspace objectives
+// another project owns (#287) lead the rows and count with them — they are
+// outcomes this project is read under, which is what the size is about — and
+// their checkpoints stay home, because a milestone is project-scoped.
+function objectiveListing(model: ProjectModel, contributors: Map<string, string[]>, leading: string[] = []): ListingBlock
 {
     const objectives = openObjectives(model.goals);
     return {
         kind: "listing",
-        rows: objectives.length === 0
+        rows: objectives.length === 0 && leading.length === 0
             ? ['no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`']
-            : objectives.flatMap((objective) => [
+            : [...leading, ...objectives.flatMap((objective) => [
                 objectiveRow(model, objective, contributors),
                 ...objective.milestones.map((milestone) =>
                     `  ${milestone.id}  ${stateMark(milestone.state)}  ${milestone.outcome} — ${milestone.reason}`)
-            ]),
-        total: objectives.length,
+            ])],
+        total: objectives.length + leading.length,
         noun: "open objective"
     };
 }
