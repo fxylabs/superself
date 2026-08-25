@@ -76,7 +76,8 @@ still has to drive every action.
 Instruction files like `CLAUDE.md` and `AGENTS.md` are the right place for
 stable operating rules, and Superself writes into them rather than replacing
 them: `self connect` renders a managed block that teaches any terminal agent
-the protocol and the project's current conventions.
+the protocol, plus the conventions recorded with `--public`. Everything else
+a project records stays in the store, out of the tracked file.
 
 What an instruction file cannot hold is the state that changes with every
 session: which decisions are current and why, which work is open and who

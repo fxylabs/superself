@@ -94,7 +94,7 @@ $ self milestone   (in project, exit 0)
 no milestones — add one with `self milestone add "<outcome>" --objective <id> --exit "<criterion>"`
 
 $ self convention   (in project, exit 1)
-error: usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w
+error: usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] | drop <event-id> --why w
 
 $ self log   (in project, exit 0)
 <ts>  entity.confirmed  [<event-id>]  stage 1 lands the render gate and its pilot
@@ -229,7 +229,7 @@ usage: self <command>
                                              list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]
                                              find an artifact, or open it with the OS default app at a terminal
-  convention add "<text>" [--supersedes <event-id>] [--workspace]
+  convention add "<text>" [--supersedes <event-id>] [--workspace] [--public]
                                              record a rule, optionally replacing ones it corrects
   convention drop <event-id> --why "<reason>"
                                              retire a convention with nothing replacing it

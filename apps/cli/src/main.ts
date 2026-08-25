@@ -561,6 +561,7 @@ const CONVENTION_OPTIONS = {
     supersedes: { type: "string", multiple: true },
     why: { type: "string" },
     workspace: { type: "boolean" },
+    public: { type: "boolean" },
     demote: { type: "string", multiple: true }
 } as const;
 
@@ -1217,7 +1218,7 @@ export const COMMANDS: Command[] = [
     {
         name: "convention",
         usage: [
-            { syntax: 'convention add "<text>" [--supersedes <event-id>] [--workspace]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
+            { syntax: 'convention add "<text>" [--supersedes <event-id>] [--workspace] [--public]', description: ["record a rule, optionally replacing ones it corrects"], verbs: ["add"] },
             { syntax: 'convention drop <event-id> --why "<reason>"', description: ["retire a convention with nothing replacing it"], verbs: ["drop"] }
         ],
         detail: [
@@ -1227,16 +1228,22 @@ export const COMMANDS: Command[] = [
             "  --why <text>          why a dropped rule no longer holds; every withdrawal carries one",
             "  --workspace           record at workspace scope: the rule renders in every",
             "                        project's context; its record stays in this project's store",
+            "  --public              also render the rule into the managed AGENTS.md/CLAUDE.md block;",
+            "                        without it the rule stays in the store and never reaches a",
+            "                        tracked file",
             "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
             "                        moving one tier down (full → index, index → search); repeatable",
             "",
             "correcting a rule is one event, not a drop and a re-add: the replacement",
-            "carries the lineage, so the pair can never both read as current."
+            "carries the lineage, so the pair can never both read as current.",
+            "",
+            "visibility is stated once, at the moment the rule is recorded. To change it,",
+            "restate the rule with --supersedes and the visibility you want."
         ],
         node: branch({
             name: "convention",
             unnamed: "refuse",
-            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] | drop <event-id> --why w',
+            refusal: 'usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] | drop <event-id> --why w',
             children: [
                 retiring(leaf("add", CONVENTION_OPTIONS, 1, conventionAdd)),
                 retiring(leaf("drop", CONVENTION_OPTIONS, 1, conventionDrop, { requires: [WHY_REQUIRED] }))
@@ -1261,7 +1268,11 @@ export const COMMANDS: Command[] = [
             "write the managed block that tells any agent tool how this project",
             "records its state.",
             "",
-            "  --global    write into this machine's agent instruction files instead"
+            "  --global    write into this machine's agent instruction files instead",
+            "",
+            "the block carries the fixed protocol and the conventions recorded with",
+            "--public. Every other record stays in the store, where `self context`",
+            "renders it — these files are tracked, and the block is repository content."
         ],
         node: leaf("", { global: { type: "boolean" } }, 0, ({ values }) => cmdConnect(values.global === true))
     },
@@ -3273,14 +3284,20 @@ function reportingDir(ctx: ProjectContext): string
 
 function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
 {
-    const text = requireText(positionals[0], 'convention add "<text>" [--supersedes <event-id>] [--workspace]');
+    const text = requireText(positionals[0], 'convention add "<text>" [--supersedes <event-id>] [--workspace] [--public]');
     if (values.why !== undefined)
     {
         throw new CliError("convention add takes no --why — the rule is its own statement; --why records why a rule was withdrawn");
     }
     const ctx = requireProject(process.cwd());
     const models = workspaceModels(ctx.storeDir, ctx.project);
-    const model = models[0];
+    presetEntityEvent(ctx, models, "convention", text, conventionExtra(models[0], values), undefined, { demote: values.demote });
+}
+
+// Everything the flags say about a rule beyond its text: what it replaces,
+// where it renders, and whether it may reach a tracked file.
+function conventionExtra(model: ProjectModel, values: CommandInput<typeof CONVENTION_OPTIONS>["values"]): Record<string, unknown>
+{
     const extra: Record<string, unknown> = {};
     // A correction is one event: the replacement carries the lineage, so
     // the rule it replaces never has to be dropped and re-added — which is
@@ -3297,14 +3314,23 @@ function conventionAdd({ values, positionals }: CommandInput<typeof CONVENTION_O
         // every project's context while its record stays in this store.
         extra.scope = "workspace";
     }
-    presetEntityEvent(ctx, models, "convention", text, extra, undefined, { demote: values.demote });
+    if (values.public === true)
+    {
+        // The one thing that lets a rule reach AGENTS.md and CLAUDE.md, which
+        // are tracked (#276). Absent from the payload otherwise, so a rule
+        // recorded any other way — `state add`, an alias preset — is internal
+        // for good, which is the safe direction to be stuck in.
+        extra.visibility = "public";
+    }
+    return extra;
 }
 
-function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
+// The option table is declared once for the whole verb, so the subcommand that
+// does not take one of these says so by name rather than dropping the flag and
+// ignoring what the person meant by it. Each of the three states something
+// about a *new* rule, and a withdrawal states none of them.
+function refuseStatingFlags(values: CommandInput<typeof CONVENTION_OPTIONS>["values"]): void
 {
-    // Declared once for the whole verb, so the subcommand that does not
-    // take it says so rather than dropping one convention and ignoring the
-    // id the person expected it to replace.
     if (values.supersedes !== undefined)
     {
         throw new CliError('convention drop takes no --supersedes — to replace a rule, run `convention add "<text>" --supersedes <event-id>`');
@@ -3313,6 +3339,15 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     {
         throw new CliError("convention drop takes no --workspace — a rule is dropped wherever it renders; --workspace states a new rule's scope");
     }
+    if (values.public === true)
+    {
+        throw new CliError("convention drop takes no --public — a rule is dropped wherever it renders; --public states a new rule's visibility");
+    }
+}
+
+function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_OPTIONS>): void
+{
+    refuseStatingFlags(values);
     refuseWithdrawalDemote("convention drop", values.demote);
     const ctx = requireProject(process.cwd());
     const usage = 'convention drop <event-id> --why "<why the rule no longer holds>"';

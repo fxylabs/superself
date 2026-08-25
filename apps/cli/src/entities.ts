@@ -152,6 +152,12 @@ export interface EntityState
     // the verb can validate it. Decision `01kz96jysmppnk0npgz6gbr696` is the
     // design decision this key grows the vocabulary by.
     from?: string;
+    // Whether the record may reach the repository's tracked instruction files
+    // (#276). Absent means internal: the record lives in the store and the
+    // managed block never carries it. Stated once, at birth — a placement
+    // moves where a record renders and says nothing about whether it is
+    // public, so promoting one is a new statement, not a move.
+    visibility?: "public";
     why?: string;
     scope: EntityScope;
     priority?: number;
@@ -545,6 +551,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
         from: str(event.payload.from),
+        visibility: readVisibility(event.payload.visibility),
         why: str(event.payload.why),
         scope: readScopeValue(event.payload.scope),
         priority: readPriority(event.payload.priority),
@@ -1446,6 +1453,14 @@ function readScopeValue(value: unknown): EntityScope
 function readScopeOptional(value: unknown): EntityScope | undefined
 {
     return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+// The leak-facing default is "no": exactly `"public"` opens the record to the
+// tracked instruction files, and anything else — absent, a casing a
+// hand-append left, a value from a newer writer — reads as internal.
+function readVisibility(value: unknown): "public" | undefined
+{
+    return value === "public" ? "public" : undefined;
 }
 
 function readExposure(value: unknown): Exposure
