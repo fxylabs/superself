@@ -169,7 +169,12 @@ a cap charges is the length of the string a reader actually sees.
 |---|---|---|---|
 | 46 | a path, not an id | `convention add --artifact ./guide.md` | **two commits.** `writeThrough` folds and commits per call, so the registration and the record land separately, and a clone pulling between them sees an artifact nothing points at — the surplus of cell 17, never a loss |
 
-### The removal half (#239 C — counted by `artifact-retention.test.mjs`)
+### The removal half (#239 C — run by `artifact-prune.test.mjs`)
+
+These five landed with `artifact prune`. Rows 39 and 40 are the same state and
+the same outcome as cells 35 and 47 of
+[`239-artifact-prune.md`](239-artifact-prune.md), so one test answers for both
+rather than two drifting apart; its name carries both numbers.
 
 | # | State | Action | Expected |
 |---|---|---|---|

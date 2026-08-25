@@ -2,12 +2,16 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { branch, Command, leaf } from "./contract.js";
+import { isLive } from "./entities.js";
+import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { artifactId } from "./ids.js";
+import { buildModel, ProjectModel } from "./model.js";
 import { notice } from "./output.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { artifactMetas, ArtifactRecord, listArtifacts } from "./registry.js";
 import { digestFile } from "./repo.js";
-import { activeProjects, CliContext, ProjectContext, readRegistry, requireProject, requireWorkspace } from "./paths.js";
+import { activeProjects, CliContext, ProjectContext, readRegistry, refuseArchived, requireProject, requireWorkspace } from "./paths.js";
+import { bold, plural, red } from "./style.js";
 import { launchFile } from "./view.js";
 import { ArtifactMember, ArtifactMeta, artifactName, artifactSearchText, CliError, CommandOutput, encodedPath } from "./types.js";
 
@@ -647,10 +651,15 @@ function adoptStored(storeDir: string, slug: string, planned: PlannedArtifact[])
 // A bundle answers with its manifest hash, which is derived where something
 // needs it and never stored. The first record of a digest wins, so a path two
 // records already share is adopted as the one they share.
+//
+// A pruned record is out of the index (#239). Its bytes were removed on
+// purpose, and where another live record shares the path they are still there —
+// so the live record is the one a new artifact hangs off, and a fresh copy is
+// made when no live record is left.
 function storedIndex(storeDir: string, slug: string): Map<string, ArtifactRecord>
 {
     const index = new Map<string, ArtifactRecord>();
-    for (const record of listArtifacts(storeDir, [slug]))
+    for (const record of listArtifacts(storeDir, [slug]).filter((item) => item.pruned === undefined))
     {
         const digest = artifactDigest(record);
         if (digest !== undefined && digest !== "" && !index.has(digest))
@@ -1037,6 +1046,11 @@ export const ARTIFACT_COMMAND: Command = {
             syntax: "artifact search <query> | open <id> [--project slug]",
             description: ["find an artifact, or open it with the OS default app at a terminal"],
             verbs: ["search", "open"]
+        },
+        {
+            syntax: 'artifact prune <id> --why "<reason>" [--project slug]',
+            description: ["remove a stored artifact's bytes, keeping the record that names them"],
+            verbs: ["prune"]
         }
     ],
     detail: [
@@ -1052,8 +1066,17 @@ export const ARTIFACT_COMMAND: Command = {
         "`open` on it opens that bundle's entry. The same size bounds and the same",
         "reuse of bytes the project already stores apply to both verbs.",
         "",
+        "`prune` removes a stored artifact's bytes and keeps the record naming",
+        "them, so a done claim resting on that evidence stays auditable. It needs",
+        "a person at a terminal typing the artifact id back. Evidence is removable",
+        "once its work unit is done or retired, bytes a live record points at are",
+        "not, and bytes a design approval named never are. Where two artifacts",
+        "share one stored path, each is pruned by name and the last one reclaims",
+        "the bytes. Only the working tree shrinks: history is never rewritten.",
+        "",
         "  --entry <file>      which member of a directory a person opens",
-        "  --why <text>        what this file is for, kept beside the record",
+        "  --why <text>        what this file is for, kept beside the record;",
+        "                      on `prune`, why the bytes are being removed",
         "  --work <work-id>    only artifacts attached to this work unit",
         "  --project <slug>    only artifacts of this project, instead of the current one"
     ],
@@ -1061,7 +1084,7 @@ export const ARTIFACT_COMMAND: Command = {
         name: "artifact",
         unnamed: "refuse",
         refusal: "usage: self artifact add <path> [--entry <file>] [--why <text>] | list [--work id] [--project slug]"
-            + " | search <query> | open <id> [--project slug]",
+            + " | search <query> | open <id> [--project slug] | prune <id> --why \"<reason>\" [--project slug]",
         children: [
             leaf("add", { entry: { type: "string", multiple: true }, why: { type: "string" } }, 1,
                 ({ values, positionals }) => addArtifact(values, positionals[0])),
@@ -1069,7 +1092,14 @@ export const ARTIFACT_COMMAND: Command = {
                 artifactListing(scopedRecords(workspace(), values.work, values.project))),
             leaf("search", {}, 1, ({ positionals }) => searchArtifacts(workspace(), positionals[0])),
             leaf("open", { project: { type: "string" } }, 1, ({ values, positionals }) =>
-                openArtifact(workspace(), positionals[0], values.project))
+                openArtifact(workspace(), positionals[0], values.project)),
+            // Deliberately not marked `retiring`: a reviewed set (#312) is one
+            // person's answer over a batch of record withdrawals, and removing
+            // bytes is a different act with a different challenge — the id of
+            // the exact artifact whose bytes go.
+            leaf("prune", { why: { type: "string" }, project: { type: "string" } }, 1,
+                ({ values, positionals }) => pruneArtifact(values, positionals[0]),
+                { requires: [{ flags: ["why"], hint: "why these bytes are no longer worth storing" }] })
         ]
     })
 };
@@ -1125,8 +1155,13 @@ function artifactListing(records: ArtifactRecord[]): CommandOutput
         kind: "listing",
         rows: records.length === 0
             ? ["no artifacts — attach one with `self report <work-id> \"…\" --artifact <path>`"]
+            // A pruned record keeps its row. The listing answers what the log
+            // holds, and a record whose bytes were removed is still a record —
+            // dropping it would make the store look as though the evidence had
+            // never been attached.
             : records.map((record) =>
-                `${record.id}  ${record.ts.slice(0, 10)}  ${record.project}  ${record.work ?? "-"}  ${artifactName(record)}`),
+                `${record.id}  ${record.ts.slice(0, 10)}  ${record.project}  ${record.work ?? "-"}  `
+                + `${artifactName(record)}${record.pruned === undefined ? "" : " (pruned)"}`),
         total: records.length,
         noun: "artifact"
     }];
@@ -1196,6 +1231,24 @@ function within(root: string, file: string): boolean
     return step !== "" && step !== ".." && !step.startsWith(".." + sep) && !isAbsolute(step);
 }
 
+// Asked before the file is looked for, and whether or not it is there. Two
+// records can share one stored path, so pruning one leaves the bytes standing
+// for the other — and opening this record's bytes because another record still
+// needs them would make the removal a lie. The record is the truth.
+//
+// No `self sync` is offered. Syncing fetches what another machine holds, and
+// what another machine holds is the same removal.
+function refuseOpeningPruned(record: ArtifactRecord): void
+{
+    if (record.pruned === undefined)
+    {
+        return;
+    }
+    const why = record.pruned.why === undefined ? "" : `: ${record.pruned.why}`;
+    throw new CliError(`artifact ${record.id} was pruned on ${record.pruned.ts.slice(0, 10)}${why} — its bytes were `
+        + "removed from this store on purpose, and the record is kept so what was attached stays auditable");
+}
+
 function openArtifact(ctx: CliContext, id: string | undefined, project: string | undefined): CommandOutput
 {
     const wanted = id?.trim();
@@ -1207,6 +1260,7 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
         ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
         : [requireRegistered(ctx, project)];
     const record = requireArtifact(ctx.storeDir, slugs, wanted);
+    refuseOpeningPruned(record);
     const file = storedFile(ctx.storeDir, record);
     if (!existsSync(file))
     {
@@ -1219,4 +1273,292 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
             ? `opened ${label}`
             : `${file} — ${label} resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed`
     }];
+}
+
+/* ── removing bytes a person named (#239) ──────────────────────────── */
+
+// The one act in this module that cannot be undone, and its shape is what
+// makes it survivable.
+//
+// The record is never removed, only the bytes. `completionRefusal`
+// (`completion.ts`) reads a work unit's reports rather than the files they
+// name, so dropping the bytes takes nothing from a `done` claim already
+// closed — while dropping the record would take away the audit of it. Every
+// read answers `pruned` from the log from then on.
+//
+// Only the working tree is reclaimed. History is never rewritten (#239 R4), so
+// the copy the artifact left in `.git` stays there, and both the disclosure and
+// the receipt say so rather than letting a reader believe the store shrank by
+// what was removed.
+
+// The work states an artifact's evidence may be removed under: the outcome is
+// closed, either way it closes. Exactly the complement of the set
+// `artifactSignals` (`reachability.ts`) still verifies, which is why no
+// ordinary prune can produce a false missing-file signal.
+const REMOVABLE_WORK = ["done", "retired"];
+
+// Every reason this prune must not happen, answered before a byte is written
+// and before a person is asked. Pure: it reads the record and the fold and
+// nothing on the disk, so what refuses is auditable line by line.
+function pruneRefusal(target: ArtifactRecord, model: ProjectModel): string | null
+{
+    if (target.pruned !== undefined)
+    {
+        return `${target.id} was already pruned on ${target.pruned.ts.slice(0, 10)} — the record stays as it is, and a `
+            + "second prune has nothing of its own left to remove";
+    }
+    return sourceRefusal(target, model) ?? approvalRefusal(target, model) ?? referenceRefusal(target, model);
+}
+
+// What is leaning on these bytes depends on how they got here. Evidence
+// reported on a work unit, and evidence a review named, both answer to that
+// unit: while the outcome is open, the evidence is what an argument about it
+// would be made from. Bytes registered on their own answer to whichever records
+// point at them, which is the check below this one.
+function sourceRefusal(target: ArtifactRecord, model: ProjectModel): string | null
+{
+    if (target.source === "registered")
+    {
+        return null;
+    }
+    if (target.work === undefined)
+    {
+        return `${target.id} came in on a ${target.source} that names no work unit, so nothing in this log says `
+            + "whether the outcome it belongs to is finished — and bytes are removed only once that is settled";
+    }
+    const work = model.works.find((item) => item.id === target.work);
+    if (work === undefined)
+    {
+        return `${target.id} names work ${target.work}, which this project's fold does not carry — `
+            + "the unit it is evidence for cannot be read, so whether it is finished cannot be answered";
+    }
+    return REMOVABLE_WORK.includes(work.status) ? null
+        : `${target.id} is evidence on ${work.id}, which is ${work.status} — evidence is removable once the outcome `
+            + "is done or retired, and not while it is still being worked";
+}
+
+// A design approval names an exact hash: a person read those bytes and said
+// yes. Removing them would leave an approval whose subject nobody can read
+// again, so this refusal has no flag past it and no work state that lifts it.
+function approvalRefusal(target: ArtifactRecord, model: ProjectModel): string | null
+{
+    const digest = artifactDigest(target);
+    if (digest === undefined)
+    {
+        return null;
+    }
+    const approved = model.works.flatMap((work) =>
+        work.reports.filter((report) => report.approval?.digest === digest).map((report) => `${work.id} ${report.id}`));
+    return approved.length === 0 ? null
+        : `${target.id} holds the bytes a person approved as the design of ${approved[0]} — an approval names an exact `
+            + "hash, and nothing removes the bytes it names";
+}
+
+// A live record pointing at the artifact is a rule or a note whose whole
+// content is "read this file" (#238). Withdrawing that record first is what
+// makes the bytes spare, so the refusal names the record and the way through is
+// the record's own withdrawal rather than a flag here.
+function referenceRefusal(target: ArtifactRecord, model: ProjectModel): string | null
+{
+    const naming = model.entities.filter((item) => item.artifact === target.id && isLive(item)).map((item) => item.id);
+    if (naming.length === 0)
+    {
+        return null;
+    }
+    return `${target.id} is what ${naming.join(", ")} points at, and ${naming.length === 1 ? "that record is" : "those records are"}`
+        + " still live — retract or supersede it first, and these bytes become removable";
+}
+
+// Which live records name the stored path this one names. Two artifacts share a
+// path whenever the same bytes were attached twice (#372) and each keeps its own
+// id, so a prune removes the record a person named and the bytes go with the
+// last live record naming them. Derived from the log every time: a stored
+// counter could not stay true across a merge of two machines' logs.
+function liveSharers(records: ArtifactRecord[], target: ArtifactRecord): ArtifactRecord[]
+{
+    return records.filter((record) => record.path === target.path && record.pruned === undefined);
+}
+
+function pruneArtifact(values: { why?: string; project?: string }, id: string | undefined): CommandOutput
+{
+    const ctx = requireWorkspace(process.cwd());
+    const wanted = id?.trim();
+    if (wanted === undefined || wanted === "")
+    {
+        throw new CliError("usage: self artifact prune <id> --why \"<reason>\" [--project slug]");
+    }
+    const slugs = values.project === undefined
+        ? readRegistry(ctx.storeDir).map((entry) => entry.slug)
+        : [requireRegistered(ctx, values.project)];
+    const record = requireArtifact(ctx.storeDir, slugs, wanted);
+    // Asked before the gate rather than at the append: a person asked to
+    // confirm a removal the log would refuse anyway has been asked for nothing.
+    refuseArchived(ctx.storeDir, record.project, "nothing is removed from it");
+    const refusal = pruneRefusal(record, buildModel(ctx.storeDir, record.project, new Date()));
+    if (refusal !== null)
+    {
+        throw new CliError(refusal);
+    }
+    const sharers = liveSharers(listArtifacts(ctx.storeDir, [record.project]), record);
+    return recordPrune(ctx, record, sharers.length - 1, String(values.why));
+}
+
+// The write order, and it is not negotiable: append, then remove, then fold and
+// commit. `onRecorded` (`pipeline.ts`) fires between the appended line and the
+// fold, which is the one seam where the record is already durable and the bytes
+// are still there.
+//
+// Reversed — remove first, record second — a process dying in between loses
+// bytes nothing in the log accounts for. In this order the same death leaves
+// bytes nothing points at, which `self store size` reports as orphaned: surplus
+// rather than loss, and surplus is a state someone can still act on.
+function recordPrune(ctx: CliContext, record: ArtifactRecord, shared: number, why: string): CommandOutput
+{
+    const target = ownedRoot(ctx.storeDir, record);
+    if (target === null)
+    {
+        throw new CliError(`artifact ${record.id} is recorded at ${record.path}, which is not inside project `
+            + `"${record.project}"'s own artifacts — the event naming it cannot be trusted, and nothing was removed`);
+    }
+    const bytes = storedBytes(target);
+    const confirmation = requireHumanPrune(record, shared, bytes);
+    const failures: Error[] = [];
+    // `refs.work` is what the record's own declaring event named, carried
+    // forward: it is the true link — this is that unit's evidence — and it is
+    // also what makes the fold see the removal at all, because a unit projected
+    // from an entity exists only after the first pass and `model.ts`
+    // `replayDeferred` replays the lines naming a unit onto it.
+    const refs = record.work === undefined ? { artifacts: [record.id] } : { artifacts: [record.id], work: record.work };
+    const event = makeEvent(record.project, "artifact.pruned",
+        prunePayload(record, why, shared === 0, confirmation), refs, true);
+    recordEvent(ctx, event, `${record.id} ${artifactName(record)} pruned`,
+        () => { if (shared === 0) { removeBytesOf(target, failures); } });
+    return pruneReceipt(record, shared, bytes, failures[0]);
+}
+
+function prunePayload(record: ArtifactRecord, why: string, bytesRemoved: boolean,
+    confirmation: HumanConfirmation): Record<string, unknown>
+{
+    // `bytesRemoved` is what makes the log answerable on its own: which prune
+    // actually reclaimed a path, read back beside what `store size` reports as
+    // orphaned, without anyone having to replay the sharing arithmetic.
+    const payload: Record<string, unknown> = { artifact: record.id, why, bytesRemoved, confirmation };
+    const digest = artifactDigest(record);
+    if (digest !== undefined)
+    {
+        payload.digest = digest;
+    }
+    return payload;
+}
+
+// Runs inside `onRecorded`, and never throws. `writeThrough` (`pipeline.ts`)
+// does not wrap the callback, so a throw here would skip the fold and the
+// commit and leave the appended line uncommitted — a worse outcome than bytes
+// outliving their record, and the one this whole order exists to avoid. The
+// failure is carried back out instead, and said in the receipt.
+function removeBytesOf(target: string, failures: Error[]): void
+{
+    const failure = capture(() => rmSync(target, { recursive: true, force: true }));
+    if (failure !== null)
+    {
+        failures.push(failure);
+    }
+}
+
+// What this prune is allowed to remove: a path inside the owning project's own
+// artifacts, and nowhere else. Narrower than `storedRoot`, which every read
+// goes through, and narrower on purpose — a read of another project's bytes
+// shows the wrong file, while a delete of them is gone. A log travels between
+// machines through a shared remote, so a line naming `artifacts/<other>/…` is
+// a line this command must refuse rather than follow.
+function ownedRoot(storeDir: string, record: ArtifactRecord): string | null
+{
+    const root = resolve(storeDir, record.path);
+    return within(artifactDir(storeDir, record.project), root) ? root : null;
+}
+
+// What removing this record would reclaim, counted before anything is removed
+// so a person reads it while the decision is still open. Regular files only and
+// no link followed, which is the rule `store size` counts under too.
+function storedBytes(path: string): number
+{
+    if (!existsSync(path))
+    {
+        return 0;
+    }
+    const info = lstatSync(path);
+    if (info.isFile())
+    {
+        return info.size;
+    }
+    return info.isDirectory()
+        ? readdirSync(path).reduce((sum, name) => sum + storedBytes(join(path, name)), 0)
+        : 0;
+}
+
+// The human gate, in the shape `retirement.ts` established for every act that
+// destroys something: the disclosure is rendered once and ends two ways — a
+// refusal where no person can answer, a challenge prompt where one can — so
+// what an agent reads and what a person reads cannot drift apart.
+//
+// The challenge is the artifact's own id, so what a person types back is the
+// exact record being removed. One id is all one answer covers, which is why a
+// shared path is pruned one record at a time.
+function requireHumanPrune(record: ArtifactRecord, shared: number, bytes: number): HumanConfirmation
+{
+    const disclosure = pruneDisclosure(record, shared, bytes).join("\n");
+    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    {
+        throw new CliError([`removing stored bytes is a person's call, and this process has no terminal to make it at — `
+            + "nothing was removed", "", disclosure, "", "  a person runs this in their own terminal:",
+        `    self artifact prune ${record.id} --why "…"`].join("\n"));
+    }
+    const confirmed = confirmHuman(
+        `${red(bold(`prune artifact ${record.id} ${artifactName(record)}? — nothing is removed until you confirm`))}\n\n${disclosure}`,
+        record.id,
+        `type ${bold(record.id)} to remove exactly these bytes`);
+    if ("code" in confirmed)
+    {
+        throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
+    }
+    return confirmed;
+}
+
+// What a person reads before answering: the record, what happens to the bytes,
+// and the two things people expect that are not true — that the record goes
+// with them, and that `.git` shrinks.
+function pruneDisclosure(record: ArtifactRecord, shared: number, bytes: number): string[]
+{
+    return [
+        `  ${record.id}  ${artifactName(record)}  ${record.source}  attached ${record.ts.slice(0, 10)}`,
+        ...(record.summary === "" ? [] : [`  ${record.summary.split("\n")[0]}`]),
+        `  stored at ${record.path} (${bytes} bytes)`,
+        shared === 0
+            ? "  those bytes are removed from the working tree"
+            : `  ${plural(shared, "other live record")} ${shared === 1 ? "shares" : "share"} those bytes, `
+                + "so nothing is reclaimed until the last of them is pruned",
+        "  the record itself is kept — what was attached stays auditable, and a done claim resting on it still holds",
+        "  history is never rewritten, so the copy this artifact left in .git stays there"
+    ];
+}
+
+function pruneReceipt(record: ArtifactRecord, shared: number, bytes: number, failure: Error | undefined): CommandOutput
+{
+    const lines = [`${record.id} ${artifactName(record)} pruned — the record is kept and its bytes are not`];
+    if (shared > 0)
+    {
+        lines.push(`${plural(shared, "other live record")} still ${shared === 1 ? "names" : "name"} ${record.path}, `
+            + "so no byte was reclaimed — the last live record naming them is the prune that reclaims them");
+    }
+    else if (failure !== undefined)
+    {
+        lines.push(`the record is pruned and ${record.path} could not be removed: ${failure.message} — `
+            + "`self store size` reports those bytes as orphaned until someone removes them");
+    }
+    else
+    {
+        lines.push(`${bytes} bytes reclaimed from the working tree; history is never rewritten, so what this artifact `
+            + "left in .git stays there");
+    }
+    return [{ kind: "receipt", text: lines.join("\n") }];
 }

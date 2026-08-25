@@ -314,9 +314,14 @@ function optionalReportRow(prefix: string, label: string, values: string[]): Han
     return values.length === 0 ? [] : [row(prefix, `${label}: ${values.join("; ")}`)];
 }
 
+// A pruned artifact keeps its row in the packet. The next session is told the
+// evidence was recorded and its bytes removed, which is a different thing from
+// evidence that was never there — and looking for the file would otherwise be
+// the first thing they did.
 function artifactLabel(artifact: ArtifactMeta): string
 {
-    return `${artifact.id} ${artifactName(artifact)}${artifact.digest === undefined ? "" : ` (${artifact.digest})`}`;
+    const digest = artifact.digest === undefined ? "" : ` (${artifact.digest})`;
+    return `${artifact.id} ${artifactName(artifact)}${digest}${artifact.pruned === undefined ? "" : " (pruned)"}`;
 }
 
 function approvalLabel(approval: { ts: string; digest?: string }): string

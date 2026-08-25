@@ -18,7 +18,7 @@ import {
 } from "./objectives.js";
 import { activeProjects, readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
 import { plural } from "./style.js";
-import { ArtifactMeta, SelfEvent } from "./types.js";
+import { ArtifactMeta, PrunedMark, SelfEvent } from "./types.js";
 
 const PROPOSAL_EXPIRY_DAYS = 14;
 const STALL_DAYS = 3;
@@ -783,7 +783,8 @@ const EXACT_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
     ["work.run-exited", applyProcess],
     ["goal.set", (model, event) => { model.goal = String(event.payload.text); }],
     ["report.added", applyReport],
-    ["report.confirmed", applyReportConfirmed]
+    ["report.confirmed", applyReportConfirmed],
+    ["artifact.pruned", applyArtifactPruned]
 ];
 
 const NAMESPACE_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
@@ -1580,7 +1581,10 @@ function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: S
 
 function attachedWorkOf(event: SelfEvent): string | undefined
 {
-    if (event.type.startsWith("report.") || event.type.startsWith("run."))
+    // `artifact.pruned` is deferred for the same reason a report is: it marks
+    // an artifact hanging off a unit, and in the first pass that unit is not
+    // projected yet (#239).
+    if (event.type.startsWith("report.") || event.type.startsWith("run.") || event.type === "artifact.pruned")
     {
         return event.refs?.work === undefined ? undefined : String(event.refs.work);
     }
@@ -1785,6 +1789,34 @@ function applyReportConfirmed(model: ProjectModel, event: SelfEvent): void
     work.lastEventTs = event.ts;
     const digest = event.payload.digest;
     report.approval = { ts: event.ts, digest: typeof digest === "string" ? digest : undefined };
+}
+
+// Bytes removed under a person's confirmation (#239). The record stays exactly
+// where it was — a `done` claim that rested on this evidence is still auditable,
+// and `completionRefusal` reads the report rather than the file — so the fold
+// marks it rather than dropping it, and every surface that renders an artifact
+// says the bytes are gone.
+//
+// The mark is placed by artifact id rather than by `refs.work`: one artifact
+// can be carried by a unit and by several of its reports, and the id finds
+// every copy of it in one pass. `refs.work` is what gets this event replayed
+// onto a unit projected from an entity — see `replayDeferred` — and nothing
+// else here reads it. Bytes registered on their own belong to no unit and are
+// marked in the registry alone, which is where they are read from.
+function applyArtifactPruned(model: ProjectModel, event: SelfEvent): void
+{
+    const id = String(event.payload.artifact ?? "");
+    const mark: PrunedMark = event.payload.why === undefined
+        ? { ts: event.ts }
+        : { ts: event.ts, why: String(event.payload.why) };
+    // Not a transition of the unit, so `lastEventTs` is left alone: what was
+    // removed is a file, and the unit's own history did not move.
+    for (const work of model.works)
+    {
+        [...work.artifacts, ...work.reports.flatMap((report) => report.artifacts)]
+            .filter((meta) => meta.id === id && meta.pruned === undefined)
+            .forEach((meta) => { meta.pruned = mark; });
+    }
 }
 
 // A report that recorded its evidence as typed was split when it was written,

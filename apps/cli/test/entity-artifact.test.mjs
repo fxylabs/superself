@@ -3,9 +3,9 @@
 // named by its cell number, asserting that cell's stated outcome. The table is
 // the review surface: a cell the table lacks is a path nothing proves.
 //
-// Cells 39-42 and 45 are the removal half and are counted by
-// artifact-retention.test.mjs when `artifact prune` lands (#239 C); the 41
-// cells here are this branch's whole gate.
+// Cells 39-42 and 45 are the removal half and landed with `artifact prune`
+// (#239 C): they are run by artifact-prune.test.mjs, two of them by tests whose
+// names carry both tables' numbers. The 41 cells here are this branch's own.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

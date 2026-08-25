@@ -340,6 +340,25 @@ self runbook resume E001
   same output without paying for it twice. The reuse stops at the project
   boundary, and the stored file is re-hashed before it is shared, so a record
   whose bytes this machine has not synced is never adopted.
+- `self artifact prune <id> --why "<reason>"` removes a stored artifact's
+  bytes, recording `artifact.pruned`. **The record is never removed**: it
+  keeps its row, marked `(pruned)`, so a `done` claim resting on that evidence
+  stays auditable, and `artifact open` refuses it by name rather than sending
+  anyone to `self sync` for a file that is not coming.
+- It needs a person at an interactive terminal typing the artifact id back. A
+  piped or scripted run is refused and handed the command to pass on.
+- What may be pruned depends on how the bytes got here. A report's or a
+  review's evidence is removable once its work unit is **done or retired**, and
+  not before; bytes a live record points at are refused until that record is
+  retracted or superseded; bytes a design approval named are refused outright,
+  with no flag past it.
+- Where two artifacts share one stored path, each is pruned by name and only
+  the last live record naming those bytes reclaims them. Until then the receipt
+  says so and the event records `bytesRemoved: false`.
+- Only the working tree shrinks. History is never rewritten, so what the
+  artifact left in `.git` stays there — and if the removal itself fails after
+  the event is recorded, the command still succeeds and `self store size`
+  reports those bytes as orphaned.
 - `report --design --implements <decision-id>` submits a design or scope
   proposal. It is refused unless every cited decision exists, still holds, and
   renders in the work unit's project, and the receipt prints each cited
@@ -453,7 +472,8 @@ The CLI writes one shared event grammar. Every asserted record uses the
 `entity.started`, `entity.blocked`, `entity.unblocked`, `entity.done`,
 `entity.retired`. Beside them, `report.added` records progress,
 `report.confirmed` records a person's approval of a design report,
-`artifact.registered` records bytes stored with no report behind them, and
+`artifact.registered` records bytes stored with no report behind them,
+`artifact.pruned` records bytes removed under a person's confirmation, and
 `work.run-started` / `work.run-exited` record process transitions. Event
 namespaces are owned; the current owners are listed in
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md#event-namespaces), and the
@@ -480,7 +500,9 @@ A report may carry:
 - on a design report, the decisions it implements and the approval bound to
   its artifact hash.
 
-Artifact metadata in the folded project state is `{id, name, path, digest?}`.
+Artifact metadata in the folded project state is `{id, name, path, digest?}`,
+with `pruned: {ts, why?}` added by the fold — never by the event — once
+`artifact.pruned` has named it.
 The declared artifact shape everywhere else is `{name, sha256, bytes}` —
 `name`, never `path`.
 

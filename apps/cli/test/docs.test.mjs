@@ -226,7 +226,10 @@ async function writeCurrentVocabulary(box, demo)
     must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
     must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
     writeFileSync(join(demo, "registered-guide.md"), "a guide no report is about\n");
-    must(box, demo, ["artifact", "add", "registered-guide.md"]);
+    const guide = must(box, demo, ["artifact", "add", "registered-guide.md"]).out.match(/\ba-[0-9a-z]{5}\b/)[0];
+    // Removing stored bytes is a person's call, so the last verb in the
+    // vocabulary is driven the way every other gated one above it is.
+    await approvedIn(box, demo, ["artifact", "prune", guide, "--why", "the guide is folded into the rule"], guide);
 }
 
 async function writtenVocabulary(box, ws, demo)

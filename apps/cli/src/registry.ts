@@ -10,7 +10,13 @@
 // cycle this tree has ever had; reading it out of here closes none, because
 // this module imports the log reader and the shared types and nothing else.
 import { readEvents } from "./logfile.js";
-import { ArtifactMeta } from "./types.js";
+import { ArtifactMeta, PrunedMark, SelfEvent } from "./types.js";
+
+// Which event put a record in the registry. What may remove its bytes turns on
+// it (#239): a report's evidence answers to the work unit it was reported on, a
+// review's to the unit the review named, and bytes registered on their own
+// answer to whichever records point at them.
+type ArtifactSource = "report" | "review" | "registered";
 
 export interface ArtifactRecord extends ArtifactMeta
 {
@@ -18,31 +24,67 @@ export interface ArtifactRecord extends ArtifactMeta
     work?: string;
     ts: string;
     summary: string;
+    source: ArtifactSource;
 }
 
 // What the log says this store holds. The store's own size is answered from it
 // — which stored paths a live record names is the difference between artifact
 // bytes and orphaned ones — and so is every artifact read.
+//
+// One pass over the log carries both halves: what was declared, and what was
+// later pruned. A removal is an event like any other, so a record's own reading
+// says it was pruned wherever the record is read.
 export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]
 {
     const records: ArtifactRecord[] = [];
     for (const slug of slugs)
     {
-        for (const event of readEvents(storeDir, slug))
+        const events = readEvents(storeDir, slug);
+        const pruned = prunedMarks(events);
+        for (const event of events)
         {
-            for (const meta of declaredArtifacts(event))
-            {
-                records.push({
-                    ...meta,
-                    project: slug,
-                    work: event.refs?.work,
-                    ts: event.ts,
-                    summary: summaryOf(event)
-                });
-            }
+            records.push(...declaredArtifacts(event)
+                .map((meta) => declaredRecord(meta, slug, event, pruned.get(meta.id))));
         }
     }
     return records;
+}
+
+function declaredRecord(meta: ArtifactMeta, slug: string, event: SelfEvent, pruned: PrunedMark | undefined): ArtifactRecord
+{
+    const record: ArtifactRecord = {
+        ...meta,
+        project: slug,
+        work: event.refs?.work,
+        ts: event.ts,
+        summary: summaryOf(event),
+        source: sourceOf(event)
+    };
+    if (pruned !== undefined)
+    {
+        record.pruned = pruned;
+    }
+    return record;
+}
+
+// The first removal of an id is the one that happened: a second `artifact
+// prune` on the same id is refused, so two marks reach here only from a log
+// edited by hand or written by another version, and the earlier one is what
+// every other reader already answered with.
+function prunedMarks(events: SelfEvent[]): Map<string, PrunedMark>
+{
+    const marks = new Map<string, PrunedMark>();
+    for (const event of events.filter((item) => item.type === "artifact.pruned"))
+    {
+        const id = String(event.payload.artifact ?? "");
+        if (id !== "" && !marks.has(id))
+        {
+            marks.set(id, event.payload.why === undefined
+                ? { ts: event.ts }
+                : { ts: event.ts, why: String(event.payload.why) });
+        }
+    }
+    return marks;
 }
 
 // The ids a record names, resolved against one project's own log. Nothing is
@@ -85,6 +127,18 @@ function declaredArtifacts(event: { type: string; payload: Record<string, unknow
         return [event.payload.artifact as ArtifactMeta];
     }
     return [];
+}
+
+// The same three doors, named on the record so a reader downstream does not
+// have to re-derive which one it came through. `artifact prune` is the reader:
+// what leans on an artifact's bytes is a different thing for each (#239).
+function sourceOf(event: { type: string }): ArtifactSource
+{
+    if (event.type === "review.received")
+    {
+        return "review";
+    }
+    return event.type === "artifact.registered" ? "registered" : "report";
 }
 
 function summaryOf(event: { type: string; payload: Record<string, unknown> }): string
