@@ -1,4 +1,4 @@
-import { EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
+import { artifactPointer, EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
 import { commonProtocolLines } from "./connect.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
@@ -41,7 +41,7 @@ import {
     WaitingRow,
     workspacePointer
 } from "./pretty.js";
-import { archivedScopeSignals, artifactSignals, askedRepositories, frozenVerdictSignals, verdictSignals } from "./reachability.js";
+import { archivedScopeSignals, artifactSignals, askedRepositories, entityArtifactSignals, frozenVerdictSignals, verdictSignals } from "./reachability.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 import { renderWorkDetails } from "./fold.js";
@@ -82,6 +82,7 @@ function withVerdicts(storeDir: string, model: ProjectModel): ProjectModel
     model.health.push(...verdictSignals(model.works, readVerdicts(storeDir, model.slug), askedRepositories(storeDir, model.slug)),
         ...frozenVerdictSignals(storeDir, model.slug, model.unshipped.length),
         ...artifactSignals(storeDir, model.works),
+        ...entityArtifactSignals(storeDir, model.slug, model.entities),
         ...archivedScopeSignals(storeDir, model.slug, model.entities));
     return model;
 }
@@ -264,7 +265,7 @@ function conventionRows(conventions: HandoffConvention[]): HandoffRow[]
 {
     return conventions.flatMap((convention) => [
         row(`CONVENTION ${convention.id}`, `recorded ${convention.ts}`),
-        row(`CONVENTION ${convention.id}`, convention.text)
+        row(`CONVENTION ${convention.id}`, `${convention.text}${artifactPointer(convention.artifact)}`)
     ]);
 }
 
@@ -511,7 +512,7 @@ function fullEntityRow(entity: EntityState): string
 {
     const target = entity.target === undefined ? "" : ` (target ${entity.target})`;
     const why = entity.why === undefined ? "" : ` — ${entity.why}`;
-    return `- ${entityLabel(entity)}${entity.text}${target}${why}`;
+    return `- ${entityLabel(entity)}${entity.text}${target}${why}${artifactPointer(entity.artifact)}`;
 }
 
 // One record on one line: its labels, its text and the reason it carries. The
@@ -521,7 +522,7 @@ function fullEntityRow(entity: EntityState): string
 export function recordLine(entity: EntityState): string
 {
     const why = entity.why === undefined ? "" : ` — ${entity.why}`;
-    return `${entityLabel(entity)}${oneLine(entity.text)}${oneLine(why)}`;
+    return `${entityLabel(entity)}${oneLine(entity.text)}${oneLine(why)}${artifactPointer(entity.artifact)}`;
 }
 
 function indexEntityRow(entity: EntityState): string
@@ -808,7 +809,8 @@ function snapshotContextModel(storeDir: string, models: ProjectModel[], model: P
     const works = models.flatMap((other) => scopedWorks(other, model.slug));
     return { ...model, works, health: [...model.health,
         ...verdictSignals(works, verdicts, askedRepositories(storeDir, model.slug)),
-        ...artifactSignals(storeDir, works), ...archivedScopeSignals(storeDir, model.slug, model.entities)] };
+        ...artifactSignals(storeDir, works), ...entityArtifactSignals(storeDir, model.slug, model.entities),
+        ...archivedScopeSignals(storeDir, model.slug, model.entities)] };
 }
 
 // Every other project's records that render here (#181 D2), over folds

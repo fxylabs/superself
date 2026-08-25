@@ -3,20 +3,13 @@ import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { branch, Command, leaf } from "./contract.js";
 import { artifactId } from "./ids.js";
-import { readEvents } from "./logfile.js";
 import { notice } from "./output.js";
+import { makeEvent, recordEvent } from "./pipeline.js";
+import { artifactMetas, ArtifactRecord, listArtifacts } from "./registry.js";
 import { digestFile } from "./repo.js";
-import { activeProjects, CliContext, readRegistry, requireWorkspace } from "./paths.js";
+import { activeProjects, CliContext, ProjectContext, readRegistry, requireProject, requireWorkspace } from "./paths.js";
 import { launchFile } from "./view.js";
 import { ArtifactMember, ArtifactMeta, artifactName, artifactSearchText, CliError, CommandOutput, encodedPath } from "./types.js";
-
-interface ArtifactRecord extends ArtifactMeta
-{
-    project: string;
-    work?: string;
-    ts: string;
-    summary: string;
-}
 
 // Bytes already in the store, waiting for the event that names them. Nothing
 // outside this module may keep them without writing that event.
@@ -929,54 +922,100 @@ function capture(action: () => void): Error | null
     }
 }
 
-// The derived registry: what the log says this store holds. Exported because
-// the store's own size is answered from it — which stored paths a live record
-// names is the difference between artifact bytes and orphaned ones.
-export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord[]
+/* ── registering bytes with no report behind them (#238) ───────────── */
+
+// The ingest path a report takes, with the report left out. Everything a
+// report's artifact gets — the size bounds, the bundle rules, the reuse of
+// bytes the project already stores — is the same two functions, so a
+// registration cannot drift into a second way of putting a file in the store.
+//
+// It records `artifact.registered`, which carries no `refs.work`: nothing here
+// is evidence of anything, and the completion gate reads a work unit's reports
+// alone, so registering a file never opens `work done`.
+function registerArtifact(ctx: ProjectContext, path: string, entries: string[] | undefined,
+    why: string | undefined): ArtifactMeta
 {
-    const records: ArtifactRecord[] = [];
-    for (const slug of slugs)
+    const staged = stageArtifacts(ctx.storeDir, ctx.project, [path], entries);
+    const meta = staged.artifacts[0];
+    const payload: Record<string, unknown> = { artifacts: staged.artifacts };
+    if (why !== undefined)
     {
-        for (const event of readEvents(storeDir, slug))
-        {
-            for (const meta of declaredArtifacts(event))
-            {
-                records.push({
-                    ...meta,
-                    project: slug,
-                    work: event.refs?.work,
-                    ts: event.ts,
-                    summary: summaryOf(event)
-                });
-            }
-        }
+        payload.why = why;
     }
-    return records;
+    const event = makeEvent(ctx.project, "artifact.registered", payload, { artifacts: [meta.id] });
+    commitStaged(staged, (recorded) => recordEvent(ctx, event, `${meta.id} ${meta.name}`, recorded));
+    return meta;
 }
 
-// Bytes reach the store through a report or through a review receipt, and the
-// registry is derived from whichever event named them: a review record that
-// only one surface could find would be a record nobody can audit.
-function declaredArtifacts(event: { type: string; payload: Record<string, unknown> }): ArtifactMeta[]
+function addArtifact(values: { entry?: string[]; why?: string }, path: string | undefined): CommandOutput
 {
-    if (event.type === "report.added" && Array.isArray(event.payload.artifacts))
+    const named = path?.trim();
+    if (named === undefined || named === "")
     {
-        return event.payload.artifacts as ArtifactMeta[];
+        throw new CliError("usage: self artifact add <path> [--entry <file>] [--why <text>]");
     }
-    if (event.type === "review.received" && event.payload.artifact !== undefined)
-    {
-        return [event.payload.artifact as ArtifactMeta];
-    }
-    return [];
+    const meta = registerArtifact(requireProject(process.cwd()), named, values.entry, values.why);
+    return [{ kind: "receipt", text: meta.id }];
 }
 
-function summaryOf(event: { type: string; payload: Record<string, unknown> }): string
+// Taken as repeatable for the reason `--entry` is: a record references one
+// artifact, and left as a single option the parser keeps the last value and
+// drops the first without a word, so a caller who meant two would be told
+// nothing at all.
+function requireOneArtifact(named: string[] | undefined): string | undefined
 {
-    if (event.type !== "review.received")
+    if (named !== undefined && named.length > 1)
     {
-        return String(event.payload.text ?? "");
+        throw new CliError(`--artifact names one artifact and was passed ${named.length} times — a record references one, `
+            + "so pass it once; attach a directory as a bundle when several files belong together");
     }
-    return `${event.payload.scope} review ${event.payload.verdict} for ${event.payload.changeSet}`;
+    return named?.[0];
+}
+
+// A minted artifact id, and nothing a path could be mistaken for: the shape is
+// `a-` and five characters, so a file actually named `a-notes` is read as the
+// path it is.
+const ARTIFACT_ID = /^a-[0-9abcdefghjkmnpqrstvwxyz]{5}$/;
+
+// What `--artifact` on a record verb resolves to: an id this project already
+// holds, or a path registered here and now.
+//
+// The registration happens **before** the record's own event, deliberately. A
+// process that dies between the two leaves an artifact nothing points at,
+// which `artifact list` shows and which nothing else depends on. The other
+// order leaves a record pointing at an artifact that was never stored, and
+// there is no way back from that.
+export function resolveArtifactRef(ctx: ProjectContext, named: string[] | undefined): string | undefined
+{
+    const value = requireOneArtifact(named)?.trim();
+    if (value === undefined)
+    {
+        return undefined;
+    }
+    // Refused rather than resolved: an empty value is a path that resolves to
+    // the directory the command ran in, and registering that would ingest a
+    // whole checkout on a typo.
+    if (value === "")
+    {
+        throw new CliError("--artifact names an artifact id or a path to register, and was passed an empty value");
+    }
+    return ARTIFACT_ID.test(value)
+        ? requireOwnArtifact(ctx, value)
+        : registerArtifact(ctx, value, undefined, undefined).id;
+}
+
+// An id is checked against this project's own log and no other's. Artifact
+// bytes live under `artifacts/<slug>/`, so a record naming another project's
+// id would make this project's event point into a directory it does not own —
+// and the health check that verifies the reference reads one project's fold.
+function requireOwnArtifact(ctx: ProjectContext, id: string): string
+{
+    if (!artifactMetas(ctx.storeDir, ctx.project, [id]).has(id))
+    {
+        throw new CliError(`unknown artifact "${id}" in project "${ctx.project}" — a record references an artifact this `
+            + `project stores; run \`self artifact list --project ${ctx.project}\` to see ids, or pass a path to register one`);
+    }
+    return id;
 }
 
 // The workspace is resolved only once the arguments check out, so a typo is
@@ -984,6 +1023,11 @@ function summaryOf(event: { type: string; payload: Record<string, unknown> }): s
 export const ARTIFACT_COMMAND: Command = {
     name: "artifact",
     usage: [
+        {
+            syntax: "artifact add <path> [--entry <file>] [--why <text>]",
+            description: ["store a file or directory with no report behind it"],
+            verbs: ["add"]
+        },
         {
             syntax: "artifact list [--work id] [--project slug]",
             description: ["list artifacts from the derived registry"],
@@ -996,21 +1040,31 @@ export const ARTIFACT_COMMAND: Command = {
         }
     ],
     detail: [
-        "browse the files reports have attached. Artifacts are ingested by",
-        "`self report --artifact`, never registered on their own. Without an",
-        "interactive terminal, `open` prints the resolved path and launches nothing.",
+        "browse the files reports have attached, and register files that stand on",
+        "their own. `self report --artifact` attaches evidence to a work unit;",
+        "`artifact add` stores a file no report is about — a guide a convention",
+        "points at with `--artifact`, say — and lists with `-` in the work column.",
+        "Registering a file is not evidence, so it never satisfies `work done`.",
+        "Without an interactive terminal, `open` prints the resolved path and",
+        "launches nothing.",
         "",
-        "a directory attached with `--artifact` is one artifact and lists as one",
-        "row, `dist/ (12 files)`; `open` on it opens that bundle's entry.",
+        "a directory is one artifact and lists as one row, `dist/ (12 files)`;",
+        "`open` on it opens that bundle's entry. The same size bounds and the same",
+        "reuse of bytes the project already stores apply to both verbs.",
         "",
+        "  --entry <file>      which member of a directory a person opens",
+        "  --why <text>        what this file is for, kept beside the record",
         "  --work <work-id>    only artifacts attached to this work unit",
         "  --project <slug>    only artifacts of this project, instead of the current one"
     ],
     node: branch({
         name: "artifact",
         unnamed: "refuse",
-        refusal: "usage: self artifact list [--work id] [--project slug] | search <query> | open <id> [--project slug]",
+        refusal: "usage: self artifact add <path> [--entry <file>] [--why <text>] | list [--work id] [--project slug]"
+            + " | search <query> | open <id> [--project slug]",
         children: [
+            leaf("add", { entry: { type: "string", multiple: true }, why: { type: "string" } }, 1,
+                ({ values, positionals }) => addArtifact(values, positionals[0])),
             leaf("list", { work: { type: "string" }, project: { type: "string" } }, 0, ({ values }) =>
                 artifactListing(scopedRecords(workspace(), values.work, values.project))),
             leaf("search", {}, 1, ({ positionals }) => searchArtifacts(workspace(), positionals[0])),

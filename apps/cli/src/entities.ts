@@ -141,9 +141,10 @@ export interface EntityState
     text: string;
     labels: string[];
     links: EntityLink[];
-    // Reserved metadata (#197 §2). The vocabulary is `target`, `criteria` and
-    // `from`, and grows only by design decision: the verb refuses anything
-    // else, and the fold ignores unknown keys a hand-appended line might carry.
+    // Reserved metadata (#197 §2). The vocabulary is `target`, `criteria`,
+    // `from` and `artifact`, and grows only by design decision: the verb
+    // refuses anything else, and the fold ignores unknown keys a hand-appended
+    // line might carry.
     target?: string;
     criteria: string[];
     // Which project this one came from, by slug (#75). A slug rather than a
@@ -152,6 +153,17 @@ export interface EntityState
     // the verb can validate it. Decision `01kz96jysmppnk0npgz6gbr696` is the
     // design decision this key grows the vocabulary by.
     from?: string;
+    // A registered artifact this record points at, by id (#238). One, never a
+    // list: an entity holds the short statement and the artifact holds the
+    // long document, and a list would make an entity an unbounded attachment
+    // surface. Not an `EntityLink`, whose vocabulary is edges between records,
+    // and not `target`, which is a deadline — a field that answered two
+    // questions would make every reader ask which one it is holding.
+    //
+    // The id alone, never the artifact's name: what a retention cap charges
+    // has to be the same number when the record is written and when it is
+    // read, and an id is seven characters forever while a name is not.
+    artifact?: string;
     // Whether the record may reach the repository's tracked instruction files
     // (#276). Absent means internal: the record lives in the store and the
     // managed block never carries it. Stated once, at birth — a placement
@@ -551,6 +563,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         target: str(event.payload.target),
         criteria: stringList(event.payload.criteria),
         from: str(event.payload.from),
+        artifact: str(event.payload.artifact),
         visibility: readVisibility(event.payload.visibility),
         why: str(event.payload.why),
         scope: readScopeValue(event.payload.scope),
@@ -1181,7 +1194,51 @@ export function occupiesTier(entity: EntityState, home: string, target: string, 
 export function tierCharacters(entities: EntityState[], home: string, target: string, exposure: Exposure): number
 {
     return entities.filter((item) => occupiesTier(item, home, target, exposure))
-        .reduce((sum, item) => sum + countCharacters(item.text), 0);
+        .reduce((sum, item) => sum + entityCharacters(item), 0);
+}
+
+/* ── what a record costs a retention tier (#238) ───────────────────── */
+
+// The fixed wording an artifact reference renders as, wrapped around the id.
+// A reference costs a record the pointer and never the document: the cap
+// answers "how much can context hold", and an artifact's bytes are not in the
+// render — a session opens one deliberately, when the record it hangs off
+// applies.
+const POINTER_BEFORE = " — see `self artifact open ";
+const POINTER_AFTER = "`";
+
+// What a record's reference renders as, or nothing when it has none. Every
+// surface that shows a record reads this, and so does the cost below, so the
+// number a cap charges is the length of the string a reader actually sees.
+export function artifactPointer(artifact: string | undefined): string
+{
+    return artifact === undefined ? "" : `${POINTER_BEFORE}${artifact}${POINTER_AFTER}`;
+}
+
+// What a record costs the tier it sits in, taken as a shape rather than as an
+// `EntityState`: three of the ten sites that count this are weighing a record
+// that does not exist yet, so there is no folded entity to hand over. An
+// `EntityState` satisfies it structurally, so the other seven pass the record
+// itself.
+interface CostedEntity
+{
+    text: string;
+    artifact?: string;
+}
+
+// The one window every cap sum goes through. Two answers to what a record
+// costs would let a write pass a check the confirm then fails, or the reverse.
+export function entityCharacters(costed: CostedEntity): number
+{
+    return countCharacters(costed.text) + countCharacters(artifactPointer(costed.artifact));
+}
+
+// The reference a payload carries, read back where the cost has to be counted
+// before the record exists. The three add-time sites all have the composed
+// payload in hand already, so none of them needs a wider signature.
+export function payloadArtifact(payload: Record<string, unknown>): string | undefined
+{
+    return typeof payload.artifact === "string" && payload.artifact !== "" ? payload.artifact : undefined;
 }
 
 // Which transitions are demotions: exposure moving toward less-rendered —

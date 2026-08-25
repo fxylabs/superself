@@ -23,7 +23,7 @@ prints them during the same run.
 | Workspace | `init [--lang <code>] [--agents]`, `workspace [<path>]`, `lang [<code>]`, `theme [<name>]`, `timezone [<zone>]`, `setup` |
 | Projects and state remotes | `project [--archived]`, `project init [--name <slug>] [--desc <text>] [--no-connect]`, `project link [slug] [path|--here] [--force]`, `project unlink [slug] <path|--here> [--force]`, `project from <parent-slug> --why "<reason>" [--supersedes <id>]`, `project archive <slug> --why "<reason>"`, `project restore <slug> [--why "<reason>"]`, `remote add <url>`, `sync`, `clone <url> [dir]` |
 | Outcomes | `goal add "<text>" [--supersedes <id>] [--workspace]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
-| Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace] [--public]`, `convention drop <event-id>` |
+| Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace] [--public] [--artifact <id\|path>]`, `convention drop <event-id>` |
 | Approving a reviewed set | `apply <file>` |
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
@@ -186,6 +186,15 @@ work, or a free-labeled entity — folds into one record kind with placement:
   `state place`, and the alias verbs into a tier: past a cap the verb refuses
   until `--demote <id>` names what frees the room, and every number in that
   refusal is a token count.
+- `state add --artifact <id|path>` and `convention add --artifact <id|path>`
+  point a record at a registered artifact — the guide a rule is too short to
+  state. One per record; a second `--artifact` is refused by name. Pass an
+  `a-` id this project already stores, or a path, which is registered first
+  and referenced second. Context renders the record's text followed by
+  `` — see `self artifact open <id>` ``, and **only that pointer counts against
+  the retention cap** — the artifact's own bytes never do, which is what lets
+  a one-line rule carry a twelve-thousand-character guide. Restating the rule
+  with `--supersedes` is how the reference is changed.
 - `tokens` prints what one character costs in tokens, and records a
   measurement that replaces the shipped estimate. The caps and the piped
   context budget both read through it.
@@ -233,6 +242,11 @@ work, or a free-labeled entity — folds into one record kind with placement:
 - `report --artifact <dir>` attaches a whole directory as one artifact — a
   bundle — instead of one `--artifact` per file. It lists as one row,
   `dist/ (12 files)`, and `artifact open` opens its entry.
+- `self artifact add <path> [--entry <file>] [--why <text>]` stores a file or
+  directory with no report behind it, recording `artifact.registered`. It
+  lists with `-` in the work column, obeys the same bounds and the same reuse
+  of bytes already stored, and is **not evidence**: registering a file never
+  satisfies `work done`.
 - The entry is `--entry <file>` if given, else `index.html`, `index.md` or
   `README.md` at the directory's own root, else an index the CLI generates
   there. Nothing but a `.git` directory is left out of the copy.
@@ -359,7 +373,8 @@ The CLI writes one shared event grammar. Every asserted record uses the
 `entity.linked`, `entity.unlinked`, `entity.covered` — and the execution facts
 `entity.started`, `entity.blocked`, `entity.unblocked`, `entity.done`,
 `entity.retired`. Beside them, `report.added` records progress,
-`report.confirmed` records a person's approval of a design report, and
+`report.confirmed` records a person's approval of a design report,
+`artifact.registered` records bytes stored with no report behind them, and
 `work.run-started` / `work.run-exited` record process transitions. Event
 namespaces are owned; the current owners are listed in
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md#event-namespaces), and the

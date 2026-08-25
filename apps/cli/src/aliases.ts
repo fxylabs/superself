@@ -354,6 +354,8 @@ function aliasDetail(verb: string, row: PresetRow): string[]
         "                        registered project's slug, or workspace",
         "  --target <date>       a YYYY-MM-DD deadline for the derived views to judge",
         "  --criteria <text>     an exit criterion that gates done claims, repeatable",
+        "  --artifact <id|path>  a registered artifact this record points at: an `a-` id this",
+        "                        project stores, or a path registered now — one per record",
         "  --link [type:]<id>    typed edge, repeatable, as `state add` takes it",
         "  --why <text>          rationale recorded with the entity",
         "  --proposed            record as a proposal; `state confirm` makes it hold",

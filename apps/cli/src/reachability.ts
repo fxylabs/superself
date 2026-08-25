@@ -5,6 +5,7 @@ import { EntityState, isLive, scopeTarget } from "./entities.js";
 import { checkoutTops, git, realPath, refListing, repositoryIdentity, resolveCommits, revListExcept } from "./gitutil.js";
 import { EvidenceHead, linkedPaths, ProjectRepositories, projectArchive, projectStateDir, readEvidenceHead, readVerdicts, Verdict, writeEvidenceHead } from "./paths.js";
 import { WorkState } from "./model.js";
+import { artifactMetas } from "./registry.js";
 import { digestFile } from "./repo.js";
 import { ArtifactMember, ArtifactMeta } from "./types.js";
 
@@ -627,6 +628,43 @@ function within(root: string, file: string): boolean
 {
     const step = relative(root, file);
     return step !== "" && step !== ".." && !step.startsWith(".." + sep) && !isAbsolute(step);
+}
+
+// The artifact a live record points at (#238), checked against the store the
+// same way a report's evidence is. `artifactSignals` above is left exactly as
+// it stands: this is a second axis, and a second axis added to an existing
+// function is a function two changes have to share.
+//
+// Live records only — proposed and confirmed. A retracted or superseded rule
+// renders nowhere, so an artifact it named is nobody's problem, and reporting
+// it would make a project noisier the longer it runs.
+//
+// This does not reopen the "open work only" rule `artifactSignals` states.
+// That rule exists because a finished archive grows without bound; the set
+// here is one artifact per live record, and live records are what the
+// retention caps bound.
+//
+// One project's own fold, never the whole registry: a workspace-scoped rule
+// renders in other projects through `scopedIn`, which never reaches
+// `model.entities`, so the owning project raises the line exactly once.
+export function entityArtifactSignals(storeDir: string, slug: string, entities: EntityState[]): string[]
+{
+    const referring = entities.filter((item) => isLive(item) && item.artifact !== undefined);
+    const metas = artifactMetas(storeDir, slug, referring.map((item) => item.artifact as string));
+    return referring.flatMap((entity) => referenceFailure(storeDir, metas, entity));
+}
+
+function referenceFailure(storeDir: string, metas: Map<string, ArtifactMeta>, entity: EntityState): string[]
+{
+    const id = entity.artifact as string;
+    const meta = metas.get(id);
+    if (meta === undefined)
+    {
+        return [`${entity.id} names artifact ${id}, which this project's log does not record — `
+            + "run `self artifact list` to see what it holds, or restate the record with an artifact it stores"];
+    }
+    const failure = artifactFailure(storeDir, meta);
+    return failure === null ? [] : [`${entity.id} artifact ${meta.id} ${meta.name} ${failure}`];
 }
 
 // The third thing that can render nowhere, beside a vanished commit and a

@@ -7,7 +7,7 @@ import { branchLabel, branchTotals, buildModel, currentConventions, DecisionStat
 import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
-import { artifactSignals, askedRepositories, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
+import { artifactSignals, askedRepositories, entityArtifactSignals, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
 import { errYellow } from "./style.js";
 import { artifactName } from "./types.js";
 import { chromeStale, claimChrome, writeViews } from "./view.js";
@@ -86,7 +86,8 @@ function judgeEvidence(storeDir: string, slug: string, model: ProjectModel): Rec
     const verdicts = updateVerdicts(storeDir, slug, resolveProjectPaths(storeDir, slug), evidenceOf(model.works));
     model.health.push(...verdictSignals(model.works, verdicts, askedRepositories(storeDir, slug)),
         ...frozenVerdictSignals(storeDir, slug, model.unshipped.length),
-        ...artifactSignals(storeDir, model.works));
+        ...artifactSignals(storeDir, model.works),
+        ...entityArtifactSignals(storeDir, slug, model.entities));
     return verdicts;
 }
 

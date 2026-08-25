@@ -6,7 +6,7 @@
 // blocks equal the connect.ts template applied to this repository's state.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMANDS } from "../dist/main.js";
@@ -225,6 +225,8 @@ async function writeCurrentVocabulary(box, demo)
     const runUnit = workIdIn(must(box, demo, ["work", "add", "a supervised outcome"]).out);
     must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
     must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
+    writeFileSync(join(demo, "registered-guide.md"), "a guide no report is about\n");
+    must(box, demo, ["artifact", "add", "registered-guide.md"]);
 }
 
 async function writtenVocabulary(box, ws, demo)
@@ -236,7 +238,7 @@ async function writtenVocabulary(box, ws, demo)
 
 // Every dotted name under a namespace the CLI has ever owned; wildcards like
 // `entity.*` and file names like `main.ts` are not event mentions.
-const NAMESPACES = "entity|work|report|goal|decision|convention|objective|milestone"
+const NAMESPACES = "entity|work|report|artifact|goal|decision|convention|objective|milestone"
     + "|run|spec|changeset|attempt|lease|merge|promotion|repo|target|main|ci|review";
 const EVENT_MENTION = new RegExp(`\\b(?:${NAMESPACES})\\.[a-z][a-z-]*\\b`, "g");
 const FILE_SUFFIXES = ["ts", "js", "mjs", "md", "json", "jsonl", "yml", "html", "sh"];
