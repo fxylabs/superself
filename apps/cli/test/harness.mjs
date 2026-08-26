@@ -47,42 +47,26 @@ export function machine()
 // ── the drivers ──────────────────────────────────────────────────────────
 //
 // Two of them, reporting the same thing: exit code and merged output, because
-// a refusal's text is part of the contract. `drive` runs the command in this
-// process; `spawnIn` starts the real binary as a child. The child is what the
-// whole suite used to do, and what a handful of cells still have to do —
-// #371's 4-3 table names them, and they say so by calling `spawnIn` or
-// `mustSpawn` rather than by a flag somewhere else.
+// a refusal's text is part of the contract.
+//
+// `selfIn` and `must` run the command in this process, which is what nearly
+// every case wants: the suite used to spawn `bin/self.mjs` once per case, and
+// on macOS every one of those execs went through the OS policy check — 2,264
+// of them, at seconds each, for a suite that spent 6% of its wall clock
+// actually running anything (#371).
+//
+// `spawnIn` and `mustSpawn` start the real binary as a child. A handful of
+// cells need that and say so by name: the terminal check, the styled-at-load
+// files, the exit-status conversion, the golden fixture. #371's 4-3 table is
+// the list and the reason for each.
 //
 // `extra` overrides environment for this call alone. Two sessions against one
 // workspace is a real case the CLI answers differently (#230), and the only
 // thing that separates them is what the environment says the session is.
 
-// Whichever driver this run selected. The default is the child, so nothing
-// changes under a file until it is ready; `SELF_TEST_DRIVER=inprocess` runs the
-// same file the way the suite will run it after the switchover. Read per call,
-// not once at load, because `drive` replaces the whole environment while a
-// command runs and the next call has to read the runner's own again.
-function inProcessSelected()
+export async function selfIn(box, cwd, args, extra = {})
 {
-    return process.env.SELF_TEST_DRIVER === "inprocess";
-}
-
-// Deliberately not `async`. An `async` function returns a promise under either
-// driver, and every one of the suite's call sites would have to grow an `await`
-// in the same commit that introduced the driver. `await` in front of a plain
-// value is a no-op, so leaving the child path synchronous is what lets a file
-// grow its `await`s one commit at a time while the suite keeps running the way
-// it does today. The last commit of this series makes these plainly `async`.
-export function selfIn(box, cwd, args, extra = {})
-{
-    return inProcessSelected() ? drive(box, cwd, args, { extra }) : spawnIn(box, cwd, args, extra);
-}
-
-// Continue whichever of the two shapes came back, without turning a synchronous
-// one into a promise.
-function after(result, then)
-{
-    return result instanceof Promise ? result.then(then) : then(result);
+    return drive(box, cwd, args, { extra });
 }
 
 export function spawnIn(box, cwd, args, extra = {})
@@ -334,22 +318,20 @@ export function git(box, cwd, args)
 
 // The floor state: a workspace at <root>/ws holding one registered project at
 // <root>/ws/demo. Returns the paths a test drives.
-export function demoWorkspace(box)
+export async function demoWorkspace(box)
 {
     const ws = join(box.root, "ws");
     const demo = join(ws, "demo");
     mkdirSync(demo, { recursive: true });
-    return after(must(box, ws, ["init"]), () =>
-    {
-        git(box, demo, ["init", "-q", "-b", "main"]);
-        const named = must(box, demo, ["project", "init", "--name", "demo", "--desc", "fast tier project"]);
-        return after(named, () => ({ ws, demo }));
-    });
+    await must(box, ws, ["init"]);
+    git(box, demo, ["init", "-q", "-b", "main"]);
+    await must(box, demo, ["project", "init", "--name", "demo", "--desc", "fast tier project"]);
+    return { ws, demo };
 }
 
-export function must(box, cwd, args, extra = {})
+export async function must(box, cwd, args, extra = {})
 {
-    return after(selfIn(box, cwd, args, extra), (result) => refuseFailure(result, args));
+    return refuseFailure(await selfIn(box, cwd, args, extra), args);
 }
 
 function refuseFailure(result, args)

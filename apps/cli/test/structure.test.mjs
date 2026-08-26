@@ -11,7 +11,9 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    awaitedDriverExempt,
     awaitedDriverViolations,
+    awaitedTestFiles,
     changedLines,
     deadExports,
     diskTree,
@@ -459,6 +461,25 @@ test("a file that is not on the list is not read at all", () =>
 {
     const tree = suite("import { must } from \"./harness.mjs\";\nmust(1);\n");
     assert.deepEqual(awaitedDriverViolations(tree, []), []);
+});
+
+// The list is a predicate now, not a roster: a file is on it because it names a
+// driver, so a test file written later cannot be missed by not being added.
+test("the list is every test file that names a driver, however it imports one", () =>
+{
+    const tree = memoryTree({
+        "test/harness.mjs": "export function must() {}\nexport function machine() {}\n",
+        "test/plain.test.mjs": "import { must } from \"./harness.mjs\";\n",
+        "test/lazy.test.mjs": "const { must } = await import(\"./harness.mjs\");\n",
+        "test/scratch.test.mjs": "import { machine } from \"./harness.mjs\";\n",
+        "test/alone.test.mjs": "import assert from \"node:assert\";\n"
+    });
+    assert.deepEqual(awaitedTestFiles(tree), ["test/lazy.test.mjs", "test/plain.test.mjs"]);
+});
+
+test("the file that owns the runtime defence is the one exemption, and it says so", () =>
+{
+    assert.deepEqual(awaitedDriverExempt, ["test/driver.test.mjs"]);
 });
 
 test("a result handed straight to the caller is awaited by the caller", () =>

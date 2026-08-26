@@ -684,76 +684,22 @@ function callsIn(node)
 
 // ------------------------------------------------- awaiting the driver
 
-// The test files whose harness calls have been given their `await`. It grows
-// one migration commit at a time, and the commit that makes the in-process
-// driver the only driver replaces it with every file that imports the harness.
-export const awaitedTestFiles = [
-    "test/aliases.test.mjs",
-    "test/apply.test.mjs",
-    "test/archived-scope.test.mjs",
-    "test/artifact-bundle.test.mjs",
-    "test/artifact-prune.test.mjs",
-    "test/artifact-retention.test.mjs",
-    "test/claim.test.mjs",
-    "test/confirm-owner.test.mjs",
-    "test/context.test.mjs",
-    "test/convention-visibility.test.mjs",
-    "test/cover.test.mjs",
-    "test/cross-link.test.mjs",
-    "test/cutover.test.mjs",
-    "test/derivation.test.mjs",
-    "test/design-gate.test.mjs",
-    "test/docs.test.mjs",
-    "test/entities.test.mjs",
-    "test/entity-artifact.test.mjs",
-    "test/execution.test.mjs",
-    "test/frozen-verdicts.test.mjs",
-    "test/goal-record.test.mjs",
-    "test/guide.test.mjs",
-    "test/handoff.test.mjs",
-    "test/integrity.test.mjs",
-    "test/legacy-work-fold.test.mjs",
-    "test/lifecycle.test.mjs",
-    "test/multi-repo-evidence.test.mjs",
-    "test/objective-revise-carry.test.mjs",
-    "test/place.test.mjs",
-    "test/pr7-contract.test.mjs",
-    "test/pr7-loader.test.mjs",
-    "test/pr7-login.test.mjs",
-    "test/preset-caps.test.mjs",
-    "test/process.test.mjs",
-    "test/project-archive.test.mjs",
-    "test/project-init.test.mjs",
-    "test/project-link.test.mjs",
-    "test/project-unlink.test.mjs",
-    "test/proposal-answer.test.mjs",
-    "test/proposal-id.test.mjs",
-    "test/render-gate-documents.test.mjs",
-    "test/render-gate-listings.test.mjs",
-    "test/render-gate-receipts.test.mjs",
-    "test/render-gate-values.test.mjs",
-    "test/render-gate.test.mjs",
-    "test/report-file.test.mjs",
-    "test/report-friction.test.mjs",
-    "test/required.test.mjs",
-    "test/retirement-gate.test.mjs",
-    "test/runbook-approval.test.mjs",
-    "test/runbook.test.mjs",
-    "test/scope-move.test.mjs",
-    "test/scope.test.mjs",
-    "test/search-live.test.mjs",
-    "test/state.test.mjs",
-    "test/supersede.test.mjs",
-    "test/sweep.test.mjs",
-    "test/tokens.test.mjs",
-    "test/waiting-render.test.mjs",
-    "test/work-attachment.test.mjs",
-    "test/work-revise.test.mjs",
-    "test/workspace-direction.test.mjs",
-    "test/workspace-scope.test.mjs",
-    "test/worktree-evidence.test.mjs",
-    "test/wrong-kind-hint.test.mjs"
-];
+// The one file the check leaves alone, and why. `driver.test.mjs` owns the
+// case that proves the runtime half of this defence, and that case starts a
+// command deliberately without awaiting it. A check that refused it would be
+// refusing its own evidence.
+export const awaitedDriverExempt = ["test/driver.test.mjs"];
+
+// Every test file that reaches the CLI through the harness. It was an explicit
+// list while the migration ran, one file per commit; it is a predicate now, so
+// a test file written next month is on it the day it is written rather than
+// the day somebody remembers to add it.
+export function awaitedTestFiles(tree)
+{
+    return testsOf(tree)
+        .filter((path) => !awaitedDriverExempt.includes(path))
+        .filter((path) => harnessNames(parseSource(tree, path)).length > 0);
+}
 
 // The harness exports that run a command. `spawnIn` and `mustSpawn` are
 // deliberately absent: they start a child and are synchronous, which is the
@@ -762,7 +708,7 @@ export const driverExports = ["selfIn", "must", "demoWorkspace", "approvedIn", "
 
 const HARNESS = "./harness.mjs";
 
-export function awaitedDriverViolations(tree, files = awaitedTestFiles)
+export function awaitedDriverViolations(tree, files = awaitedTestFiles(tree))
 {
     return files.filter((path) => tree.paths.includes(path))
         .flatMap((path) => driverCallViolations(tree, path, parseSource(tree, path)));
@@ -942,16 +888,37 @@ export function namedFunctions(source)
 
 function harnessNames(source)
 {
-    return source.statements.flatMap((statement) =>
+    const named = source.statements.flatMap((statement) =>
     {
         const bindings = ts.isImportDeclaration(statement) && statement.moduleSpecifier.text === HARNESS
             ? statement.importClause?.namedBindings
             : undefined;
-        return bindings && ts.isNamedImports(bindings)
-            ? bindings.elements.filter((element) => driverExports.includes((element.propertyName ?? element.name).getText()))
-                .map((element) => element.name.getText())
-            : [];
+        return bindings && ts.isNamedImports(bindings) ? [...bindings.elements] : [];
     });
+    return [...named, ...lazyHarnessNames(source)]
+        .filter((element) => driverExports.includes((element.propertyName ?? element.name).getText()))
+        .map((element) => element.name.getText());
+}
+
+// The three files that set `isTTY` above their imports load the harness with
+// `await import(…)` instead, so the names arrive in a destructuring pattern. A
+// file that reaches the driver is read by this rule however it spells the
+// import — otherwise the only files it skips are the ones that took the
+// unusual route.
+function lazyHarnessNames(source)
+{
+    const found = [];
+    const visit = (node) =>
+    {
+        if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name)
+            && node.initializer && node.initializer.getText().includes(HARNESS))
+        {
+            found.push(...node.name.elements);
+        }
+        ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(source, visit);
+    return found;
 }
 
 // A test file's cases run one after another, and the in-process driver relies
