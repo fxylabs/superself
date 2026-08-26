@@ -1,5 +1,10 @@
 // The process ledger: the synced log carries the transitions, the machine
 // ledger carries the pid, and liveness is judged at read time by the OS.
+//
+// Cell 25 of #371's table, and the one cell in it that needed no change: the
+// pid a case records is a child this file spawned for the purpose, never the
+// runner's own, so what liveness is judged about is the same whether the
+// command runs here or in a process of its own.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

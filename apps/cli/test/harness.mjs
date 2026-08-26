@@ -51,8 +51,8 @@ export function machine()
 //
 // `selfIn` and `must` run the command in this process, which is what nearly
 // every case wants: the suite used to spawn `bin/self.mjs` once per case, and
-// on macOS every one of those execs went through the OS policy check — 2,264
-// of them, at seconds each, for a suite that spent 6% of its wall clock
+// on macOS every one of those execs went through the OS policy check — some
+// 2,500 of them, seconds each, for a suite that spent 6% of its wall clock
 // actually running anything (#371).
 //
 // `spawnIn` and `mustSpawn` start the real binary as a child. A handful of
