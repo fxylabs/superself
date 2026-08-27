@@ -60,8 +60,25 @@ export function eventRecord(event: SelfEvent): string
     return named === undefined ? event.id : String(named);
 }
 
+// Every event id an annulment took back, read off `refs.annuls` whatever the
+// event type says (#390) — an older log's `entity.restored` and this CLI's
+// `entity.annulled` mean the same thing here. The log marks the rows it names,
+// so a reader scanning history sees which half of a pair no longer holds.
+export function annulledEvents(events: SelfEvent[]): Set<string>
+{
+    return new Set(events.map((event) => event.refs?.annuls)
+        .filter((value): value is string => typeof value === "string" && value !== ""));
+}
+
 export function eventSummary(event: SelfEvent): string
 {
+    // An annulment says what it took back rather than repeating the record's
+    // words, so a log row reads without resolving the event it names.
+    if (event.type === "entity.annulled")
+    {
+        const why = event.payload.why === undefined ? "" : ` — ${String(event.payload.why)}`;
+        return `undone ${String(event.payload.undid ?? "an event")} [${String(event.refs?.annuls ?? "")}]${why}`;
+    }
     const payload = event.payload;
     const parts = [payload.work, payload.objective, payload.milestone, payload.proposal, payload.criterion,
         payload.attempt, payload.text ?? payload.outcome ?? payload.why ?? payload.as ?? payload.detail,

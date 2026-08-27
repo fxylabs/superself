@@ -11,7 +11,7 @@ import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Re
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
 import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitations } from "./design.js";
-import { entityCharacters, EntityState, Exposure, isEntityCreation, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
+import { entityCharacters, EntityState, Exposure, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, requireRetirable, requireSupersedableWork, WORK_GOAL_LEAVES } from "./goals.js";
@@ -60,7 +60,8 @@ import {
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
 import { notice, renderOutput } from "./output.js";
-import { makeEvent, recordEvent, recordEvents, resetPipeline } from "./pipeline.js";
+import { makeEvent, recordEvent, recordEvents, resetPipeline, stateIntent } from "./pipeline.js";
+import { annulledIds, coupledUnit, dependentRefusal, dependentsOf, requireUndoable } from "./undo.js";
 import { resetHomeRule } from "./redact.js";
 import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
@@ -97,7 +98,7 @@ import {
 import { loadTrustDocument, resetVerifierCalls } from "./trust.js";
 import { jsonMode, renderFailure, selectJsonMode } from "./output.js";
 import { suppressJournal } from "./rail.js";
-import { CliError, CommandOutput, EventRefs, OutputBlock, SelfEvent } from "./types.js";
+import { CliError, CommandOutput, EventRefs, OutputBlock, refuse, SelfEvent } from "./types.js";
 
 async function main(argv: string[]): Promise<void>
 {
@@ -114,6 +115,7 @@ async function main(argv: string[]): Promise<void>
     // mini-app verb, and neither leaf should have to declare an option about
     // whether this machine keeps a record of its own calls.
     suppressJournal(argv.includes("--no-journal"));
+    stateIntent(hostIntent(argv));
     const args = hostFlagsRemoved(argv);
     const resolved = resolveCommand(COMMANDS, args);
     if (resolved !== null)
@@ -231,11 +233,36 @@ function verbPath(argv: string[]): string
     return words.join(" ");
 }
 
+// `--meant "<what the caller meant>"` belongs to the host for the same reason
+// (#390). Every mutating verb takes it, so declaring it per leaf would owe a
+// help line on each of the fifty-odd of them and would still miss the next one
+// someone adds. Being a host flag also means the requirement machinery never
+// sees it, which is why an empty one is refused here by hand.
+const HOST_INTENT = "--meant";
+
+function hostIntent(argv: string[]): string | undefined
+{
+    const end = argv.indexOf("--");
+    const at = argv.indexOf(HOST_INTENT);
+    if (at === -1 || (end !== -1 && at > end))
+    {
+        return undefined;
+    }
+    const text = argv[at + 1];
+    if (text === undefined || text.trim() === "")
+    {
+        throw new CliError('--meant states what this call was meant to do, so it takes text: --meant "<what you meant>"');
+    }
+    return text;
+}
+
 function hostFlagsRemoved(argv: string[]): string[]
 {
     const end = argv.indexOf("--");
+    const intent = argv.indexOf(HOST_INTENT);
+    const consumed = intent === -1 || (end !== -1 && intent > end) ? [] : [intent, intent + 1];
     return argv.filter((argument, at) =>
-        argument !== "--no-journal" || (end !== -1 && at > end));
+        (argument !== "--no-journal" || (end !== -1 && at > end)) && !consumed.includes(at));
 }
 
 // `--timeout <s>` replaces the derived per-command deadline outright, in both
@@ -531,6 +558,10 @@ const DECIDE_OPTIONS = {
 } as const;
 
 const WITHDRAW_OPTIONS = { why: { type: "string" } } as const;
+
+// `undo` takes the withdraw verbs' `--why` and one flag of its own, so the
+// withdraw verbs are not handed a flag they do not accept (#390).
+const UNDO_OPTIONS = { why: { type: "string" }, supersession: { type: "boolean" } } as const;
 
 const TRANSITION_OPTIONS = { on: { type: "string" }, why: { type: "string" } } as const;
 
@@ -1160,33 +1191,40 @@ export const COMMANDS: Command[] = [
         name: "undo",
         usage: [
             {
-                syntax: 'undo <event-id> --why "<why the retirement was wrong>"',
+                syntax: "undo [<event-id>] [--supersession] [--why <text>]",
                 verbs: [""]
             }
         ],
         detail: [
-            "take back one retirement, supersession, withdrawal or link. Nothing else",
-            "is undone: the id names the event to take back, and any other kind of",
-            "event is refused rather than guessed at.",
+            "take back a record made by mistake. The id names the event to undo; with",
+            "no id at all the newest append is the target, which is the one a receipt",
+            "was just printed for.",
             "",
-            "A project archive is not among them. It is ended by `self project restore",
-            "<slug>`, which runs from anywhere the archive did — this verb would need",
-            "the project's checkout, and a project that is set aside frequently has",
-            "none on this machine.",
+            "No --why is owed. \"This was a mistake\" is the whole statement, and the",
+            "annulment already names the event it reversed.",
             "",
-            "The record comes back and the log keeps both halves — what happened and",
-            "what took it back. A supersession's successor stays; it simply stops",
-            "claiming to replace anything, which is the accident this answers: a",
-            "record that belonged, carrying a link that did not.",
+            "One append is one undo: a `work done --report` and a `work accept` each",
+            "write more than one event as a single state change, and undoing either",
+            "half takes back the whole of it. A record something was already built on",
+            "is refused with the list of what stands on it and the lines to take those",
+            "back first — never a cascade nobody asked for.",
+            "",
+            "A few kinds are refused by name, each naming the verb that does the job:",
+            "a person's ruling on a design report (record a new design report), a",
+            "registered artifact and a prune (`self artifact prune`; nothing takes back",
+            "a deletion), a project archive or restore (`self project restore|archive",
+            "<slug>`, which run from anywhere this verb cannot), process telemetry",
+            "(a process really ran), and an undo itself.",
             "",
             "No terminal is needed. Retiring a record is a person's call because it",
-            "cannot be taken back; this is the taking back, and gating it would",
-            "contradict the reason the other gate exists.",
+            "cannot be taken back; this is the taking back, and it asserts nothing.",
             "",
-            "  --why <text>    why the retirement was wrong"
+            "  --supersession  take back only what a creation displaced, leaving the",
+            "                  record itself standing",
+            "  --why <text>    why the record was wrong, where it is worth saying"
         ],
-        node: leaf("", WITHDRAW_OPTIONS, 1, ({ values, positionals }) =>
-            cmdUndo(requireProject(process.cwd()), positionals[0], values.why), { requires: [WHY_REQUIRED] })
+        node: leaf("", UNDO_OPTIONS, 1, ({ values, positionals }) =>
+            cmdUndo(requireProject(process.cwd()), positionals[0], values))
     },
     // The command list is handed over as a thunk rather than imported by
     // `apply.ts`: this is the root list the verb dispatches against, and a
@@ -2660,6 +2698,7 @@ function captureHandoff(ctx: CliContext, wanted: string, project: string | undef
     {
         throw new CliError(`project "${found.slug}" is archived — pass --project ${found.slug} to address it explicitly`);
     }
+    requireWorkable(found);
     const sources = handoffSourceModels(ctx.storeDir, found.slug, models);
     const conventions = applicableConventions(found.slug, sources);
     const verdicts = readVerdicts(ctx.storeDir, found.slug);
@@ -2671,6 +2710,18 @@ function captureHandoff(ctx: CliContext, wanted: string, project: string | undef
             new Set(conventions.map((item) => item.id)), verdicts),
         verdicts, archived, ownerCheckoutAvailable: handoffCheckoutAvailable(ctx, found.slug)
     };
+}
+
+// A packet hands a session work to do, and a unit whose own creation was taken
+// back has none (#390): the id still resolves — `self work show` answers for
+// it — but handing it over would brief a session on a mistake.
+function requireWorkable(found: FoundWork): void
+{
+    if (found.work.status === "undone")
+    {
+        throw new CliError(`${found.work.id} was recorded by mistake and undone — there is nothing to hand over; `
+            + `\`self work show ${found.work.id}\` says what it was and when it was taken back`);
+    }
 }
 
 function resolveHandoffWork(ctx: CliContext, wanted: string, project: string | undefined,
@@ -3611,114 +3662,159 @@ function userMessage(error: unknown, argv: string[]): string | null
 // command.
 /* ── undo ──────────────────────────────────────────────────────────── */
 
-// The kinds of event an undo can take back, and what each one did. Anything
-// outside this table is refused by name: `undo` reads like it reverses any
-// event, and the refusal is where that impression gets corrected.
-const UNDOABLE: Record<string, string> = {
-    "entity.retracted": "withdrawal",
-    "entity.retired": "retirement",
-    // A link is a statement too (#244 D5): taking the event back removes the
-    // contribution edge from every surface that read it, in every project.
-    "entity.linked": "link",
-    // Taking a revision back leaves the version before it current, and an
-    // acceptance bound to that version current with it (#356) — everything
-    // derives from the revisions that still stand, so there is no rule here.
-    "entity.revised": "revision"
-};
-
-// Reversing one destructive event. The event is named rather than the record,
-// because what went wrong is an act, not a state — and because naming the act
-// is what lets this stay safe under a merge: an undo cannot have been written
-// without seeing the event it reverses, which is the exact case a withdrawal
-// stays terminal against.
-function cmdUndo(ctx: ProjectContext, prefix: string | undefined, why: string | undefined): CommandOutput
+// A mistaken record is erased, not ceremonially superseded (#390). The event
+// is named rather than the record, because what went wrong is an act, not a
+// state — and because naming the act is what lets this stay safe under a
+// merge: an annulment cannot have been written without seeing the event it
+// reverses, which is the exact case a withdrawal stays terminal against.
+function cmdUndo(ctx: ProjectContext, prefix: string | undefined, values: { why?: string; supersession?: boolean }): CommandOutput
 {
-    const usage = 'undo <event-id> --why "<why the retirement was wrong>"';
-    const event = findEventByPrefix(ctx.storeDir, ctx.project, requireText(prefix, usage));
-    const undone = undoableKind(event);
-    if (readEvents(ctx.storeDir, ctx.project).some((item: SelfEvent) => item.refs?.annuls === event.id))
+    const events = readEvents(ctx.storeDir, ctx.project);
+    const event = undoTarget(ctx, events, prefix);
+    requireUndoable(event);
+    const taken = annulledIds(events);
+    requireNotAnnulled(taken, event);
+    // A member already taken back on its own is left alone: one annulment per
+    // annulled event keeps `refs.annuls` the single carrier of the meaning.
+    const unit = coupledUnit(events, event).filter((member) => !taken.has(member.id));
+    const dependents = dependentsOf(events, unit);
+    if (dependents.length > 0)
+    {
+        throw refuse("built_on", dependentRefusal(event, dependents));
+    }
+    return recordAnnulment(ctx, unit, event, values);
+}
+
+// The append the annulments are written as: one `entity.annulled` per member
+// of the coupled unit, all in one write, so a reader can never find half of an
+// undo either.
+function recordAnnulment(ctx: ProjectContext, unit: SelfEvent[], event: SelfEvent,
+    values: { why?: string; supersession?: boolean }): CommandOutput
+{
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    const named = annulledRecord(event);
+    const text = model.entities.find((item) => item.id === named)?.text ?? named;
+    recordEvents(ctx, unit.map((member) => makeEvent(ctx.project, "entity.annulled",
+        annulmentPayload(member, values), { annuls: member.id }, false)), `${named} ${text}`.trim());
+    return [{ kind: "receipt", text: undoneNote(unit, event, named, values.supersession === true) }];
+}
+
+// `undid` lets `self log` render the annulment's row without resolving the
+// event it names. `why` is optional (#390 R2): "this was a mistake" is the
+// whole statement, and the annulment already names what it reversed.
+function annulmentPayload(member: SelfEvent, values: { why?: string; supersession?: boolean }): Record<string, unknown>
+{
+    const entity = annulledRecord(member);
+    return {
+        undid: member.type,
+        ...(entity === "" ? {} : { entity }),
+        ...(values.supersession === true ? { scope: "supersession" } : {}),
+        ...(values.why === undefined ? {} : { why: values.why })
+    };
+}
+
+// What an undo actually gave back, in the words of the act it reversed.
+// Undoing a link never removed the record and undoing a revision never removed
+// it either, so neither says "standing again", which would claim a
+// restoration that did not happen; a creation taken back says the opposite —
+// the record is gone, and saying it stands would be the same error mirrored.
+const UNDONE_NOTE: ReadonlyArray<readonly [string, (record: string) => string]> = [
+    ["entity.linked", (record) => `${record} no longer carries the link — the linked event was taken back`],
+    ["entity.unlinked", (record) => `${record} carries the link again — the unlink was taken back`],
+    ["entity.revised", (record) => `${record} states its previous plan again — the revision was taken back`],
+    ["entity.retracted", (record) => `${record} is standing again — its withdrawal was taken back`],
+    ["entity.retired", (record) => `${record} is standing again — its retirement was taken back`],
+    ["entity.covered", (record) => `${record} has that criterion open again — the coverage claim was taken back`],
+    ["entity.placed", (record) => `${record} is placed where it was — the placement was taken back`],
+    ["report.added", (record) => `the report on ${record} was taken back`]
+];
+
+function undoneNote(unit: SelfEvent[], event: SelfEvent, named: string, narrow: boolean): string
+{
+    if (narrow)
+    {
+        return `${named} stands and no longer claims to replace anything — its supersession was taken back`;
+    }
+    const rest = unit.length === 1 ? "" : ` (${unit.length} events of one append, taken back together)`;
+    return `${namedNote(event, named)}${rest}`;
+}
+
+function namedNote(event: SelfEvent, named: string): string
+{
+    const stated = UNDONE_NOTE.find(([type]) => type === event.type);
+    if (stated !== undefined)
+    {
+        return stated[1](named);
+    }
+    if (event.type === "entity.confirmed" && event.refs?.confirms !== undefined)
+    {
+        return `${named} is proposed again — its acceptance was taken back; a person accepts it with `
+            + `\`self work accept ${named}\``;
+    }
+    if (event.type === "entity.proposed" || event.type === "entity.confirmed")
+    {
+        return `${named} was recorded by mistake and is undone — it is gone from every live surface`;
+    }
+    return `${named} is open again — its ${event.type.replace("entity.", "")} was taken back`;
+}
+
+// Which record an event speaks about, for the receipt and the annulment's own
+// payload. A creation that displaced something names the record it displaced
+// only under `--supersession`; otherwise it names its own.
+function annulledRecord(event: SelfEvent): string
+{
+    const named = String(event.payload.entity ?? event.refs?.work ?? "");
+    return named !== "" ? named : supersedeTargets(event.payload)[0] ?? "";
+}
+
+// An undo is not undone (#390): a second one against the same event is
+// refused rather than stacked, and one annulment stays in the log.
+function requireNotAnnulled(taken: Set<string>, event: SelfEvent): void
+{
+    if (taken.has(event.id))
     {
         throw new CliError(`${event.id} was already undone — the record it took back is standing`);
     }
-    const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const restored = restoredBy(event);
-    const text = model.entities.find((item) => item.id === restored)?.text ?? restored;
-    recordEvent(ctx, makeEvent(ctx.project, "entity.restored",
-        { entity: restored, why: required(why) }, { annuls: event.id }, true), text);
-    return [{ kind: "receipt", text: undoneNote(restored, undone) }];
 }
 
-// Undoing a link never removed the record itself, and undoing a revision
-// never removed it either — so neither says "standing again", which would
-// claim a restoration that did not happen.
-function undoneNote(restored: string, undone: string): string
+// The event to take back: the one the id names, or the newest append when the
+// caller named none. A record is settled by the next append and nothing else
+// (#390 §2.2), so the bare form is the ergonomic payoff — the correction is
+// one command with no id to look up.
+function undoTarget(ctx: ProjectContext, events: SelfEvent[], prefix: string | undefined): SelfEvent
 {
-    if (undone === "link")
+    if (prefix !== undefined)
     {
-        return `${restored} no longer carries the link — the linked event was taken back`;
+        return resolveUndoPrefix(ctx, prefix);
     }
-    if (undone === "revision")
+    const newest = [...events].sort((left, right) => left.ts.localeCompare(right.ts) || left.id.localeCompare(right.id)).at(-1);
+    if (newest === undefined)
     {
-        return `${restored} states its previous plan again — the revision was taken back`;
+        throw new CliError(`nothing has been recorded in "${ctx.project}" — \`self undo <event-id>\` names the event to take back`);
     }
-    return `${restored} is standing again — its ${undone} was taken back`;
+    return newest;
 }
 
-// Which act this event was, or a refusal naming the ones that can be taken
-// back. A creation is undoable only where it displaced something: without a
-// supersedes link there is nothing for an undo to give back.
-function undoableKind(event: SelfEvent): string
+// The prefix, resolved in this project's log. An event another project's log
+// holds is named rather than reported missing: `undo` writes into the project
+// the directory resolves to, so the answer is which directory to stand in.
+function resolveUndoPrefix(ctx: ProjectContext, prefix: string): SelfEvent
 {
-    const named = UNDOABLE[event.type];
-    if (named !== undefined)
+    try
     {
-        return named;
+        return findEventByPrefix(ctx.storeDir, ctx.project, prefix);
     }
-    if (isEntityCreation(event) && supersedeTargets(event.payload).length > 0)
+    catch (error)
     {
-        return "supersession";
+        const owner = orderedSlugs(ctx).filter((slug) => slug !== ctx.project)
+            .find((slug) => readEvents(ctx.storeDir, slug).some((event) => event.id.startsWith(prefix)));
+        if (owner === undefined)
+        {
+            throw error;
+        }
+        throw new CliError(`"${prefix}" is an event in project "${owner}", not in "${ctx.project}" — `
+            + `undo records into the project the directory resolves to, so run it from ${owner}'s checkout`);
     }
-    refuseArchiveUndo(event);
-    refuseAcceptanceUndo(event);
-    throw new CliError(`${event.id} is a ${event.type} — undo takes back a retirement, a withdrawal, a link, `
-        + "or a record's supersession of another, and nothing else");
-}
-
-// An archive is ended by `project restore` and by nothing else (#283). This
-// refusal exists because reaching it at all means someone looked for `undo`
-// here, and the generic answer above would send them away without the verb
-// that does the job. `restore` also runs from anywhere, which is why it is the
-// only way back: `undo` resolves its project from the working directory, and
-// an archived project's checkout is frequently on another machine.
-function refuseArchiveUndo(event: SelfEvent): void
-{
-    if (event.type === "project.archived")
-    {
-        throw new CliError(`${event.id} archived project "${event.project}" — an archive is ended by `
-            + `\`self project restore ${event.project}\`, which takes --why if it should never have been archived`);
-    }
-}
-
-// An acceptance is not taken back (#356). The way back from one is a
-// revision: the record keeps every version it ever stated, and the plan is
-// waiting on a person again the moment a new one is stated.
-function refuseAcceptanceUndo(event: SelfEvent): void
-{
-    if (event.type === "entity.confirmed" && event.refs?.confirms !== undefined)
-    {
-        const entity = String(event.payload.entity ?? "<id>");
-        throw new CliError(`${event.id} accepted ${entity} — an acceptance is not taken back; restate the plan with `
-            + `\`self work revise ${entity} "<revised plan>" --why w\`, which returns it to review`);
-    }
-}
-
-// What comes back. A withdrawal and a retirement name their target; a
-// supersession names it from the link the successor carries.
-function restoredBy(event: SelfEvent): string
-{
-    return UNDOABLE[event.type] === undefined
-        ? supersedeTargets(event.payload)[0]
-        : String(event.payload.entity ?? "");
 }
 
 // Everything this process remembers between commands, forgotten. The caches are

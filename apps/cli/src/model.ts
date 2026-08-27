@@ -16,6 +16,7 @@ import {
     ObjectiveState,
     WorkProposal
 } from "./objectives.js";
+import { sessionToken } from "./machine.js";
 import { activeProjects, readRegistry, readStoreConfig, readVerdicts, Verdict } from "./paths.js";
 import { plural } from "./style.js";
 import { ArtifactMeta, PrunedMark, SelfEvent } from "./types.js";
@@ -36,9 +37,10 @@ export interface DecisionState
     ts: string;
     // The lifecycle every statement-type record shares: a live record
     // (`proposed`/`confirmed`), one replaced by a linked successor
-    // (`superseded`), one withdrawn with no successor (`retracted`), and a
-    // proposal turned down (`declined`). Only the live ones render as current.
-    status: "proposed" | "confirmed" | "superseded" | "retracted" | "declined";
+    // (`superseded`), one withdrawn with no successor (`retracted`), a
+    // proposal turned down (`declined`), and one whose record was taken back
+    // as a mistake (`undone`, #390). Only the live ones render as current.
+    status: "proposed" | "confirmed" | "superseded" | "retracted" | "declined" | "undone";
     humanConfirmed: boolean;
     expired: boolean;
     supersedes: string[];
@@ -66,7 +68,7 @@ export interface ConventionState
     id: string;
     ts: string;
     text: string;
-    status: "current" | "superseded" | "dropped";
+    status: "current" | "superseded" | "dropped" | "undone";
     supersedes: string[];
     // Why the rule was dropped. Absent on a supersession, which says why by
     // naming the rule that replaced it.
@@ -194,7 +196,13 @@ export interface WorkState
     // `review` is the sixth (#356): a unit whose current plan nobody has
     // accepted. It is open work — it lists, it counts, it can carry a design
     // — and it is the one status `work start` refuses.
-    status: "next" | "active" | "blocked" | "done" | "retired" | "review";
+    // `undone` is the seventh (#390): the unit's own creation was taken back,
+    // so it never held. It is not open work and it is not a closed outcome —
+    // it renders nowhere but on its own page and in the log.
+    status: "next" | "active" | "blocked" | "done" | "retired" | "review" | "undone";
+    // When the unit's own creation was taken back (#390). Present on an undone
+    // unit alone, and what its page states beside the status.
+    undoneAt?: string;
     // Which version of the plan is current and which one an acceptance bound,
     // for a unit that began as a proposal (#356). Absent on a `work add` unit
     // and on every unit folded from pre-cutover history.
@@ -593,7 +601,7 @@ function foldLog(model: ProjectModel, entityFold: EntityFold, events: SelfEvent[
     const creations = new Map<string, SelfEvent>();
     for (const event of events)
     {
-        applyEvent(model, event);
+        applyEvent(model, event, entityFold.annulled);
         // The entity reading of the same pass: `entity.*` and the goal chain
         // fold here; the other legacy kinds derive from their folded records.
         applyEntity(entityFold, event);
@@ -616,7 +624,7 @@ function reconcileEntityView(model: ProjectModel, entityFold: EntityFold, events
     syncLegacyRecords(model);
     const nativeWorks = projectNativeRecords(model, creations);
     carryLegacyMilestones(model);
-    replayDeferred(model, events, nativeWorks);
+    replayDeferred(model, events, nativeWorks, entityFold.annulled);
 }
 
 function deriveVerdictReads(model: ProjectModel, storeDir: string, slug: string): void
@@ -635,7 +643,7 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
     const entityFold = emptyEntityFold();
     const creations = foldLog(model, entityFold, events);
     reconcileEntityView(model, entityFold, events, creations);
-    deriveSignals(model, now);
+    deriveSignals(model, now, events);
     deriveVerdictReads(model, storeDir, slug);
     return model;
 }
@@ -780,7 +788,11 @@ function emptyModel(storeDir: string, slug: string): ProjectModel
     };
 }
 
-type Reducer = (model: ProjectModel, event: SelfEvent) => void;
+// The annulled set rides with the event because one reducer needs it: a
+// report taken back must leave every surface that read it (#390), and the
+// replay pass below calls `applyEvent` directly, so a check at the fold's
+// boundary would be bypassed by it.
+type Reducer = (model: ProjectModel, event: SelfEvent, annulled: Set<string>) => void;
 
 // Exact types first, then namespaces. An event matching neither folds to
 // nothing, which is what the retired namespaces (changeset.*, lease.*, merge.*,
@@ -803,15 +815,15 @@ const NAMESPACE_REDUCERS: ReadonlyArray<readonly [string, Reducer]> = [
     ["convention.", applyConvention]
 ];
 
-function applyEvent(model: ProjectModel, event: SelfEvent): void
+function applyEvent(model: ProjectModel, event: SelfEvent, annulled: Set<string>): void
 {
     const exact = EXACT_REDUCERS.find(([type]) => type === event.type);
     if (exact !== undefined)
     {
-        exact[1](model, event);
+        exact[1](model, event, annulled);
         return;
     }
-    NAMESPACE_REDUCERS.find(([prefix]) => event.type.startsWith(prefix))?.[1](model, event);
+    NAMESPACE_REDUCERS.find(([prefix]) => event.type.startsWith(prefix))?.[1](model, event, annulled);
 }
 
 // One correction is one event: the replacement is recorded and the conventions
@@ -1132,7 +1144,7 @@ function projectNativeRecords(model: ProjectModel, creations: Map<string, SelfEv
     // Milestones after the objectives they hang under, and work last: a
     // unit's member-of links resolve against the projected outcome layer, and
     // a union-merged log can order any of the pairs backwards.
-    for (const entity of natives.filter((item) => item.source === "milestone"))
+    for (const entity of natives.filter((item) => item.source === "milestone" && item.status !== "undone"))
     {
         projectMilestone(model, entity, creations.get(entity.id));
     }
@@ -1239,7 +1251,7 @@ function projectConvention(entity: EntityState): ConventionState
         ts: entity.ts,
         text: entity.text,
         status: entity.status === "confirmed" || entity.status === "proposed" ? "current"
-            : entity.status === "superseded" ? "superseded" : "dropped",
+            : entity.status === "superseded" ? "superseded" : entity.status === "undone" ? "undone" : "dropped",
         supersedes: supersedesOf(entity),
         closedWhy: entity.closedWhy,
         visibility: entity.visibility,
@@ -1280,6 +1292,12 @@ function projectObjective(entity: EntityState, creation: SelfEvent | undefined):
 // status, because completion and withdrawal say more than "still asserted".
 function objectiveStatusOf(entity: EntityState): ObjectiveState["status"]
 {
+    // Ahead of the execution reading: a record whose creation was taken back
+    // never held, so nothing it recorded afterwards says anything about it.
+    if (entity.status === "undone")
+    {
+        return "undone";
+    }
     if (entity.execution?.status === "done")
     {
         return "reached";
@@ -1434,7 +1452,10 @@ function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEve
     // A plan awaiting review is a unit too, in the `review` status: the
     // dispatch gate has to see it to refuse a start by name, and a filter
     // restated in six renderers is what a sixth status exists instead of.
-    if (!entity.confirmedOnce && !awaitsReview(entity))
+    // An undone unit is projected although it is neither confirmed nor
+    // awaiting review: `self work show <id>` has to keep answering for an id a
+    // reader followed out of a commit message, and say it was a mistake.
+    if (!entity.confirmedOnce && !awaitsReview(entity) && entity.status !== "undone")
     {
         return;
     }
@@ -1465,6 +1486,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         ts: entity.ts,
         lastEventTs: entity.execution?.ts ?? entity.ts,
         status: workStatusOf(entity),
+        undoneAt: entity.undoneAt,
         blockedOn: entity.execution?.status === "blocked" ? entity.execution.on ?? "dependency" : undefined,
         blockedWhy: entity.execution?.status === "blocked" ? entity.execution.why : undefined,
         retiredWhy: entity.execution?.status === "retired" ? entity.execution.why ?? "retired" : undefined,
@@ -1486,6 +1508,10 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
 
 function workStatusOf(entity: EntityState): WorkState["status"]
 {
+    if (entity.status === "undone")
+    {
+        return "undone";
+    }
     const status = entity.execution?.status;
     if (status === "in-progress")
     {
@@ -1572,7 +1598,7 @@ function projectProposal(entity: EntityState, creation: SelfEvent)
 // the first pass they attach to nothing when they name a unit the projection
 // had not created yet, so the lines naming a native unit run once more here —
 // everything else already attached, and runs zero times.
-function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: Set<string>): void
+function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: Set<string>, annulled: Set<string>): void
 {
     if (nativeWorks.size === 0)
     {
@@ -1583,7 +1609,7 @@ function replayDeferred(model: ProjectModel, events: SelfEvent[], nativeWorks: S
         const ref = attachedWorkOf(event);
         if (ref !== undefined && nativeWorks.has(ref))
         {
-            applyEvent(model, event);
+            applyEvent(model, event, annulled);
         }
     }
 }
@@ -1756,10 +1782,14 @@ function applyAttempt(model: ProjectModel, event: SelfEvent): void
     }
 }
 
-function applyReport(model: ProjectModel, event: SelfEvent): void
+// A report taken back is a report that was never filed (#390): it leaves the
+// unit's history, the handoff packet and the friction the sweep reads. The
+// guard sits inside the reducer rather than at the fold's boundary because
+// `replayDeferred` calls `applyEvent` directly.
+function applyReport(model: ProjectModel, event: SelfEvent, annulled: Set<string>): void
 {
     const work = model.works.find((item) => item.id === event.refs?.work);
-    if (work === undefined)
+    if (work === undefined || annulled.has(event.id))
     {
         return;
     }
@@ -1883,7 +1913,7 @@ function deriveWorkSignals(model: ProjectModel, work: WorkState, now: Date): voi
     // Derived for open units only. A closed unit was already judged by the
     // gate when it was closed, and asking again on a page that says it is done
     // would answer a question nobody can act on.
-    if (work.status !== "done" && work.status !== "retired")
+    if (isOpenWork(work))
     {
         work.owes = completionRefusal(work) ?? undefined;
     }
@@ -1926,10 +1956,34 @@ function frictionSignals(model: ProjectModel, now: Date): string[]
         + ` in the last ${FRICTION_WINDOW_DAYS} days — self report … --friction "<what differed>"`];
 }
 
-function deriveSignals(model: ProjectModel, now: Date): void
+// A record is settled by the next append and by nothing else (#390 §2.2), so
+// the newest append is the one nobody has built on yet. Saying so on every
+// write of this session would be noise — the receipt already said it — so the
+// line is scoped to the case that motivates it: a session resumes, and the
+// last thing recorded was written by someone else and never looked at.
+//
+// An annulment is not flagged: it is the answer to this line, not a new
+// record awaiting one.
+function unreviewedSignal(model: ProjectModel, events: SelfEvent[]): string[]
+{
+    const newest = [...events].sort((left, right) =>
+        left.ts.localeCompare(right.ts) || left.id.localeCompare(right.id)).at(-1);
+    if (newest === undefined || newest.type === "entity.annulled" || newest.type === "entity.restored"
+        || newest.origin.session === sessionToken())
+    {
+        return [];
+    }
+    const named = String(newest.payload.entity ?? newest.refs?.work ?? "");
+    const text = model.entities.find((item) => item.id === named)?.text ?? String(newest.payload.text ?? "");
+    return [`the last record is unreviewed: ${`${named} ${text}`.trim()} [${newest.id}]`
+        + " — `self undo` takes it back"];
+}
+
+function deriveSignals(model: ProjectModel, now: Date, events: SelfEvent[]): void
 {
     model.health.push(...deriveGoals(model.goals, model.works, now, model.zone));
     model.health.push(...frictionSignals(model, now));
+    model.health.push(...unreviewedSignal(model, events));
     noteProposedObjectives(model);
     expireProposedDecisions(model, now);
     for (const work of model.works)
@@ -2093,7 +2147,16 @@ function evidenceByBranch(work: WorkState): Map<string, Set<string>>
 // append would pay for it.
 function stated(works: WorkState[]): WorkState[]
 {
-    return works.filter((work) => work.status !== "done" && work.status !== "retired");
+    return works.filter(isOpenWork);
+}
+
+// A unit that still counts as work. `undone` joins done and retired here for a
+// stronger reason than either (#390): the unit's own creation was taken back,
+// so it never held at all. Written once because six surfaces asked the
+// question and a seventh would have asked it a seventh way.
+export function isOpenWork(work: WorkState): boolean
+{
+    return work.status !== "done" && work.status !== "retired" && work.status !== "undone";
 }
 
 // A verdict that cannot locate the commit cannot say whether it shipped.

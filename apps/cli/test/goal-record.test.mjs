@@ -160,12 +160,14 @@ test("B7: superseding an already superseded goal destroys nothing, so no gate st
     assert.match((await must(box, dir, ["context"])).out, /B7 a third direction/);
 });
 
-test("B8: undo gives a superseded goal back and leaves the successor standing", async () =>
+// #390 cell 19: the narrow form. Without `--supersession` the same call is
+// cell 20 and takes the successor back with the displacement.
+test("B8: undo --supersession gives a superseded goal back and leaves the successor standing", async () =>
 {
     const dir = await project("b8");
     const first = await addGoal(dir, "B8 the first direction");
     const replacing = await approvedIn(box, dir, ["goal", "add", "B8 the second direction", "--supersedes", first], first);
-    const undone = await selfIn(box, dir, ["undo", idIn(replacing.printed), "--why", "it stands beside the first, it does not replace it"]);
+    const undone = await selfIn(box, dir, ["undo", idIn(replacing.printed), "--supersession", "--why", "it stands beside the first, it does not replace it"]);
     assert.equal(undone.code, 0, undone.out);
     assert.match((await must(box, dir, ["state", "show", first])).out, /confirmed/);
     const context = (await must(box, dir, ["context"])).out;

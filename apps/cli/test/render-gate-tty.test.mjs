@@ -80,8 +80,11 @@ test("cell 8: at a styled terminal, an event verb prints today's ✓ line", asyn
     // The id is read by its own grammar rather than out of the first brackets:
     // a styled line opens with an escape sequence, and those carry brackets too.
     const id = answer.printed.match(/\[([0-9abcdefghjkmnpqrstvwxyz]{26})\]/)[1];
+    // The review line #390 added is the append's too, and dim for the same
+    // reason the summary is: it is not the command's answer.
     assert.equal(answer.printed,
-        `${green("✓")} ${bold("entity.proposed")}  ${dim(text)}  ${dim(`[${id}]`)}\n`);
+        `${green("✓")} ${bold("entity.proposed")}  ${dim(text)}  ${dim(`[${id}]`)}\n`
+        + `${dim(`  ${text} — verify; wrong? self undo ${id}`)}\n`);
 });
 
 // The bare id a work unit is created under is a receipt, and a receipt is the
@@ -95,7 +98,8 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
     const outcome = "the receipts answer through the gate";
     const answer = await approvedIn(box, demo, ["work", "add", outcome], "");
     assert.equal(answer.code, 0, answer.out);
-    const [announced, id] = answer.printed.split("\n");
+    // The append's own two lines since #390, then the id.
+    const [announced, , id] = answer.printed.split("\n");
     const event = announced.match(/\[([0-9abcdefghjkmnpqrstvwxyz]{26})\]/)[1];
     assert.equal(announced, `${green("✓")} ${bold("entity.confirmed")}  ${dim(`${id} ${outcome}`)}  ${dim(`[${event}]`)}`);
     assert.match(answer.printed, /\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n/);

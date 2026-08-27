@@ -252,6 +252,9 @@ test("stage 5 cell 13: a leaf whose run returns void dispatches and prints its a
     const answer = await selfIn(box, demo, ["decide", "void stays legal", "--why", "the shapes are what a handler may return, not what it must"]);
     assert.equal(answer.code, 0, answer.out);
     const lines = answer.out.split("\n").filter((line) => line !== "");
-    assert.equal(lines.length, 1, answer.out);
+    // Both lines are the append's own (#390): nothing came back from the
+    // handler, which is what this cell is about.
+    assert.equal(lines.length, 2, answer.out);
     assert.match(lines[0], /^entity\.confirmed recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]$/);
+    assert.match(lines[1], /^ {2}void stays legal — verify; wrong\? self undo [0-9abcdefghjkmnpqrstvwxyz]{26}$/);
 });

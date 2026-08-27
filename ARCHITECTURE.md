@@ -235,14 +235,35 @@ because a log merged from another clone can carry a revision written before
 the withdrawal was pulled.
 
 Only an event naming that withdrawal *by id* reverses it, which is what `undo`
-records — `entity.restored` carrying `refs.annuls`. That case is exactly the
+records — `entity.annulled` carrying `refs.annuls`. That case is exactly the
 one the rule above is not written against: an undo cannot have been composed
 without seeing the event it takes back. The fold collects the annulled ids
 before it reads anything else and skips those events, so every rule keeps its
 shape — first-withdrawal-wins still holds among the withdrawals that stand —
 and binding to an id rather than to log order is what keeps a merged log
-folding to one answer. An annulled supersession gives back what it displaced
-and leaves its successor standing, without the link.
+folding to one answer. `undo --supersession` gives back what a creation
+displaced and leaves its successor standing, without the link.
+
+The ref, not the event type, carries that meaning: the fold keys on
+`refs.annuls` whatever type the line is, so a log written before #390 — where
+the undo's type was the legacy `entity.restored`, and its one reach into a
+creation was that narrow supersession undo — folds byte-identically and
+unmigrated.
+
+A mistake is undone rather than superseded (#390). Supersession says an outcome
+moved to a successor; an undo says nothing was there to move, and `self undo`
+owes no `--why` because "this was a mistake" is the whole statement. Every
+`entity.*` kind and `report.added` are taken back; a short list of kinds is
+refused **by name**, each refusal naming the verb that does the job — a
+person's ruling on a design report, stored bytes, a project archive or restore,
+process telemetry, and an undo itself. A record something was already built on
+is refused with the list of what stands on it; undo never cascades, because a
+cascade computed on one clone would annul a set another clone would not.
+
+One append is one undo. `refs.batch` marks an append that held more than one
+event, and the undo takes back the coupled component inside it — the events
+naming the same record — so `work done --report` comes back whole while
+`self sweep --record`'s unrelated proposals come back one at a time.
 
 Lifecycle refs also survive log order. A union merge orders lines by neither
 time nor dependency, so a retraction can sit above the decision it withdraws;

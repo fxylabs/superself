@@ -2,7 +2,7 @@ import { artifactPointer, EntityState, isCurrent, orderEntities, pendingSummary,
 import { commonProtocolLines } from "./connect.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
-import { eventRecord, eventSummary, readEvents } from "./logfile.js";
+import { annulledEvents, eventRecord, eventSummary, readEvents } from "./logfile.js";
 import {
     AttentionRow,
     ATTENTION_ORDER,
@@ -18,6 +18,7 @@ import {
     projectGoalLine,
     ProjectModel,
     HandoffConvention,
+    isOpenWork,
     ReportEntry,
     reportProjection,
     reviewWork,
@@ -376,7 +377,7 @@ function checkoutGuidance(snapshot: HandoffSnapshot): string[]
 
 function terminalWork(work: WorkState): boolean
 {
-    return work.status === "done" || work.status === "retired";
+    return !isOpenWork(work);
 }
 
 function snapshotLimitLines(snapshot: HandoffSnapshot): string[]
@@ -798,7 +799,7 @@ function deadlineRows(model: ProjectModel, linked: ForeignObjectiveView): string
 function foreignDeadlineRows(model: ProjectModel, linked: ForeignObjectiveView): { target: string; id: string; row: string }[]
 {
     const rows = new Map<string, { target: string; id: string; row: string }>();
-    for (const work of model.works.filter((item) => item.status !== "done" && item.status !== "retired"))
+    for (const work of model.works.filter(isOpenWork))
     {
         for (const link of work.foreignObjectives.filter((item) => item.project !== model.slug))
         {
@@ -1364,7 +1365,7 @@ function countLine(works: WorkState[]): string
 export function workList(ctx: ProjectScope): CommandOutput
 {
     const model = renderedModel(ctx.storeDir, ctx.project);
-    const open = model.works.filter((w) => w.status !== "done" && w.status !== "retired");
+    const open = model.works.filter(isOpenWork);
     const rows = open.length === 0 ? ["no open work"] : open.map((work) => openWorkRow(model, work));
     return [{
         kind: "listing",
@@ -1418,9 +1419,12 @@ export function projectLog(ctx: ProjectScope, limit: number): CommandOutput
 {
     const events = readEvents(ctx.storeDir, ctx.project);
     const shown = events.slice(-limit);
+    // Read once for the page, never per row: the set is a pass over the log,
+    // and asking it inside the map would make the render quadratic.
+    const annulled = annulledEvents(events);
     return [{
         kind: "listing",
-        rows: shown.map((event) => logLine(event, undefined)),
+        rows: shown.map((event) => logLine(event, undefined, annulled)),
         total: events.length,
         noun: "event",
         window: { shown: shown.length, recover: pointerTo({ verb: "log", lines: events.length }, shellArgument(ctx.project)) }
@@ -1477,9 +1481,18 @@ function historyLines(record: HistoryRecord, page: number): string[]
     const rest = events.length - start - HISTORY_PAGE;
     return [
         head,
-        ...events.slice(start, start + HISTORY_PAGE).map((event) => logLine(event, undefined)),
+        ...pageRows(events, start),
         ...(rest > 0 ? [`… ${rest} more; run \`${nextPage(record, page + 1)}\``] : [])
     ];
+}
+
+// One page of a record's own history. The annulled set is read once for the
+// page rather than once per row: it is a pass over the log, and asking it
+// inside the map would make the render quadratic in the log's length.
+function pageRows(events: SelfEvent[], start: number): string[]
+{
+    const annulled = annulledEvents(events);
+    return events.slice(start, start + HISTORY_PAGE).map((event) => logLine(event, undefined, annulled));
 }
 
 // A page is counted from one. A page past the last is answered rather than
@@ -1532,12 +1545,13 @@ export function workspaceLog(scopes: ProjectScope[], limit: number): CommandOutp
         .map((event) => ({ event, slug: scope.project })));
     merged.sort((left, right) => compareDated(left.event, right.event));
     const shown = merged.slice(-limit);
+    const annulled = annulledEvents(merged.map((item) => item.event));
     // The whole of this log is the workspace's, so the command for the rest
     // names `--workspace` and no project: pointing at one of the projects it
     // merged would answer a narrower question than the one that was asked.
     return [{
         kind: "listing",
-        rows: shown.map((item) => logLine(item.event, item.slug)),
+        rows: shown.map((item) => logLine(item.event, item.slug, annulled)),
         total: merged.length,
         noun: "event",
         window: { shown: shown.length, recover: workspacePointer({ verb: "log", lines: merged.length }) }
@@ -1547,17 +1561,20 @@ export function workspaceLog(scopes: ProjectScope[], limit: number): CommandOutp
 // One event, styled for a terminal and plain for everything else. The plain
 // form is the machine contract, so the project column appears only in the
 // workspace form — the surface where a line without it is ambiguous.
-function logLine(event: SelfEvent, slug: string | undefined): string
+function logLine(event: SelfEvent, slug: string | undefined, annulled: Set<string> = new Set()): string
 {
+    // The mark, not a filter: an undone event keeps its place in the log, and
+    // the row says it no longer holds (#390 R3).
+    const undone = annulled.has(event.id) ? " · undone" : "";
     if (!styled)
     {
-        return `${slug === undefined ? "" : slug + "  "}${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}`;
+        return `${slug === undefined ? "" : slug + "  "}${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}${undone}`;
     }
     const lead = slug === undefined ? 0 : displayWidth(slug) + 2;
     const ts = event.ts.slice(5, 16).replace("T", " ");
     const summary = fit(eventSummary(event).split("\n", 1)[0], Math.max(20, termWidth() - 37 - lead - event.id.length));
     return `${slug === undefined ? "" : dim(slug + "  ")}${dim(ts)}  ` +
-        `${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}`;
+        `${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}${dim(undone)}`;
 }
 
 function eventStyle(type: string): (text: string) => string

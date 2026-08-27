@@ -25,7 +25,7 @@ prints them during the same run.
 | Outcomes | `goal add "<text>" [--supersedes <id>] [--workspace]`, `goal retract <id> --why "<reason>"`, `objective ...`, `milestone ...` |
 | Decisions and conventions | `decide ...`, `convention add "<text>" [--workspace] [--public] [--artifact <id\|path>]`, `convention drop <event-id>` |
 | Approving a reviewed set | `apply <file>` |
-| Taking a destruction back | `undo <event-id> --why "<reason>"` |
+| Taking a mistaken record back | `undo [<event-id>] [--supersession] [--why "<reason>"]` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Reusable procedures | `runbook add "<name>" --stage s`, `runbook show <id|name>`, `runbook revise <id> --stage s --why w`, `runbook start <id> --instance <key>`, `runbook advance <key> --why w`, `runbook hold\|approve\|stop\|resume\|link <key>` |
 | Reusable skills | `skill [--project <slug>]`, `skill add "<name>" --command "<line>" --purpose "<what it is for>" [--workspace]`, `skill add "<name>" --file <path> --purpose "<what it is for>"`, `skill show <id\|name>`, `skill drop <id\|name> --why w` |
@@ -123,6 +123,51 @@ as any other project, with one line saying it is set aside.
 from anywhere in the workspace, while `undo` reads its project from the working
 directory — and a project that is set aside frequently has no checkout on this
 machine at all.
+
+### Taking a mistaken record back
+
+A record that turns out to be a plain mistake — a unit added with the wrong
+outcome, a wrong `done`, a wrong link — is undone rather than superseded.
+Supersession says an outcome moved to a successor; an undo says nothing was
+there to move.
+
+```bash
+cd ~/undo-demo
+self project init
+self decide "prefer the streaming client for large payloads"
+self undo
+```
+
+`self undo` with no id takes back the newest append, which is the one the
+receipt was just printed for. Naming the event id takes back that one instead,
+and any unambiguous prefix of it resolves. No `--why` is owed: "this was a
+mistake" is the whole statement, and the annulment names the event it reversed.
+
+Nothing is deleted. The undo is itself an event, both halves stay in `self log`,
+and the row it took back is marked `· undone`. A record whose creation was
+undone still answers to `self work show <id>` — it reads `Status: undone`, so a
+reader who followed the id out of a commit message is told it was a mistake
+rather than told the id is unknown.
+
+An append that was one state change comes back whole: `work done --report`
+writes the report and the completion together, and undoing either takes back
+both. An append that was several unrelated changes does not — undoing one of
+`self sweep --record`'s proposals leaves the others standing.
+
+A record something was already built on is refused, with the list of what
+stands on it and the lines to take those back first. Undo never cascades.
+
+Some kinds are refused by name, each naming the verb that does the job instead:
+a person's ruling on a design report, a registered artifact or a prune, a
+project archive or restore, process telemetry, and an undo itself.
+
+`--supersession` narrows an undo of a record that displaced another: the record
+stands and only its claim to replace the older one is taken back.
+
+Every mutating command's receipt prints the record it actually resolved and the
+exact line that takes it back, so a wrong id is caught before anything is built
+on it. `--meant "<what you meant>"` adds the caller's own restatement beside it
+and records it on the event; it is printed, never judged.
 
 ### Approving a reviewed set at once
 

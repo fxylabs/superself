@@ -4,7 +4,7 @@ import { foldProject } from "./fold.js";
 import { commitAll, currentBranch, topOf } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { sessionToken } from "./machine.js";
-import { notice } from "./output.js";
+import { jsonMode, notice } from "./output.js";
 import { CliContext, ensureDir, invalidateResolution, projectStateDir, refuseArchived } from "./paths.js";
 import { assertSanitized } from "./sanitize.js";
 import { bold, dim, green, styled } from "./style.js";
@@ -22,9 +22,21 @@ let machineMode = false;
 // ride into the batch beside the ones that do.
 let heldForApproval = false;
 
+// What the caller said it meant by this call (#390), from the `--meant` host
+// flag. Recorded beside what the command actually resolved, so the receipt can
+// print two independent statements of the same thing side by side — which is
+// the cross-check. Never judged: a fuzzy comparator would be a second thing to
+// be wrong about.
+let statedIntent: string | undefined = undefined;
+
 export function holdAppends(on: boolean): void
 {
     heldForApproval = on;
+}
+
+export function stateIntent(text: string | undefined): void
+{
+    statedIntent = text;
 }
 
 // A hold is closed by the collector that opened it, and an exception thrown
@@ -36,6 +48,7 @@ export function resetPipeline(): void
 {
     machineMode = false;
     heldForApproval = false;
+    statedIntent = undefined;
 }
 
 export function makeEvent(
@@ -79,7 +92,12 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, 
 export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: string, onRecorded?: () => void): void
 {
     refuseHeld();
-    // First, before the branch stamp and before a byte reaches the log: what an
+    // The stated intent is stamped before the sanitizer runs, not after: it is
+    // free text off the command line and owes the same check every other
+    // free-text payload owes.
+    stampIntent(events);
+    stampBatch(events);
+    // Then, before the branch stamp and before a byte reaches the log: what an
     // event carries is checked while refusing it still costs only this command.
     events.forEach((event) => assertSanitized(event));
     requireWritable(ctx, events);
@@ -112,6 +130,8 @@ export function recordCalls(calls: RecordedCall[], summary: string): void
         return;
     }
     const events = calls.flatMap((call) => call.events);
+    stampIntent(events);
+    stampBatch(events);
     events.forEach((event) => assertSanitized(event));
     calls.forEach((call) => requireWritable(call.ctx, call.events));
     calls.forEach((call) => stampBranch(call.ctx, call.events));
@@ -167,6 +187,29 @@ function refuseHeld(): void
     {
         throw new CliError("this records something rather than destroying a record, and one confirmation covers "
             + "only the calls that need a person's approval");
+    }
+}
+
+// The append boundary, stamped only where the append holds more than one
+// event (#390). An undo takes back everything one state change wrote, and log
+// adjacency cannot say what one state change was: a union merge of two clones'
+// logs interleaves their lines. Absent on every event written before this, so
+// each of those is a unit of one and no log is migrated.
+function stampBatch(events: SelfEvent[]): void
+{
+    if (events.length < 2)
+    {
+        return;
+    }
+    const batch = ulid();
+    events.forEach((event) => { event.refs = { ...event.refs, batch }; });
+}
+
+function stampIntent(events: SelfEvent[]): void
+{
+    if (statedIntent !== undefined)
+    {
+        events.forEach((event) => { event.payload = { ...event.payload, meant: statedIntent }; });
     }
 }
 
@@ -230,7 +273,33 @@ function announce(events: SelfEvent[], summary: string): void
         notice(styled
             ? `${green("✓")} ${bold(event.type)}  ${dim(truncate(summary, 80))}  ${dim(`[${event.id}]`)}`
             : `${event.type} recorded [${event.id}]`);
+        const review = reviewLine(event, summary);
+        if (review !== null)
+        {
+            notice(styled ? dim(review) : review);
+        }
     }
+}
+
+// The review a record gets before anything is built on it (#390 §2). What
+// catches the mistakes an undo exists for is the *resolved* record printed
+// back: an agent that typed one id and meant its neighbour finds out here,
+// because the outcome text it reads is the one it actually wrote against. The
+// line is built at this one seam because every mutating command passes through
+// it, including every command added after this line was written.
+//
+// An annulment is exempt: an undo is not undone, so handing back a line that
+// would be refused would teach the wrong grammar.
+function reviewLine(event: SelfEvent, summary: string): string | null
+{
+    // A machine surface owns its stdout: a caller that asked for JSON gets the
+    // JSON and nothing else to parse around, the review line included.
+    if (jsonMode() || event.type === "entity.annulled" || event.type === "entity.restored")
+    {
+        return null;
+    }
+    const meant = statedIntent === undefined ? "" : `  ·  meant: ${truncate(statedIntent, 60)}`;
+    return `  ${truncate(summary, 80)}${meant} — verify; wrong? self undo ${event.id}`;
 }
 
 function truncate(text: string, max: number): string

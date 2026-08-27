@@ -26,7 +26,7 @@
 // | 16 | cwd is outside any project              | `revise`            | refused by the project resolver |
 // | 17 | cwd is outside any project              | `accept`            | resolves through the record |
 // | 18 | v3 current, v2 accepted                 | `undo <v3>`         | v2 current and accepted again |
-// | 19 | v2 accepted                             | `undo <accept>`     | refused by name; names `work revise` |
+// | 19 | v2 accepted                             | `undo <accept>`     | back to review; re-accepting still needs a person (inverted by #390) |
 // | 20 | a gap proposal, never started           | `revise` + `accept` | the member-of edge is untouched |
 // | 21 | v2 current                              | `revise` same text  | refused; nothing recorded |
 // | 22 | a done unit                             | `revise`            | refused: already done |
@@ -318,14 +318,18 @@ test("18: undoing a revision makes the version before it current, and accepted a
     assert.ok(page.includes("18: cut the timeout to 3s"), `the version before the revision is not current:\n${page}`);
 });
 
-test("19: undoing an acceptance is refused by name, and the answer is a revision", async () =>
+// Inverted by #390 (its cell 6): an acceptance is taken back. It can only ever
+// move the record back to `proposed`, so re-accepting still costs a person and
+// a terminal — an eraser cannot manufacture a person's judgement.
+test("19: undoing an acceptance returns the plan to review, and re-accepting still needs a person", async () =>
 {
     const id = await propose("19: cut the timeout to 5s");
     const accepted = idIn((await mustPerson(box, demo, ["work", "accept", id])).out);
-    const refused = await selfIn(box, demo, ["undo", accepted, "--why", "it should not have been accepted"]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /an acceptance is not taken back/);
-    assert.match(refused.out, new RegExp(`self work revise ${id}`));
+    const undone = await must(box, demo, ["undo", accepted]);
+    assert.match(undone.out, /is proposed again/);
+    assert.match(await show(id), /- Status: review/);
+    const refused = await selfIn(box, demo, ["work", "accept", id]);
+    assert.equal(refused.code, 1, refused.out);
 });
 
 test("20: revising a gap proposal keeps its member-of edge, and re-accepting states it once", async () =>

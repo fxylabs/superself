@@ -18,7 +18,12 @@ export const LINK_TYPES = ["member-of", "supersedes", "relates"] as const;
 
 export type Exposure = (typeof EXPOSURES)[number];
 export type LinkType = (typeof LINK_TYPES)[number];
-type EntityStatus = "proposed" | "confirmed" | "superseded" | "retracted";
+// `undone` is the record a mistake left behind (#390): its creation was
+// annulled, so it never held, and it is neither a withdrawal nor a
+// replacement. It leaves every live surface and stays resolvable by id, so a
+// reader who followed the id out of a commit message is told it was a mistake
+// rather than told the id is unknown.
+type EntityStatus = "proposed" | "confirmed" | "superseded" | "retracted" | "undone";
 
 // Where a record renders, never where it is stored (#181 D1). Three forms:
 // `project` — the project whose log holds it, the default and what every event
@@ -202,6 +207,8 @@ export interface EntityState
     // legacy read shapes, and this is the mark it projects by.
     native?: boolean;
     supersededBy?: string;
+    // When the creation was annulled, on an undone record alone (#390).
+    undoneAt?: string;
     // Why the record was retracted, or what closed the legacy record it
     // reads. Absent on a supersession, which says why by naming its successor.
     closedWhy?: string;
@@ -442,14 +449,23 @@ export interface EntityFold
     // ids first is what lets a union merge order the confirm above the
     // proposal it answers.
     confirmations: Set<string>;
-    // Every destructive event an `entity.restored` took back, by id. An undo
-    // names the event it reverses rather than asserting a new state, so the
-    // fold skips what was annulled and every rule below keeps its shape:
-    // first-withdrawal-wins still holds among the withdrawals that stand.
-    // Binding to an id rather than to log order is also what keeps a merged
-    // log safe — two clones fold the same lines to the same state whatever
-    // order the merge produced.
+    // Every event an annulment took back, by id. An undo names the event it
+    // reverses rather than asserting a new state, so the fold skips what was
+    // annulled and every rule below keeps its shape: first-withdrawal-wins
+    // still holds among the withdrawals that stand. Binding to an id rather
+    // than to log order is also what keeps a merged log safe — two clones fold
+    // the same lines to the same state whatever order the merge produced.
     annulled: Set<string>;
+    // The annulments that take back only what a creation displaced, not the
+    // record itself (#390 §1.4). `self undo --supersession` is the spelling,
+    // and every older log's `entity.restored` is read as one: that type only
+    // ever narrowed a creation this way, so a log written before #390 folds
+    // byte-identically.
+    narrowed: Set<string>;
+    // When each annulment was recorded, by the id it took back. The undone
+    // record's page states it: a reader who followed the id out of a commit
+    // message is told when it stopped holding, not only that it did.
+    annulledAt: Map<string, string>;
 }
 
 export function emptyEntityFold(): EntityFold
@@ -465,7 +481,9 @@ export function emptyEntityFold(): EntityFold
         coverage: [],
         revisions: [],
         confirmations: new Set(),
-        annulled: new Set()
+        annulled: new Set(),
+        narrowed: new Set(),
+        annulledAt: new Map()
     };
 }
 
@@ -481,10 +499,19 @@ export function collectAnnulled(fold: EntityFold, events: SelfEvent[]): void
 {
     for (const event of events)
     {
-        const annuls = event.type === "entity.restored" ? event.refs?.annuls : undefined;
-        if (typeof annuls === "string" && annuls !== "")
+        const annuls = event.refs?.annuls;
+        if (typeof annuls !== "string" || annuls === "")
         {
-            fold.annulled.add(annuls);
+            continue;
+        }
+        fold.annulled.add(annuls);
+        fold.annulledAt.set(annuls, event.ts);
+        // An older log's `entity.restored` is read as the narrow form for the
+        // reason the type name states: it took a *restoration* back, and the
+        // only creation it ever reached was one that had displaced something.
+        if (event.type === "entity.restored" || event.payload.scope === "supersession")
+        {
+            fold.narrowed.add(annuls);
         }
     }
 }
@@ -541,13 +568,23 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
     fold.entities.push(newEntity(fold, event, id));
 }
 
-// An annulled creation keeps its record and loses only what it displaced: the
-// accident an undo answers is a supersedes link that should never have been
-// attached, not the record it was attached to.
+// A narrowly annulled creation keeps its record and loses only what it
+// displaced: that accident is a supersedes link that should never have been
+// attached, not the record it was attached to. A record annulled outright
+// drops the links for the same reason it leaves the live set — a mistake
+// displaced nothing.
 function createdLinks(fold: EntityFold, event: SelfEvent): EntityLink[]
 {
     const links = readLinks(event.payload.links);
     return fold.annulled.has(event.id) ? links.filter((link) => link.type !== "supersedes") : links;
+}
+
+// Whether this creation's record itself was taken back (#390). The narrow
+// form is the older behaviour and says nothing about the record; the default
+// says the record was a mistake and never held.
+function undoneCreation(fold: EntityFold, event: SelfEvent): boolean
+{
+    return fold.annulled.has(event.id) && !fold.narrowed.has(event.id);
 }
 
 function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
@@ -569,7 +606,8 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         scope: readScopeValue(event.payload.scope),
         priority: readPriority(event.payload.priority),
         exposure: readExposure(event.payload.exposure),
-        status: confirmed ? "confirmed" : "proposed",
+        status: undoneCreation(fold, event) ? "undone" : confirmed ? "confirmed" : "proposed",
+        undoneAt: fold.annulledAt.get(event.id),
         humanConfirmed: event.origin.confirmed === true,
         confirmedOnce: confirmed,
         bornProposed: !confirmed,
@@ -661,7 +699,11 @@ function collectExecution(fold: EntityFold, event: SelfEvent): void
 function collectConfirm(fold: EntityFold, event: SelfEvent): void
 {
     const confirms = String(event.refs?.confirms ?? "");
-    if (confirms === "" || fold.confirms.some((item) => item.event === event.id))
+    // An annulled acceptance is dropped here rather than at each of the three
+    // places a confirm is read (#390): the status pass, the plan pass and the
+    // placement parking all ask this list, and filtering in one of them was
+    // what let an annulled placement confirm keep applying its placement.
+    if (confirms === "" || fold.annulled.has(event.id) || fold.confirms.some((item) => item.event === event.id))
     {
         return;
     }
@@ -766,7 +808,7 @@ interface DecisionSource
     ts: string;
     text: string;
     why?: string;
-    status: "proposed" | "confirmed" | "superseded" | "retracted" | "declined";
+    status: "proposed" | "confirmed" | "superseded" | "retracted" | "declined" | "undone";
     humanConfirmed: boolean;
     supersedes: string[];
     closedWhy?: string;
@@ -777,7 +819,7 @@ interface ConventionSource
     id: string;
     ts: string;
     text: string;
-    status: "current" | "superseded" | "dropped";
+    status: "current" | "superseded" | "dropped" | "undone";
     supersedes: string[];
     closedWhy?: string;
 }
@@ -973,7 +1015,9 @@ function applyCoverage(entities: EntityState[], fold: EntityFold): void
     const byId = new Map(entities.map((item) => [item.id, item]));
     for (const item of ordered(fold.coverage))
     {
-        const target = byId.get(item.entity);
+        // A claim taken back is a claim that was never made: the criterion
+        // gates done and reach again, everywhere the claim list is read.
+        const target = fold.annulled.has(item.event) ? undefined : byId.get(item.entity);
         if (target !== undefined && target.criteria.includes(item.claim.criterion))
         {
             target.covered.push(item.claim);
@@ -1196,7 +1240,7 @@ function applyPlacements(entities: EntityState[], fold: EntityFold): void
         left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
     for (const placement of ordered)
     {
-        const target = byId.get(placement.entity);
+        const target = fold.annulled.has(placement.event) ? undefined : byId.get(placement.entity);
         if (target === undefined || !isLive(target))
         {
             continue;
