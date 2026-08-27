@@ -96,7 +96,9 @@ const FIXTURE_SIZES = [
     ["$ self milestone   (in project, exit 0)", "1 milestone"],
     ["$ self work   (in project, exit 0)", "1 open work unit"],
     ["$ self artifact list   (in project, exit 0)", "1 artifact"],
-    ["$ self log -n 5   (in project, exit 0)", "last 5 of 15 events · self log -n 15 --project 'demo'"]
+    // Sixteen since #389: the scenario's unit is proposed and then accepted,
+    // which is one event more than the single `work add` it used to record.
+    ["$ self log -n 5   (in project, exit 0)", "last 5 of 16 events · self log -n 16 --project 'demo'"]
 ];
 
 /* ── scratch machines ──────────────────────────────────────────────── */

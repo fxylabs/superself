@@ -10,10 +10,10 @@
 // work-entry-gate.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "../dist/ids.js";
-import { approvedIn, demoWorkspace, idIn, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -150,6 +150,23 @@ test("cell 32: --supersedes composes with a gap brief and is not a brief flag", 
     assert.equal(payload.supersedes.entity, target);
     assert.equal(payload.objective, objective);
     assert.equal(payload.confidence, "medium");
+});
+
+// Surfaced by the implementation, not by the design: a correction is recorded
+// in the log that holds the unit, and calling another project's id unknown
+// sends the reader looking for a typo instead of a checkout.
+test("cell 75: a target another registered project owns is refused by naming that project", async () =>
+{
+    const second = join(ws, "second");
+    mkdirSync(second, { recursive: true });
+    git(box, second, ["init", "-q", "-b", "main"]);
+    await must(box, second, ["project", "init", "--name", "second", "--desc", "the other checkout", "--no-connect"]);
+    const target = await unit("cell 75: the outcome demo owns");
+    const refused = await selfIn(box, second, ["work", "propose", "cell 75: the corrected outcome",
+        "--supersedes", target, "--why", "the outcome moved"]);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, new RegExp(`${target} is demo's unit`));
+    assert.match(refused.out, /run this in demo's checkout/);
 });
 
 test("cell 73: the receipt says the target is untouched until a person accepts", async () =>

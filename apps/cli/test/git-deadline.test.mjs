@@ -161,7 +161,10 @@ test("nothing git runs may go looking for a keyboard when there is none", async 
     const remove = hook("post-commit", `printf '%s|%s\\n' "\${GIT_TERMINAL_PROMPT-unset}" "\${GIT_SSH_COMMAND-unset}" > ${probe}`);
     try
     {
-        await mustPerson(box, demo, ["work", "add", "runs with no terminal"]);
+        // `work propose`, not `work add`: this cell's subject is a process with
+        // no keyboard, and `work add` is refused for exactly that now (#389).
+        // Driving it as a person would hand git a terminal and prove nothing.
+        await must(box, demo, ["work", "propose", "runs with no terminal"]);
     }
     finally
     {
@@ -221,7 +224,10 @@ test("a read is not blocked by a writer stalled inside git", async () =>
     // A real child, because the in-process driver runs one command at a time
     // and the whole question is what a second, concurrent command sees.
     // Detached so the stalled git and its sleep can be killed as one group.
-    const writer = spawn(process.execPath, [bin, "work", "add", "stalled writer"], {
+    // A child records with `work propose`: a confirmed record needs a person at
+    // a keyboard (#389), and a detached child has none — what this cell needs is
+    // any write that reaches git and stalls there.
+    const writer = spawn(process.execPath, [bin, "work", "propose", "stalled writer"], {
         cwd: demo,
         env: { ...box.env, SUPERSELF_GIT_TIMEOUT_MS: "60000" },
         stdio: "ignore",

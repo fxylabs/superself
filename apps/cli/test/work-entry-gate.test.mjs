@@ -18,7 +18,6 @@ import {
     machine,
     must,
     mustPerson,
-    personIn,
     selfIn,
     spawnIn,
     workIdIn

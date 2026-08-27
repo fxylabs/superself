@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { demoWorkspace, machine, personIn } from "./harness.mjs";
+import { demoWorkspace, machine } from "./harness.mjs";
 import {
     installFixture, jsonOf, pluginSource, pluginsRoot, railEnv, railServer,
     readState, releaseDocument, selfAsync, selfSplit, signManifest, statePath, writeCredential, writeState
@@ -55,10 +55,12 @@ test("cell 1: a built-in verb reads nothing in the plugin tree", async () =>
 {
     const it = await workspaceBox();
     // A manifest no reader can parse. Building the verb index would throw on
-    // it, so a `work add` that succeeds is a `work add` that never looked.
+    // it, so a built-in that succeeds is one that never looked. `work propose`
+    // rather than `work add`: every call in this file is a spawned child, and a
+    // child has no person at its keyboard to record a confirmed unit (#389).
     installFixture(it, { key: "email" });
     writeFileSync(join(pluginsRoot(it), "email", "0.1.0", "manifest.json"), "{ not json");
-    assert.equal(personIn(it, it.demo, ["work", "add", "a built-in still resolves"]).code, 0);
+    assert.equal(selfIn(it, it.demo, ["work", "propose", "a built-in still resolves"]).code, 0);
 });
 
 test("cell 2: an unknown verb builds the index from metadata alone — no import, no signature check, no hash", () =>

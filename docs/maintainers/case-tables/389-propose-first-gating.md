@@ -3,8 +3,8 @@
 The design artifact for #389, written before the code and approved on the
 issue. Every cell below is one test, named by its cell number: cells 1-12,
 14, 20-22, 38-41, 48, 56-61 and 70-72 in
-`apps/cli/test/work-entry-gate.test.mjs`, cells 23-32, 42-55, 62-69 and 73 in
-`apps/cli/test/work-propose-supersedes.test.mjs`. The cells this issue leaves
+`apps/cli/test/work-entry-gate.test.mjs`, cells 23-32, 42-55, 62-69, 73 and 75
+in `apps/cli/test/work-propose-supersedes.test.mjs`. The cells this issue leaves
 unchanged name the test that already proves them. The table is the review
 surface: a cell the table lacks is a path nothing proves.
 
@@ -110,7 +110,7 @@ append through `recordRetirement`.
 | 16 | P, target retired | same | refused with the target's own reason — `supersede.test.mjs` B2 |
 | 17 | P, no `--why` | same | refused by the usage refusal naming `--why` — `supersede.test.mjs` B4 |
 | 18 | P, unknown target id | same | refused as an unknown work id — `supersede.test.mjs` B3 |
-| 19 | P, target is another kind of record | same | refused by `requireSupersedeKind` — `supersede.test.mjs` K10, K11 |
+| 19 | P, target is another kind of record | same | refused by `requireSupersedeKind` — `supersede.test.mjs` K11 |
 | 20 | A, target open | same | refused, naming `work propose "y" --supersedes <t> --why w` and the target it replaces; nothing appended; the retirement gate never runs |
 | 21 | A, target done | same | refused **for the target being done**, not for the person gate |
 | 22 | A, `--why` missing, target open | same | refused for the missing `--why`, not for the person gate |
@@ -130,13 +130,14 @@ append through `recordRetirement`.
 | 31 | A, plan text equals an open standalone plan's | same | refused by `requireNovel` |
 | 32 | A, target open, plus `--objective` and the full brief | same | records the gap brief **and** `payload.supersedes`; `--supersedes` is not a brief flag |
 | 73 | A, target open | receipt | carries `replaces <t> on acceptance — <t> is untouched until a person runs \`self work accept <id>\`` |
+| 75 | A, target owned by another registered project | same | refused by naming that project and its checkout, not by calling the id unknown. **Added during implementation**: the design left a foreign id to the ordinary unknown-id refusal, which sends the reader looking for a typo instead of a checkout. `work add --supersedes` answers the same way, through the same resolver |
 
 ### D. `work accept` × proposal state
 
 | # | State | Operation | Expected |
 |---|---|---|---|
 | 33 | P, plan open, no supersedes | `accept` | `entity.confirmed` binding the current revision; status `next` — `work-revise.test.mjs` cell 4, and cell 6 above |
-| 34 | P, plan already accepted | `accept` | refused: already accepted, before the person gate — `proposal-answer.test.mjs` cell 4, and cell 39 below |
+| 34 | P, plan already accepted | `accept` | refused: already accepted, before the person gate — `confirm-owner.test.mjs` cells 1-3, whose second run of the advertised line asserts it, and cell 39 below |
 | 35 | P, plan declined | `accept` | refused: already declined — `proposal-answer.test.mjs` cell 5 |
 | 36 | P, revised after accept | `accept` | binds the current revision; status `next` — `work-revise.test.mjs` cell 5 |
 | 37 | P, plan not accepted | `work start` | refused by `reviewRefusal`, naming `self work accept <id>` — `work-revise.test.mjs` cell 6 |
@@ -202,7 +203,8 @@ append through `recordRetirement`.
 | 72 | any | `self help agents`, `self help work` | the session-facing pages open with `work propose`, and the correction they spell is the propose one |
 | 74 | any | `docs.test.mjs`, the golden fixture | regenerated: the fixture's unit is proposed and accepted, the piped `work accept` refusal is pinned, and every documented `work add`/`work accept` line runs as the person the document describes |
 
-**74 cells.**
+**75 cells** — the design's 74, plus cell 75, which the implementation
+surfaced.
 
 ## Out of scope
 
