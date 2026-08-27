@@ -3,7 +3,7 @@ import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { branch, Command, leaf } from "./contract.js";
 import { isLive } from "./entities.js";
-import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
+import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
 import { artifactId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
 import { notice } from "./output.js";
@@ -1536,7 +1536,7 @@ function storedBytes(path: string): number
 function requireHumanPrune(record: ArtifactRecord, shared: number, bytes: number): HumanConfirmation
 {
     const disclosure = pruneDisclosure(record, shared, bytes).join("\n");
-    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    if (!personAtTerminal() || !process.stdout.isTTY)
     {
         throw new CliError([`removing stored bytes is a person's call, and this process has no terminal to make it at — `
             + "nothing was removed", "", disclosure, "", "  a person runs this in their own terminal:",

@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkoutBetween } from "../dist/paths.js";
-import { git, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 function gitOut(box, cwd, args)
 {
@@ -80,7 +80,7 @@ function subdirectory(dir, name)
 
 async function work(box, cwd)
 {
-    return workIdIn((await must(box, cwd, ["work", "add", "ship it"])).out);
+    return workIdIn((await mustPerson(box, cwd, ["work", "add", "ship it"])).out);
 }
 
 // What the last recorded report stamped. `refs.commits[0]` is the evidence

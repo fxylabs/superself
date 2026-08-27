@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 // Three projects: a contributing one, an owning one, and a third that holds
 // colliding ids and receives a scoped unit. Named rather than reusing the
@@ -75,7 +75,7 @@ objectiveFixture(a.box, a.ws, "gamma", "o-bbbbb", "collides abroad (gamma copy)"
 
 async function aWork(outcome)
 {
-    return workIdIn((await must(a.box, a.alpha, ["work", "add", outcome])).out);
+    return workIdIn((await mustPerson(a.box, a.alpha, ["work", "add", outcome])).out);
 }
 
 /* ── C. render surfaces ────────────────────────────────────────────── */
@@ -86,9 +86,9 @@ const cShared = objectiveIdIn((await must(c.box, c.beta, ["objective", "add", "s
 
 const cBare = objectiveIdIn((await must(c.box, c.beta, ["objective", "add", "untargeted beta objective"])).out);
 
-const cW1 = workIdIn((await must(c.box, c.alpha, ["work", "add", "c alpha unit one"])).out);
+const cW1 = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "c alpha unit one"])).out);
 
-const cW2 = workIdIn((await must(c.box, c.alpha, ["work", "add", "c alpha unit two"])).out);
+const cW2 = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "c alpha unit two"])).out);
 
 await must(c.box, c.alpha, ["work", "link", cW1, "--objective", cShared]);
 
@@ -338,7 +338,7 @@ test("C8 objective show --project answers from anywhere with the owner's merged 
 
 test("C9 a unit scoped to render in a third project takes its toward line and Deadlines row along", async () =>
 {
-    const work = workIdIn((await must(c.box, c.alpha, ["work", "add", "c9 travelling unit"])).out);
+    const work = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "c9 travelling unit"])).out);
     await must(c.box, c.alpha, ["work", "link", work, "--objective", cShared]);
     await must(c.box, c.alpha, ["work", "start", work]);
     await must(c.box, c.alpha, ["state", "place", work, "--scope", "gamma", "--why", "gamma runs it"]);
@@ -355,7 +355,7 @@ test("C9 a unit scoped to render in a third project takes its toward line and De
 test("D1 the owner dropping the objective discloses on the toward line, leaves the Deadlines, and keeps the owner's answer", async () =>
 {
     const dropped = objectiveIdIn((await must(c.box, c.beta, ["objective", "add", "beta outcome to drop", "--target", "2032-01-01"])).out);
-    const work = workIdIn((await must(c.box, c.alpha, ["work", "add", "d1 unit"])).out);
+    const work = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "d1 unit"])).out);
     await must(c.box, c.alpha, ["work", "link", work, "--objective", dropped]);
     await must(c.box, c.alpha, ["work", "start", work]);
     assert.ok((await must(c.box, c.alpha, ["context"])).out.includes("beta outcome to drop (beta)"));
@@ -370,7 +370,7 @@ test("D1 the owner dropping the objective discloses on the toward line, leaves t
 test("D2 a superseded objective discloses, and the link never auto-moves to the successor", async () =>
 {
     const old = objectiveIdIn((await must(c.box, c.beta, ["objective", "add", "beta outcome to supersede"])).out);
-    const work = workIdIn((await must(c.box, c.alpha, ["work", "add", "d2 unit"])).out);
+    const work = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "d2 unit"])).out);
     await must(c.box, c.alpha, ["work", "link", work, "--objective", old]);
     await must(c.box, c.alpha, ["work", "start", work]);
     objectiveFixture(c.box, c.ws, "beta", "o-ddddd", "the successor outcome", { links: [{ type: "supersedes", target: old }] });
@@ -388,7 +388,7 @@ test("D3 a unit done in the contributing project leaves the owner's counts by th
         const line = (await must(c.box, c.beta, ["objective"])).out.split("\n").find((row) => row.startsWith(cShared));
         return Number(line.match(/\[(\d+) work unit\(s\)\]/)[1]);
     };
-    const work = workIdIn((await must(c.box, c.alpha, ["work", "add", "d3 unit"])).out);
+    const work = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "d3 unit"])).out);
     await must(c.box, c.alpha, ["work", "link", work, "--objective", cShared]);
     const before = await count();
     assert.ok((await must(c.box, c.beta, ["objective", "show", cShared])).out.includes(`${work} (alpha)`));
@@ -399,7 +399,7 @@ test("D3 a unit done in the contributing project leaves the owner's counts by th
 
 test("D5 undoing the link event removes the link from every surface", async () =>
 {
-    const work = workIdIn((await must(c.box, c.alpha, ["work", "add", "d5 unit"])).out);
+    const work = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "d5 unit"])).out);
     await must(c.box, c.alpha, ["work", "link", work, "--objective", cShared]);
     await must(c.box, c.alpha, ["work", "start", work]);
     const event = linkEventsFor(c.ws, "alpha", work)[0];
@@ -413,7 +413,7 @@ test("D5 undoing the link event removes the link from every surface", async () =
 test("D6 an objective closed as reached discloses on the contributing toward line", async () =>
 {
     const reached = objectiveIdIn((await must(c.box, c.beta, ["objective", "add", "beta outcome to reach"])).out);
-    const work = workIdIn((await must(c.box, c.alpha, ["work", "add", "d6 unit"])).out);
+    const work = workIdIn((await mustPerson(c.box, c.alpha, ["work", "add", "d6 unit"])).out);
     await must(c.box, c.alpha, ["work", "link", work, "--objective", reached]);
     await must(c.box, c.alpha, ["work", "start", work]);
     await must(c.box, c.beta, ["objective", "close", reached, "--as", "reached"]);
@@ -425,7 +425,7 @@ test("D4 an unregistered owner is disclosed as dangling, and the link is kept", 
 {
     const d4 = await trio();
     const objective = objectiveIdIn((await must(d4.box, d4.beta, ["objective", "add", "an orphaned beta outcome"])).out);
-    const work = workIdIn((await must(d4.box, d4.alpha, ["work", "add", "d4 unit"])).out);
+    const work = workIdIn((await mustPerson(d4.box, d4.alpha, ["work", "add", "d4 unit"])).out);
     await must(d4.box, d4.alpha, ["work", "link", work, "--objective", objective]);
     await must(d4.box, d4.alpha, ["work", "start", work]);
     const registry = join(d4.ws, ".superself", "registry.jsonl");

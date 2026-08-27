@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -169,7 +169,7 @@ test("a plan naming one record twice is refused before anybody is asked", async 
 test("a plan mixing record kinds says how many records, not how many decisions", async () =>
 {
     const decision = await decided("H1 a decision that goes");
-    const unit = (await must(box, demo, ["work", "add", "H2 an outcome that is given up"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const unit = (await mustPerson(box, demo, ["work", "add", "H2 an outcome that is given up"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
     const path = plan("mixed-kinds.txt", [
         `decide retract ${decision} --why "spent"`,
         `work retire ${unit} --why "the outcome moved"`
@@ -391,7 +391,7 @@ test("a supersession discloses the record it would write, not only the one it re
 // outcome rather than taking a statement back.
 test("a retirement's reason is spelled retired, in a plan and in a single command", async () =>
 {
-    const unit = workIdIn((await must(box, demo, ["work", "add", "S1 an outcome that moved"])).out);
+    const unit = workIdIn((await mustPerson(box, demo, ["work", "add", "S1 an outcome that moved"])).out);
     const single = await selfIn(box, demo, ["work", "retire", unit, "--why", "the outcome moved to another unit"]);
     assert.equal(single.code, 1);
     assert.match(single.out, /retired because: the outcome moved to another unit/);

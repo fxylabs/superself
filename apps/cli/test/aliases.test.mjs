@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
+import { demoWorkspace, idIn, machine, must, mustPerson, selfIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -48,7 +48,7 @@ test("A1: all 8 preset verbs resolve through the table with spec §7 defaults", 
     const roadmap = entityIn((await must(box, demo, ["roadmap", "add", "the arc"])).out);
     assert.equal(await placementOf(roadmap), "placement: project · index");
     assert.ok((await must(box, demo, ["state", "show", roadmap])).out.includes("labels: roadmap"));
-    const work = (await must(box, demo, ["work", "add", "ship it"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const work = (await mustPerson(box, demo, ["work", "add", "ship it"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
     assert.equal(await placementOf(work), "placement: project · search");
 });
 

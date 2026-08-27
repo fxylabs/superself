@@ -11,13 +11,13 @@
 // resolver; the placement flag's own cells are in workspace-direction.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { demoWorkspace, machine, must, selfIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, mustPerson, selfIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
 const self = (cwd, args) => selfIn(box, cwd, args);
 
-await must(box, demo, ["work", "add", "scoped outcome"]);
+await mustPerson(box, demo, ["work", "add", "scoped outcome"]);
 
 test("a read answers for the named project from anywhere in the workspace", async () =>
 {

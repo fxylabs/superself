@@ -79,3 +79,24 @@ test("a write outside a registered project is refused with the remedy", () =>
     assert.notEqual(code, 0);
     assert.match(out, /not inside a registered project/);
 });
+
+// Cell 3 of #389, and the strongest form of it: a child spawned with
+// `stdio: ["ignore", …]` has no keyboard at all, which no driver can stand in
+// for. What it records instead is a proposal, which is the line the refusal
+// hands back — so the same process proves both halves of the rule.
+test("inside a project, a process with no terminal cannot record confirmed work, and proposes instead", () =>
+{
+    const project = join(workspace, "project");
+    mkdirSync(project);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: project, env, stdio: "ignore" });
+    assert.equal(self(["project", "init", "--name", "smoke", "--desc", "the smoke project", "--no-connect"], project).code, 0);
+    const refused = self(["work", "add", "an outcome recorded with nobody there"], project);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /recording confirmed work is a person's call/);
+    assert.match(refused.out, /self work propose "an outcome recorded with nobody there"/);
+    const proposed = self(["work", "propose", "an outcome recorded with nobody there"], project);
+    assert.equal(proposed.code, 0, proposed.out);
+    const accepted = self(["work", "accept", proposed.out.match(/\bw-[0-9a-z]{5}\b/)[0]], project);
+    assert.notEqual(accepted.code, 0);
+    assert.match(accepted.out, /accepting a plan is a person's call/);
+});

@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSyn
 import { join } from "node:path";
 import { artifactPointer } from "../dist/entities.js";
 import { foldProject } from "../dist/fold.js";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 // What a reference costs the tier holding the record: the rendered pointer,
 // read off the one constant the render itself reads. A number written here
@@ -158,7 +158,7 @@ test("6: a path that does not exist is refused, and writes no event", async () =
 
 test("7: registering a file is not evidence, so it never opens `work done`", async () =>
 {
-    const work = workIdIn((await must(reg, regPaths.demo, ["work", "add", "the flow works"])).out);
+    const work = workIdIn((await mustPerson(reg, regPaths.demo, ["work", "add", "the flow works"])).out);
     await must(reg, regPaths.demo, ["artifact", "add", "guide.md"]);
     const refused = await selfIn(reg, regPaths.demo, ["work", "done", work]);
     assert.notEqual(refused.code, 0);
@@ -440,7 +440,7 @@ test("31: the handoff packet carries the pointer", async () =>
 {
     const { box, demo, artifact } = await withGuide();
     await must(box, demo, ["convention", "add", "API design follows the guide", "--artifact", artifact]);
-    const work = workIdIn((await must(box, demo, ["work", "add", "the flow works"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "the flow works"])).out);
     const packet = (await must(box, demo, ["handoff", work])).out;
     assert.match(packet, new RegExp(`CONVENTION .* \\| API design follows the guide — see \`self artifact open ${artifact}\``));
 });

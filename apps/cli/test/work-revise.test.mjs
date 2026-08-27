@@ -43,7 +43,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -134,7 +134,7 @@ test("4: accepting binds the exact revision, and the same id becomes ordinary ne
 {
     const id = await propose("4: cut the timeout to 5s");
     const revised = idIn((await revise(id, "4: cut the timeout to 3s", "5s still times out in CI")).out);
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     assert.equal(eventOf(id, "entity.confirmed").refs.confirms, revised,
         "the acceptance names the record rather than the revision it read");
     assert.match(await show(id), /- Status: next/);
@@ -145,7 +145,7 @@ test("5: revising an accepted plan that never started returns it to review under
 {
     const id = await propose("5: cut the timeout to 5s");
     await revise(id, "5: cut the timeout to 3s", "5s still times out in CI");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await revise(id, "5: cut the timeout to 3s and pin the clock", "the retry needs a stable clock");
     const page = await show(id);
     assert.match(page, /- Status: review/);
@@ -159,7 +159,7 @@ test("6: start is refused while the current plan is unaccepted, and again while 
     const never = await selfIn(box, demo, ["work", "start", id]);
     assert.equal(never.code, 1);
     assert.match(never.out, new RegExp(`${id} is waiting on review — its plan \\(v1\\) has not been accepted; a person runs .self work accept ${id}.`));
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await revise(id, "6: cut the timeout to 3s", "5s still times out in CI");
     const stale = await selfIn(box, demo, ["work", "start", id]);
     assert.equal(stale.code, 1);
@@ -170,7 +170,7 @@ test("7: an accepted current plan starts, prints the brief and records the claim
 {
     const id = await propose("7: cut the timeout to 5s");
     await revise(id, "7: cut the timeout to 3s", "5s still times out in CI");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     const started = await must(box, demo, ["work", "start", id], { SUPERSELF_SESSION: "s-seven" });
     assert.ok(started.out.includes("7: cut the timeout to 3s"), `the brief was not handed over:\n${started.out}`);
     assert.notEqual(eventOf(id, "entity.started"), undefined, "no claim was recorded");
@@ -180,7 +180,7 @@ test("7: an accepted current plan starts, prints the brief and records the claim
 test("8: once a unit has started, its plan is frozen and the refusal names the successor path", async () =>
 {
     const id = await propose("8: cut the timeout to 5s");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await must(box, demo, ["work", "start", id], { SUPERSELF_SESSION: "s-eight" });
     const refused = await selfIn(box, demo, ["work", "revise", id, "8: cut it to 3s", "--why", "too late"]);
     assert.equal(refused.code, 1);
@@ -200,7 +200,7 @@ test("9: an acceptance of v1 and a revision to v2 fold the same way in either me
     // Clone B is seeded with the proposal alone, and neither clone sees the
     // other's answer until the merge below.
     logFixture(there.ws, "demo", creationOf(id));
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     const accepted = eventOf(id, "entity.confirmed");
     await must(other, there.demo, ["work", "revise", id, "9: cut the timeout to 3s", "--why", "5s times out"]);
     const revision = eventOf(id, "entity.revised", there.ws);
@@ -222,7 +222,7 @@ test("9: an acceptance of v1 and a revision to v2 fold the same way in either me
 
 test("10: a work add unit behaves exactly as it did, and refuses a revision by name", async () =>
 {
-    const id = workIdIn((await must(box, demo, ["work", "add", "10: the already-approved outcome"])).out);
+    const id = workIdIn((await mustPerson(box, demo, ["work", "add", "10: the already-approved outcome"])).out);
     assert.match(await show(id), /- Status: next/);
     const refused = await selfIn(box, demo, ["work", "revise", id, "10: something else", "--why", "a correction"]);
     assert.equal(refused.code, 1);
@@ -253,7 +253,7 @@ test("11: the review state and the version read the same in the ruled render and
 test("12: a standalone proposal is accepted from outside its checkout, through the record", async () =>
 {
     const id = await propose("12: cut the timeout to 5s");
-    const accepted = await must(box, ws, ["work", "accept", id]);
+    const accepted = await mustPerson(box, ws, ["work", "accept", id]);
     assert.ok(accepted.out.includes(id));
     assert.match(await show(id), /- Status: next/);
 });
@@ -299,7 +299,7 @@ test("16: a revision run outside every project is refused by the project resolve
 test("17: a standalone proposal is accepted from outside every project", async () =>
 {
     const id = await propose("17: cut the timeout to 5s");
-    const accepted = await must(box, box.root, ["work", "accept", id]);
+    const accepted = await mustPerson(box, box.root, ["work", "accept", id]);
     assert.ok(accepted.out.includes(id));
     assert.match(await show(id), /- Status: next/);
 });
@@ -308,7 +308,7 @@ test("18: undoing a revision makes the version before it current, and accepted a
 {
     const id = await propose("18: cut the timeout to 5s");
     await revise(id, "18: cut the timeout to 3s", "5s still times out in CI");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     const third = idIn((await revise(id, "18: cut it to 3s and pin the clock", "the retry needs a stable clock")).out);
     assert.match(await show(id), /- Status: review/);
     const undone = await must(box, demo, ["undo", third, "--why", "the clock was already pinned"]);
@@ -321,7 +321,7 @@ test("18: undoing a revision makes the version before it current, and accepted a
 test("19: undoing an acceptance is refused by name, and the answer is a revision", async () =>
 {
     const id = await propose("19: cut the timeout to 5s");
-    const accepted = idIn((await must(box, demo, ["work", "accept", id])).out);
+    const accepted = idIn((await mustPerson(box, demo, ["work", "accept", id])).out);
     const refused = await selfIn(box, demo, ["undo", accepted, "--why", "it should not have been accepted"]);
     assert.equal(refused.code, 1);
     assert.match(refused.out, /an acceptance is not taken back/);
@@ -333,10 +333,10 @@ test("20: revising a gap proposal keeps its member-of edge, and re-accepting sta
     const objective = (await must(box, demo, ["objective", "add", "20: a measurable outcome", "--target", "2099-01-01"]))
         .out.match(/\bo-[0-9a-z]{5}\b/)[0];
     const id = workIdIn((await must(box, demo, ["work", "propose", "20: close the gap", "--objective", objective, ...BRIEF])).out);
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await revise(id, "20: close the gap another way", "the first way needed a service nobody runs");
     assert.match(await show(id), /- Status: review/);
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     assert.match(await show(id), new RegExp(`Contributes to: ${objective}`));
     const links = events().filter((event) => event.type === "entity.linked" && event.payload.entity === id);
     assert.equal(links.length, 1, "the re-acceptance stated the same edge a second time");
@@ -355,7 +355,7 @@ test("21: a revision that changes nothing is refused, and records nothing", asyn
 test("22: a done unit refuses a revision, saying it is done", async () =>
 {
     const id = await propose("22: cut the timeout to 5s");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await must(box, demo, ["work", "done", id, "--report", "22: the timeout verifiably fell"]);
     const refused = await selfIn(box, demo, ["work", "revise", id, "22: cut it to 3s", "--why", "too late"]);
     assert.equal(refused.code, 1);
@@ -365,7 +365,7 @@ test("22: a done unit refuses a revision, saying it is done", async () =>
 test("23: a retired unit refuses a revision with the reason it was retired for", async () =>
 {
     const id = await propose("23: cut the timeout to 5s");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await approvedIn(box, demo, ["work", "retire", id, "--why", "the loader was deleted"], id);
     const refused = await selfIn(box, demo, ["work", "revise", id, "23: cut it to 3s", "--why", "too late"]);
     assert.equal(refused.code, 1);
@@ -385,7 +385,7 @@ test("25: a declined proposal refuses a revision, saying it is declined", async 
 test("26: the freeze is the first start, not the current status — a blocked unit is still frozen", async () =>
 {
     const id = await propose("26: cut the timeout to 5s");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     await must(box, demo, ["work", "start", id], { SUPERSELF_SESSION: "s-twentysix" });
     await must(box, demo, ["work", "block", id, "--on", "dependency", "--why", "the loader is being rewritten"]);
     assert.match(await show(id), /- Status: blocked/);
@@ -450,7 +450,7 @@ test("31: a confirm naming v1 that arrives after v2 was accepted leaves v2 accep
 {
     const id = await propose("31: cut the timeout to 5s");
     await revise(id, "31: cut the timeout to 3s", "5s still times out in CI");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     assert.match(await show(id), /- Status: next/);
     logFixture(ws, "demo", {
         id: "01hz0000000000000000031zz1", ts: "2099-01-01T00:00:00.000Z", type: "entity.confirmed", project: "demo",

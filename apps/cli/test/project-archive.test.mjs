@@ -19,7 +19,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, idIn, machine, must, mustPerson, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 
@@ -55,12 +55,12 @@ async function two()
 // to give back wrongly.
 async function mixedWork(box, dir)
 {
-    const active = workIdIn((await must(box, dir, ["work", "add", "the active outcome"])).out);
+    const active = workIdIn((await mustPerson(box, dir, ["work", "add", "the active outcome"])).out);
     await must(box, dir, ["work", "start", active]);
-    const blocked = workIdIn((await must(box, dir, ["work", "add", "the blocked outcome"])).out);
+    const blocked = workIdIn((await mustPerson(box, dir, ["work", "add", "the blocked outcome"])).out);
     await must(box, dir, ["work", "start", blocked]);
     await must(box, dir, ["work", "block", blocked, "--on", "dependency", "--why", "waiting on the other one"]);
-    const next = workIdIn((await must(box, dir, ["work", "add", "the next outcome"])).out);
+    const next = workIdIn((await mustPerson(box, dir, ["work", "add", "the next outcome"])).out);
     return { active, blocked, next };
 }
 
@@ -196,8 +196,8 @@ test("9: --archived lists the archived slug with its reason and the day it was s
 test("10: a --workspace read leaves the archived project's rows out of the aggregate", async () =>
 {
     const { box, ws, alpha, beta } = await two();
-    await must(box, alpha, ["work", "add", "an outcome nobody is chasing"]);
-    await must(box, beta, ["work", "add", "an outcome someone is chasing"]);
+    await mustPerson(box, alpha, ["work", "add", "an outcome nobody is chasing"]);
+    await mustPerson(box, beta, ["work", "add", "an outcome someone is chasing"]);
     await archive(box, ws);
     const merged = (await must(box, ws, ["log", "--workspace"])).out;
     assert.doesNotMatch(merged, /alpha/, `alpha is still in the merged log:\n${merged}`);
@@ -210,7 +210,7 @@ test("10: a --workspace read leaves the archived project's rows out of the aggre
 test("11: --project reads the archived project normally, with one line saying it is archived", async () =>
 {
     const { box, ws, alpha } = await two();
-    const unit = workIdIn((await must(box, alpha, ["work", "add", "the outcome that was left standing"])).out);
+    const unit = workIdIn((await mustPerson(box, alpha, ["work", "add", "the outcome that was left standing"])).out);
     await archive(box, ws);
     const read = streams(box, ws, ["work", "--project", "alpha"]);
     assert.equal(read.code, 0);
@@ -235,7 +235,7 @@ test("12: context inside an archived project's checkout renders, and says how it
 test("13: every write inside an archived project's checkout is refused, naming restore", async () =>
 {
     const { box, ws, alpha } = await two();
-    const unit = workIdIn((await must(box, alpha, ["work", "add", "the outcome that was left standing"])).out);
+    const unit = workIdIn((await mustPerson(box, alpha, ["work", "add", "the outcome that was left standing"])).out);
     await archive(box, ws);
     const before = events(ws, "alpha").length;
     const refused = [
@@ -248,7 +248,9 @@ test("13: every write inside an archived project's checkout is refused, naming r
     ];
     for (const args of refused)
     {
-        const attempt = await selfIn(box, alpha, args);
+        // Driven as a person, so the archive gate is what answers `work add`
+        // rather than the person gate in front of it (#389).
+        const attempt = await personIn(box, alpha, args);
         assert.notEqual(attempt.code, 0, `\`self ${args.join(" ")}\` was allowed into an archived project`);
         assert.match(attempt.out, /self project restore alpha/, `\`self ${args.join(" ")}\` did not name restore`);
     }
@@ -268,8 +270,8 @@ test("14: project init inside an archived project's checkout is refused, naming 
 test("15: an archived project cannot receive a retired outcome's successor", async () =>
 {
     const { box, ws, alpha, beta } = await two();
-    const successor = workIdIn((await must(box, alpha, ["work", "add", "where the outcome would go"])).out);
-    const source = workIdIn((await must(box, beta, ["work", "add", "the outcome being moved"])).out);
+    const successor = workIdIn((await mustPerson(box, alpha, ["work", "add", "where the outcome would go"])).out);
+    const source = workIdIn((await mustPerson(box, beta, ["work", "add", "the outcome being moved"])).out);
     await archive(box, ws);
     const moved = await selfIn(box, beta, ["work", "retire", source, "--why", "moved", "--successor", successor,
         "--successor-project", "alpha"]);
@@ -321,7 +323,7 @@ test("17: restoring with a reason carries it on the restoration event", async ()
 test("18: archive, restore and the listing all answer without the project's checkout", async () =>
 {
     const { box, ws, alpha } = await two();
-    await must(box, alpha, ["work", "add", "the outcome left behind on the other machine"]);
+    await mustPerson(box, alpha, ["work", "add", "the outcome left behind on the other machine"]);
     // The store knows the project; this machine no longer holds its checkout,
     // which is the ordinary case for a project being set aside.
     rmSync(alpha, { recursive: true, force: true });

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { demoWorkspace, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, mustPerson, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 import { deadExports, diskTree, interactionPrompt, memoryTree, packageRoot, printingModules, printSiteViolations } from "./structure.mjs";
 import { COMMANDS } from "../dist/main.js";
 import { commandUsage, rootUsage } from "../dist/help.js";
@@ -62,7 +62,7 @@ const ALIVE = String(process.pid);
 async function freshUnit()
 {
     seq += 1;
-    return workIdIn((await must(box, demo, ["work", "add", `stage five outcome ${seq}`])).out);
+    return workIdIn((await mustPerson(box, demo, ["work", "add", `stage five outcome ${seq}`])).out);
 }
 
 /* ── cells 1-4: the scalar reads ───────────────────────────────────── */

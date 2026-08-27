@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 import { printingModules } from "./structure.mjs";
 
 const source = fileURLToPath(new URL("../src", import.meta.url));
@@ -40,14 +40,14 @@ const objective = idOf((await must(box, demo, ["objective", "add", "every listin
 await must(box, demo, ["objective", "add", "the gate owns the size line"]);
 const milestone = idOf((await must(box, demo, ["milestone", "add", "the listings answer with blocks",
     "--objective", objective, "--exit", "no listing prints for itself"])).out, "m");
-const open = workIdIn((await must(box, demo, ["work", "add", "the listings move behind the gate"])).out);
+const open = workIdIn((await mustPerson(box, demo, ["work", "add", "the listings move behind the gate"])).out);
 await must(box, demo, ["work", "link", open, "--milestone", milestone]);
-const second = workIdIn((await must(box, demo, ["work", "add", "the size line is written once"])).out);
-const finished = workIdIn((await must(box, demo, ["work", "add", "the receipts moved in stage two"])).out);
+const second = workIdIn((await mustPerson(box, demo, ["work", "add", "the size line is written once"])).out);
+const finished = workIdIn((await mustPerson(box, demo, ["work", "add", "the receipts moved in stage two"])).out);
 await must(box, demo, ["work", "done", finished, "--report", "stage two shipped"]);
 writeFileSync(join(demo, "evidence.md"), "a listing carries an artifact\n");
 await must(box, demo, ["report", open, "the listing sweep", "--artifact", "evidence.md"]);
-await must(box, other, ["work", "add", "the other project keeps its own log"]);
+await mustPerson(box, other, ["work", "add", "the other project keeps its own log"]);
 
 function idOf(text, prefix)
 {
@@ -96,7 +96,9 @@ const FIXTURE_SIZES = [
     ["$ self milestone   (in project, exit 0)", "1 milestone"],
     ["$ self work   (in project, exit 0)", "1 open work unit"],
     ["$ self artifact list   (in project, exit 0)", "1 artifact"],
-    ["$ self log -n 5   (in project, exit 0)", "last 5 of 15 events · self log -n 15 --project 'demo'"]
+    // Sixteen since #389: the scenario's unit is proposed and then accepted,
+    // which is one event more than the single `work add` it used to record.
+    ["$ self log -n 5   (in project, exit 0)", "last 5 of 16 events · self log -n 16 --project 'demo'"]
 ];
 
 /* ── scratch machines ──────────────────────────────────────────────── */
@@ -209,8 +211,8 @@ test("stage 3 cell 6: a piped `self work` counts the open units and keeps the hi
 test("stage 3 cell 6: a retired unit stays its own bucket line and is not counted as open", async () =>
 {
     const retireBox = await machineWithProjects([]);
-    const unit = workIdIn((await must(retireBox.box, retireBox.demo, ["work", "add", "an outcome that moved"])).out);
-    await must(retireBox.box, retireBox.demo, ["work", "add", "the outcome it moved to"]);
+    const unit = workIdIn((await mustPerson(retireBox.box, retireBox.demo, ["work", "add", "an outcome that moved"])).out);
+    await mustPerson(retireBox.box, retireBox.demo, ["work", "add", "the outcome it moved to"]);
     // Retiring a confirmed record needs a person at a terminal (#173), and the
     // cell is about the listing rather than about the gate that guards it.
     retireFixture(retireBox.box, retireBox.ws, "demo", "entity.retired", { entity: unit, why: "it moved" });

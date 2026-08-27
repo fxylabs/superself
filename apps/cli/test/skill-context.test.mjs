@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 async function floor()
 {
@@ -271,7 +271,7 @@ test("H5: a handoff packet carries the skill in its context section and not in t
 {
     const ground = await floor();
     const id = await addSkill(ground, "deploy", "make deploy", "push the built image to staging");
-    const unit = workIdIn((await must(ground.box, ground.demo, ["work", "add", "the deploy works"])).out);
+    const unit = workIdIn((await mustPerson(ground.box, ground.demo, ["work", "add", "the deploy works"])).out);
     const packet = (await must(ground.box, ground.demo, ["handoff", unit])).out;
     assert.match(packet, new RegExp(`- deploy — push the built image to staging.*${id}`));
     assert.equal(block(packet, "## Conventions").includes(id), false,

@@ -10,14 +10,14 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
 
 test("a started unit shows running while its process lives, stale after it dies", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "runs under a live process"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "runs under a live process"])).out);
     await must(box, demo, ["work", "start", work]);
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
     try
@@ -35,7 +35,7 @@ test("a started unit shows running while its process lives, stale after it dies"
 
 test("an exited unit reports its code, and the pid never reaches the synced log", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "exits cleanly"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "exits cleanly"])).out);
     await must(box, demo, ["work", "start", work]);
     await must(box, demo, ["work", "started", work, "--pid", String(process.pid)]);
     await must(box, demo, ["work", "exited", work, "--code", "0"]);
@@ -46,7 +46,7 @@ test("an exited unit reports its code, and the pid never reaches the synced log"
 
 test("started refuses a missing or malformed pid", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "needs a pid"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "needs a pid"])).out);
     const bare = await selfIn(box, demo, ["work", "started", work]);
     assert.notEqual(bare.code, 0);
     assert.match(bare.out, /--pid/);

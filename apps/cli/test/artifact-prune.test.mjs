@@ -20,7 +20,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, w
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { artifactId, ulid } from "../dist/ids.js";
-import { approvedIn, demoWorkspace, git, idIn, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -77,7 +77,7 @@ function events(project = "demo", at = ws)
 async function unit(at = demo)
 {
     seq += 1;
-    return workIdIn((await must(box, at, ["work", "add", `outcome ${seq}`])).out);
+    return workIdIn((await mustPerson(box, at, ["work", "add", `outcome ${seq}`])).out);
 }
 
 // A report's artifact, read back off the event that recorded it: what the log
@@ -277,7 +277,7 @@ test("cell 38: evidence on a blocked unit is refused", async () =>
 test("cell 39: evidence on a unit whose plan is awaiting review is refused", async () =>
 {
     const work = workIdIn((await must(box, demo, ["work", "propose", "review the flow before it is worked"])).out);
-    await must(box, demo, ["work", "accept", work]);
+    await mustPerson(box, demo, ["work", "accept", work]);
     const meta = await attach(work, ["--artifact", fileAt("cell39.md", "cell 39 bytes\n")]);
     await must(box, demo, ["work", "revise", work, "review the flow, then work it", "--why", "the first plan skipped the review"]);
     const refused = await refuse(meta.id);
@@ -303,7 +303,7 @@ test("cell 41: an artifact in an archived project is refused, and the way back i
     mkdirSync(beta, { recursive: true });
     git(box, beta, ["init", "-q", "-b", "main"]);
     await must(box, beta, ["project", "init", "--name", "beta", "--desc", "the archived project"]);
-    const work = workIdIn((await must(box, beta, ["work", "add", "an outcome of beta"])).out);
+    const work = workIdIn((await mustPerson(box, beta, ["work", "add", "an outcome of beta"])).out);
     const meta = await attach(work, ["--artifact", fileAt("cell41.md", "cell 41 bytes\n")], beta, "beta");
     await must(box, beta, ["work", "done", work]);
     await must(box, ws, ["project", "archive", "beta", "--why", "nobody is working on it"]);
@@ -534,7 +534,7 @@ test("cell 58: another clone gets the record and the removal in one pull", async
     const remote = join(originBox.root, "remote.git");
     execFileSync("git", ["init", "--bare", "-q", remote], { env: originBox.env });
     await must(originBox, origin.ws, ["remote", "add", remote]);
-    const work = workIdIn((await must(originBox, origin.demo, ["work", "add", "a shared outcome"])).out);
+    const work = workIdIn((await mustPerson(originBox, origin.demo, ["work", "add", "a shared outcome"])).out);
     writeFileSync(join(origin.demo, "cell58.md"), "cell 58 bytes\n");
     await must(originBox, origin.demo, ["report", work, "attached", "--artifact", "cell58.md"]);
     const meta = events("demo", origin.ws).filter((event) => event.type === "report.added").at(-1).payload.artifacts[0];

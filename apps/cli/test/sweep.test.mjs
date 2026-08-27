@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "../dist/ids.js";
-import { git, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, logFixture, machine, must, mustPerson, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 // One complaint, said three ways. The tokens they share after normalization
 // and stop-word removal are well over half, which is what makes them one
@@ -58,7 +58,7 @@ async function fresh(...slugs)
 async function reported(box, dir, said)
 {
     seq += 1;
-    const unit = workIdIn((await must(box, dir, ["work", "add", `outcome ${seq}`])).out);
+    const unit = workIdIn((await mustPerson(box, dir, ["work", "add", `outcome ${seq}`])).out);
     await must(box, dir, ["report", unit, `report ${seq}`, "--friction", said]);
     return unit;
 }
@@ -68,7 +68,7 @@ async function reported(box, dir, said)
 async function reportedDaysAgo(box, ws, project, dir, said, days)
 {
     seq += 1;
-    const unit = workIdIn((await must(box, dir, ["work", "add", `old outcome ${seq}`])).out);
+    const unit = workIdIn((await mustPerson(box, dir, ["work", "add", `old outcome ${seq}`])).out);
     return logFixture(ws, project, {
         id: ulid(),
         ts: new Date(Date.now() - days * 86_400_000).toISOString(),
@@ -392,7 +392,7 @@ test("C16: one more piece of evidence the next day does not produce a second pro
 
 test("C3: accepting it goes through the unchanged acceptance path", async () =>
 {
-    assert.equal((await selfIn(recorded.box, recorded.demo, ["work", "accept", proposal])).code, 0);
+    assert.equal((await personIn(recorded.box, recorded.demo, ["work", "accept", proposal])).code, 0);
     const shown = (await must(recorded.box, recorded.demo, ["work", "show", proposal])).out;
     assert.ok(shown.includes(SAID), shown);
     assert.ok(!(await must(recorded.box, recorded.demo, ["context"])).out.includes(`self work accept ${proposal}`));

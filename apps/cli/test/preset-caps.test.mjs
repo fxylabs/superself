@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, personIn, selfIn } from "./harness.mjs";
 
 function entityIn(text)
 {
@@ -216,7 +216,9 @@ test("T2.6: decide in a store whose alias sets exposure search records — the s
 
 test("T2.7: work add records ungated — it enters the search tier", async () =>
 {
-    const added = await indexCapSelf(["work", "add", "an outcome"]);
+    // A person's own command since #389, and the cap is what this cell is
+    // about: driven with a keyboard so the retention tier is what answers.
+    const added = await personIn(indexCapBox, indexCapDemo, ["work", "add", "an outcome"]);
     assert.equal(added.code, 0, added.out);
 });
 

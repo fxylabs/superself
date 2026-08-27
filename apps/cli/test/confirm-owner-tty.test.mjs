@@ -20,7 +20,7 @@ import { join } from "node:path";
 // `mustSpawn`/`spawnIn` rather than `must`/`selfIn`, as in the other two files
 // that set `isTTY` above their imports: the styled decision is already made, so
 // a command driven in this process would answer painted (#371, cell 23).
-const { approvedIn, git, machine, mustSpawn, spawnIn } = await import("./harness.mjs");
+const { approvedIn, git, machine, mustSpawn, personIn } = await import("./harness.mjs");
 const { styled } = await import("../dist/style.js");
 
 const box = machine();
@@ -70,7 +70,11 @@ test("cell 26: every line self status --project prints at a terminal runs where 
         `self status --project advertised something other than the two kinds it prints:\n${plain(read.out)}`);
     for (const argv of lines)
     {
-        const ran = spawnIn(box, ws, argv);
+        // Driven in this process with a keyboard, not spawned: one of the two
+        // advertised lines is `work accept`, which a process with no person at
+        // it cannot run (#389), and a child cannot be given one. Only the exit
+        // code is read here, so the painted output costs this cell nothing.
+        const ran = await personIn(box, ws, argv);
         assert.equal(ran.code, 0, `\`self ${argv.join(" ")}\` failed where the render was read:\n${ran.out}`);
     }
 });

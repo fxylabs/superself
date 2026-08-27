@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, machine, must, mustPerson, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 // Three projects, because a move needs a source, a destination, and a third
 // project that must never see the record. Named rather than reusing the
@@ -107,7 +107,7 @@ const t3 = await trio();
 
 const t3Entity = entityIn((await must(t3.box, t3.alpha, ["state", "add", "t3 the moved note", "--priority", "5"])).out);
 
-const t3Work = workIdIn((await must(t3.box, t3.alpha, ["work", "add", "t3 the moved outcome"])).out);
+const t3Work = workIdIn((await mustPerson(t3.box, t3.alpha, ["work", "add", "t3 the moved outcome"])).out);
 
 await must(t3.box, t3.alpha, ["state", "place", t3Entity, "--scope", "beta", "--why", "belongs to beta"]);
 
@@ -120,7 +120,7 @@ const t4 = await trio();
 
 async function movedUnit(outcome)
 {
-    const work = workIdIn((await must(t4.box, t4.alpha, ["work", "add", outcome])).out);
+    const work = workIdIn((await mustPerson(t4.box, t4.alpha, ["work", "add", outcome])).out);
     await must(t4.box, t4.alpha, ["state", "place", work, "--scope", "beta", "--why", "belongs to beta"]);
     return work;
 }
@@ -262,7 +262,7 @@ test("T2.2: a confirmed objective moves, and its milestones and linked work keep
 {
     const objective = entityIn((await must(t2.box, t2.alpha, ["objective", "add", "t2-2 an outcome"])).out);
     const milestone = entityIn((await must(t2.box, t2.alpha, ["milestone", "add", "t2-2 a checkpoint", "--objective", objective, "--exit", "the checkpoint holds"])).out);
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-2 the doing"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-2 the doing"])).out);
     await must(t2.box, t2.alpha, ["work", "link", work, "--objective", objective]);
     await moveToBeta(objective);
     assert.match(await placementOf(t2.beta, objective), /placement: beta/);
@@ -299,7 +299,7 @@ test("T2.5: a confirmed goal moves", async () =>
 
 test("T2.6: an open work unit moves, and its brief, reports and evidence render at the destination", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-6 an open outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-6 an open outcome"])).out);
     commit(t2.box, t2.alpha, "t2-6 evidence");
     await must(t2.box, t2.alpha, ["report", work, "t2-6 the first report"]);
     await moveToBeta(work);
@@ -312,7 +312,7 @@ test("T2.6: an open work unit moves, and its brief, reports and evidence render 
 
 test("T2.7: a started unit moves, and the holder note travels with it", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-7 a held outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-7 a held outcome"])).out);
     await must(t2.box, t2.alpha, ["work", "start", work], { SUPERSELF_SESSION: "t2-7-holder" });
     await moveToBeta(work);
     const shown = (await must(t2.box, t2.beta, ["work", "show", work], { SUPERSELF_SESSION: "t2-7-other" })).out;
@@ -321,7 +321,7 @@ test("T2.7: a started unit moves, and the holder note travels with it", async ()
 
 test("T2.8: a blocked unit moves, and its block reason and --on are unchanged", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-8 a parked outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-8 a parked outcome"])).out);
     await must(t2.box, t2.alpha, ["work", "block", work, "--on", "dependency", "--why", "t2-8 waiting on the other half"]);
     await moveToBeta(work);
     const shown = (await must(t2.box, t2.beta, ["work", "show", work])).out;
@@ -331,7 +331,7 @@ test("T2.8: a blocked unit moves, and its block reason and --on are unchanged", 
 
 test("T2.9: a done unit moves — a finished unit in the wrong project still misfiles its artifacts", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-9 a finished outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-9 a finished outcome"])).out);
     commit(t2.box, t2.alpha, "t2-9 evidence");
     await must(t2.box, t2.alpha, ["report", work, "t2-9 what happened"]);
     await must(t2.box, t2.alpha, ["work", "done", work]);
@@ -342,8 +342,8 @@ test("T2.9: a done unit moves — a finished unit in the wrong project still mis
 
 test("T2.10: a retired unit moves, and its successor pointer is unchanged", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-10 a given-up outcome"])).out);
-    const successor = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-10 the outcome now"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-10 a given-up outcome"])).out);
+    const successor = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-10 the outcome now"])).out);
     retireFixture(t2.box, t2.ws, "alpha", "entity.retired",
         { entity: work, why: "t2-10 moved on", successor, successorProject: "alpha" });
     await moveToBeta(work);
@@ -380,7 +380,7 @@ test("T2.13: a superseded record is refused, naming the successor to place inste
 
 test("T2.14: a report is refused — it is not independently placed, it moves with its work unit", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-14 a reported outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-14 a reported outcome"])).out);
     commit(t2.box, t2.alpha, "t2-14 evidence");
     await must(t2.box, t2.alpha, ["report", work, "t2-14 the report body"]);
     const report = eventsOf(t2.ws, "alpha").find((event) => event.type === "report.added" && event.refs?.work === work).id;
@@ -392,7 +392,7 @@ test("T2.14: a report is refused — it is not independently placed, it moves wi
 
 test("T2.15: an artifact is refused for the same reason", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-15 an attaching outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-15 an attaching outcome"])).out);
     const file = join(t2.alpha, "t2-15-artifact.txt");
     writeFileSync(file, "t2-15 bytes\n");
     commit(t2.box, t2.alpha, "t2-15 evidence");
@@ -428,7 +428,7 @@ test("T2.17: a cross-project move with --why omitted is recorded without why", a
 
 test("T2.18: a done unit moves back to its home project — D5 makes it resolvable from the destination", async () =>
 {
-    const work = workIdIn((await must(t2.box, t2.alpha, ["work", "add", "t2-18 a returning outcome"])).out);
+    const work = workIdIn((await mustPerson(t2.box, t2.alpha, ["work", "add", "t2-18 a returning outcome"])).out);
     commit(t2.box, t2.alpha, "t2-18 evidence");
     await must(t2.box, t2.alpha, ["report", work, "t2-18 what happened"]);
     await must(t2.box, t2.alpha, ["work", "done", work]);
@@ -625,7 +625,7 @@ test("T4.6: the same writes run in a third project are refused as an unknown id"
 
 test("T4.7: work add in the destination is born there — D3 does not change where an add lands", async () =>
 {
-    const work = workIdIn((await must(t4.box, t4.beta, ["work", "add", "t4-7 a native beta outcome"])).out);
+    const work = workIdIn((await mustPerson(t4.box, t4.beta, ["work", "add", "t4-7 a native beta outcome"])).out);
     assert.ok(logOf(t4.ws, "beta").includes(work));
     assert.ok(!logOf(t4.ws, "alpha").includes(work));
     assert.ok((await must(t4.box, t4.beta, ["work"])).out.includes(work));
@@ -727,8 +727,8 @@ test("T5.8: a move plus --exposure full in one call applies both, charged agains
 
 test("T6.1: a unit blocked on the moved one keeps its blocker, and the dependency names it at its new scope", async () =>
 {
-    const moved = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-1 the blocking outcome"])).out);
-    const dependent = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-1 the waiting outcome"])).out);
+    const moved = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-1 the blocking outcome"])).out);
+    const dependent = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-1 the waiting outcome"])).out);
     await must(t6.box, t6.alpha, ["work", "block", dependent, "--on", "dependency", "--why", `waits on ${moved}`]);
     await must(t6.box, t6.alpha, ["state", "place", moved, "--scope", "beta", "--why", "belongs to beta"]);
     const shown = (await must(t6.box, t6.alpha, ["work", "show", dependent])).out;
@@ -738,7 +738,7 @@ test("T6.1: a unit blocked on the moved one keeps its blocker, and the dependenc
 
 test("T6.2: evidence commits produced in the source repository are not re-resolved against the destination", async () =>
 {
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-2 an evidenced outcome"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-2 an evidenced outcome"])).out);
     commit(t6.box, t6.alpha, "t6-2 alpha evidence");
     await must(t6.box, t6.alpha, ["report", work, "t6-2 the report"]);
     const before = eventsOf(t6.ws, "alpha").find((event) => event.type === "report.added" && event.refs?.work === work).refs.commits;
@@ -750,7 +750,7 @@ test("T6.2: evidence commits produced in the source repository are not re-resolv
 
 test("T6.3: evidence that no longer resolves stays visible as unresolved rather than dropped", async () =>
 {
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-3 an unresolvable outcome"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-3 an unresolvable outcome"])).out);
     const dangling = "0".repeat(40);
     await must(t6.box, t6.alpha, ["report", work, "t6-3 the report", "--evidence", dangling]);
     await must(t6.box, t6.alpha, ["state", "place", work, "--scope", "beta", "--why", "belongs to beta"]);
@@ -760,7 +760,7 @@ test("T6.3: evidence that no longer resolves stays visible as unresolved rather 
 
 test("T6.4: the moved unit's artifacts resolve at the destination with their recorded declaration unchanged", async () =>
 {
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-4 an attaching outcome"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-4 an attaching outcome"])).out);
     const file = join(t6.alpha, "t6-4-artifact.txt");
     writeFileSync(file, "t6-4 bytes\n");
     commit(t6.box, t6.alpha, "t6-4 evidence");
@@ -777,7 +777,7 @@ test("T6.4: the moved unit's artifacts resolve at the destination with their rec
 
 test("T6.5: the moved unit's reports render at the destination with their original timestamps", async () =>
 {
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-5 a reported outcome"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-5 a reported outcome"])).out);
     commit(t6.box, t6.alpha, "t6-5 evidence");
     await must(t6.box, t6.alpha, ["report", work, "t6-5 the earlier report"]);
     const stamped = eventsOf(t6.ws, "alpha").find((event) => event.type === "report.added" && event.refs?.work === work).ts;
@@ -800,7 +800,7 @@ test("T6.6: a record superseding a moved record resolves its lineage across the 
 
 test("T6.7: an id that exists in both projects keeps the ambiguity error, and --project disambiguates", async () =>
 {
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-7 the alpha outcome"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-7 the alpha outcome"])).out);
     // The same id in beta's log: two clones minting the same short id is the
     // collision the ambiguity error exists for.
     retireFixture(t6.box, t6.ws, "beta", "entity.confirmed",
@@ -814,7 +814,7 @@ test("T6.7: an id that exists in both projects keeps the ambiguity error, and --
 test("T6.8: a moved unit linked to an objective in the source keeps the link, and the objective does not move", async () =>
 {
     const objective = entityIn((await must(t6.box, t6.alpha, ["objective", "add", "t6-8 an outcome that stays"])).out);
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-8 the moving doing"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-8 the moving doing"])).out);
     await must(t6.box, t6.alpha, ["work", "link", work, "--objective", objective]);
     await must(t6.box, t6.alpha, ["state", "place", work, "--scope", "beta", "--why", "belongs to beta"]);
     assert.ok((await must(t6.box, t6.beta, ["work", "show", work])).out.includes(objective));
@@ -825,7 +825,7 @@ test("T6.8: a moved unit linked to an objective in the source keeps the link, an
 test("T6.9: a moved objective keeps the links from work in the source, and that work does not move with it", async () =>
 {
     const objective = entityIn((await must(t6.box, t6.alpha, ["objective", "add", "t6-9 the moving outcome"])).out);
-    const work = workIdIn((await must(t6.box, t6.alpha, ["work", "add", "t6-9 the doing that stays"])).out);
+    const work = workIdIn((await mustPerson(t6.box, t6.alpha, ["work", "add", "t6-9 the doing that stays"])).out);
     await must(t6.box, t6.alpha, ["work", "link", work, "--objective", objective]);
     await must(t6.box, t6.alpha, ["state", "place", objective, "--scope", "beta", "--why", "belongs to beta"]);
     assert.match((await must(t6.box, t6.beta, ["state", "show", objective])).out, /placement: beta/);

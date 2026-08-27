@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "../dist/ids.js";
-import { demoWorkspace, git, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, git, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -96,7 +96,7 @@ async function nudgeProject(name, pattern)
     const dir = await registerProject(nudgeBox, nudgeWs, name);
     if (pattern.length > 0)
     {
-        const work = workIdIn((await must(nudgeBox, dir, ["work", "add", `${name} outcome`])).out);
+        const work = workIdIn((await mustPerson(nudgeBox, dir, ["work", "add", `${name} outcome`])).out);
         pattern.forEach((said, index) => reportFixture(nudgeWs, name, work, index, said));
     }
     return dir;
@@ -121,7 +121,7 @@ test("context renders by placement: full block, anchored live state, index lines
     await must(box, demo, ["convention", "add", "events only, no hand edits"]);
     decision = (await must(box, demo, ["decide", "keep sqlite", "--why", "simple"])).out.match(/\[([^\]]+)\]/)[1];
     await must(box, demo, ["milestone", "add", "suite green", "--objective", objective, "--exit", "tests pass"]);
-    const work = workIdIn((await must(box, demo, ["work", "add", "ship phase 2"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "ship phase 2"])).out);
     await must(box, demo, ["work", "start", work]);
     await must(box, demo, ["state", "add", "raw searchable note", "--exposure", "search"]);
 
@@ -182,7 +182,7 @@ test("a fresh store renders no empty section headers, and live state renders wit
     const empty = (await must(freshBox, freshDemo, ["context"])).out;
     assert.ok(!empty.includes("##"), `an empty store rendered a section header:\n${empty}`);
     assert.ok(empty.includes("# demo"));
-    const work = workIdIn((await must(freshBox, freshDemo, ["work", "add", "only moving part"])).out);
+    const work = workIdIn((await mustPerson(freshBox, freshDemo, ["work", "add", "only moving part"])).out);
     await must(freshBox, freshDemo, ["work", "start", work]);
     const out = (await must(freshBox, freshDemo, ["context"])).out;
     assert.ok(out.includes("## Work in progress"), "live state did not render with an empty full block");
@@ -277,7 +277,7 @@ test("D5: the nudge fits the budget, and a cut one leaves the stated elision", a
     mkdirSync(cutWs, { recursive: true });
     await must(cutBox, cutWs, ["init"]);
     const dir = await registerProject(cutBox, cutWs, "d5");
-    const work = workIdIn((await must(cutBox, dir, ["work", "add", "d5 outcome"])).out);
+    const work = workIdIn((await mustPerson(cutBox, dir, ["work", "add", "d5 outcome"])).out);
     [null, null, null, "d"].forEach((said, index) => reportFixture(cutWs, "d5", work, index, said));
     assert.match((await must(cutBox, dir, ["context"])).out, NUDGE);
     // The same overrun the budget cell above uses: three rules of 5,000

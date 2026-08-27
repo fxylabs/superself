@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMANDS } from "../dist/main.js";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -126,6 +126,17 @@ async function floorState(box)
     return { cwd: enteredDir(box, join(box.env.HOME, "my-project")) };
 }
 
+// The documents show a person at their own terminal, and two of the verbs they
+// show write a confirmed work record — which is a person's call, refused where
+// no person is there (#389). Those lines are driven with a keyboard, so what a
+// document claims is judged against the run it describes.
+const PERSON_LINES = [["work", "add"], ["work", "accept"]];
+
+function personLine(argv)
+{
+    return PERSON_LINES.some((line) => line.every((word, index) => argv[index] === word));
+}
+
 async function runSegment(box, state, doc, segment)
 {
     const command = segment.split(" # ")[0].trim();
@@ -140,7 +151,10 @@ async function runSegment(box, state, doc, segment)
         return;
     }
     const expectRefusal = segment.includes(" # refused");
-    const result = await selfIn(box, state.cwd, words.slice(1).map((word) => expandTilde(box, word)));
+    const argv = words.slice(1).map((word) => expandTilde(box, word));
+    const result = personLine(argv)
+        ? await personIn(box, state.cwd, argv)
+        : await selfIn(box, state.cwd, argv);
     if (expectRefusal)
     {
         assert.notEqual(result.code, 0, `${doc}: \`${command}\` should have been refused, and was not`);
@@ -173,8 +187,8 @@ async function writeCurrentVocabulary(box, demo)
     const milestone = entityIdIn((await must(box, demo, ["milestone", "add", "a checkpoint", "--objective", objective, "--exit", "the proof passes"])).out);
     const plan = workIdIn((await must(box, demo, ["work", "propose", "review the flow before it is worked"])).out);
     await must(box, demo, ["work", "revise", plan, "review the flow, then work it", "--why", "the first plan skipped the review"]);
-    await must(box, demo, ["work", "accept", plan]);
-    const unit = workIdIn((await must(box, demo, ["work", "add", "the flow works"])).out);
+    await mustPerson(box, demo, ["work", "accept", plan]);
+    const unit = workIdIn((await mustPerson(box, demo, ["work", "add", "the flow works"])).out);
     await must(box, demo, ["work", "link", unit, "--milestone", milestone]);
     await must(box, demo, ["work", "unlink", unit, "--milestone", milestone]);
     await must(box, demo, ["work", "start", unit]);
@@ -183,12 +197,12 @@ async function writeCurrentVocabulary(box, demo)
     await must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "the proof passed"]);
     await must(box, demo, ["report", unit, "progress so far"]);
     await must(box, demo, ["work", "done", unit, "--report", "the flow verifiably works"]);
-    const retiredUnit = workIdIn((await must(box, demo, ["work", "add", "a superseded outcome"])).out);
+    const retiredUnit = workIdIn((await mustPerson(box, demo, ["work", "add", "a superseded outcome"])).out);
     await approvedIn(box, demo, ["work", "retire", retiredUnit, "--why", "moved elsewhere"], retiredUnit);
-    const undoneUnit = workIdIn((await must(box, demo, ["work", "add", "an outcome given up in error"])).out);
+    const undoneUnit = workIdIn((await mustPerson(box, demo, ["work", "add", "an outcome given up in error"])).out);
     const undone = await approvedIn(box, demo, ["work", "retire", undoneUnit, "--why", "given up"], undoneUnit);
     await must(box, demo, ["undo", idIn(undone.printed), "--why", "the outcome is still wanted"]);
-    const runUnit = workIdIn((await must(box, demo, ["work", "add", "a supervised outcome"])).out);
+    const runUnit = workIdIn((await mustPerson(box, demo, ["work", "add", "a supervised outcome"])).out);
     await must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
     await must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
     const skill = entityIdIn((await must(box, demo, ["skill", "add", "deploy staging",

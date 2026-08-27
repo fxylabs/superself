@@ -21,7 +21,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git as gitOf } from "../dist/gitutil.js";
-import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, mustPerson, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -84,7 +84,7 @@ test("a git that leaves a live process holding its pipes does not pin the CLI", 
     let wrote;
     try
     {
-        wrote = await selfIn(box, demo, ["work", "add", "bounded by the deadline"], { SUPERSELF_GIT_TIMEOUT_MS: DEADLINE });
+        wrote = await personIn(box, demo, ["work", "add", "bounded by the deadline"], { SUPERSELF_GIT_TIMEOUT_MS: DEADLINE });
     }
     finally
     {
@@ -113,7 +113,7 @@ test("a git that has to be killed is refused by name, with its argv, its directo
     let failed;
     try
     {
-        failed = await selfIn(box, demo, ["work", "add", "killed mid-commit"], { SUPERSELF_GIT_TIMEOUT_MS: DEADLINE });
+        failed = await personIn(box, demo, ["work", "add", "killed mid-commit"], { SUPERSELF_GIT_TIMEOUT_MS: DEADLINE });
     }
     finally
     {
@@ -133,7 +133,7 @@ test("a git that has to be killed is refused by name, with its argv, its directo
 // reporting a write it could not make.
 test("the store records again after a git was killed mid-commit", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "recorded after the kill"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "recorded after the kill"])).out);
     assert.match((await must(box, demo, ["work", "show", work])).out, /recorded after the kill/);
 });
 
@@ -142,7 +142,7 @@ test("a rejected commit is refused rather than reported as a write", async () =>
     const remove = hook("pre-commit", "echo 'this store refuses commits' >&2\nexit 1");
     try
     {
-        const failed = await selfIn(box, demo, ["work", "add", "the commit will be rejected"]);
+        const failed = await personIn(box, demo, ["work", "add", "the commit will be rejected"]);
         assert.equal(failed.code, 1);
         assert.match(failed.out, /committing the workspace store/);
         // git's own sentence survives the change of stdio: stderr is still a
@@ -161,7 +161,10 @@ test("nothing git runs may go looking for a keyboard when there is none", async 
     const remove = hook("post-commit", `printf '%s|%s\\n' "\${GIT_TERMINAL_PROMPT-unset}" "\${GIT_SSH_COMMAND-unset}" > ${probe}`);
     try
     {
-        await must(box, demo, ["work", "add", "runs with no terminal"]);
+        // `work propose`, not `work add`: this cell's subject is a process with
+        // no keyboard, and `work add` is refused for exactly that now (#389).
+        // Driving it as a person would hand git a terminal and prove nothing.
+        await must(box, demo, ["work", "propose", "runs with no terminal"]);
     }
     finally
     {
@@ -216,12 +219,15 @@ function restoreEnv(name, was)
 
 test("a read is not blocked by a writer stalled inside git", async () =>
 {
-    const read = workIdIn((await must(box, demo, ["work", "add", "read while a writer stalls"])).out);
+    const read = workIdIn((await mustPerson(box, demo, ["work", "add", "read while a writer stalls"])).out);
     const remove = hook("pre-commit", "sleep 603");
     // A real child, because the in-process driver runs one command at a time
     // and the whole question is what a second, concurrent command sees.
     // Detached so the stalled git and its sleep can be killed as one group.
-    const writer = spawn(process.execPath, [bin, "work", "add", "stalled writer"], {
+    // A child records with `work propose`: a confirmed record needs a person at
+    // a keyboard (#389), and a detached child has none — what this cell needs is
+    // any write that reaches git and stalls there.
+    const writer = spawn(process.execPath, [bin, "work", "propose", "stalled writer"], {
         cwd: demo,
         env: { ...box.env, SUPERSELF_GIT_TIMEOUT_MS: "60000" },
         stdio: "ignore",

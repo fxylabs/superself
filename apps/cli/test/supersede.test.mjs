@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STATEMENT_TYPES } from "../dist/model.js";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -51,7 +51,7 @@ function retirementOf(id)
 // terminal state.
 async function work(outcome)
 {
-    return workIdIn((await must(box, demo, ["work", "add", outcome])).out);
+    return workIdIn((await mustPerson(box, demo, ["work", "add", outcome])).out);
 }
 
 async function objective(outcome)

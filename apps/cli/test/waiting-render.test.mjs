@@ -5,7 +5,7 @@
 // which is how a whole waiting kind went missing from it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { demoWorkspace, machine, must, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, mustPerson, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -51,7 +51,7 @@ const proposal = workIdIn((await must(box, demo, ["work", "propose", "a proposed
     "--risk", "low", "--capacity", "one round", "--evidence-plan", "a recorded run",
     "--confidence", "high", "--expires", "2099-01-01"])).out).slice(0, 8);
 
-const blocked = workIdIn((await must(box, demo, ["work", "add", "an outcome waiting on a ruling"])).out);
+const blocked = workIdIn((await mustPerson(box, demo, ["work", "add", "an outcome waiting on a ruling"])).out);
 await must(box, demo, ["work", "block", blocked, "--on", "decision", "--why", "the ruling above settles it"]);
 
 test("a pending placement reaches the terminal render with the command that confirms it", async () =>

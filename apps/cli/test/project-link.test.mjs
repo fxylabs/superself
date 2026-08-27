@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 // A machine holding an initialized workspace and nothing registered in it.
 async function workspace()
@@ -256,7 +256,7 @@ test("L13: a different repository is refused without --force, nothing written", 
 test("L14: --force links the second repository, says old and new, and refolds the verdicts across both", async () =>
 {
     const { box, ws, a, b } = await registered();
-    const work = workIdIn((await must(box, a, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, a, ["work", "add", "ship it"])).out);
     const hash = commit(box, b, "two");
     await must(box, a, ["report", work, "done in beta", "--evidence", `commit:${hash}`]);
     assert.equal(verdicts(ws, "alpha")[hash], "unverifiable");
@@ -283,7 +283,7 @@ test("L16: a folder holding repositories links with --force, and the fold judges
     const f = join(ws, "proj");
     const y = folder(box, ws, join("proj", "y"));
     const hash = commit(box, y, "y-root");
-    const work = workIdIn((await must(box, a, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, a, ["work", "add", "ship it"])).out);
     await must(box, a, ["report", work, "done in y", "--evidence", `commit:${hash}`]);
     assert.equal(verdicts(ws, "alpha")[hash], "unverifiable");
     const refused = await selfIn(box, ws, ["project", "link", "alpha", f]);

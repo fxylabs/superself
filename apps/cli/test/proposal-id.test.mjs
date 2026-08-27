@@ -8,7 +8,7 @@
 // is the pair of cells that were always about the proposal today's verb makes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -74,7 +74,7 @@ test("cell 9: a native proposal is advertised by its own short id", async () =>
     const id = await nativeProposal(outcome);
     assert.match(id, /^w-[0-9a-z]{5}$/);
     assert.equal(advertised(await surface("terminal"), outcome), id);
-    assert.equal((await selfIn(box, demo, ["work", "accept", id])).code, 0);
+    assert.equal((await personIn(box, demo, ["work", "accept", id])).code, 0);
 });
 
 test("cell 10: a native proposal's row is the row it always was", async () =>

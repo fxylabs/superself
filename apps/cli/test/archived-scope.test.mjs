@@ -47,7 +47,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, machine, must, workIdIn } from "./harness.mjs";
+import { approvedIn, git, machine, must, mustPerson, workIdIn } from "./harness.mjs";
 
 // The record's home and the project it is scoped into and archived. A cell
 // that needs a bystander — one that must answer for neither — asks for gamma;
@@ -297,7 +297,7 @@ test("19: two records scoped into the archived project are named one line each",
 test("20: a work unit scoped into the archived project is named the same way", async () =>
 {
     const { box, ws, alpha } = await workspaceOf();
-    const unit = workIdIn((await must(box, alpha, ["work", "add", "the outcome that renders elsewhere"])).out);
+    const unit = workIdIn((await mustPerson(box, alpha, ["work", "add", "the outcome that renders elsewhere"])).out);
     await must(box, alpha, ["state", "place", unit, "--scope", "beta"]);
     await archive(box, ws);
     assertReported((await must(box, alpha, ["status"])).out, unit);

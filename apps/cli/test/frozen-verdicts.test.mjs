@@ -12,7 +12,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { git, machine, must, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, workIdIn } from "./harness.mjs";
 
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 
@@ -69,7 +69,7 @@ async function project(world, slug, banded)
     git(world.box, dir, ["init", "-q", "-b", "main"]);
     commit(world.box, dir, "a.txt", `first ${slug}`);
     await must(world.box, dir, ["project", "init", "--name", slug, "--no-connect"]);
-    const work = workIdIn((await must(world.box, dir, ["work", "add", `ship ${slug}`])).out);
+    const work = workIdIn((await mustPerson(world.box, dir, ["work", "add", `ship ${slug}`])).out);
     await must(world.box, dir, ["work", "start", work]);
     if (banded)
     {

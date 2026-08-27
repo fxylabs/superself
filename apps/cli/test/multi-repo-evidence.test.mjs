@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ulid } from "../dist/ids.js";
-import { git, logFixture, machine, must, workIdIn } from "./harness.mjs";
+import { git, logFixture, machine, must, mustPerson, workIdIn } from "./harness.mjs";
 
 const GONE1 = "no longer resolves in the project repo — history may have been rewritten";
 const RESET = "was reset away on its branch";
@@ -57,7 +57,7 @@ async function oneLink()
     const a = repo(box, join(ws, "demo"));
     await must(box, a, ["project", "init", "--name", "demo", "--no-connect"]);
     const b = repo(box, join(ws, "other"));
-    const work = workIdIn((await must(box, a, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, a, ["work", "add", "ship it"])).out);
     return { box, ws, a, b, work, store: join(ws, ".superself") };
 }
 
@@ -82,7 +82,7 @@ async function folderLink()
     const a = repo(box, join(f, "a"));
     const b = repo(box, join(f, "b"));
     await must(box, f, ["project", "init", "--name", "proj", "--no-connect"]);
-    const work = workIdIn((await must(box, a, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, a, ["work", "add", "ship it"])).out);
     return { box, ws, f, a, b, work, store: join(ws, ".superself"), slug: "proj" };
 }
 
@@ -400,7 +400,7 @@ test("E26: a folder link with no repository below leaves stored verdicts untouch
     const f = join(ws, "empty");
     mkdirSync(f);
     await must(box, f, ["project", "init", "--name", "empty", "--no-connect"]);
-    const work = workIdIn((await must(box, f, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, f, ["work", "add", "ship it"])).out);
     const t = { box, ws, work, store: join(ws, ".superself"), slug: "empty" };
     storeVerdicts(t, { [NOWHERE]: "provisional" });
     await report(t, f, NOWHERE);
@@ -454,7 +454,7 @@ test("E29: a repository with no commit records no repository", async () =>
     mkdirSync(dir);
     git(box, dir, ["init", "-q", "-b", "main"]);
     await must(box, dir, ["project", "init", "--name", "fresh", "--no-connect"]);
-    const work = workIdIn((await must(box, dir, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, dir, ["work", "add", "ship it"])).out);
     const t = { box, ws, work, store: join(ws, ".superself"), slug: "fresh" };
     await report(t, dir, NOWHERE);
     assert.deepEqual(lastReport(t).refs.commits, [NOWHERE]);

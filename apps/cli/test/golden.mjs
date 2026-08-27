@@ -19,7 +19,8 @@ import { fileURLToPath } from "node:url";
 // child with `stdio: ["ignore", "pipe", "pipe"]` is the thing that produces
 // that. Driving the sweep in this process would make the fixture a record of
 // what the driver arranged rather than of what a person piping `self` sees.
-import { git, idIn, machine, spawnIn, workIdIn } from "./harness.mjs";
+import { git, idIn, logFixture, machine, spawnIn, workIdIn } from "./harness.mjs";
+import { ulid } from "../dist/ids.js";
 
 export const fixturePath = fileURLToPath(new URL("fixtures/golden/piped.txt", import.meta.url));
 
@@ -85,7 +86,13 @@ export function sweep()
     run(ws, "workspace", ["init"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
     run(demo, "project", ["project", "init", "--name", "demo", "--desc", "the render gate scenario", "--no-connect"]);
-    const work = workIdIn(run(demo, "project", ["work", "add", "stage 1 lands the render gate and its pilot"]).out);
+    // Proposed rather than added: recording a confirmed unit is a person's
+    // call, and a piped child is the one process that can never be one (#389).
+    // The scenario still needs a unit it can start, report on and finish, so
+    // the acceptance a person would type is written as a fixture — the
+    // precedent `retireFixture` set for the retirement gate.
+    const work = workIdIn(run(demo, "project", ["work", "propose", "stage 1 lands the render gate and its pilot"]).out);
+    acceptFixture(ws, "demo", work);
     for (const [cwd, where, args] of steps(box, ws, demo, work))
     {
         run(cwd, where, args);
@@ -144,7 +151,7 @@ function receiptSweep(box, run, ws, demo, work)
 {
     machineConfig(run, ws, demo);
     projectReceipts(box, run, ws, demo);
-    const goals = goalReceipts(run, demo, work);
+    const goals = goalReceipts(run, ws, demo, work);
     aliasReceipts(run, demo);
     fileReceipts(run, demo, work);
     outsideRefusals(box, run);
@@ -215,7 +222,7 @@ function reinitRepository(box, dir, message)
 // The goal graph's own receipts, and the one event `undo` can take back
 // without a person at a terminal: a link displaces nothing, so recording it
 // and reversing it both run piped.
-function goalReceipts(run, demo, work)
+function goalReceipts(run, ws, demo, work)
 {
     const objective = idOf(run(demo, "project", ["objective", "add", "the CLI answers through one gate"]).out, "o");
     const milestone = idOf(run(demo, "project", ["milestone", "add", "the write verbs answer with receipts",
@@ -225,7 +232,10 @@ function goalReceipts(run, demo, work)
         "--success", "every listing returns rows", "--stop", "the gate grows a second print path",
         "--risk", "a line moves against the announce lines", "--capacity", "one stage",
         "--evidence-plan", "the golden fixture", "--confidence", "medium", "--expires", "2030-01-01"]).out, "w");
+    // The refusal a piped `work accept` prints is fixture-worthy in itself, and
+    // the acceptance behind it is written the way the unit above's was.
     run(demo, "project", ["work", "accept", proposal]);
+    acceptFixture(ws, "demo", proposal, milestone);
     const linked = idIn(run(demo, "project", ["work", "link", work, "--milestone", milestone]).out);
     run(demo, "project", ["undo", linked, "--why", "the checkpoint was the wrong one"]);
     return { objective, milestone };
@@ -323,6 +333,34 @@ function documentSweep(box, run, ws, demo, work, goals)
     run(demo, "project", ["setup"]);
     run(ws, "workspace", ["setup"]);
     run(box.root, "outside", ["setup"]);
+}
+
+// The acceptance a person would type at their own terminal, written straight
+// into the log. `work accept` is a person's call (#389) and every command in
+// this file is a piped child, so the events it would have appended are the
+// fixture: the confirm names the plan's current revision — which for a plan
+// nobody revised is the record's own id — and the grouping edge rides with it
+// where the proposal named a gap. Not a way past the gate: the gate's own
+// behaviour is asserted in work-entry-gate.test.mjs.
+function acceptFixture(ws, project, id, target)
+{
+    const events = [{ type: "entity.confirmed", payload: { entity: id }, refs: { confirms: id } }];
+    if (target !== undefined)
+    {
+        events.push({ type: "entity.linked", payload: { entity: id, link: { type: "member-of", target } } });
+    }
+    for (const event of events)
+    {
+        logFixture(ws, project, {
+            id: ulid(),
+            ts: new Date().toISOString(),
+            type: event.type,
+            origin: { actor: "agent", confirmed: true },
+            project,
+            payload: event.payload,
+            ...(event.refs === undefined ? {} : { refs: event.refs })
+        });
+    }
 }
 
 // A minted id of one kind, read off the answer that printed it. The prefixes

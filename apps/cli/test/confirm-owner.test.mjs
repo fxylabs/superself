@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, idIn, machine, must, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const BRIEF = {
     value: "closes the gap",
@@ -226,11 +226,11 @@ VERBS.forEach((verb, index) =>
             const id = await verb.make(alpha, `cell ${number}: a record answered from ${place.name}`);
             const ownerWas = events(box, "alpha");
             const otherWas = events(box, "beta");
-            const ran = await selfIn(box, place.dir(), verb.answer(id));
+            const ran = await personIn(box, place.dir(), verb.answer(id));
             assert.equal(ran.code, 0, `the line failed where it was read:\n${ran.out}`);
             assert.ok(events(box, "alpha") > ownerWas, "nothing was recorded into the project that owns the record");
             assert.equal(events(box, "beta"), otherWas, "the answer reached a project the record does not belong to");
-            assert.match((await selfIn(box, place.dir(), verb.answer(id))).out, verb.again);
+            assert.match((await personIn(box, place.dir(), verb.answer(id))).out, verb.again);
         });
     }
 });
@@ -262,7 +262,7 @@ VERBS.forEach((verb, index) =>
     test(`cell ${13 + index}: ${verb.name} resolves when the owning checkout is on another machine`, async () =>
     {
         const was = events(goneBox, "alpha");
-        const ran = await selfIn(goneBox, goneWs, verb.answer(goneRecords[verb.name]));
+        const ran = await personIn(goneBox, goneWs, verb.answer(goneRecords[verb.name]));
         assert.equal(ran.code, 0, `the line failed with no checkout to stand in:\n${ran.out}`);
         assert.ok(events(goneBox, "alpha") > was, "nothing was recorded into the project that owns the record");
     });
@@ -379,7 +379,9 @@ test("cell 25: every line self context --project prints runs where it was read",
         `self context --project did not advertise all three kinds:\n${read}`);
     for (const argv of lines)
     {
-        const ran = await selfIn(box, ws, argv);
+        // An advertised line is one a person runs, and one of the three is a
+        // person's call at their own terminal (#389).
+        const ran = await personIn(box, ws, argv);
         assert.equal(ran.code, 0, `\`self ${argv.join(" ")}\` failed where the render was read:\n${ran.out}`);
     }
 });

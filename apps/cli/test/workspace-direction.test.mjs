@@ -81,7 +81,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 import { buildModel } from "../dist/model.js";
 import { renderWorkspace } from "../dist/pretty.js";
 import { workspaceDirectionLines } from "../dist/views.js";
@@ -291,9 +291,9 @@ test("B6: `self objective` elsewhere leads with the owner's slug and counts work
 {
     // One unit in the owning project and one contributed from a third: both
     // are counted against the objective, which is what the owner's fold holds.
-    const owned = workIdIn((await must(b.box, b.alpha, ["work", "add", "ship the first cut"])).out);
+    const owned = workIdIn((await mustPerson(b.box, b.alpha, ["work", "add", "ship the first cut"])).out);
     await must(b.box, b.alpha, ["work", "link", owned, "--objective", companyObjective]);
-    const contributed = workIdIn((await must(b.box, b.gamma, ["work", "add", "write the page"])).out);
+    const contributed = workIdIn((await mustPerson(b.box, b.gamma, ["work", "add", "write the page"])).out);
     await must(b.box, b.gamma, ["work", "link", contributed, "--objective", companyObjective]);
     const listing = (await must(b.box, b.beta, ["objective"])).out;
     const rows = listing.split("\n");

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, spawnIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, spawnIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -55,7 +55,7 @@ test("the disclosure states the reason the call gives, beside what the record sa
 // justifies the loss, and it was misspelled on every one of them.
 test("a retirement's reason is spelled retired on every verb that gives one up", async () =>
 {
-    const unit = (await must(box, demo, ["work", "add", "an outcome that was given up"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const unit = (await mustPerson(box, demo, ["work", "add", "an outcome that was given up"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
     const refused = await selfIn(box, demo, ["work", "retire", unit, "--why", "the outcome moved to another unit"]);
     assert.equal(refused.code, 1);
     assert.match(refused.out, /retired because: the outcome moved to another unit/);
@@ -116,7 +116,7 @@ test("undo needs no terminal — reversing a destruction destroys nothing", asyn
 
 test("undo keeps both halves in the log and refuses a second time", async () =>
 {
-    const unit = (await must(box, demo, ["work", "add", "undo: an outcome given up"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const unit = (await mustPerson(box, demo, ["work", "add", "undo: an outcome given up"])).out.match(/\bw-[0-9a-z]{5}\b/)[0];
     const retired = await approvedIn(box, demo, ["work", "retire", unit, "--why", "given up early"], unit);
     const retirement = idIn(retired.printed);
     assert.equal((await selfIn(box, demo, ["undo", retirement, "--why", "it is still wanted"])).code, 0);

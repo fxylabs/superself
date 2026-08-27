@@ -358,10 +358,25 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   claim must carry evidence: a report with a commit or an artifact, or a
   done-time `--report` stating what verifiably happened. A bare claim is
   refused.
+- `work add` and `work accept` write a confirmed work record, which is a
+  person's call: a process with no person at its keyboard — one a runner
+  started, or one whose stdin is not a terminal — is refused, nothing is
+  recorded, and the refusal hands back the exact `work propose` line to run
+  instead. A person at their own terminal loses nothing: both stay one command,
+  with no prompt to answer. Only stdin is read, so piping a command's output
+  changes nothing about who is running it.
 - `work propose "<plan>"` records work for a person to review. The plan text
   alone is enough; naming `--objective` or `--milestone` makes it a gap
   proposal, which owes the full brief. `work accept` confirms it under the
   same id, and the acceptance binds the exact version of the plan it read.
+- `work propose "<plan>" --supersedes <work-id> --why w` proposes a correction
+  of a unit that has already started. The named unit is untouched while the
+  plan waits: the acceptance records the new unit and retires the one it
+  replaces, naming it the successor — the same pair `work add --supersedes`
+  records in one command. A unit that closed between the proposal and the
+  acceptance refuses the acceptance rather than being retired over it, and the
+  refusal names revising or declining the plan. A plan still awaiting review is
+  not a supersession target: restate it with `work revise`, which keeps its id.
 - `work revise <id> "<revised plan>" --why w` restates an unstarted plan under
   the same work id. Every version stays in that unit's history, the previous
   acceptance stops authorizing a start, and `work start` is refused by name

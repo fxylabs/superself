@@ -158,6 +158,11 @@ self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
 ```
 
+Run these in your own terminal. `self work add` records a confirmed work unit,
+which is a person's call: an agent session running it is refused and told to
+record the plan with `self work propose "<plan>"` instead, which you accept
+with `self work accept <id>`.
+
 Each command answers with the event it recorded — a line such as
 `entity.confirmed recorded [<event-id>]` — and `self work add` additionally
 prints a work id such as `w-abc12`. Copy the id printed in your terminal; ids

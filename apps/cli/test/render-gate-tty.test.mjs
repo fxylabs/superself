@@ -35,6 +35,18 @@ mustSpawn(box, ws, ["init"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 mustSpawn(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
 
+// A confirmed unit, in the two steps a session and a person take since #389:
+// the plan is proposed by a child, whose unpainted receipt carries the id, and
+// the acceptance runs in this process, where a keyboard can be stood in for.
+// Its painted answer is read by nothing, which is why the split is safe here.
+async function recordedUnit(plan)
+{
+    const proposed = mustSpawn(box, demo, ["work", "propose", plan]).out.match(/\bw-[0-9a-z]{5}\b/)[0];
+    const accepted = await approvedIn(box, demo, ["work", "accept", proposed], "");
+    assert.equal(accepted.code, 0, accepted.out);
+    return proposed;
+}
+
 test("this file loads with a styled stdout, or its cells assert nothing", () =>
 {
     assert.equal(styled, true);
@@ -99,7 +111,7 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
 // the move — which for `self work` is the ruled list and nothing under it.
 test("stage 3 cell 13: at a terminal, `self work` prints the ruled list with no size line under it", async () =>
 {
-    mustSpawn(box, demo, ["work", "add", "the listings answer with blocks"]);
+    await recordedUnit("the listings answer with blocks");
     const answer = await approvedIn(box, demo, ["work"], "");
     assert.equal(answer.code, 0, answer.out);
     const model = buildModel(join(ws, ".superself"), "demo", new Date());
@@ -134,7 +146,7 @@ function sizeLines(printed)
 // a pipe is absent — the gate chose, not the handler.
 test("stage 4 cell 13: at a terminal, `self work` is the listing block's ruled render", async () =>
 {
-    mustSpawn(box, demo, ["work", "add", "the pages answer with blocks"]);
+    await recordedUnit("the pages answer with blocks");
     const answer = await approvedIn(box, demo, ["work"], "");
     assert.equal(answer.code, 0, answer.out);
     const model = buildModel(join(ws, ".superself"), "demo", new Date());

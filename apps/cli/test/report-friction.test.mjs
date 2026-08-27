@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -22,7 +22,7 @@ let seq = 0;
 async function freshUnit()
 {
     seq += 1;
-    return workIdIn((await must(box, demo, ["work", "add", `outcome ${seq}`])).out);
+    return workIdIn((await mustPerson(box, demo, ["work", "add", `outcome ${seq}`])).out);
 }
 
 function reportsOf(id)
