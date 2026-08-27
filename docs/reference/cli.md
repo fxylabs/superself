@@ -28,6 +28,7 @@ prints them during the same run.
 | Taking a destruction back | `undo <event-id> --why "<reason>"` |
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Reusable procedures | `runbook add "<name>" --stage s`, `runbook show <id|name>`, `runbook revise <id> --stage s --why w`, `runbook start <id> --instance <key>`, `runbook advance <key> --why w`, `runbook hold\|approve\|stop\|resume\|link <key>` |
+| Reusable skills | `skill [--project <slug>]`, `skill add "<name>" --command "<line>" --purpose "<what it is for>" [--workspace]`, `skill add "<name>" --file <path> --purpose "<what it is for>"`, `skill show <id\|name>`, `skill drop <id\|name> --why w` |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `handoff <work-id> [--project <slug>]`, `artifact ...` |
 | Store size and maintenance | `store size [--json]`, `store compact` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
@@ -40,7 +41,7 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone tokens project remote sync clone
-goal objective milestone decide work handoff report artifact store convention state alias runbook
+goal objective milestone decide work handoff report artifact store convention state alias runbook skill
 undo apply
 connect view context status setup
 log search fold sweep
@@ -273,6 +274,64 @@ self runbook resume E001
 - `list` and `show` read, so they take `--project <slug>`. Every other verb
   writes, so it takes no read-scope flag and records into the project it runs
   in.
+
+### Reusable skills
+
+A skill is operational know-how this project reuses and neither a rule nor a
+procedure covers: the exact command that deploys, the flag soup that runs one
+test file against the right environment, the short recipe for a task that comes
+up every few weeks. Registered once, it appears in `self context` as a name and
+a one-line purpose, so a session that has just started discovers what exists
+without being told.
+
+```bash
+cd ~/my-project
+self project init
+self skill add "deploy staging" --command "make deploy ENV=staging" --purpose "push the built image to staging"
+self skill
+self skill show "deploy staging"
+self skill run "deploy staging"   # refused — a skill is printed, never run
+```
+
+Its other forms, where a placeholder stands for something you supply:
+
+```text
+self skill add "release notes" --file docs/recipes/release-notes.md --purpose "draft the notes from merged PRs"
+self skill add "deploy staging" --command "make deploy ENV=staging" --purpose "..." --workspace
+self skill add "deploy staging" --command "make deploy ENV=staging TAG={{tag}}" --purpose "..."
+self skill list --project <slug>
+self skill drop "deploy staging" --why "the deploy moved to the pipeline"
+```
+
+- **A skill is printed, never run.** There is no verb that executes one, and
+  `self skill run` is a refusal that says why: this store is synced between
+  machines and clones, so a line it holds can be appended anywhere and would
+  execute everywhere. `skill show` hands the line over and the caller runs it.
+- **No new event type exists for any of this.** A skill is an entity labelled
+  `skill` whose name is its text, whose purpose is its `why`, whose one line is
+  its reserved `criteria`, and whose longer recipe is its reserved `artifact`.
+  So `state show`, `search`, `log`, `undo` and the retention caps answer for a
+  skill exactly as they answer for every other record.
+- **`--file` registers the recipe as an artifact and never records the path.**
+  The bytes are read once, at the add, so editing that file afterwards changes
+  nothing; the pointer counts against the retention cap and the document does
+  not. `self artifact prune` refuses to remove bytes a live skill points at.
+- **Correcting a skill is registering it again under the same name.** That
+  proposes a new version carrying a `supersedes` link, and `self state confirm
+  <id>` is what lands it — the previous version stays in the record's history,
+  which is what `skill show` prints as its version list. A restatement that
+  changes neither the line nor the purpose is refused rather than recorded.
+- **A placeholder — `{{tag}}` — is recognised and listed, never filled.** `skill
+  add` refuses a malformed one, so a record can never promise a hole no caller
+  can find, and no flag substitutes one: the caller fills it where they paste
+  the line.
+- **A project skill shadows a workspace skill of the same name**, and the shadow
+  is disclosed everywhere — at the add, in the listing, on the page, and in
+  `self context`, which carries one row for the skill a name actually reaches.
+- `list` and `show` read, so they take `--project <slug>`. `add` and `drop`
+  write, so they take no read-scope flag and record into the project they run
+  in. `drop` is a withdrawal like any other: a person at a terminal, typing the
+  id back.
 
 ### Outcome and work commands
 

@@ -191,6 +191,9 @@ async function writeCurrentVocabulary(box, demo)
     const runUnit = workIdIn((await must(box, demo, ["work", "add", "a supervised outcome"])).out);
     await must(box, demo, ["work", "started", runUnit, "--pid", String(process.pid)]);
     await must(box, demo, ["work", "exited", runUnit, "--code", "0"]);
+    const skill = entityIdIn((await must(box, demo, ["skill", "add", "deploy staging",
+        "--command", "make deploy ENV=staging", "--purpose", "push the built image to staging"])).out);
+    await approvedIn(box, demo, ["skill", "drop", skill, "--why", "the deploy moved to the pipeline"], skill);
     writeFileSync(join(demo, "registered-guide.md"), "a guide no report is about\n");
     const guide = (await must(box, demo, ["artifact", "add", "registered-guide.md"])).out.match(/\ba-[0-9a-z]{5}\b/)[0];
     // Removing stored bytes is a person's call, so the last verb in the

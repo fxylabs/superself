@@ -153,6 +153,24 @@ function isControl(point: number): boolean
     return (point < 0x20 && !ALLOWED_CONTROL.includes(point)) || point === 0x7f || (point >= 0x80 && point <= 0x9f);
 }
 
+// Where the first control byte sits, or nothing. Exported because bytes reach
+// this store two ways: as a payload, which the gate below judges, and as an
+// artifact's file, which never passes through it — a `skill --file` recipe
+// (#391) is judged against this same rule at the moment it is read, so one
+// answer to "what is a control byte" serves both.
+export function firstControlByte(text: string): { point: number; offset: number } | undefined
+{
+    for (let index = 0; index < text.length; index += 1)
+    {
+        const point = text.charCodeAt(index);
+        if (isControl(point))
+        {
+            return { point, offset: index };
+        }
+    }
+    return undefined;
+}
+
 // Refused rather than stripped, like everything else this gate judges: a
 // control byte in recorded text is either an accident whose author wants to
 // know, or an attempt to draw with somebody else's terminal, and silently
@@ -160,15 +178,12 @@ function isControl(point: number): boolean
 // which is what the writer has to go and remove — never the value.
 function assertNoControlBytes(text: string, at: string): void
 {
-    for (let index = 0; index < text.length; index += 1)
+    const found = firstControlByte(text);
+    if (found !== undefined)
     {
-        const point = text.charCodeAt(index);
-        if (isControl(point))
-        {
-            throw new CliError(`refusing to record ${at} — it holds the terminal control character ` +
-                `U+${point.toString(16).toUpperCase().padStart(4, "0")} at offset ${index}, ` +
-                `which every surface that renders this value would obey instead of showing`);
-        }
+        throw new CliError(`refusing to record ${at} — it holds the terminal control character ` +
+            `U+${found.point.toString(16).toUpperCase().padStart(4, "0")} at offset ${found.offset}, ` +
+            `which every surface that renders this value would obey instead of showing`);
     }
 }
 

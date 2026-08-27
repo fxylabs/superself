@@ -43,6 +43,7 @@ import {
 } from "./pretty.js";
 import { archivedScopeSignals, artifactSignals, askedRepositories, entityArtifactSignals, frozenVerdictSignals, verdictSignals } from "./reachability.js";
 import { instanceKey, isRunbookRun, readInstance, runbookInstances, runbookRow } from "./runbooks.js";
+import { effectiveSkills, isSkill, skillRow } from "./skills.js";
 import { blue, charactersFor, countCharacters, dim, displayWidth, fit, green, oneLine, plural, red, styled, takeCharacters, termWidth, yellow } from "./style.js";
 import { ArtifactMeta, artifactName, CliError, CommandOutput, SelfEvent } from "./types.js";
 import { renderWorkDetails } from "./fold.js";
@@ -440,22 +441,61 @@ function projectContextSections(model: ProjectModel, foreign: EntityState[], all
     // workspace and project entities interleave rather than sectioning. Work
     // records are deliberately absent: the derived live state below is the
     // render a work unit gets (#197 §7 — "live state shows the active ones").
-    const placed = orderEntities([
-        ...model.entities.filter((item) => item.status === "confirmed" && isCurrent(item)
-            && rendersIn(item, model.slug, model.slug)),
-        ...foreign
+    const rendered = renderedHere(model, foreign, excluded);
+    const placed = orderEntities(rendered.filter((item) => item.source !== "work"
         // A runbook run is absent for the same reason a work record is: the
         // live-state section below is the render it gets, and a record printed
-        // in two blocks of one page is one record read twice (#171).
-    ].filter((item) => item.source !== "work" && !isRunbookRun(item) && !excluded.has(item.id)));
+        // in two blocks of one page is one record read twice (#171). A skill
+        // is absent for the same reason again — its block is `## Skills`.
+        && !isRunbookRun(item) && !isSkill(item)));
     return {
         head: [`# ${model.slug}`, ""],
         sections: [
             descriptionSection(model, project),
             fullSection(placed, project),
             ...liveSections(model, project, linked),
+            skillSection(rendered, project),
             indexSection(placed, project)
         ]
+    };
+}
+
+// Every record that renders here, before anything is filtered out of it (#197
+// §6, #181 D2): this project's own current records plus every other store's
+// workspace-scoped ones. The skills block and the placement projection are two
+// readings of one set, and building them from two collections is how the two
+// drift.
+function renderedHere(model: ProjectModel, foreign: EntityState[], excluded: Set<string>): EntityState[]
+{
+    return [
+        ...model.entities.filter((item) => item.status === "confirmed" && isCurrent(item)
+            && rendersIn(item, model.slug, model.slug)),
+        ...foreign
+    ].filter((item) => !excluded.has(item.id));
+}
+
+// The compact index of what this project knows how to do (#391): a name and a
+// one-line purpose per skill, and the command that prints the body. A session
+// that has just started discovers what exists without being told, which is the
+// whole of what this section is for.
+//
+// One row per name a caller can actually reach: a project skill's row carries
+// the shadow disclosure, and the workspace skill it answers for gets no row of
+// its own. A context that listed a skill no name reaches would be a row a
+// reader cannot act on.
+//
+// It sits after the live state and before the index, so the budget cuts it
+// before a health signal and after the index rows — a health signal outranks a
+// reference index, and neither outranks what is moving.
+function skillSection(rendered: EntityState[], project: string): ContextSection
+{
+    const skills = effectiveSkills(rendered);
+    return {
+        header: "## Skills",
+        rows: skills.map((reading) => `- ${skillRow(reading)}`
+            + ` · \`${pointerTo({ verb: "skill-show", id: reading.skill.id }, project)}\``),
+        ids: skills.map((reading) => reading.skill.id),
+        omission: (count) => `- … ${plural(count, "skill")} omitted; run \`${scoped("self skill", project)}\``
     };
 }
 

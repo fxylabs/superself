@@ -8,8 +8,8 @@ import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectiv
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
 import { artifactSignals, askedRepositories, entityArtifactSignals, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
-import { EntityState, isCurrent } from "./entities.js";
-import { readInstance, runbookChain, runbookDefinitions, runbookInstances, runbookVersion, stageDigest } from "./runbooks.js";
+import { chainVersion, EntityState, isCurrent } from "./entities.js";
+import { readInstance, runbookChain, runbookDefinitions, runbookInstances, stageDigest } from "./runbooks.js";
 import { errYellow } from "./style.js";
 import { ArtifactMeta, artifactName } from "./types.js";
 import { chromeStale, claimChrome, writeViews } from "./view.js";
@@ -246,7 +246,7 @@ function sweepPages(dir: string, hashes: Record<string, string>, folder: string,
 function renderRunbookBody(chain: EntityState[], definition: EntityState): string
 {
     const lines = [`# ${chain[0].id} — ${definition.text}`, "",
-        `- Edition: v${runbookVersion(chain, definition.id)} (${definition.id})`,
+        `- Edition: v${chainVersion(chain, definition.id)} (${definition.id})`,
         `- Stages fingerprint: ${stageDigest(definition.criteria)}`, ""];
     bullets(lines, "Stages", definition.criteria);
     bullets(lines, "Editions", chain.map((edition, at) =>
