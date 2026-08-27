@@ -35,8 +35,12 @@ test("stage 2 cell 1: a piped `self work add` answers with the bare id, under th
 {
     const answer = await personIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
     assert.equal(answer.code, 0, answer.out);
+    // The append prints two lines since #390 — the recorded line and the review
+    // line under it — and the receipt is still the bare id directly under them.
     assert.match(answer.out,
         new RegExp(`^entity\\.confirmed recorded \\[[0-9abcdefghjkmnpqrstvwxyz]{26}\\]`
+            + `\\n {2}w-[0-9abcdefghjkmnpqrstvwxyz]{5} the receipts answer through the gate`
+            + ` — verify; wrong\\? self undo [0-9abcdefghjkmnpqrstvwxyz]{26}`
             + `\\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\\n${escaped(NO_OBJECTIVE_HINT)}\\n$`));
 });
 

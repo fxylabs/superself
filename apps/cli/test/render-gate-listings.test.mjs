@@ -160,15 +160,17 @@ test("stage 3 cell 3: a piped `self project archive` answers with its receipt, t
     const archiveBox = await machineWithProjects(["alpha"]);
     const printed = lines(await selfIn(archiveBox.box, archiveBox.ws,
         ["project", "archive", "alpha", "--why", "nobody is working on it"]));
-    // The append's own line, then the receipt, then the listing this verb no
-    // longer writes for itself, then its size — in that order and no other.
+    // The append's own two lines since #390 — the recorded line and the review
+    // line under it — then the receipt, then the listing this verb no longer
+    // writes for itself, then its size, in that order and no other.
     assert.match(printed[0], /^project\.archived recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]$/);
-    assert.equal(printed[1], "project \"alpha\" is archived — 0 open work units went with it, unchanged; "
+    assert.match(printed[1], /^ {2}.* — verify; wrong\? self undo [0-9abcdefghjkmnpqrstvwxyz]{26}$/);
+    assert.equal(printed[2], "project \"alpha\" is archived — 0 open work units went with it, unchanged; "
         + "run `self project restore alpha` to bring it back");
-    assert.match(printed[2], /^alpha — archived \d{4}-\d{2}-\d{2}: nobody is working on it$/);
-    assert.equal(printed[3], "    self project restore alpha [--why \"<why it should never have been archived>\"]");
-    assert.equal(printed[4], "1 archived project");
-    assert.equal(printed.length, 5);
+    assert.match(printed[3], /^alpha — archived \d{4}-\d{2}-\d{2}: nobody is working on it$/);
+    assert.equal(printed[4], "    self project restore alpha [--why \"<why it should never have been archived>\"]");
+    assert.equal(printed[5], "1 archived project");
+    assert.equal(printed.length, 6);
 });
 
 test("stage 3 cell 3: a piped `self project restore` answers the same way, with what is still set aside", async () =>
@@ -177,8 +179,8 @@ test("stage 3 cell 3: a piped `self project restore` answers the same way, with 
     await must(archiveBox.box, archiveBox.ws, ["project", "archive", "alpha", "--why", "set aside"]);
     await must(archiveBox.box, archiveBox.ws, ["project", "archive", "beta", "--why", "set aside too"]);
     const printed = lines(await selfIn(archiveBox.box, archiveBox.ws, ["project", "restore", "alpha"]));
-    assert.equal(printed[1], "project \"alpha\" is back — 0 open work units came back with it, as it was left");
-    assert.match(printed[2], /^beta — archived /);
+    assert.equal(printed[2], "project \"alpha\" is back — 0 open work units came back with it, as it was left");
+    assert.match(printed[3], /^beta — archived /);
     assert.equal(printed.at(-1), "1 archived project");
 });
 

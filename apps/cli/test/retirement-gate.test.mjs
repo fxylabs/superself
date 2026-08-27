@@ -89,13 +89,15 @@ test("a wrong answer at the terminal records nothing", async () =>
 const events = () => readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8")
     .trim().split("\n").map((line) => JSON.parse(line));
 
-test("undo gives back a superseded record and leaves the successor standing", async () =>
+// Cell 19 of #390: the narrow undo. Without `--supersession` this same call is
+// cell 20 and takes the successor back too.
+test("undo --supersession gives back a superseded record and leaves the successor standing", async () =>
 {
     const first = idIn((await must(box, demo, ["decide", "undo: the standing policy"])).out);
     const replacing = await approvedIn(box, demo, ["decide", "undo: the replacement", "--supersedes", first], first);
     assert.equal(replacing.code, 0, replacing.out);
     assert.match((await must(box, demo, ["state", "show", first])).out, /superseded/);
-    const undone = await selfIn(box, demo, ["undo", idIn(replacing.printed), "--why", "it added to the policy, it did not replace it"]);
+    const undone = await selfIn(box, demo, ["undo", idIn(replacing.printed), "--supersession", "--why", "it added to the policy, it did not replace it"]);
     assert.equal(undone.code, 0, undone.out);
     assert.match((await must(box, demo, ["state", "show", first])).out, /confirmed/);
     const context = (await must(box, demo, ["context"])).out;
@@ -128,19 +130,16 @@ test("undo keeps both halves in the log and refuses a second time", async () =>
     assert.match(again.out, /was already undone/);
 });
 
-test("undo refuses an event that destroyed nothing, and names what it takes back", async () =>
+// Inverted by #390 (cell 3): a plain decision recorded by mistake is the
+// cheapest thing in the system to erase, and the ceremony it used to owe is
+// what that issue abolishes. `--why` goes with it — "this was a mistake" is
+// the whole statement, and the annulment already names what it reversed.
+test("undo takes back a decision that replaced nothing, with no --why owed", async () =>
 {
     const plain = idIn((await must(box, demo, ["decide", "undo: a decision that replaced nothing"])).out);
-    const refused = await selfIn(box, demo, ["undo", plain, "--why", "nothing to take back"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /undo takes back a retirement, a withdrawal, a link, or a record's supersession/);
-});
-
-test("undo without --why is refused", async () =>
-{
-    const refused = await selfIn(box, demo, ["undo", "01zzzzz"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /--why/);
+    const undone = await selfIn(box, demo, ["undo", plain]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.doesNotMatch((await must(box, demo, ["context"])).out, /undo: a decision that replaced nothing/);
 });
 
 /* ── uniformity and merge safety ───────────────────────────────────── */

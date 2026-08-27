@@ -102,7 +102,7 @@ creation is always v1; `work revise` states v2, v3 … under the same `w-` id.
 | 16 | cwd is outside any project | `revise` | refused by `requireProject`, naming where it looked |
 | 17 | cwd is outside any project | `work accept <id>` | resolves through the record, unchanged |
 | 18 | v3 current, v2 accepted | `undo <v3 event id> --why …` | v2 is current again and accepted again; status returns to `next` |
-| 19 | v2 accepted | `undo <accept event id>` | refused by name: an acceptance is not taken back; the answer names `work revise` |
+| 19 | v2 accepted | `undo <accept event id>` | **inverted by [#390](390-undo-review-settle.md), cell 6:** the acceptance is taken back and the plan returns to review. It can only ever move the record back to `proposed`, so re-accepting still costs a person and a terminal — an eraser manufactures no judgement. `refuseAcceptanceUndo` is deleted |
 | 20 | a proposal with `--objective o-x`, never started | `revise`, then `accept` | same id; the member-of edge is untouched; still toward `o-x` |
 | 21 | v2 current | `revise` with text identical to v2 | refused: nothing changed, nothing recorded |
 | 22 | a done unit | `revise` | refused: it is already done |

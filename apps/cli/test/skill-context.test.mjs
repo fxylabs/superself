@@ -235,26 +235,30 @@ test("H1: a recipe's bytes are counted by `store size` like any other artifact",
     assert.ok(size.artifactBytes > 0, `the recipe's bytes are not counted: ${JSON.stringify(size)}`);
 });
 
-test("H2: undoing the confirm that landed a replacement is refused — an acceptance is not taken back", async () =>
+// Inverted by #390: `refuseAcceptanceUndo` is deleted, and a confirm is taken
+// back like any other `entity.*` event. It can only ever move the replacement
+// back to proposed, so landing it again still costs what landing it cost.
+test("H2: undoing the confirm that landed a replacement returns it to proposed", async () =>
 {
     const ground = await floor();
-    await addSkill(ground, "deploy", "make deploy");
+    const first = await addSkill(ground, "deploy", "make deploy");
     const second = await addSkill(ground, "deploy", "make deploy FAST=1");
     const landed = await must(ground.box, ground.demo, ["state", "confirm", second]);
-    const refused = await ground.self(["undo", idIn(landed.out), "--why", "the change was wrong"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /acceptance is not taken back/);
-    assert.match((await must(ground.box, ground.demo, ["skill", "show", "deploy"])).out, new RegExp(second));
+    const undone = await ground.self(["undo", idIn(landed.out)]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.match((await must(ground.box, ground.demo, ["skill", "show", "deploy"])).out, new RegExp(first));
 });
 
-test("H3: undoing a first registration is refused, and the refusal names what undo does take back", async () =>
+// Inverted by #390: a creation recorded by mistake is the cheapest thing in
+// the system to erase, whether or not it displaced anything.
+test("H3: undoing a first registration takes the skill out of the registry", async () =>
 {
     const ground = await floor();
     const recorded = await must(ground.box, ground.demo,
         ["skill", "add", "deploy", "--command", "make deploy", "--purpose", "p"]);
-    const refused = await ground.self(["undo", idIn(recorded.out), "--why", "recorded in error"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /undo takes back a retirement, a withdrawal, a link/);
+    const undone = await ground.self(["undo", idIn(recorded.out)]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.doesNotMatch((await must(ground.box, ground.demo, ["skill"])).out, /make deploy/);
 });
 
 test("H4: undoing a drop puts the skill back", async () =>

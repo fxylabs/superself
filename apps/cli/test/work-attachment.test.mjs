@@ -37,12 +37,13 @@ async function objectiveIn(box, demo, outcome)
     return shortId((await must(box, demo, ["objective", "add", outcome])).out, "o");
 }
 
-// What `work add` printed, with the announce line and the new id stripped off:
-// the two lines above the offer are the receipt this cell is not about.
+// What `work add` printed, with the announce line, its review line (#390) and
+// the new id stripped off: the three lines above the offer are the receipt this
+// cell is not about.
 function offer(printed)
 {
     const lines = printed.replace(/\n$/, "").split("\n");
-    return lines.slice(2);
+    return lines.slice(3);
 }
 
 /* ── cell 1: one open objective ───────────────────────────────────── */
@@ -156,7 +157,8 @@ test("at a terminal the offer is appended under the id, with no size line", asyn
     assert.equal(added.code, 0, added.out);
     const work = workIdIn(added.printed);
     const lines = added.printed.replace(/\n$/, "").split("\n");
-    assert.equal(lines[1], work, "the id is no longer the line under the announce line");
+    // The announce line, then its review line (#390), then the id.
+    assert.equal(lines[2], work, "the id is no longer the line under the append's own two lines");
     // The terminal render frames its own rows, so the plain render's size line
     // is not printed here — `output.ts` prints one or the other, never both.
     assert.ok(!lines.some((line) => line.includes("open objective")), `a size line reached the terminal:\n${added.printed}`);

@@ -21,6 +21,7 @@ import {
     branchTotals,
     currentConventions,
     foreignToward,
+    isOpenWork,
     LogPage,
     otherGoals,
     projectGoalLine,
@@ -537,7 +538,7 @@ function workNotes(model: ProjectModel, work: WorkState): Cell[]
 
 export function renderWorkList(model: ProjectModel): string[]
 {
-    const open = model.works.filter((work) => work.status !== "done" && work.status !== "retired");
+    const open = model.works.filter(isOpenWork);
     const lines = open.length === 0
         ? [dim("no open work")]
         : tableLines(WORK_COLUMNS, open.map((work) => workRow(model, work)), columns());
@@ -851,7 +852,7 @@ export function renderContext(input: SurfaceInput): string[]
     lines.push(...waitingSection(input.waiting, scoped("self context", project)));
     lines.push("", ...attentionSections(model));
     const open = model.works
-        .filter((work) => work.status !== "done" && work.status !== "retired")
+        .filter(isOpenWork)
         .sort((left, right) => (OPEN_FIRST[left.status] ?? 3) - (OPEN_FIRST[right.status] ?? 3));
     lines.push("", ...tableSection("WORK", workCounts(model), WORK_COLUMNS, open.map((work) => workRow(model, work)),
         scoped("self work", project)));

@@ -12,17 +12,21 @@ project "demo" registered
 
 $ self work propose stage 1 lands the render gate and its pilot   (in project, exit 0)
 entity.proposed recorded [<event-id>]
+  stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 <w-id>
 
 $ self decide the render gate is the one path to stdout --why one print path   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
+  the render gate is the one path to stdout — verify; wrong? self undo <event-id>
 
 $ self state add a note the search surface can find --exposure search   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
+  <e-id> a note the search surface can find — verify; wrong? self undo <event-id>
 <e-id>
 
 $ self work start <w-id>   (in project, exit 0)
 entity.started recorded [<event-id>]
+  <w-id> stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 # <w-id> — stage 1 lands the render gate and its pilot
 
 - Status: next
@@ -30,6 +34,7 @@ entity.started recorded [<event-id>]
 
 $ self report <w-id> the fixture was generated   (in project, exit 0)
 report.added recorded [<event-id>]
+  <w-id> the fixture was generated — verify; wrong? self undo <event-id>
 
 $ self lang   (in project, exit 0)
 en
@@ -227,7 +232,7 @@ usage: self <command>
                                              retire the unit itself: its outcome was given up or moved, not reached
                                              history stays inspectable; the unit stops counting as open work
   handoff <work-id> [--project <slug>]       compile one deterministic, self-contained read-only packet for a fresh agent
-  undo <event-id> --why "<why the retirement was wrong>"
+  undo [<event-id>] [--supersession] [--why <text>]
   apply <file>                               run a reviewed file of record-destroying commands on one confirmation
                                              (nothing is recorded until the whole set is confirmed at a terminal)
   report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n] [--friction f]
@@ -560,14 +565,17 @@ refolded demo
 
 $ self objective add the CLI answers through one gate   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
+  <o-id> the CLI answers through one gate — verify; wrong? self undo <event-id>
 <o-id>
 
 $ self milestone add the write verbs answer with receipts --objective <o-id> --exit no write verb prints for itself   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
+  <m-id> the write verbs answer with receipts — verify; wrong? self undo <event-id>
 <m-id>
 
 $ self work propose the listings move behind the gate --milestone <m-id> --value one answer to what a piped run prints --success every listing returns rows --stop the gate grows a second print path --risk a line moves against the announce lines --capacity one stage --evidence-plan the golden fixture --confidence medium --expires <date>   (in project, exit 0)
 entity.proposed recorded [<event-id>]
+  the listings move behind the gate — verify; wrong? self undo <event-id>
 <w-id>
 
 $ self work accept <w-id>   (in project, exit 1)
@@ -581,9 +589,10 @@ error: accepting a plan is a person's call, and this process has no terminal to 
 
 $ self work link <w-id> --milestone <m-id>   (in project, exit 0)
 entity.linked recorded [<event-id>]
+  <w-id> stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 
 $ self undo <event-id> --why the checkpoint was the wrong one   (in project, exit 0)
-entity.restored recorded [<event-id>]
+entity.annulled recorded [<event-id>]
 <w-id> no longer carries the link — the linked event was taken back
 
 $ self alias add note --label note --exposure search   (in project, exit 0)
@@ -609,6 +618,7 @@ note dropped — the verb refuses again
 
 $ self report <w-id> the fixture carries an artifact --artifact evidence.md   (in project, exit 0)
 report.added recorded [<event-id>]
+  <w-id> the fixture carries an artifact — verify; wrong? self undo <event-id>
 
 $ self artifact list   (in project, exit 0)
 <a-id>  <date>  demo  <w-id>  evidence.md
@@ -625,7 +635,9 @@ $ self view demo   (in project, exit 0)
 
 $ self work done <w-id> --report the sweep covers every receipt this stage moves   (in project, exit 0)
 report.added recorded [<event-id>]
+  <w-id> stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 entity.done recorded [<event-id>]
+  <w-id> stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 
 $ self work add a unit recorded from nowhere   (in outside, exit 1)
 error: not inside a registered project — run `self project init` here to register it, or `self project link <slug> --here` if it is a checkout of a project registered on another machine
@@ -691,8 +703,8 @@ work         work         search     (built-in)
 8 aliases
 
 $ self log -n 5   (in project, exit 0)
-<ts>  entity.linked  [<event-id>]  
-<ts>  entity.restored  [<event-id>]  the checkpoint was the wrong one
+<ts>  entity.linked  [<event-id>]   · undone
+<ts>  entity.annulled  [<event-id>]  undone entity.linked [<event-id>] — the checkpoint was the wrong one
 <ts>  report.added  [<event-id>]  the fixture carries an artifact
 <ts>  report.added  [<event-id>]  the sweep covers every receipt this stage moves
 <ts>  entity.done  [<event-id>]  
@@ -708,6 +720,7 @@ no archived projects — `self project` lists the ones this workspace is working
 
 $ self project archive second --why nobody is working on the second checkout   (in project, exit 0)
 project.archived recorded [<event-id>]
+  archived second — verify; wrong? self undo <event-id>
 project "second" is archived — 0 open work units went with it, unchanged; run `self project restore second` to bring it back
 second — archived <date>: nobody is working on the second checkout
     self project restore second [--why "<why it should never have been archived>"]
@@ -720,6 +733,7 @@ second — archived <date>: nobody is working on the second checkout
 
 $ self project restore second   (in workspace, exit 0)
 project.restored recorded [<event-id>]
+  restored second — verify; wrong? self undo <event-id>
 project "second" is back — 0 open work units came back with it, as it was left
 no archived projects — `self project` lists the ones this workspace is working on
 
@@ -728,6 +742,7 @@ no archived projects — `self project` lists the ones this workspace is working
 
 $ self state add a record the document sweep reads back --exposure index   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
+  <e-id> a record the document sweep reads back — verify; wrong? self undo <event-id>
 <e-id>
 
 $ self state show <e-id>   (in project, exit 0)
@@ -746,8 +761,8 @@ $ self work show <w-id> --history   (in project, exit 0)
 <ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot
 <ts>  entity.confirmed  [<event-id>]  
 <ts>  entity.started  [<event-id>]  
-<ts>  entity.linked  [<event-id>]  
-<ts>  entity.restored  [<event-id>]  the checkpoint was the wrong one
+<ts>  entity.linked  [<event-id>]   · undone
+<ts>  entity.annulled  [<event-id>]  undone entity.linked [<event-id>] — the checkpoint was the wrong one
 <ts>  entity.done  [<event-id>]  
 
 $ self objective show <o-id>   (in project, exit 0)

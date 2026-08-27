@@ -14,7 +14,7 @@ type TargetState = "reached" | "missed" | "blocked" | "at-risk" | "unstarted" | 
 // live (`proposed`/`active`), replaced by a linked successor
 // (`superseded`), withdrawn with no successor (`dropped`), turned down
 // as a proposal (`declined`), or finished (`reached`).
-type ObjectiveStatus = "proposed" | "active" | "reached" | "dropped" | "superseded" | "declined";
+type ObjectiveStatus = "proposed" | "active" | "reached" | "dropped" | "superseded" | "declined" | "undone";
 
 interface Criterion
 {

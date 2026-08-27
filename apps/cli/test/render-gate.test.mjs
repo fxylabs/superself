@@ -70,7 +70,9 @@ test("cell 9: a piped event verb prints the recorded line the append always prin
 {
     const answer = await selfIn(box, demo, ["decide", "the gate prints once", "--proposed"]);
     assert.equal(answer.code, 0, answer.out);
-    assert.match(answer.out, /^entity\.proposed recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]\n$/);
+    // Two lines since #390: the recorded line, then the record it resolved and
+    // the line that takes it back. Both are the append's, printed by `notice`.
+    assert.match(answer.out, /^entity\.proposed recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]\n {2}the gate prints once — verify; wrong\? self undo [0-9abcdefghjkmnpqrstvwxyz]{26}\n$/);
 });
 
 // Machine mode is `pipeline.ts`'s judgment about a run, and stage 1 left it

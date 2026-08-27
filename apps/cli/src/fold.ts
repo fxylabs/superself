@@ -62,7 +62,10 @@ function foldWorkPages(dir: string, hashes: Record<string, string>, model: Proje
     for (const work of model.works)
     {
         const rel = join("work", `${work.id}.md`);
-        if (work.status === "done" || work.status === "retired")
+        // An undone unit loses its page for a stronger reason than a done one:
+        // the unit never held, so a page stating its plan would be a page about
+        // a mistake (#390).
+        if (work.status === "done" || work.status === "retired" || work.status === "undone")
         {
             drop(dir, hashes, rel);
         }
@@ -626,7 +629,7 @@ function workUnshippedLines(work: WorkState, verdicts: Record<string, Verdict>):
 // Where the unit stands: status, what it contributes to, and what stopped it.
 function workStandingLines(work: WorkState, model: ProjectModel, supersedes: string[], portable = false): string[]
 {
-    const lines: string[] = [`- Status: ${work.status}`, ...planLines(work)];
+    const lines: string[] = [`- Status: ${work.status}`, ...planLines(work), ...undoneLines(work)];
     const contributes = contributionLines(work, model);
     if (contributes.length > 0)
     {
@@ -648,6 +651,14 @@ function workStandingLines(work: WorkState, model: ProjectModel, supersedes: str
         lines.push(`- Process: ${work.process.state}${work.process.code === undefined ? "" : ` (code ${work.process.code})`} at ${work.process.at}`);
     }
     return lines;
+}
+
+// When a unit's own creation was taken back (#390). A record that never held
+// still answers by id, so the reader who followed it out of a commit message
+// is told when it stopped holding rather than that the id is unknown.
+function undoneLines(work: WorkState): string[]
+{
+    return work.undoneAt === undefined ? [] : [`- Undone: ${work.undoneAt.slice(0, 10)}`];
 }
 
 // Which version of the plan a unit awaiting review currently states, and the

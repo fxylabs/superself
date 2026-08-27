@@ -9,11 +9,21 @@ export interface EventRefs
 {
     confirms?: string;
     supersedes?: string[];
-    // The destructive event an `entity.restored` takes back. Naming the event
-    // rather than asserting a new state is what lets a withdrawal stay
-    // terminal against everything written in ignorance of it: an undo cannot
-    // have been written without seeing what it reverses.
+    // The event an annulment takes back. Naming the event rather than
+    // asserting a new state is what lets a withdrawal stay terminal against
+    // everything written in ignorance of it: an undo cannot have been written
+    // without seeing what it reverses.
+    //
+    // This ref, not the event type, is what the fold keys on (#390): an older
+    // log's `entity.restored` and this CLI's `entity.annulled` carry the same
+    // meaning here, so both fold identically and no log is migrated.
     annuls?: string;
+    // The append this event was written in, stamped only where the append held
+    // more than one event (#390). Log adjacency cannot serve instead — a union
+    // merge of two clones interleaves lines, so contiguity is not a fact about
+    // an append — and an undo needs the boundary to take back everything one
+    // state change wrote. Absent means an event of its own.
+    batch?: string;
     work?: string;
     // Git revisions in the project repo, and nothing else. Free-form evidence
     // is recorded as `payload.notes`, because everything listed here is handed

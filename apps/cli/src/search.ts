@@ -13,7 +13,7 @@
 // `work show <id> --history` (R3). No flag here reaches a dead record.
 
 import { EntityState, Exposure, EXPOSURES, isCurrent, scopeTarget } from "./entities.js";
-import { buildModel, ProjectModel, WorkState } from "./model.js";
+import { buildModel, isOpenWork, ProjectModel, WorkState } from "./model.js";
 import { notice } from "./output.js";
 import { activeProjects, CliContext, requireRegistered } from "./paths.js";
 import { bold, dim, displayWidth, fitDisplay, oneLine, styled } from "./style.js";
@@ -186,7 +186,7 @@ function liveRecords(model: ProjectModel): LiveRecord[]
     // A unit folded from the pre-cutover `work.*` grammar has no entity of its
     // own (#207 §8), and it is as live as any other open unit.
     return [...records, ...model.works
-        .filter((work) => !known.has(work.id) && work.status !== "done" && work.status !== "retired")
+        .filter((work) => !known.has(work.id) && isOpenWork(work))
         .map((work) => legacyWorkRecord(model, work))];
 }
 

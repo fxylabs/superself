@@ -253,16 +253,24 @@ membership produces is driven end to end by cell 12 of
 | Cell | State | Action | Expected |
 |---|---|---|---|
 | H1 | a file skill | `self store size` | the recipe's bytes are counted like any other artifact |
-| H2 | a confirmed replacement | `self undo <the entity.confirmed that landed it>` | **refused** — that event is an acceptance, and an acceptance is not taken back |
-| H3 | a first registration | `self undo <that entity.confirmed event>` | **refused** — a creation with no supersedes link is not undoable; the refusal names the four kinds that are |
+| H1 | a file skill | `self store size` | the recipe's bytes are counted like any other artifact |
+| H2 | a confirmed replacement | `self undo <the entity.confirmed that landed it>` | the confirm is taken back and the replacement returns to proposed — **inverted by #390** |
+| H3 | a first registration | `self undo <that entity.confirmed event>` | the registration is taken back and the skill leaves the registry — **inverted by #390** |
 | H4 | a dropped skill | `self undo <the entity.retracted event>` | the skill stands again |
 | H5 | one skill, a work unit | `self handoff <work-id>` | the skill is in the packet's context section and **not** in the conventions closure |
 
-H2's designed expectation was "the supersession is taken back". The shipped
-outcome is a refusal, and the refusal is correct: a replacement lands through
-`self state confirm`, whose event is an `entity.confirmed` carrying
-`refs.confirms`, which `refuseAcceptanceUndo` (#356) refuses. The cell is
-recorded here as the baseline #390 would change, which is what H2–H4 exist for.
+H2's designed expectation was "the supersession is taken back", and the shipped
+outcome was a refusal: a replacement lands through `self state confirm`, whose
+event is an `entity.confirmed` carrying `refs.confirms`, which
+`refuseAcceptanceUndo` (#356) refused. H3's was the same refusal from the other
+side — a creation with no supersedes link had nothing for an undo to give back.
+
+Both were recorded here as the baselines #390 would change, and #390 changed
+them: `refuseAcceptanceUndo` is deleted, every `entity.*` kind is undoable by
+default, and the refusals that remain are named one by one. Undoing an
+acceptance can only ever move a record back to `proposed`, so re-confirming it
+still costs whatever the confirm costs. See
+[`390-undo-review-settle.md`](390-undo-review-settle.md).
 
 ## 4.9 Coverage of the raw product
 
