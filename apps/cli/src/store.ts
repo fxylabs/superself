@@ -24,7 +24,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { artifactDigest } from "./artifact.js";
 import { branch, Command, leaf } from "./contract.js";
-import { git } from "./gitutil.js";
+import { git, gitPatient } from "./gitutil.js";
 import { readRegistry, requireWorkspace } from "./paths.js";
 import { listArtifacts } from "./registry.js";
 import { plural } from "./style.js";
@@ -275,7 +275,10 @@ export function compactionSignal(storeDir: string): string | null
 function compactStore(storeDir: string): CommandOutput
 {
     const before = { bytes: treeBytes(join(storeDir, ".git")), objects: countObjects(storeDir) };
-    const packed = git(storeDir, "gc", "-q");
+    // Repacking a long history is minutes of work on a large store, and a
+    // person ran this verb on purpose to wait for it — the tight local bound
+    // every other call gets would cut it off partway.
+    const packed = gitPatient(storeDir, "gc", "-q");
     if (!packed.ok)
     {
         throw new CliError(`store compact failed: ${packed.err === "" ? "git could not be run" : packed.err}`);

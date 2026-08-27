@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { foldEveryProject } from "./fold.js";
-import { commitAll, configureStoreIdentity, excludeLocally, git } from "./gitutil.js";
+import { commitAll, configureStoreIdentity, excludeLocally, git, gitPatient } from "./gitutil.js";
 import { setMachineWorkspace } from "./machine.js";
 import { notice } from "./output.js";
 import { CliContext, ensureDir, EVIDENCE_HEAD_EXCLUDE, LINKS_FILE, readRegistry, STORE_DIR } from "./paths.js";
@@ -59,7 +59,7 @@ export function syncStore(ctx: CliContext): CommandOutput
     commitAll(ctx.storeDir, "sync: local changes");
     const branch = git(ctx.storeDir, "rev-parse", "--abbrev-ref", "HEAD").out;
     pullAndRefold(ctx.storeDir, branch);
-    const push = git(ctx.storeDir, "push", "-q", "-u", "origin", branch);
+    const push = gitPatient(ctx.storeDir, "push", "-q", "-u", "origin", branch);
     if (!push.ok)
     {
         throw new CliError(`push failed: ${push.err}`);
@@ -69,7 +69,7 @@ export function syncStore(ctx: CliContext): CommandOutput
 
 function pullAndRefold(storeDir: string, branch: string): void
 {
-    const fetch = git(storeDir, "fetch", "-q", "origin");
+    const fetch = gitPatient(storeDir, "fetch", "-q", "origin");
     if (!fetch.ok)
     {
         throw new CliError(`fetch failed: ${fetch.err}`);
@@ -78,7 +78,7 @@ function pullAndRefold(storeDir: string, branch: string): void
     {
         return;
     }
-    const pull = git(storeDir, "pull", "-q", "--rebase", "origin", branch);
+    const pull = gitPatient(storeDir, "pull", "-q", "--rebase", "origin", branch);
     if (!pull.ok)
     {
         git(storeDir, "rebase", "--abort");
@@ -116,7 +116,7 @@ export function cloneStore(url: string, dir: string | undefined): CommandOutput
         throw new CliError(`${target} is already a workspace`);
     }
     ensureDir(target);
-    const clone = git(target, "clone", "-q", url, STORE_DIR);
+    const clone = gitPatient(target, "clone", "-q", url, STORE_DIR);
     if (!clone.ok)
     {
         throw new CliError(`clone failed: ${clone.err}`);
