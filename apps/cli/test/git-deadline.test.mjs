@@ -95,7 +95,11 @@ test("a git that leaves a live process holding its pipes does not pin the CLI", 
     assert.ok(took < BOUND_MS, `the write took ${took}ms, so the deadline did not end the wait`);
     if (wrote.code === 0)
     {
-        assert.match(wrote.out, /bounded by the deadline/);
+        // Read back rather than trusting the receipt: what the success half of
+        // this claims is that the record survived the hook, not that the
+        // command printed a line.
+        const shown = await must(box, demo, ["work", "show", workIdIn(wrote.out)]);
+        assert.match(shown.out, /bounded by the deadline/);
         return;
     }
     assert.equal(wrote.code, 1);
