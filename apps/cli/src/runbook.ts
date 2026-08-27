@@ -17,7 +17,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
-import { EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
+import { chainHead, chainVersion, EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
 import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
 import { wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels } from "./model.js";
@@ -33,11 +33,9 @@ import {
     readInstance,
     runbookChain,
     runbookDefinitions,
-    runbookHead,
     runbookInstances,
     RUNBOOK_LABEL,
     RUNBOOK_RUN_LABEL,
-    runbookVersion,
     stageDigest
 } from "./runbooks.js";
 import { alreadyBlocked, composedEntityAdd, notBlocked, recordCoverage } from "./state.js";
@@ -551,7 +549,7 @@ function requireDefinition(model: ProjectModel, wanted: string | undefined): Ent
     {
         throw new CliError(`no runbook here answers to "${id}" — run \`self runbook\` to list them`);
     }
-    const head = runbookHead(runbookChain(model.entities, found.id));
+    const head = chainHead(runbookChain(model.entities, found.id));
     if (head === undefined)
     {
         throw new CliError(`${found.id} is ${found.status} and no edition of it holds`
@@ -636,7 +634,7 @@ function definitionLine(model: ProjectModel, definition: EntityState): string
 {
     const chain = runbookChain(model.entities, definition.id);
     const running = runsOf(model, chain).filter(isCurrent).length;
-    return `${chain[0].id} ${definition.text} v${runbookVersion(chain, definition.id)}`
+    return `${chain[0].id} ${definition.text} v${chainVersion(chain, definition.id)}`
         + ` · ${definition.criteria.length} stages · ${running} running`;
 }
 
@@ -663,7 +661,7 @@ function showLines(model: ProjectModel, chain: EntityState[], head: EntityState)
     return [
         `# ${chain[0].id} — ${head.text}`,
         "",
-        `- Edition: v${runbookVersion(chain, head.id)} (${head.id})`,
+        `- Edition: v${chainVersion(chain, head.id)} (${head.id})`,
         `- Stages fingerprint: ${stageDigest(head.criteria)}`,
         "- The record is the authority: to change the procedure run `self runbook revise`, not the file it came from.",
         "",

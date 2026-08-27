@@ -29,8 +29,9 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
-import { artifactPointer, isCurrent } from "./entities.js";
+import { artifactPointer, isCurrent, rendersIn } from "./entities.js";
 import { readInstance, runbookInstances, runbookRow } from "./runbooks.js";
+import { effectiveSkills, skillRow } from "./skills.js";
 import { claimNote } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
@@ -335,24 +336,9 @@ export function scoped(command: ScopableVerb, project: string): Pointer
 // to malform and no place for an empty id to become a verb with no positional.
 export function pointerTo(target: RecoveryTarget, project: string): Pointer
 {
-    if (target.verb === "work-show")
+    if (target.verb === "work-show" || target.verb === "runbook-show" || target.verb === "skill-show")
     {
-        // An id the parser would refuse renders a command that fails when the
-        // reader pastes it: no positional, two positionals, or a leading dash
-        // read as an unknown option. A type cannot say "a usable id", so the
-        // pointer says it, and falls back to the list a reader can act on
-        // (#165 review rounds 8 and 9).
-        return usableId(target.id)
-            ? `self work show ${target.id} --project ${project}` as Pointer
-            : scoped("self work", project);
-    }
-    if (target.verb === "runbook-show")
-    {
-        // Same rule as the work page: an id the parser would refuse falls back
-        // to the listing, which is a command the reader can still act on.
-        return usableId(target.id)
-            ? `self runbook show ${target.id} --project ${project}` as Pointer
-            : scoped("self runbook", project);
+        return recordPage(RECORD_LISTINGS[target.verb], target.id, project);
     }
     if (target.verb === "log")
     {
@@ -361,6 +347,27 @@ export function pointerTo(target: RecoveryTarget, project: string): Pointer
     const named = target.id === undefined || !usableId(target.id) ? "" : ` ${target.id}`;
     const kind = target.type === undefined || !usableId(target.type) ? "" : ` --type ${target.type}`;
     return `self search${named}${kind} --project ${project}` as Pointer;
+}
+
+// The listing each record page falls back to. One table rather than one arm
+// per kind: the three pages differ only in the verb, and a fourth kind that
+// forgot the fallback would be a pointer nobody can act on.
+const RECORD_LISTINGS: Record<"work-show" | "runbook-show" | "skill-show", ScopableVerb> = {
+    "work-show": "self work",
+    "runbook-show": "self runbook",
+    "skill-show": "self skill"
+};
+
+// One record's page, or the listing that reaches it. An id the parser would
+// refuse renders a command that fails when the reader pastes it: no positional,
+// two positionals, or a leading dash read as an unknown option. A type cannot
+// say "a usable id", so the pointer says it, and falls back to the list a
+// reader can still act on (#165 review rounds 8 and 9). A skill is pointed at
+// by id for the same reason and one more: a name with a space or a quote in it
+// does not paste.
+function recordPage(listing: ScopableVerb, id: string, project: string): Pointer
+{
+    return usableId(id) ? `${listing} show ${id} --project ${project}` as Pointer : scoped(listing, project);
 }
 
 // `self log -n 0` prints nothing and `-n 1.5` is refused, so a count that is
@@ -865,8 +872,18 @@ function standingSections(model: ProjectModel, project: string): string[]
         "", ...listSection("CONVENTIONS",
             currentConventions(model.conventions).map((item) => `${item.text}${artifactPointer(item.artifact)}`),
             scoped("self search --type convention", project)),
+        "", ...listSection("SKILLS", skillLines(model), scoped("self skill", project)),
         "", ...listSection("HEALTH", model.health, scoped("self status", project), red)
     ];
+}
+
+// The same sentence the piped context prints, said to a person (#391). The row
+// body is composed once in `skills.ts` so the two renders of one skill can
+// never disagree about its name, its purpose or what it shadows.
+function skillLines(model: ProjectModel): string[]
+{
+    return effectiveSkills(model.entities.filter((item) => rendersIn(item, model.slug, model.slug)))
+        .map(skillRow);
 }
 
 // The same sentence the piped context prints, said to a person (#171). The

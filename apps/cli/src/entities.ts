@@ -1001,6 +1001,92 @@ export function isCurrent(entity: EntityState): boolean
     return isLive(entity) && entity.execution?.status !== "done" && entity.execution?.status !== "retired";
 }
 
+/* ── the supersedes chain a labelled record belongs to ─────────────── */
+
+// Which records a chain walk may step through. Every kind that versions itself
+// by supersession — a runbook edition (#171), a skill (#391) — walks the same
+// links over its own label, so the predicate is the only difference between
+// them and the walk is written once.
+type KindPredicate = (entity: EntityState) => boolean;
+
+// The whole chain an id belongs to, oldest first. Walked back along the
+// supersedes links to the root and then forward along the `supersededBy` the
+// fold filled in, so either end of a chain answers with the same list — the
+// root's id is the stable id of the thing, whatever version is current.
+export function supersedesChain(entities: EntityState[], id: string, isKind: KindPredicate): EntityState[]
+{
+    const byId = new Map(entities.map((entity) => [entity.id, entity]));
+    const start = byId.get(id);
+    if (start === undefined || !isKind(start))
+    {
+        return [];
+    }
+    return chainForward(byId, chainRoot(byId, start, isKind), isKind);
+}
+
+function chainRoot(byId: Map<string, EntityState>, start: EntityState, isKind: KindPredicate): EntityState
+{
+    const seen = new Set([start.id]);
+    let at = start;
+    let back = chainPredecessor(byId, at, isKind);
+    while (back !== undefined && !seen.has(back.id))
+    {
+        seen.add(back.id);
+        at = back;
+        back = chainPredecessor(byId, at, isKind);
+    }
+    return at;
+}
+
+function chainForward(byId: Map<string, EntityState>, root: EntityState, isKind: KindPredicate): EntityState[]
+{
+    const chain = [root];
+    let at = root;
+    while (at.supersededBy !== undefined)
+    {
+        const next = byId.get(at.supersededBy);
+        if (next === undefined || !isKind(next) || chain.some((item) => item.id === next.id))
+        {
+            break;
+        }
+        chain.push(next);
+        at = next;
+    }
+    return chain;
+}
+
+// A proposed version carries the supersedes link but has displaced nothing
+// yet, so it is reachable backward and not forward: an unconfirmed replacement
+// leaves the chain exactly as it was until a person confirms it.
+function chainPredecessor(byId: Map<string, EntityState>, entity: EntityState, isKind: KindPredicate): EntityState | undefined
+{
+    for (const link of entity.links)
+    {
+        const target = link.type === "supersedes" ? byId.get(link.target) : undefined;
+        if (target !== undefined && isKind(target))
+        {
+            return target;
+        }
+    }
+    return undefined;
+}
+
+// Which version this one is, counted from the root — v1, v2, v3. Zero for an
+// id the chain does not hold, which no caller reaches: every caller resolved
+// the id out of the chain it is asking about.
+export function chainVersion(chain: EntityState[], id: string): number
+{
+    return chain.findIndex((item) => item.id === id) + 1;
+}
+
+// The version that holds now: the last confirmed one in the chain. A proposal
+// waiting on a person is not it, which is why the head is read by status
+// rather than by position.
+export function chainHead(chain: EntityState[]): EntityState | undefined
+{
+    return [...chain].reverse().find((item) => item.status === "confirmed" && isLive(item));
+}
+
 // Working state lands in timestamp order, event id breaking ties — the same
 // determinism rule placements follow. The fold never refuses history (#205
 // table D): a line the transition matrix would have refused at the verb —

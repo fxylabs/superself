@@ -283,6 +283,12 @@ usage: self <command>
   runbook stop <key> --why "<why it was given up>" | resume <key>
                                              give the run up, or pick a parked one back up
   runbook link <key> --work <id>             state which work unit is carrying this run; one or more
+  skill [--project <slug>]                   list the skills registered here, and which of them the workspace shares
+  skill add "<name>" --command "<line>" --purpose "<what it is for>" [--workspace]
+                                             register a reusable line; --file <path> registers a longer markdown recipe instead
+  skill show <id|name> [--project <slug>]    print the line or the recipe, ready to use, with the placeholders it declares
+  skill drop <id|name> --why "<why it no longer helps>"
+                                             withdraw a skill — a person at a terminal, exactly as any record is withdrawn
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
   view [slug]                                open the live workspace or project view in the browser at a terminal

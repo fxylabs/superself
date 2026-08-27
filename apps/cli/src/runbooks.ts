@@ -13,7 +13,7 @@
 // stored field can contradict the log.
 
 import { createHash } from "node:crypto";
-import { EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
+import { chainHead, chainVersion, EntityState, isCurrent, isLive, supersedesChain, uncoveredCriteria } from "./entities.js";
 
 // The two labels the surface records under. `runbook-run` rather than `run`:
 // `run.*` is the attempt namespace and `self work run` is a process, so a
@@ -43,83 +43,13 @@ export function stageDigest(stages: string[]): string
 
 /* ── the edition chain ─────────────────────────────────────────────── */
 
-// The whole chain a runbook id belongs to, oldest edition first. Walked back
-// along the supersedes links to the root and then forward along the
-// `supersededBy` the fold filled in, so either end of a chain answers with the
-// same list — the root's id is the stable workflow id, whatever edition is
-// current.
+// The whole chain a runbook id belongs to, oldest edition first. The walk
+// itself is `entities.ts` `supersedesChain`, shared with every other kind that
+// versions itself by supersession (#391); what is a runbook is this module's
+// to say, and that is all this wrapper adds.
 export function runbookChain(entities: EntityState[], id: string): EntityState[]
 {
-    const byId = new Map(entities.map((entity) => [entity.id, entity]));
-    const start = byId.get(id);
-    if (start === undefined || !isRunbook(start))
-    {
-        return [];
-    }
-    return forward(byId, rootOf(byId, start));
-}
-
-function rootOf(byId: Map<string, EntityState>, start: EntityState): EntityState
-{
-    const seen = new Set([start.id]);
-    let at = start;
-    let back = predecessorOf(byId, at);
-    while (back !== undefined && !seen.has(back.id))
-    {
-        seen.add(back.id);
-        at = back;
-        back = predecessorOf(byId, at);
-    }
-    return at;
-}
-
-function forward(byId: Map<string, EntityState>, root: EntityState): EntityState[]
-{
-    const chain = [root];
-    let at = root;
-    while (at.supersededBy !== undefined)
-    {
-        const next = byId.get(at.supersededBy);
-        if (next === undefined || !isRunbook(next) || chain.some((item) => item.id === next.id))
-        {
-            break;
-        }
-        chain.push(next);
-        at = next;
-    }
-    return chain;
-}
-
-// A proposed edition carries the supersedes link but has displaced nothing
-// yet, so it is reachable backward and not forward: an unconfirmed revision
-// leaves the chain exactly as it was until a person confirms it.
-function predecessorOf(byId: Map<string, EntityState>, entity: EntityState): EntityState | undefined
-{
-    for (const link of entity.links)
-    {
-        const target = link.type === "supersedes" ? byId.get(link.target) : undefined;
-        if (target !== undefined && isRunbook(target))
-        {
-            return target;
-        }
-    }
-    return undefined;
-}
-
-// Which edition this one is, counted from the root — v1, v2, v3. Zero for an
-// id the chain does not hold, which no caller reaches: every caller resolved
-// the id out of the chain it is asking about.
-export function runbookVersion(chain: EntityState[], id: string): number
-{
-    return chain.findIndex((item) => item.id === id) + 1;
-}
-
-// The edition that holds now: the last confirmed one in the chain. A proposal
-// waiting on a person is not it, which is why the head is read by status
-// rather than by position.
-export function runbookHead(chain: EntityState[]): EntityState | undefined
-{
-    return [...chain].reverse().find((item) => item.status === "confirmed" && isLive(item));
+    return supersedesChain(entities, id, isRunbook);
 }
 
 /* ── what a project has registered, and what is running ────────────── */
@@ -215,15 +145,15 @@ export function readInstance(entities: EntityState[], instance: EntityState): Ru
 {
     const followed = instanceDefinition(instance) ?? "";
     const chain = runbookChain(entities, followed);
-    const head = runbookHead(chain);
+    const head = chainHead(chain);
     const place = stagePlace(instance);
     return {
         instance,
         key: instanceKey(instance),
         name: chain.find((item) => item.id === followed)?.text ?? instance.text,
         root: chain[0]?.id ?? instance.id,
-        version: runbookVersion(chain, followed),
-        head: head === undefined ? 0 : runbookVersion(chain, head.id),
+        version: chainVersion(chain, followed),
+        head: head === undefined ? 0 : chainVersion(chain, head.id),
         drifted: drifted(chain, followed, head),
         at: place.at,
         of: place.of,

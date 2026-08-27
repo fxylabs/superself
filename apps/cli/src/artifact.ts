@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { branch, Command, leaf } from "./contract.js";
 import { isLive } from "./entities.js";
@@ -1203,6 +1203,35 @@ function storedFile(storeDir: string, record: ArtifactRecord): string
         throw new CliError(`artifact ${record.id} is recorded at a path outside this store's artifacts — the event naming it cannot be trusted`);
     }
     return file;
+}
+
+// What a record's artifact holds, for a page that prints the document inline
+// rather than launching it (#391). The bytes may be gone three ways and none
+// of them is a refusal: a page that names an artifact still has a record to
+// render, and saying why the body is missing is worth more than an exit code.
+interface StoredDocument
+{
+    text?: string;
+    // The phrase a page writes in place of the body, naming the artifact and
+    // what became of it. Set exactly when `text` is not.
+    absent?: string;
+}
+
+export function storedDocument(storeDir: string, slug: string, id: string): StoredDocument
+{
+    const record = listArtifacts(storeDir, [slug]).find((item) => item.id === id);
+    if (record === undefined)
+    {
+        return { absent: `${id}, which this project's log does not record` };
+    }
+    if (record.pruned !== undefined)
+    {
+        return { absent: `${id}, whose bytes were removed` };
+    }
+    const file = storedFile(storeDir, record);
+    return existsSync(file) && statSync(file).isFile()
+        ? { text: readFileSync(file, "utf8") }
+        : { absent: `${id}, whose file ${record.path} is missing from this store` };
 }
 
 // Where a recorded path lands in this store, or null when it lands anywhere

@@ -64,6 +64,7 @@ import { makeEvent, recordEvent, recordEvents, resetPipeline } from "./pipeline.
 import { resetHomeRule } from "./redact.js";
 import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
+import { SKILL_COMMAND } from "./skill.js";
 import { dropCollected, recordInvocation, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
@@ -1284,6 +1285,7 @@ export const COMMANDS: Command[] = [
     STATE_COMMAND,
     ALIAS_COMMAND,
     RUNBOOK_COMMAND,
+    SKILL_COMMAND,
     {
         name: "connect",
         usage: [

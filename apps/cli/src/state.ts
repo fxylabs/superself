@@ -310,6 +310,17 @@ interface ComposedValues
     why?: string;
     supersedes?: string[];
     demote?: string[];
+    // Where the composed record renders, in the raw verb's own spelling: a
+    // registered project's slug, or `workspace`. Handed over rather than
+    // written into the reserved payload, so the retention cap is charged
+    // against the tier the record is actually born into (#391).
+    scope?: string;
+    // The artifact the composed record points at — an `a-` id this project
+    // stores, or a path registered now. Taken here rather than resolved by the
+    // caller so a `--file` skill's pointer is charged to the cap by the one
+    // site that already counts it, and the registration keeps its place: after
+    // every other refusal, before the record's own event (#238).
+    artifact?: string[];
     // Whether the composed record is proposed rather than asserted. A verb
     // that replaces a standing record on a person's say-so — `runbook revise`
     // (#171) — records the successor as a proposal so nothing is displaced

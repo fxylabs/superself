@@ -268,6 +268,7 @@ export type ScopableVerb =
     | "self log"
     | "self state"
     | "self runbook"
+    | "self skill"
     | "self search --type decision"
     | "self search --type convention";
 
@@ -281,6 +282,7 @@ export type ScopableVerb =
 export type RecoveryTarget =
     | { verb: "work-show"; id: string }
     | { verb: "runbook-show"; id: string }
+    | { verb: "skill-show"; id: string }
     | { verb: "search"; id?: string; type?: string }
     | LogPage;
 
