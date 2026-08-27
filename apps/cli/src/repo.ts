@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { runGit } from "./gitutil.js";
 
 // Digests must not depend on who runs the command. Every option that a user's
 // git config can move — rename detection, prefixes, line endings, external
@@ -21,7 +21,7 @@ function run(repoDir: string, args: string[]): { ok: boolean; out: string } | nu
     {
         return null;
     }
-    const result = spawnSync("git", [...STABLE, ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    const result = runGit(repoDir, [...STABLE, ...args], { maxBuffer: 256 * 1024 * 1024 });
     if (result.error !== undefined)
     {
         return null;

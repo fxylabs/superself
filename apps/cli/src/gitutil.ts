@@ -1,11 +1,160 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns, StdioOptions } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { CliError } from "./types.js";
+import { CliError, fail } from "./types.js";
 
-export function git(cwd: string, ...args: string[]): { ok: boolean; out: string; err: string }
+// ── the one place git is spawned ─────────────────────────────────────────
+//
+// Every git this CLI runs comes through `runGit`, and every one of them is
+// bounded. Unbounded, a single git could stop the CLI forever: anything git
+// starts — a hook, a credential helper, an ssh control master — inherits
+// git's stdout and stderr, and a synchronous spawn reads those pipes until
+// they close, not until git is reaped. So a hook that backgrounds a process
+// and returns leaves the CLI waiting on a git that exited minutes ago (#367).
+// A network verb has a second way to wait forever, a credential prompt
+// written straight to the terminal, which the environment below closes off.
+
+// A local git command that has not answered in half a minute is not stuck
+// behind work, it is stuck. Two kinds of call are the exception and get the
+// patient bound instead: one bounded by someone's network rather than by this
+// machine — a first clone over a weak link legitimately runs for minutes — and
+// a repack of the whole history, which is a maintenance verb a person runs
+// deliberately and waits on.
+const LOCAL_DEADLINE_MS = 30_000;
+const PATIENT_DEADLINE_MS = 300_000;
+
+interface GitOptions
 {
-    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    input?: string;
+    maxBuffer?: number;
+    patient?: boolean;
+}
+
+interface GitResult
+{
+    ok: boolean;
+    out: string;
+    err: string;
+}
+
+// One knob, and it only tightens: the suite has to prove the bound holds
+// without spending half a minute per case, and nothing should be able to talk
+// the CLI into waiting longer than the deadlines above.
+function deadline(base: number): number
+{
+    const asked = Number(process.env.SUPERSELF_GIT_TIMEOUT_MS);
+    return Number.isFinite(asked) && asked > 0 ? Math.min(asked, base) : base;
+}
+
+// Nobody is at a keyboard, so nothing git starts may go looking for one. A
+// credential helper or ssh asking for a passphrase writes to /dev/tty, which
+// no redirection of this process's own stdin can close — the only thing that
+// stops it is telling git and ssh not to ask.
+function gitEnv(): NodeJS.ProcessEnv
+{
+    if (process.stdin.isTTY === true)
+    {
+        return process.env;
+    }
+    return {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "",
+        SSH_ASKPASS: "",
+        GIT_SSH_COMMAND: `${process.env.GIT_SSH_COMMAND ?? "ssh"} -o BatchMode=yes`
+    };
+}
+
+// stdin is closed rather than piped wherever nothing is being fed in: no git
+// this CLI runs reads a person's typing, and an open pipe is one more handle a
+// child can hold. Where a batch probe does feed git, stdin has to stay a pipe
+// — an "ignore" in slot zero silently discards `input` — and node closes it as
+// soon as the bytes are written, so it is held no longer either way. stdout
+// and stderr stay pipes because the sentences the CLI shows on a failure are
+// git's own.
+function spawnOptions(cwd: string, limit: number, options: GitOptions): SpawnSyncOptionsWithStringEncoding
+{
+    const stdio: StdioOptions = [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
+    return {
+        cwd,
+        encoding: "utf8",
+        timeout: limit,
+        killSignal: "SIGKILL",
+        stdio,
+        env: gitEnv(),
+        ...(options.input === undefined ? {} : { input: options.input }),
+        ...(options.maxBuffer === undefined ? {} : { maxBuffer: options.maxBuffer })
+    };
+}
+
+// The deadline passing means two different things, and only one of them is a
+// failure. Where git had already exited on its own — the hook case, where what
+// the CLI was still waiting on was a pipe a grandchild holds open — git's exit
+// status is there and everything git wrote has been read, so that answer is
+// the true one and the run continues on it. Where git had to be killed,
+// nothing is known about what it did, and guessing is how a half-finished
+// write gets reported as a finished one. Either way the waiting has stopped,
+// which is the whole of what #367 asked for.
+export function runGit(cwd: string, args: string[], options: GitOptions = {}): SpawnSyncReturns<string>
+{
+    const limit = deadline(options.patient === true ? PATIENT_DEADLINE_MS : LOCAL_DEADLINE_MS);
+    const started = Date.now();
+    const result = spawnSync("git", args, spawnOptions(cwd, limit, options));
+    if (neverFinished(result) && result.status === null)
+    {
+        throw cutShort(cwd, args, limit, Date.now() - started, result);
+    }
+    return result;
+}
+
+// Two ways git can fail to reach an exit of its own: this CLI's deadline, which
+// arrives as ETIMEDOUT, and a signal from somewhere else — an out-of-memory
+// kill, an operator. A spawn that never ran at all, no git on the machine, is
+// neither and stays the ordinary failure it has always been. So is a run that
+// overran its output buffer: node kills that one too, but with its own errno,
+// and the batch probes have always degraded to "unanswerable" there rather
+// than refusing the command.
+function neverFinished(result: SpawnSyncReturns<string>): boolean
+{
+    const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    return code === "ETIMEDOUT" || (code === undefined && result.signal !== null);
+}
+
+// The one sentence a git that never finished produces. It names the command,
+// where it ran and how long it lasted, because the fix is never inside this
+// CLI: it is a hook, a credential helper, a remote that never answered, or
+// whatever else on the machine ended the process.
+function cutShort(cwd: string, args: string[], limit: number, elapsed: number, result: SpawnSyncReturns<string>): CliError
+{
+    const where = `git ${args.join(" ")} in ${cwd}`;
+    if (result.error === undefined)
+    {
+        return fail("git_killed", `${where} was killed by ${result.signal} after ${seconds(elapsed)}s`);
+    }
+    return fail("git_timeout", `${where} was killed after ${seconds(elapsed)}s — it passed the ${seconds(limit)}s limit; ` +
+        "a git hook, a credential helper or an unreachable remote is holding it");
+}
+
+function seconds(ms: number): string
+{
+    return (ms / 1000).toFixed(1);
+}
+
+export function git(cwd: string, ...args: string[]): GitResult
+{
+    return answered(runGit(cwd, args));
+}
+
+// A verb that legitimately runs for minutes — one that talks to a remote, or
+// repacks the whole store — and so gets the patient deadline rather than the
+// tight local one. Every other call in the CLI takes `git` above.
+export function gitPatient(cwd: string, ...args: string[]): GitResult
+{
+    return answered(runGit(cwd, args, { patient: true }));
+}
+
+function answered(result: SpawnSyncReturns<string>): GitResult
+{
     return {
         ok: result.status === 0,
         out: (result.stdout ?? "").trim(),
@@ -29,14 +178,28 @@ export function ensureWorkspaceRepo(storeDir: string): void
     configureStoreIdentity(storeDir);
 }
 
+// Each step of the store commit answers for itself. All three used to be
+// dropped on the floor, so a store that could not record what the command had
+// just written still reported the write as done — a stale ident, a rejecting
+// pre-commit hook or a lock left by a killed git all read as success (#367).
+function mustGit(cwd: string, doing: string, ...args: string[]): string
+{
+    const result = git(cwd, ...args);
+    if (!result.ok)
+    {
+        throw new CliError(`${doing} in ${cwd} failed: ${result.err === "" ? "git could not be run" : result.err}`);
+    }
+    return result.out;
+}
+
 export function commitAll(storeDir: string, message: string): void
 {
-    git(storeDir, "add", "-A");
-    if (git(storeDir, "status", "--porcelain").out === "")
+    mustGit(storeDir, "staging the workspace store", "add", "-A");
+    if (mustGit(storeDir, "reading the workspace store status", "status", "--porcelain") === "")
     {
         return;
     }
-    git(storeDir, "commit", "-qm", message);
+    mustGit(storeDir, "committing the workspace store", "commit", "-qm", message);
 }
 
 interface ClassifiedEvidence
@@ -311,7 +474,7 @@ const BATCH_BUFFER = 64 * 1024 * 1024;
 
 function batch(cwd: string, args: string[], input: string): string | null
 {
-    const result = spawnSync("git", args, { cwd, encoding: "utf8", input, maxBuffer: BATCH_BUFFER });
+    const result = runGit(cwd, args, { input, maxBuffer: BATCH_BUFFER });
     if (result.error !== undefined || result.status !== 0)
     {
         return null;
