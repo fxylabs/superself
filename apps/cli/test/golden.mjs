@@ -14,7 +14,12 @@
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { git, idIn, machine, selfIn, workIdIn } from "./harness.mjs";
+// `spawnIn` rather than `selfIn`, and this file is the clearest case for it
+// (#371, 4-3): what the fixture pins is what a **piped run** prints, and a
+// child with `stdio: ["ignore", "pipe", "pipe"]` is the thing that produces
+// that. Driving the sweep in this process would make the fixture a record of
+// what the driver arranged rather than of what a person piping `self` sees.
+import { git, idIn, machine, spawnIn, workIdIn } from "./harness.mjs";
 
 export const fixturePath = fileURLToPath(new URL("fixtures/golden/piped.txt", import.meta.url));
 
@@ -68,7 +73,7 @@ export function sweep()
     const sections = [];
     const run = (cwd, where, args) =>
     {
-        const result = selfIn(box, cwd, args);
+        const result = spawnIn(box, cwd, args);
         sections.push(section(where, args, result, box.root));
         return result;
     };

@@ -12,7 +12,13 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const { approvedIn, git, machine, must } = await import("./harness.mjs");
+// `mustSpawn` rather than `must`: the setup commands run as children on
+// purpose. `style.ts` decided this run is styled when it was imported above,
+// and the in-process driver cannot take that back — normalising the terminal
+// for a call is too late for a decision already made at module load. A setup
+// command's confirmation line would come back painted, and `idIn` parses
+// `[brackets]` out of it (#371, cell 23).
+const { approvedIn, git, machine, mustSpawn } = await import("./harness.mjs");
 const { rootUsage } = await import("../dist/help.js");
 const { COMMANDS } = await import("../dist/main.js");
 const { buildModel } = await import("../dist/model.js");
@@ -25,9 +31,9 @@ const box = machine();
 const ws = join(box.root, "ws");
 const demo = join(ws, "demo");
 mkdirSync(demo, { recursive: true });
-must(box, ws, ["init"]);
+mustSpawn(box, ws, ["init"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
-must(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
+mustSpawn(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
 
 test("this file loads with a styled stdout, or its cells assert nothing", () =>
 {
@@ -93,7 +99,7 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
 // the move — which for `self work` is the ruled list and nothing under it.
 test("stage 3 cell 13: at a terminal, `self work` prints the ruled list with no size line under it", async () =>
 {
-    must(box, demo, ["work", "add", "the listings answer with blocks"]);
+    mustSpawn(box, demo, ["work", "add", "the listings answer with blocks"]);
     const answer = await approvedIn(box, demo, ["work"], "");
     assert.equal(answer.code, 0, answer.out);
     const model = buildModel(join(ws, ".superself"), "demo", new Date());
@@ -128,7 +134,7 @@ function sizeLines(printed)
 // a pipe is absent — the gate chose, not the handler.
 test("stage 4 cell 13: at a terminal, `self work` is the listing block's ruled render", async () =>
 {
-    must(box, demo, ["work", "add", "the pages answer with blocks"]);
+    mustSpawn(box, demo, ["work", "add", "the pages answer with blocks"]);
     const answer = await approvedIn(box, demo, ["work"], "");
     assert.equal(answer.code, 0, answer.out);
     const model = buildModel(join(ws, ".superself"), "demo", new Date());

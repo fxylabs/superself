@@ -285,6 +285,16 @@ export function redactHome(text: string): string
     return text.replace(homeRule.pattern, "~");
 }
 
+// Dropped between invocations. The rule above already rebuilds itself when the
+// home directory changes, so this is not what makes a second call correct — it
+// is what keeps the cache's lifetime the same as every other one this process
+// holds, so "what survives a `runCli`" has one answer rather than a per-module
+// one.
+export function resetHomeRule(): void
+{
+    homeRule = null;
+}
+
 const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
 
 function homePattern(home: string): RegExp

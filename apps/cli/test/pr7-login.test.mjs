@@ -147,7 +147,7 @@ test("cell 23: slow_down raises the interval by 5s and the client never polls fa
 test("cell 24: an approved login writes a 0600 credential in a 0700 directory, and appends no event", async () =>
 {
     const created = machine();
-    const it = { ...created, ...demoWorkspace(created) };
+    const it = { ...created, ...await demoWorkspace(created) };
     // The whole store, not one file: the project log does not exist until an
     // event is written, and "login writes no event" has to hold for the file
     // being created as much as for it growing.

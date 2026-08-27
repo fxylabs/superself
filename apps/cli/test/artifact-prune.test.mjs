@@ -23,7 +23,7 @@ import { artifactId, ulid } from "../dist/ids.js";
 import { approvedIn, demoWorkspace, git, idIn, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
-const { ws, demo } = demoWorkspace(box);
+const { ws, demo } = await demoWorkspace(box);
 // Resolved: the temporary root is reached through /var on macOS and the CLI
 // answers in the /private/var the kernel gives it.
 const store = realpathSync(join(ws, ".superself"));
@@ -74,35 +74,35 @@ function events(project = "demo", at = ws)
     return raw === "" ? [] : raw.split("\n").map((line) => JSON.parse(line));
 }
 
-function unit(at = demo)
+async function unit(at = demo)
 {
     seq += 1;
-    return workIdIn(must(box, at, ["work", "add", `outcome ${seq}`]).out);
+    return workIdIn((await must(box, at, ["work", "add", `outcome ${seq}`])).out);
 }
 
 // A report's artifact, read back off the event that recorded it: what the log
 // holds is what every prune resolves against.
-function attach(work, args, at = demo, project = "demo")
+async function attach(work, args, at = demo, project = "demo")
 {
-    must(box, at, ["report", work, "attached", ...args]);
+    await must(box, at, ["report", work, "attached", ...args]);
     return events(project).filter((event) => event.type === "report.added" && event.refs?.work === work)
         .at(-1).payload.artifacts[0];
 }
 
 // A work unit whose outcome is closed and whose report carries one file: the
 // floor state most cells prune from.
-function closed(name, body = `${name} bytes\n`)
+async function closed(name, body = `${name} bytes\n`)
 {
-    const work = unit();
-    const meta = attach(work, ["--artifact", fileAt(name, body)]);
-    must(box, demo, ["work", "done", work]);
+    const work = await unit();
+    const meta = await attach(work, ["--artifact", fileAt(name, body)]);
+    await must(box, demo, ["work", "done", work]);
     return { work, meta };
 }
 
-function registered(name, body = `${name} bytes\n`)
+async function registered(name, body = `${name} bytes\n`)
 {
     writeFileSync(join(demo, name), body);
-    return must(box, demo, ["artifact", "add", name]).out.match(/\ba-[0-9a-z]{5}\b/)[0];
+    return (await must(box, demo, ["artifact", "add", name])).out.match(/\ba-[0-9a-z]{5}\b/)[0];
 }
 
 // A review's artifact. No verb writes `review.received` — it is a retired
@@ -127,9 +127,9 @@ function reviewed(work, name, body = `${name} bytes\n`)
 
 /* ── running the prune ─────────────────────────────────────────────── */
 
-function prune(id, answer = id, extra = [])
+function prune(id, answer = id, extra = [], env = {})
 {
-    return approvedIn(box, demo, ["artifact", "prune", id, "--why", WHY, ...extra], answer);
+    return approvedIn(box, demo, ["artifact", "prune", id, "--why", WHY, ...extra], answer, env);
 }
 
 function refuse(id, extra = [], at = demo)
@@ -147,9 +147,9 @@ function pruneEvents(project = "demo")
     return events(project).filter((event) => event.type === "artifact.pruned");
 }
 
-function storeSize(at = demo)
+async function storeSize(at = demo)
 {
-    return JSON.parse(must(box, at, ["store", "size", "--json"]).out);
+    return JSON.parse((await must(box, at, ["store", "size", "--json"])).out);
 }
 
 function storeCommits(at = ws)
@@ -158,26 +158,56 @@ function storeCommits(at = ws)
         { env: box.env, encoding: "utf8" }).trim());
 }
 
+/* ── 36–41: the state of the outcome the evidence belongs to ───────── */
+
+// The six-value work vocabulary, one cell each, through one helper: the state
+// is the only thing that differs between them, so the assertion should be too.
+// The move is a command line with the work id spliced into it rather than a
+// callback, so the call that changes the state is one this file's own check can
+// see (#371).
+async function refusedInState(name, verb = null, rest = [])
+{
+    const work = await unit();
+    const meta = await attach(work, ["--artifact", fileAt(name, `${name} bytes\n`)]);
+    if (verb !== null)
+    {
+        await must(box, demo, [...verb, work, ...rest]);
+    }
+    const refused = await refuse(meta.id);
+    assert.equal(refused.code, 1, refused.out);
+    assert.equal(existsSync(stored(meta)), true, "a refused prune removed bytes");
+    assert.equal(pruneEvents().some((event) => event.payload.artifact === meta.id), false, "a refused prune wrote an event");
+    return { work, meta, refused };
+}
+
+/* ── 42–45: two records, one stored path ───────────────────────────── */
+
+// The state cells 42, 44 and 45 read: the same bytes attached twice, so one
+// stored path carries two records, each with its own id (#372 cell 2).
+const sharedBody = "cells 42 to 45 share these bytes\n";
+
+const shared = { first: null, second: null };
+
 /* ── 30–35: where the bytes came from ──────────────────────────────── */
 
 test("cell 30: a report's artifact on a done unit is removed, and the unit stays done", async () =>
 {
-    const { work, meta } = closed("cell30.md");
+    const { work, meta } = await closed("cell30.md");
     const answer = await prune(meta.id);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(existsSync(stored(meta)), false, "the bytes stayed after a confirmed prune");
     assert.match(answer.out, /pruned — the record is kept and its bytes are not/);
-    const shown = must(box, demo, ["work", "show", work]).out;
+    const shown = (await must(box, demo, ["work", "show", work])).out;
     assert.match(shown, /done/, "pruning evidence reopened a closed outcome");
-    assert.match(must(box, demo, ["artifact", "list"]).out, new RegExp(`${meta.id}.*\\(pruned\\)`));
+    assert.match((await must(box, demo, ["artifact", "list"])).out, new RegExp(`${meta.id}.*\\(pruned\\)`));
 });
 
 test("cell 31: a review's artifact on a done unit is removed, and the verdict stays recorded", async () =>
 {
-    const work = unit();
+    const work = await unit();
     const meta = reviewed(work, "cell31.md");
-    must(box, demo, ["report", work, "the work happened", "--artifact", fileAt("cell31-evidence.md", "cell 31 evidence\n")]);
-    must(box, demo, ["work", "done", work]);
+    await must(box, demo, ["report", work, "the work happened", "--artifact", fileAt("cell31-evidence.md", "cell 31 evidence\n")]);
+    await must(box, demo, ["work", "done", work]);
     const answer = await prune(meta.id);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(existsSync(stored(meta)), false, "a review artifact's bytes stayed");
@@ -185,21 +215,21 @@ test("cell 31: a review's artifact on a done unit is removed, and the verdict st
     assert.equal(review.payload.verdict, "pass", "the verdict the bytes were judged under was lost with them");
 });
 
-test("cell 32: a review's artifact on an open unit is refused", () =>
+test("cell 32: a review's artifact on an open unit is refused", async () =>
 {
-    const work = unit();
+    const work = await unit();
     const meta = reviewed(work, "cell32.md");
-    must(box, demo, ["work", "start", work]);
-    const refused = refuse(meta.id);
+    await must(box, demo, ["work", "start", work]);
+    const refused = await refuse(meta.id);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`${meta.id} is evidence on ${work}, which is active`));
     assert.equal(existsSync(stored(meta)), true, "a refused prune removed bytes");
 });
 
-test("cell 33: a review naming no work unit is refused, and says that is the reason", () =>
+test("cell 33: a review naming no work unit is refused, and says that is the reason", async () =>
 {
     const meta = reviewed(undefined, "cell33.md");
-    const refused = refuse(meta.id);
+    const refused = await refuse(meta.id);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, /came in on a review that names no work unit/);
     assert.equal(existsSync(stored(meta)), true);
@@ -207,66 +237,50 @@ test("cell 33: a review naming no work unit is refused, and says that is the rea
 
 test("cell 34: bytes registered on their own, with no record pointing at them, are removed", async () =>
 {
-    const artifact = registered("cell34.md");
+    const artifact = await registered("cell34.md");
     const path = events().filter((event) => event.type === "artifact.registered").at(-1).payload.artifacts[0].path;
     const answer = await prune(artifact);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(existsSync(stored(path)), false);
 });
 
-test("cell 35 (#238 cell 39): a live record pointing at the artifact refuses the prune, naming the record", () =>
+test("cell 35 (#238 cell 39): a live record pointing at the artifact refuses the prune, naming the record", async () =>
 {
-    const artifact = registered("cell35.md");
-    const entity = must(box, demo, ["state", "add", "read the cell 35 guide", "--exposure", "full", "--artifact", artifact])
+    const artifact = await registered("cell35.md");
+    const entity = (await must(box, demo, ["state", "add", "read the cell 35 guide", "--exposure", "full", "--artifact", artifact]))
         .out.match(/\be-[0-9a-z]{5}\b/)[0];
-    const refused = refuse(artifact);
+    const refused = await refuse(artifact);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`${artifact} is what ${entity} points at, and that record is still live`));
     assert.equal(pruneEvents().some((event) => event.payload.artifact === artifact), false);
 });
 
-/* ── 36–41: the state of the outcome the evidence belongs to ───────── */
-
-// The six-value work vocabulary, one cell each, through one helper: the state
-// is the only thing that differs between them, so the assertion should be too.
-function refusedInState(name, move)
+test("cell 36: evidence on a unit nobody has started is refused", async () =>
 {
-    const work = unit();
-    const meta = attach(work, ["--artifact", fileAt(name, `${name} bytes\n`)]);
-    move(work);
-    const refused = refuse(meta.id);
-    assert.equal(refused.code, 1, refused.out);
-    assert.equal(existsSync(stored(meta)), true, "a refused prune removed bytes");
-    assert.equal(pruneEvents().some((event) => event.payload.artifact === meta.id), false, "a refused prune wrote an event");
-    return { work, meta, refused };
-}
-
-test("cell 36: evidence on a unit nobody has started is refused", () =>
-{
-    const { work, refused } = refusedInState("cell36.md", () => {});
+    const { work, refused } = await refusedInState("cell36.md");
     assert.match(refused.out, new RegExp(`is evidence on ${work}, which is next`));
 });
 
-test("cell 37: evidence on an active unit is refused", () =>
+test("cell 37: evidence on an active unit is refused", async () =>
 {
-    const { work, refused } = refusedInState("cell37.md", (id) => must(box, demo, ["work", "start", id]));
+    const { work, refused } = await refusedInState("cell37.md", ["work", "start"]);
     assert.match(refused.out, new RegExp(`is evidence on ${work}, which is active`));
 });
 
-test("cell 38: evidence on a blocked unit is refused", () =>
+test("cell 38: evidence on a blocked unit is refused", async () =>
 {
-    const { work, refused } = refusedInState("cell38.md",
-        (id) => must(box, demo, ["work", "block", id, "--on", "dependency", "--why", "waiting on the upstream fix"]));
+    const { work, refused } = await refusedInState("cell38.md", ["work", "block"],
+        ["--on", "dependency", "--why", "waiting on the upstream fix"]);
     assert.match(refused.out, new RegExp(`is evidence on ${work}, which is blocked`));
 });
 
-test("cell 39: evidence on a unit whose plan is awaiting review is refused", () =>
+test("cell 39: evidence on a unit whose plan is awaiting review is refused", async () =>
 {
-    const work = workIdIn(must(box, demo, ["work", "propose", "review the flow before it is worked"]).out);
-    must(box, demo, ["work", "accept", work]);
-    const meta = attach(work, ["--artifact", fileAt("cell39.md", "cell 39 bytes\n")]);
-    must(box, demo, ["work", "revise", work, "review the flow, then work it", "--why", "the first plan skipped the review"]);
-    const refused = refuse(meta.id);
+    const work = workIdIn((await must(box, demo, ["work", "propose", "review the flow before it is worked"])).out);
+    await must(box, demo, ["work", "accept", work]);
+    const meta = await attach(work, ["--artifact", fileAt("cell39.md", "cell 39 bytes\n")]);
+    await must(box, demo, ["work", "revise", work, "review the flow, then work it", "--why", "the first plan skipped the review"]);
+    const refused = await refuse(meta.id);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`is evidence on ${work}, which is review`));
     assert.equal(existsSync(stored(meta)), true);
@@ -274,8 +288,8 @@ test("cell 39: evidence on a unit whose plan is awaiting review is refused", () 
 
 test("cell 40: evidence on a retired unit is removed — an outcome given up is closed too", async () =>
 {
-    const work = unit();
-    const meta = attach(work, ["--artifact", fileAt("cell40.md", "cell 40 bytes\n")]);
+    const work = await unit();
+    const meta = await attach(work, ["--artifact", fileAt("cell40.md", "cell 40 bytes\n")]);
     const retired = await approvedIn(box, demo, ["work", "retire", work, "--why", "the outcome moved elsewhere"], work);
     assert.equal(retired.code, 0, retired.out);
     const answer = await prune(meta.id);
@@ -283,33 +297,26 @@ test("cell 40: evidence on a retired unit is removed — an outcome given up is 
     assert.equal(existsSync(stored(meta)), false);
 });
 
-test("cell 41: an artifact in an archived project is refused, and the way back is named", () =>
+test("cell 41: an artifact in an archived project is refused, and the way back is named", async () =>
 {
     const beta = join(ws, "beta");
     mkdirSync(beta, { recursive: true });
     git(box, beta, ["init", "-q", "-b", "main"]);
-    must(box, beta, ["project", "init", "--name", "beta", "--desc", "the archived project"]);
-    const work = workIdIn(must(box, beta, ["work", "add", "an outcome of beta"]).out);
-    const meta = attach(work, ["--artifact", fileAt("cell41.md", "cell 41 bytes\n")], beta, "beta");
-    must(box, beta, ["work", "done", work]);
-    must(box, ws, ["project", "archive", "beta", "--why", "nobody is working on it"]);
-    const refused = refuse(meta.id, ["--project", "beta"], ws);
+    await must(box, beta, ["project", "init", "--name", "beta", "--desc", "the archived project"]);
+    const work = workIdIn((await must(box, beta, ["work", "add", "an outcome of beta"])).out);
+    const meta = await attach(work, ["--artifact", fileAt("cell41.md", "cell 41 bytes\n")], beta, "beta");
+    await must(box, beta, ["work", "done", work]);
+    await must(box, ws, ["project", "archive", "beta", "--why", "nobody is working on it"]);
+    const refused = await refuse(meta.id, ["--project", "beta"], ws);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, /project "beta" is archived[\s\S]*self project restore beta/);
     assert.equal(existsSync(stored(meta)), true);
 });
 
-/* ── 42–45: two records, one stored path ───────────────────────────── */
-
-// The state cells 42, 44 and 45 read: the same bytes attached twice, so one
-// stored path carries two records, each with its own id (#372 cell 2).
-const sharedBody = "cells 42 to 45 share these bytes\n";
-const shared = { first: null, second: null };
-
 test("cell 42: the first of two records naming one path is pruned and no byte is reclaimed", async () =>
 {
-    shared.first = closed("cell42-first.md", sharedBody).meta;
-    shared.second = closed("cell42-second.md", sharedBody).meta;
+    shared.first = (await closed("cell42-first.md", sharedBody)).meta;
+    shared.second = (await closed("cell42-second.md", sharedBody)).meta;
     assert.equal(shared.second.path, shared.first.path, "the fixture did not produce a shared path");
     const answer = await prune(shared.first.id);
     assert.equal(answer.code, 0, answer.out);
@@ -321,8 +328,8 @@ test("cell 42: the first of two records naming one path is pruned and no byte is
 test("cell 43: the last live record naming a path is the prune that reclaims the bytes", async () =>
 {
     const body = "cell 43 shares these bytes\n";
-    const one = closed("cell43-one.md", body).meta;
-    const two = closed("cell43-two.md", body).meta;
+    const one = (await closed("cell43-one.md", body)).meta;
+    const two = (await closed("cell43-two.md", body)).meta;
     assert.equal(two.path, one.path);
     assert.equal((await prune(one.id)).code, 0);
     assert.equal(existsSync(stored(one)), true, "the first prune of a shared path reclaimed bytes");
@@ -333,19 +340,19 @@ test("cell 43: the last live record naming a path is the prune that reclaims the
     assert.equal(pruneEvents().find((event) => event.payload.artifact === two.id).payload.bytesRemoved, true);
 });
 
-test("cell 44: a pruned record does not open, even while another record's bytes are still there", () =>
+test("cell 44: a pruned record does not open, even while another record's bytes are still there", async () =>
 {
     assert.equal(existsSync(stored(shared.first)), true, "cell 42 did not leave the bytes standing");
-    const opened = selfIn(box, demo, ["artifact", "open", shared.first.id]);
+    const opened = await selfIn(box, demo, ["artifact", "open", shared.first.id]);
     assert.equal(opened.code, 1, opened.out);
     assert.match(opened.out, new RegExp(`artifact ${shared.first.id} was pruned on \\d{4}-\\d{2}-\\d{2}: ${WHY}`));
     assert.doesNotMatch(opened.out, /self sync/, "a removal offered a sync that will never bring it back");
-    assert.equal(selfIn(box, demo, ["artifact", "open", shared.second.id]).code, 0, "the live record stopped opening");
+    assert.equal((await selfIn(box, demo, ["artifact", "open", shared.second.id])).code, 0, "the live record stopped opening");
 });
 
-test("cell 45: bytes a live record still names are not orphaned by the other record's prune", () =>
+test("cell 45: bytes a live record still names are not orphaned by the other record's prune", async () =>
 {
-    const orphans = storeSize().orphans;
+    const orphans = (await storeSize()).orphans;
     assert.equal(orphans.top.some((item) => item.name === shared.first.path), false,
         "a path a live record names was reported as orphaned");
     assert.equal(orphans.files, 0, "a prune that reclaimed nothing left the store reporting orphans");
@@ -356,15 +363,15 @@ test("cell 45: bytes a live record still names are not orphaned by the other rec
 test("cell 46: bytes a design approval named are refused, whatever the unit's state", async () =>
 {
     const body = "# cell 46\n\nthe design body\n";
-    const decision = idIn(must(box, demo, ["decide", "cell 46: designs bind to a hash"]).out);
-    const work = unit();
-    const submitted = must(box, demo, ["report", work, "cell 46 design", "--design",
+    const decision = idIn((await must(box, demo, ["decide", "cell 46: designs bind to a hash"])).out);
+    const work = await unit();
+    const submitted = await must(box, demo, ["report", work, "cell 46 design", "--design",
         "--implements", decision, "--artifact", fileAt("cell46-design.md", body)]);
     const report = submitted.out.match(/design report (\S+) recorded/)[1];
     const meta = events().find((event) => event.id === report).payload.artifacts[0];
     assert.equal((await approvedIn(box, demo, ["report", "confirm", report], meta.digest.slice(0, 12))).code, 0);
-    must(box, demo, ["work", "done", work]);
-    const refused = refuse(meta.id);
+    await must(box, demo, ["work", "done", work]);
+    const refused = await refuse(meta.id);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`holds the bytes a person approved as the design of ${work} ${report}`));
     assert.equal(existsSync(stored(meta)), true);
@@ -372,10 +379,10 @@ test("cell 46: bytes a design approval named are refused, whatever the unit's st
 
 test("cell 47 (#238 cell 40): once the record pointing at it is retracted, the bytes are removable", async () =>
 {
-    const artifact = registered("cell47.md");
-    const entity = must(box, demo, ["state", "add", "read the cell 47 guide", "--exposure", "full", "--artifact", artifact])
+    const artifact = await registered("cell47.md");
+    const entity = (await must(box, demo, ["state", "add", "read the cell 47 guide", "--exposure", "full", "--artifact", artifact]))
         .out.match(/\be-[0-9a-z]{5}\b/)[0];
-    assert.equal(refuse(artifact).code, 1);
+    assert.equal((await refuse(artifact)).code, 1);
     assert.equal((await approvedIn(box, demo, ["state", "retract", entity, "--why", "the guide is folded into the rule"], entity)).code, 0);
     const answer = await prune(artifact);
     assert.equal(answer.code, 0, answer.out);
@@ -383,10 +390,10 @@ test("cell 47 (#238 cell 40): once the record pointing at it is retracted, the b
 
 test("cell 48: a second prune of the same record is refused and records nothing", async () =>
 {
-    const { meta } = closed("cell48.md");
+    const { meta } = await closed("cell48.md");
     assert.equal((await prune(meta.id)).code, 0);
     const before = pruneEvents().length;
-    const again = refuse(meta.id);
+    const again = await refuse(meta.id);
     assert.equal(again.code, 1, again.out);
     assert.match(again.out, new RegExp(`${meta.id} was already pruned on \\d{4}-\\d{2}-\\d{2}`));
     assert.equal(pruneEvents().length, before, "a refused second prune wrote an event");
@@ -394,17 +401,18 @@ test("cell 48: a second prune of the same record is refused and records nothing"
 
 test("cell 49: a process with nobody at a terminal is refused, records nothing, and removes nothing", async () =>
 {
-    const { meta } = closed("cell49.md");
-    const piped = refuse(meta.id);
+    const { meta } = await closed("cell49.md");
+    const piped = await refuse(meta.id);
     assert.equal(piped.code, 1, piped.out);
     assert.match(piped.out, /removing stored bytes is a person's call, and this process has no terminal/);
     assert.match(piped.out, new RegExp(`self artifact prune ${meta.id} --why`));
     // The other half of "nobody is answering": a process a runner started
     // carries the marker, and is refused even where a terminal is attached —
-    // which is the case a piped child cannot tell apart on its own.
-    process.env.SUPERSELF_SESSION = "a-runner";
-    const marked = await prune(meta.id);
-    delete process.env.SUPERSELF_SESSION;
+    // which is the case a piped child cannot tell apart on its own. The marker
+    // is named for this call rather than left in the test process's own
+    // environment, because a command is handed the environment its caller
+    // states and nothing else.
+    const marked = await prune(meta.id, meta.id, [], { SUPERSELF_SESSION: "a-runner" });
     assert.equal(marked.code, 1, marked.out);
     assert.match(marked.out, /has no terminal to make it at/);
     assert.equal(pruneEvents().some((event) => event.payload.artifact === meta.id), false);
@@ -413,7 +421,7 @@ test("cell 49: a process with nobody at a terminal is refused, records nothing, 
 
 test("cell 50: an answer that is not the artifact id records nothing and removes nothing", async () =>
 {
-    const { meta } = closed("cell50.md");
+    const { meta } = await closed("cell50.md");
     const mistyped = await prune(meta.id, "a-wrong");
     assert.equal(mistyped.code, 1, mistyped.out);
     assert.match(mistyped.out, new RegExp(`the typed confirmation is not ${meta.id}`));
@@ -421,10 +429,10 @@ test("cell 50: an answer that is not the artifact id records nothing and removes
     assert.equal(existsSync(stored(meta)), true);
 });
 
-test("cell 51: a prune with no reason is refused by the contract, before anything is resolved", () =>
+test("cell 51: a prune with no reason is refused by the contract, before anything is resolved", async () =>
 {
-    const { meta } = closed("cell51.md");
-    const refused = selfIn(box, demo, ["artifact", "prune", meta.id]);
+    const { meta } = await closed("cell51.md");
+    const refused = await selfIn(box, demo, ["artifact", "prune", meta.id]);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, /self artifact prune needs --why/);
     assert.equal(existsSync(stored(meta)), true);
@@ -434,9 +442,9 @@ test("cell 51: a prune with no reason is refused by the contract, before anythin
 
 test("cell 52: a removal that fails after the event still folds, commits and succeeds", async () =>
 {
-    const work = unit();
-    const meta = attach(work, ["--artifact", tree("cell52", { "a.txt": "cell 52", "b.txt": "cell 52 too" })]);
-    must(box, demo, ["work", "done", work]);
+    const work = await unit();
+    const meta = await attach(work, ["--artifact", tree("cell52", { "a.txt": "cell 52", "b.txt": "cell 52 too" })]);
+    await must(box, demo, ["work", "done", work]);
     const before = storeCommits();
     // The bundle's own directory is read-only for the length of the command, so
     // `rmSync` fails with the event already appended — the crash window the
@@ -451,31 +459,31 @@ test("cell 52: a removal that fails after the event still folds, commits and suc
     assert.equal(storeCommits(), before + 1, "the fold and the commit were skipped");
     const recorded = pruneEvents().find((event) => event.payload.artifact === meta.id);
     assert.equal(recorded.payload.bytesRemoved, true, "the event claimed to have kept bytes it meant to remove");
-    const orphans = storeSize().orphans;
+    const orphans = (await storeSize()).orphans;
     assert.equal(orphans.top.some((item) => item.name === meta.path), true,
         "bytes that outlived their record are not reported as orphaned");
 });
 
 test("cell 53: a bundle is removed whole, and its manifest stays on the record", async () =>
 {
-    const work = unit();
-    const meta = attach(work, ["--artifact", tree("cell53", { "a.txt": "cell 53", "sub/b.txt": "cell 53 too" })]);
-    must(box, demo, ["work", "done", work]);
+    const work = await unit();
+    const meta = await attach(work, ["--artifact", tree("cell53", { "a.txt": "cell 53", "sub/b.txt": "cell 53 too" })]);
+    await must(box, demo, ["work", "done", work]);
     assert.equal((await prune(meta.id)).code, 0);
     assert.equal(existsSync(stored(meta)), false, "a bundle's directory survived its prune");
     const recorded = events().filter((event) => event.type === "report.added" && event.refs?.work === work)
         .at(-1).payload.artifacts[0];
     assert.equal(recorded.members.length, meta.members.length, "the manifest went with the bytes");
-    assert.match(must(box, demo, ["artifact", "list"]).out, new RegExp(`${meta.id}.*cell53/ \\(3 files\\) \\(pruned\\)`));
+    assert.match((await must(box, demo, ["artifact", "list"])).out, new RegExp(`${meta.id}.*cell53/ \\(3 files\\) \\(pruned\\)`));
 });
 
 /* ── 54–58: what every reader answers afterwards ───────────────────── */
 
 test("cell 54: opening a pruned artifact says when and why, and offers no sync", async () =>
 {
-    const { meta } = closed("cell54.md");
+    const { meta } = await closed("cell54.md");
     assert.equal((await prune(meta.id)).code, 0);
-    const opened = selfIn(box, demo, ["artifact", "open", meta.id]);
+    const opened = await selfIn(box, demo, ["artifact", "open", meta.id]);
     assert.equal(opened.code, 1, opened.out);
     assert.match(opened.out, new RegExp(`was pruned on \\d{4}-\\d{2}-\\d{2}: ${WHY}`));
     assert.doesNotMatch(opened.out, /self sync/);
@@ -483,28 +491,28 @@ test("cell 54: opening a pruned artifact says when and why, and offers no sync",
 
 test("cell 55: a pruned artifact keeps its row in the listing, marked", async () =>
 {
-    const { meta } = closed("cell55.md");
-    const before = must(box, demo, ["artifact", "list"]);
+    const { meta } = await closed("cell55.md");
+    const before = await must(box, demo, ["artifact", "list"]);
     assert.equal((await prune(meta.id)).code, 0);
-    const after = must(box, demo, ["artifact", "list"]);
+    const after = await must(box, demo, ["artifact", "list"]);
     assert.equal(after.out.split("\n").length, before.out.split("\n").length, "a pruned record lost its row");
     assert.match(after.out, new RegExp(`${meta.id}.*cell55\\.md \\(pruned\\)`));
 });
 
 test("cell 56: a pruned artifact is still found by search, marked", async () =>
 {
-    const { meta } = closed("cell56.md");
+    const { meta } = await closed("cell56.md");
     assert.equal((await prune(meta.id)).code, 0);
-    const found = must(box, demo, ["artifact", "search", "cell56"]);
+    const found = await must(box, demo, ["artifact", "search", "cell56"]);
     assert.match(found.out, new RegExp(`${meta.id}.*cell56\\.md \\(pruned\\)`));
 });
 
-test("cell 57: a hand-written pruned line on an open unit's artifact silences the health signal", () =>
+test("cell 57: a hand-written pruned line on an open unit's artifact silences the health signal", async () =>
 {
-    const work = unit();
-    const meta = attach(work, ["--artifact", fileAt("cell57.md", "cell 57 bytes\n")]);
+    const work = await unit();
+    const meta = await attach(work, ["--artifact", fileAt("cell57.md", "cell 57 bytes\n")]);
     rmSync(stored(meta));
-    const before = must(box, demo, ["status"]).out.split("\n").filter((line) => line.includes(meta.id));
+    const before = (await must(box, demo, ["status"])).out.split("\n").filter((line) => line.includes(meta.id));
     assert.equal(before.length, 1, "the missing file was not reported before the guard was given anything to do");
     logFixture(ws, "demo", {
         id: ulid(),
@@ -515,26 +523,26 @@ test("cell 57: a hand-written pruned line on an open unit's artifact silences th
         payload: { artifact: meta.id, why: "written by hand, which no verb does", bytesRemoved: true },
         refs: { artifacts: [meta.id], work }
     });
-    const after = must(box, demo, ["status"]).out.split("\n").filter((line) => line.includes(meta.id));
+    const after = (await must(box, demo, ["status"])).out.split("\n").filter((line) => line.includes(meta.id));
     assert.deepEqual(after, [], "a fold told the reader to sync a file somebody removed on purpose");
 });
 
 test("cell 58: another clone gets the record and the removal in one pull", async () =>
 {
     const originBox = machine();
-    const origin = demoWorkspace(originBox);
+    const origin = await demoWorkspace(originBox);
     const remote = join(originBox.root, "remote.git");
     execFileSync("git", ["init", "--bare", "-q", remote], { env: originBox.env });
-    must(originBox, origin.ws, ["remote", "add", remote]);
-    const work = workIdIn(must(originBox, origin.demo, ["work", "add", "a shared outcome"]).out);
+    await must(originBox, origin.ws, ["remote", "add", remote]);
+    const work = workIdIn((await must(originBox, origin.demo, ["work", "add", "a shared outcome"])).out);
     writeFileSync(join(origin.demo, "cell58.md"), "cell 58 bytes\n");
-    must(originBox, origin.demo, ["report", work, "attached", "--artifact", "cell58.md"]);
+    await must(originBox, origin.demo, ["report", work, "attached", "--artifact", "cell58.md"]);
     const meta = events("demo", origin.ws).filter((event) => event.type === "report.added").at(-1).payload.artifacts[0];
-    must(originBox, origin.demo, ["work", "done", work]);
-    must(originBox, origin.ws, ["sync"]);
+    await must(originBox, origin.demo, ["work", "done", work]);
+    await must(originBox, origin.ws, ["sync"]);
     const cloneBox = machine();
     const target = join(cloneBox.root, "clone");
-    must(cloneBox, cloneBox.root, ["clone", remote, target]);
+    await must(cloneBox, cloneBox.root, ["clone", remote, target]);
     assert.equal(existsSync(join(target, ".superself", meta.path)), true, "the clone did not get the bytes to begin with");
     const answer = await approvedIn(originBox, origin.demo, ["artifact", "prune", meta.id, "--why", WHY], meta.id);
     assert.equal(answer.code, 0, answer.out);
@@ -544,10 +552,10 @@ test("cell 58: another clone gets the record and the removal in one pull", async
         { env: originBox.env, encoding: "utf8" });
     assert.match(touched, /^M\tprojects\/demo\/log\.jsonl$/m);
     assert.match(touched, new RegExp(`^D\t${meta.path}$`, "m"));
-    must(originBox, origin.ws, ["sync"]);
-    must(cloneBox, target, ["sync"]);
+    await must(originBox, origin.ws, ["sync"]);
+    await must(cloneBox, target, ["sync"]);
     assert.equal(existsSync(join(target, ".superself", meta.path)), false, "the pull left the removed bytes behind");
-    assert.match(selfIn(cloneBox, target, ["artifact", "open", meta.id]).out, /was pruned on/);
+    assert.match((await selfIn(cloneBox, target, ["artifact", "open", meta.id])).out, /was pruned on/);
 });
 
 /* ── 59–60: reading a prune from the outside ───────────────────────── */
@@ -557,8 +565,8 @@ test("cell 59: an id two projects both hold is refused as ambiguous until a proj
     const gamma = join(ws, "gamma");
     mkdirSync(gamma, { recursive: true });
     git(box, gamma, ["init", "-q", "-b", "main"]);
-    must(box, gamma, ["project", "init", "--name", "gamma", "--desc", "the twin-id project"]);
-    const { meta } = closed("cell59.md");
+    await must(box, gamma, ["project", "init", "--name", "gamma", "--desc", "the twin-id project"]);
+    const { meta } = await closed("cell59.md");
     const twin = { id: meta.id, name: "cell59.md", path: `artifacts/gamma/${meta.id}-cell59.md`, digest: sha256("gamma bytes\n") };
     mkdirSync(join(store, "artifacts", "gamma"), { recursive: true });
     writeFileSync(join(store, twin.path), "gamma bytes\n");
@@ -571,7 +579,7 @@ test("cell 59: an id two projects both hold is refused as ambiguous until a proj
         payload: { artifacts: [twin], why: "a twin id minted in another project" },
         refs: { artifacts: [twin.id] }
     });
-    const refused = refuse(meta.id, [], ws);
+    const refused = await refuse(meta.id, [], ws);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`artifact id "${meta.id}" names 2 stored files`));
     assert.equal(existsSync(stored(twin)), true);
@@ -581,34 +589,34 @@ test("cell 59: an id two projects both hold is refused as ambiguous until a proj
 
 test("cell 60: a pruned review artifact is marked on the registry surfaces, which are the only ones it has", async () =>
 {
-    const work = unit();
+    const work = await unit();
     const meta = reviewed(work, "cell60.md");
-    must(box, demo, ["report", work, "the work happened", "--artifact", fileAt("cell60-evidence.md", "cell 60 evidence\n")]);
-    must(box, demo, ["work", "done", work]);
+    await must(box, demo, ["report", work, "the work happened", "--artifact", fileAt("cell60-evidence.md", "cell 60 evidence\n")]);
+    await must(box, demo, ["work", "done", work]);
     assert.equal((await prune(meta.id)).code, 0);
-    assert.match(must(box, demo, ["artifact", "list"]).out, new RegExp(`${meta.id}.*cell60\\.md \\(pruned\\)`));
-    assert.match(selfIn(box, demo, ["artifact", "open", meta.id]).out, /was pruned on/);
-    assert.doesNotMatch(must(box, demo, ["work", "show", work]).out, new RegExp(meta.id),
+    assert.match((await must(box, demo, ["artifact", "list"])).out, new RegExp(`${meta.id}.*cell60\\.md \\(pruned\\)`));
+    assert.match((await selfIn(box, demo, ["artifact", "open", meta.id])).out, /was pruned on/);
+    assert.doesNotMatch((await must(box, demo, ["work", "show", work])).out, new RegExp(meta.id),
         "a review artifact was expected to render nowhere but the registry");
 });
 
 test("cell 61: the unit's own sections mark the record, and the gallery stops linking to it", async () =>
 {
-    const { work, meta } = closed("cell61.md");
+    const { work, meta } = await closed("cell61.md");
     assert.ok(readFileSync(join(store, "view", "demo", "artifacts.html"), "utf8").includes(meta.id),
         "the artifact had no card to lose");
     assert.equal((await prune(meta.id)).code, 0);
-    const packet = must(box, demo, ["handoff", work]).out;
+    const packet = (await must(box, demo, ["handoff", work])).out;
     assert.match(packet, new RegExp(`- Artifacts: ${meta.id} ${meta.name} \\(pruned\\)`), "the unit's section did not mark it");
     assert.match(packet, new RegExp(`artifacts: ${meta.id} ${meta.name}.*\\(pruned\\)`), "the report's row did not mark it");
-    assert.match(must(box, demo, ["work", "show", work]).out, new RegExp(`${meta.id} ${meta.name}.*\\(pruned\\)`));
+    assert.match((await must(box, demo, ["work", "show", work])).out, new RegExp(`${meta.id} ${meta.name}.*\\(pruned\\)`));
     assert.equal(readFileSync(join(store, "view", "demo", "artifacts.html"), "utf8").includes(meta.id), false,
         "the gallery kept a card linking to bytes that are gone");
 });
 
-test("cell 62: a record naming a path inside another project is refused, and that project keeps its bytes", () =>
+test("cell 62: a record naming a path inside another project is refused, and that project keeps its bytes", async () =>
 {
-    const victim = closed("cell62.md").meta;
+    const victim = (await closed("cell62.md")).meta;
     const crafted = {
         id: artifactId(),
         name: "cell62.md",
@@ -618,7 +626,7 @@ test("cell 62: a record naming a path inside another project is refused, and tha
     const delta = join(ws, "delta");
     mkdirSync(delta, { recursive: true });
     git(box, delta, ["init", "-q", "-b", "main"]);
-    must(box, delta, ["project", "init", "--name", "delta", "--desc", "the project holding a crafted path"]);
+    await must(box, delta, ["project", "init", "--name", "delta", "--desc", "the project holding a crafted path"]);
     // A line no verb writes: delta's log naming demo's stored bytes. It reaches
     // this store the way every foreign line does — through a shared remote — so
     // the delete path refuses it rather than following it.
@@ -631,7 +639,7 @@ test("cell 62: a record naming a path inside another project is refused, and tha
         payload: { artifacts: [crafted], why: "a path pointing into another project" },
         refs: { artifacts: [crafted.id] }
     });
-    const refused = refuse(crafted.id, ["--project", "delta"], ws);
+    const refused = await refuse(crafted.id, ["--project", "delta"], ws);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`is recorded at ${victim.path}, which is not inside project "delta"`));
     assert.equal(existsSync(stored(victim)), true, "another project's bytes were removed by a crafted path");
@@ -641,17 +649,17 @@ test("cell 62: a record naming a path inside another project is refused, and tha
 
 test("#238 cell 41: two records pointing at one artifact refuse it until both are dead", async () =>
 {
-    const artifact = registered("d238-41.md");
-    const first = must(box, demo, ["state", "add", "the first rule", "--exposure", "full", "--artifact", artifact])
+    const artifact = await registered("d238-41.md");
+    const first = (await must(box, demo, ["state", "add", "the first rule", "--exposure", "full", "--artifact", artifact]))
         .out.match(/\be-[0-9a-z]{5}\b/)[0];
-    const second = must(box, demo, ["state", "add", "the second rule", "--exposure", "full", "--artifact", artifact])
+    const second = (await must(box, demo, ["state", "add", "the second rule", "--exposure", "full", "--artifact", artifact]))
         .out.match(/\be-[0-9a-z]{5}\b/)[0];
-    const both = refuse(artifact);
+    const both = await refuse(artifact);
     assert.equal(both.code, 1, both.out);
     assert.match(both.out, /those records are still live/);
     assert.ok(both.out.includes(first) && both.out.includes(second), `the refusal named neither record:\n${both.out}`);
     await approvedIn(box, demo, ["state", "retract", first, "--why", "folded into the second"], first);
-    const one = refuse(artifact);
+    const one = await refuse(artifact);
     assert.equal(one.code, 1, one.out);
     assert.match(one.out, new RegExp(`is what ${second} points at, and that record is still live`));
     await approvedIn(box, demo, ["state", "retract", second, "--why", "the guide is gone"], second);
@@ -660,9 +668,9 @@ test("#238 cell 41: two records pointing at one artifact refuse it until both ar
 
 test("#238 cell 42: an artifact that is both evidence and guidance must satisfy both before it goes", async () =>
 {
-    const { meta } = closed("d238-42.md");
-    const rule = idIn(must(box, demo, ["convention", "add", "follow the cell 42 note", "--artifact", meta.id]).out);
-    const refused = refuse(meta.id);
+    const { meta } = await closed("d238-42.md");
+    const rule = idIn((await must(box, demo, ["convention", "add", "follow the cell 42 note", "--artifact", meta.id])).out);
+    const refused = await refuse(meta.id);
     assert.equal(refused.code, 1, refused.out, "a done unit's evidence went while a rule still pointed at it");
     assert.match(refused.out, /still live — retract or supersede it first/);
     await approvedIn(box, demo, ["convention", "drop", rule, "--why", "the note is folded into the rule itself"], rule);
@@ -671,13 +679,13 @@ test("#238 cell 42: an artifact that is both evidence and guidance must satisfy 
     assert.equal(existsSync(stored(meta)), false);
 });
 
-test("#238 cell 45: a proposal is live, so the artifact it points at is refused", () =>
+test("#238 cell 45: a proposal is live, so the artifact it points at is refused", async () =>
 {
-    const artifact = registered("d238-45.md");
-    const proposal = must(box, demo,
-        ["state", "add", "a proposed rule", "--exposure", "full", "--artifact", artifact, "--proposed"])
+    const artifact = await registered("d238-45.md");
+    const proposal = (await must(box, demo,
+        ["state", "add", "a proposed rule", "--exposure", "full", "--artifact", artifact, "--proposed"]))
         .out.match(/\be-[0-9a-z]{5}\b/)[0];
-    const refused = refuse(artifact);
+    const refused = await refuse(artifact);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, new RegExp(`is what ${proposal} points at, and that record is still live`));
 });

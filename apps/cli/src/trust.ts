@@ -198,6 +198,14 @@ export function trustVerifierCalls(): number
     return verifierCalls;
 }
 
+// The count answers for one invocation. Two `runCli` calls in one process would
+// otherwise hand the second one the first's total, and "the verifier was never
+// consulted" is exactly the claim that would stop being assertable.
+export function resetVerifierCalls(): void
+{
+    verifierCalls = 0;
+}
+
 function verifyTrust(signed: SignedTrust, roots: readonly RootKey[]): RootKey
 {
     if (signed.signature.alg !== SIGNATURE_ALG)

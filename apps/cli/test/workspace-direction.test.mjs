@@ -89,19 +89,19 @@ import { workspaceDirectionLines } from "../dist/views.js";
 // The home of the direction, a project that reads it, and — where a cell needs
 // one — a third that must answer for neither. Registering a project costs a
 // fold and a commit, so no cell pays for one it does not read.
-function workspaceOf(...slugs)
+async function workspaceOf(...slugs)
 {
     const box = machine();
     const ws = join(box.root, "ws");
     const world = { box, ws };
     mkdirSync(ws, { recursive: true });
-    must(box, ws, ["init"]);
+    await must(box, ws, ["init"]);
     for (const slug of ["alpha", "beta", ...slugs])
     {
         world[slug] = join(ws, slug);
         mkdirSync(world[slug], { recursive: true });
         git(box, world[slug], ["init", "-q", "-b", "main"]);
-        must(box, world[slug], ["project", "init", "--name", slug, "--no-connect"]);
+        await must(box, world[slug], ["project", "init", "--name", slug, "--no-connect"]);
     }
     return world;
 }
@@ -127,23 +127,47 @@ function setCaps(ws, caps)
 
 /* ── A. the write verbs and the flags they take ─────────────────────── */
 
-const a = workspaceOf();
-
-test("A1: goal add with no flag records at project scope, as it always did", () =>
-{
-    const goal = idIn(must(a.box, a.alpha, ["goal", "add", "alpha ships its own thing"]).out);
-    // `project` is the sentinel a home-scoped record reports; the workspace
-    // records below report the target by name.
-    assert.match(must(a.box, a.alpha, ["state", "show", goal]).out, /placement: project · full · priority 0/);
-});
+const a = await workspaceOf();
 
 let workspaceGoal;
 
-test("A2: goal add --workspace records the placement value, not a second kind of record", () =>
+let workspaceObjective;
+
+let proposed;
+
+/* ── B. what renders, where it is read, and what the home does ──────── */
+
+const b = await workspaceOf("gamma");
+
+const projectGoal = idIn((await must(b.box, b.alpha, ["goal", "add", "alpha keeps its own aim"])).out);
+
+const companyGoal = idIn((await must(b.box, b.alpha, ["goal", "add", "the company ships weekly", "--workspace"])).out);
+
+const companyObjective = objectiveIdIn((await must(b.box, b.alpha,
+    ["objective", "add", "reach a hundred users", "--workspace"])).out);
+
+const gammaObjective = objectiveIdIn((await must(b.box, b.gamma,
+    ["objective", "add", "the company writes it down", "--workspace"])).out);
+
+const betaObjective = objectiveIdIn((await must(b.box, b.beta, ["objective", "add", "beta's own quarter"])).out);
+
+/* ── E. the tie-break, and what else sorts through it ───────────────── */
+
+const e = await workspaceOf();
+
+test("A1: goal add with no flag records at project scope, as it always did", async () =>
 {
-    workspaceGoal = idIn(must(a.box, a.alpha, ["goal", "add", "the company ships weekly", "--workspace"]).out);
-    assert.match(must(a.box, a.alpha, ["state", "show", workspaceGoal]).out, /placement: workspace · full · priority 0/);
-    assert.match(must(a.box, a.alpha, ["state", "show", workspaceGoal]).out, /stored in: alpha/);
+    const goal = idIn((await must(a.box, a.alpha, ["goal", "add", "alpha ships its own thing"])).out);
+    // `project` is the sentinel a home-scoped record reports; the workspace
+    // records below report the target by name.
+    assert.match((await must(a.box, a.alpha, ["state", "show", goal])).out, /placement: project · full · priority 0/);
+});
+
+test("A2: goal add --workspace records the placement value, not a second kind of record", async () =>
+{
+    workspaceGoal = idIn((await must(a.box, a.alpha, ["goal", "add", "the company ships weekly", "--workspace"])).out);
+    assert.match((await must(a.box, a.alpha, ["state", "show", workspaceGoal])).out, /placement: workspace · full · priority 0/);
+    assert.match((await must(a.box, a.alpha, ["state", "show", workspaceGoal])).out, /stored in: alpha/);
 });
 
 test("A3: a workspace goal is replaced by --supersedes, and the successor stays workspace-scoped", async () =>
@@ -154,197 +178,182 @@ test("A3: a workspace goal is replaced by --supersedes, and the successor stays 
         ["goal", "add", "the company ships twice weekly", "--workspace", "--supersedes", workspaceGoal],
         workspaceGoal)).printed;
     const successor = idIn(printed);
-    assert.match(must(a.box, a.alpha, ["state", "show", successor]).out, /placement: workspace · full/);
-    assert.match(must(a.box, a.alpha, ["state", "show", workspaceGoal]).out, /superseded/);
+    assert.match((await must(a.box, a.alpha, ["state", "show", successor])).out, /placement: workspace · full/);
+    assert.match((await must(a.box, a.alpha, ["state", "show", workspaceGoal])).out, /superseded/);
     workspaceGoal = successor;
 });
 
-test("A4: goal retract refuses --workspace by name rather than swallowing it", () =>
+test("A4: goal retract refuses --workspace by name rather than swallowing it", async () =>
 {
-    const refused = selfIn(a.box, a.alpha, ["goal", "retract", workspaceGoal, "--workspace", "--why", "it does not hold"]);
+    const refused = await selfIn(a.box, a.alpha, ["goal", "retract", workspaceGoal, "--workspace", "--why", "it does not hold"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /goal retract takes no --workspace/);
-    assert.match(must(a.box, a.alpha, ["state", "show", workspaceGoal]).out, /confirmed/);
+    assert.match((await must(a.box, a.alpha, ["state", "show", workspaceGoal])).out, /confirmed/);
 });
 
-test("A5: objective add with no flag records at project scope, as it always did", () =>
+test("A5: objective add with no flag records at project scope, as it always did", async () =>
 {
-    const objective = objectiveIdIn(must(a.box, a.alpha, ["objective", "add", "alpha's own quarter"]).out);
-    assert.match(must(a.box, a.alpha, ["state", "show", objective]).out, /placement: project · full · priority 10/);
+    const objective = objectiveIdIn((await must(a.box, a.alpha, ["objective", "add", "alpha's own quarter"])).out);
+    assert.match((await must(a.box, a.alpha, ["state", "show", objective])).out, /placement: project · full · priority 10/);
 });
 
-let workspaceObjective;
-
-test("A6: objective add --workspace keeps every other field it was given", () =>
+test("A6: objective add --workspace keeps every other field it was given", async () =>
 {
-    workspaceObjective = objectiveIdIn(must(a.box, a.alpha, ["objective", "add", "reach a hundred users",
-        "--workspace", "--target", "2026-12-31", "--success", "a hundred accounts in use"]).out);
-    const shown = must(a.box, a.alpha, ["state", "show", workspaceObjective]).out;
+    workspaceObjective = objectiveIdIn((await must(a.box, a.alpha, ["objective", "add", "reach a hundred users",
+        "--workspace", "--target", "2026-12-31", "--success", "a hundred accounts in use"])).out);
+    const shown = (await must(a.box, a.alpha, ["state", "show", workspaceObjective])).out;
     assert.match(shown, /placement: workspace · full · priority 10/);
     assert.match(shown, /target: 2026-12-31/);
-    assert.match(must(a.box, a.alpha, ["objective", "show", workspaceObjective]).out, /a hundred accounts in use/);
+    assert.match((await must(a.box, a.alpha, ["objective", "show", workspaceObjective])).out, /a hundred accounts in use/);
 });
 
-let proposed;
-
-test("A7: a proposed workspace objective is recorded and occupies no tier yet", () =>
+test("A7: a proposed workspace objective is recorded and occupies no tier yet", async () =>
 {
-    proposed = objectiveIdIn(must(a.box, a.alpha,
-        ["objective", "add", "double the paying teams", "--workspace", "--proposed"]).out);
-    assert.match(must(a.box, a.alpha, ["state", "show", proposed]).out, /proposed/);
+    proposed = objectiveIdIn((await must(a.box, a.alpha,
+        ["objective", "add", "double the paying teams", "--workspace", "--proposed"])).out);
+    assert.match((await must(a.box, a.alpha, ["state", "show", proposed])).out, /proposed/);
 });
 
-test("A8: confirming it puts it at workspace scope", () =>
+test("A8: confirming it puts it at workspace scope", async () =>
 {
-    must(a.box, a.alpha, ["objective", "confirm", proposed]);
-    assert.match(must(a.box, a.alpha, ["state", "show", proposed]).out, /confirmed/);
-    assert.match(must(a.box, a.alpha, ["state", "show", proposed]).out, /placement: workspace · full/);
+    await must(a.box, a.alpha, ["objective", "confirm", proposed]);
+    assert.match((await must(a.box, a.alpha, ["state", "show", proposed])).out, /confirmed/);
+    assert.match((await must(a.box, a.alpha, ["state", "show", proposed])).out, /placement: workspace · full/);
 });
 
-test("A10: closing a workspace objective takes it out of every project's context", () =>
+test("A10: closing a workspace objective takes it out of every project's context", async () =>
 {
-    assert.ok(must(a.box, a.beta, ["context"]).out.includes("double the paying teams"));
-    must(a.box, a.alpha, ["objective", "close", proposed, "--as", "reached"]);
-    assert.ok(!must(a.box, a.beta, ["context"]).out.includes("double the paying teams"),
+    assert.ok((await must(a.box, a.beta, ["context"])).out.includes("double the paying teams"));
+    await must(a.box, a.alpha, ["objective", "close", proposed, "--as", "reached"]);
+    assert.ok(!(await must(a.box, a.beta, ["context"])).out.includes("double the paying teams"),
         "a closed workspace objective still renders in another project");
 });
 
-test("A11: a write verb takes no read scope — --project is refused by the option table", () =>
+test("A11: a write verb takes no read scope — --project is refused by the option table", async () =>
 {
-    const refused = selfIn(a.box, a.beta, ["objective", "add", "somebody else's outcome", "--workspace", "--project", "alpha"]);
+    const refused = await selfIn(a.box, a.beta, ["objective", "add", "somebody else's outcome", "--workspace", "--project", "alpha"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /unknown option '--project'/);
 });
 
-test("A12: a milestone under a workspace objective is added at home, project-scoped", () =>
+test("A12: a milestone under a workspace objective is added at home, project-scoped", async () =>
 {
-    const milestone = must(a.box, a.alpha, ["milestone", "add", "the first ten are using it",
-        "--objective", workspaceObjective, "--exit", "ten accounts active"]).out.match(/\bm-[0-9a-z]{5}\b/)[0];
-    assert.match(must(a.box, a.alpha, ["state", "show", milestone]).out, /placement: project · /);
-    assert.ok(must(a.box, a.alpha, ["objective"]).out.includes(milestone));
+    const milestone = (await must(a.box, a.alpha, ["milestone", "add", "the first ten are using it",
+        "--objective", workspaceObjective, "--exit", "ten accounts active"])).out.match(/\bm-[0-9a-z]{5}\b/)[0];
+    assert.match((await must(a.box, a.alpha, ["state", "show", milestone])).out, /placement: project · /);
+    assert.ok((await must(a.box, a.alpha, ["objective"])).out.includes(milestone));
     // B5's other half: the objective reaches the other project without it.
-    const elsewhere = must(a.box, a.beta, ["context"]).out;
+    const elsewhere = (await must(a.box, a.beta, ["context"])).out;
     assert.ok(elsewhere.includes("reach a hundred users"));
     assert.ok(!elsewhere.includes(milestone), "a project-scoped milestone rendered in another project");
 });
 
-test("A13: a milestone under another project's workspace objective names the owner", () =>
+test("A13: a milestone under another project's workspace objective names the owner", async () =>
 {
-    const refused = selfIn(a.box, a.beta, ["milestone", "add", "beta's checkpoint",
+    const refused = await selfIn(a.box, a.beta, ["milestone", "add", "beta's checkpoint",
         "--objective", workspaceObjective, "--exit", "something"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /is alpha's objective/);
     assert.match(refused.out, /run `self milestone add` from alpha/);
 });
 
-test("A14: supersession resolves inside one fold, so another project's id is unknown here", () =>
+test("A14: supersession resolves inside one fold, so another project's id is unknown here", async () =>
 {
-    const refused = selfIn(a.box, a.beta, ["objective", "add", "a replacement", "--workspace", "--supersedes", workspaceObjective]);
+    const refused = await selfIn(a.box, a.beta, ["objective", "add", "a replacement", "--workspace", "--supersedes", workspaceObjective]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /unknown objective/);
 });
 
-/* ── B. what renders, where it is read, and what the home does ──────── */
-
-const b = workspaceOf("gamma");
-const projectGoal = idIn(must(b.box, b.alpha, ["goal", "add", "alpha keeps its own aim"]).out);
-const companyGoal = idIn(must(b.box, b.alpha, ["goal", "add", "the company ships weekly", "--workspace"]).out);
-const companyObjective = objectiveIdIn(must(b.box, b.alpha,
-    ["objective", "add", "reach a hundred users", "--workspace"]).out);
-const gammaObjective = objectiveIdIn(must(b.box, b.gamma,
-    ["objective", "add", "the company writes it down", "--workspace"]).out);
-const betaObjective = objectiveIdIn(must(b.box, b.beta, ["objective", "add", "beta's own quarter"]).out);
-
-test("B1 and B3: home reads both of its goals", () =>
+test("B1 and B3: home reads both of its goals", async () =>
 {
-    const home = must(b.box, b.alpha, ["context"]).out;
+    const home = (await must(b.box, b.alpha, ["context"])).out;
     assert.ok(home.includes("alpha keeps its own aim"), home);
     assert.ok(home.includes("the company ships weekly"), home);
 });
 
-test("B2 and B4: another project reads the workspace goal and not the project one", () =>
+test("B2 and B4: another project reads the workspace goal and not the project one", async () =>
 {
-    const elsewhere = must(b.box, b.beta, ["context"]).out;
+    const elsewhere = (await must(b.box, b.beta, ["context"])).out;
     assert.ok(elsewhere.includes("the company ships weekly"), elsewhere);
     assert.ok(!elsewhere.includes("alpha keeps its own aim"), elsewhere);
 });
 
-test("B5 and E1: a workspace objective renders above the reading project's own", () =>
+test("B5 and E1: a workspace objective renders above the reading project's own", async () =>
 {
-    const elsewhere = must(b.box, b.beta, ["context"]).out;
+    const elsewhere = (await must(b.box, b.beta, ["context"])).out;
     const company = elsewhere.indexOf("reach a hundred users");
     const own = elsewhere.indexOf("beta's own quarter");
     assert.ok(company !== -1 && own !== -1, elsewhere);
     assert.ok(company < own, `a workspace objective sorted below the project's own:\n${elsewhere}`);
 });
 
-test("B6: `self objective` elsewhere leads with the owner's slug and counts work in the owning fold", () =>
+test("B6: `self objective` elsewhere leads with the owner's slug and counts work in the owning fold", async () =>
 {
     // One unit in the owning project and one contributed from a third: both
     // are counted against the objective, which is what the owner's fold holds.
-    const owned = workIdIn(must(b.box, b.alpha, ["work", "add", "ship the first cut"]).out);
-    must(b.box, b.alpha, ["work", "link", owned, "--objective", companyObjective]);
-    const contributed = workIdIn(must(b.box, b.gamma, ["work", "add", "write the page"]).out);
-    must(b.box, b.gamma, ["work", "link", contributed, "--objective", companyObjective]);
-    const listing = must(b.box, b.beta, ["objective"]).out;
+    const owned = workIdIn((await must(b.box, b.alpha, ["work", "add", "ship the first cut"])).out);
+    await must(b.box, b.alpha, ["work", "link", owned, "--objective", companyObjective]);
+    const contributed = workIdIn((await must(b.box, b.gamma, ["work", "add", "write the page"])).out);
+    await must(b.box, b.gamma, ["work", "link", contributed, "--objective", companyObjective]);
+    const listing = (await must(b.box, b.beta, ["objective"])).out;
     const rows = listing.split("\n");
     assert.match(rows[0], new RegExp(`^${companyObjective}\\b.*reach a hundred users.*2 work unit\\(s\\).*\\(alpha\\)$`),
         `the foreign row did not lead, or counted work in the reading fold:\n${listing}`);
     assert.ok(listing.indexOf(companyObjective) < listing.indexOf(betaObjective), listing);
 });
 
-test("B7: `objective show` elsewhere reports contributors for the owning slug", () =>
+test("B7: `objective show` elsewhere reports contributors for the owning slug", async () =>
 {
-    const shown = must(b.box, b.beta, ["objective", "show", companyObjective]).out;
+    const shown = (await must(b.box, b.beta, ["objective", "show", companyObjective])).out;
     assert.match(shown, /reach a hundred users/);
     assert.match(shown, /\(gamma\)/, `contributors were computed for the reading project:\n${shown}`);
 });
 
-test("B8: the --workspace listing states each objective once, under its owner", () =>
+test("B8: the --workspace listing states each objective once, under its owner", async () =>
 {
-    const listing = must(b.box, b.ws, ["objective", "--workspace"]).out;
+    const listing = (await must(b.box, b.ws, ["objective", "--workspace"])).out;
     assert.equal(listing.split(companyObjective).length - 1, 1, listing);
     assert.equal(listing.split(gammaObjective).length - 1, 1, listing);
 });
 
-test("B17: two owners lead the rows in slug order, above the reading project's own", () =>
+test("B17: two owners lead the rows in slug order, above the reading project's own", async () =>
 {
-    const rows = must(b.box, b.beta, ["objective"]).out.split("\n");
+    const rows = (await must(b.box, b.beta, ["objective"])).out.split("\n");
     assert.match(rows[0], /\(alpha\)$/, rows.join("\n"));
     assert.match(rows[1], /\(gamma\)$/, rows.join("\n"));
     assert.ok(rows[2].startsWith(betaObjective), rows.join("\n"));
 });
 
-test("B18: an id prefix is unknown here exactly as it is at home", () =>
+test("B18: an id prefix is unknown here exactly as it is at home", async () =>
 {
-    const refused = selfIn(b.box, b.beta, ["objective", "show", companyObjective.slice(0, 4)]);
+    const refused = await selfIn(b.box, b.beta, ["objective", "show", companyObjective.slice(0, 4)]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /unknown objective/);
-    const atHome = selfIn(b.box, b.alpha, ["objective", "show", companyObjective.slice(0, 4)]);
+    const atHome = await selfIn(b.box, b.alpha, ["objective", "show", companyObjective.slice(0, 4)]);
     assert.notEqual(atHome.code, 0);
     assert.match(atHome.out, /unknown objective/);
 });
 
-test("B21: --project names the viewer, and every objective appears once under it", () =>
+test("B21: --project names the viewer, and every objective appears once under it", async () =>
 {
-    const listing = must(b.box, b.gamma, ["objective", "--project", "beta"]).out;
+    const listing = (await must(b.box, b.gamma, ["objective", "--project", "beta"])).out;
     assert.equal(listing.split(companyObjective).length - 1, 1, listing);
     assert.equal(listing.split(gammaObjective).length - 1, 1, listing);
     assert.match(listing.split("\n")[1], /\(gamma\)$/, `gamma's own objective did not read as foreign to beta:\n${listing}`);
 });
 
-test("B20: search answers over what context did not show, and --all finds it anyway", () =>
+test("B20: search answers over what context did not show, and --all finds it anyway", async () =>
 {
-    const byDefault = selfIn(b.box, b.beta, ["search", "weekly"]);
+    const byDefault = await selfIn(b.box, b.beta, ["search", "weekly"]);
     assert.equal(byDefault.code, 0, byDefault.out);
     assert.ok(!byDefault.out.includes(companyGoal), byDefault.out);
-    const all = must(b.box, b.beta, ["search", "weekly", "--all"]);
+    const all = await must(b.box, b.beta, ["search", "weekly", "--all"]);
     assert.ok(all.out.includes(companyGoal), all.out);
 });
 
-test("B9: the workspace context says the direction once, above the project lines", () =>
+test("B9: the workspace context says the direction once, above the project lines", async () =>
 {
-    const rendered = must(b.box, b.ws, ["context"]).out;
+    const rendered = (await must(b.box, b.ws, ["context"])).out;
     const direction = rendered.indexOf("## Workspace direction");
     const alphaRow = rendered.indexOf("alpha —");
     assert.ok(direction !== -1 && alphaRow !== -1, rendered);
@@ -368,14 +377,14 @@ test("B9t: the terminal render of the workspace context says the same facts", ()
     assert.match(table, /alpha\s+.*alpha keeps its own aim/, table);
 });
 
-test("B10: another project's status counts its own objectives only", () =>
+test("B10: another project's status counts its own objectives only", async () =>
 {
-    assert.match(must(b.box, b.beta, ["status"]).out, /objectives: 1 open/);
+    assert.match((await must(b.box, b.beta, ["status"])).out, /objectives: 1 open/);
 });
 
-test("B10r: the workspace status says no direction, in either render", () =>
+test("B10r: the workspace status says no direction, in either render", async () =>
 {
-    const piped = must(b.box, b.ws, ["status"]).out;
+    const piped = (await must(b.box, b.ws, ["status"])).out;
     assert.ok(!piped.includes("## Workspace direction"), piped);
     // The status row keeps reading the newest live goal of the project's own
     // log, workspace-scoped or not: it is that project's row, not the
@@ -390,25 +399,25 @@ test("B10r: the workspace status says no direction, in either render", () =>
     assert.ok(table.includes("the company ships weekly"), table);
 });
 
-test("B15: a project archived elsewhere leaves project-scoped records exactly as they were", () =>
+test("B15: a project archived elsewhere leaves project-scoped records exactly as they were", async () =>
 {
     // A world of its own: the archived project must hold no direction, which
     // is what the gate above refuses, and gamma in the world above holds some.
-    const bystander = workspaceOf("gamma");
-    must(bystander.box, bystander.alpha, ["goal", "add", "alpha keeps its own aim"]);
-    must(bystander.box, bystander.beta, ["objective", "add", "beta's own quarter"]);
-    const before = must(bystander.box, bystander.beta, ["status"]).out;
-    must(bystander.box, bystander.ws, ["project", "archive", "gamma", "--why", "not this quarter"]);
-    const after = must(bystander.box, bystander.beta, ["status"]).out;
+    const bystander = await workspaceOf("gamma");
+    await must(bystander.box, bystander.alpha, ["goal", "add", "alpha keeps its own aim"]);
+    await must(bystander.box, bystander.beta, ["objective", "add", "beta's own quarter"]);
+    const before = (await must(bystander.box, bystander.beta, ["status"])).out;
+    await must(bystander.box, bystander.ws, ["project", "archive", "gamma", "--why", "not this quarter"]);
+    const after = (await must(bystander.box, bystander.beta, ["status"])).out;
     assert.match(after, /health: ok/);
     assert.equal(after, before);
 });
 
 /* ── B11 to B14. the home project's own state ───────────────────────── */
 
-test("B12: archiving a project that holds live direction is refused, with both ways out", () =>
+test("B12: archiving a project that holds live direction is refused, with both ways out", async () =>
 {
-    const refused = selfIn(b.box, b.ws, ["project", "archive", "alpha", "--why", "not this quarter"]);
+    const refused = await selfIn(b.box, b.ws, ["project", "archive", "alpha", "--why", "not this quarter"]);
     assert.notEqual(refused.code, 0);
     assert.ok(refused.out.includes(companyGoal), refused.out);
     assert.ok(refused.out.includes(companyObjective), refused.out);
@@ -420,11 +429,11 @@ test("B12: archiving a project that holds live direction is refused, with both w
     assert.ok(!refused.out.includes(projectGoal), refused.out);
 });
 
-test("B11: an archived project records no event at all, --workspace included", () =>
+test("B11: an archived project records no event at all, --workspace included", async () =>
 {
-    const solo = workspaceOf();
-    must(solo.box, solo.ws, ["project", "archive", "beta", "--why", "set aside"]);
-    const refused = selfIn(solo.box, solo.beta, ["goal", "add", "a company aim", "--workspace"]);
+    const solo = await workspaceOf();
+    await must(solo.box, solo.ws, ["project", "archive", "beta", "--why", "set aside"]);
+    const refused = await selfIn(solo.box, solo.beta, ["goal", "add", "a company aim", "--workspace"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /archived/);
 });
@@ -439,118 +448,114 @@ test("B13: once the direction is folded, the same archive goes through", async (
     const closed = await approvedIn(b.box, b.alpha,
         ["objective", "close", companyObjective, "--as", "dropped", "--why", "restated in gamma"], companyObjective);
     assert.equal(closed.code, 0, closed.out);
-    const archived = must(b.box, b.ws, ["project", "archive", "alpha", "--why", "not this quarter"]);
+    const archived = await must(b.box, b.ws, ["project", "archive", "alpha", "--why", "not this quarter"]);
     assert.match(archived.out, /project "alpha" is archived/);
-    must(b.box, b.ws, ["project", "restore", "alpha"]);
+    await must(b.box, b.ws, ["project", "restore", "alpha"]);
 });
 
-test("B14: a broken home store fails the read, exactly as it does today", () =>
+test("B14: a broken home store fails the read, exactly as it does today", async () =>
 {
-    const broken = workspaceOf();
-    must(broken.box, broken.alpha, ["goal", "add", "the company ships weekly", "--workspace"]);
+    const broken = await workspaceOf();
+    await must(broken.box, broken.alpha, ["goal", "add", "the company ships weekly", "--workspace"]);
     appendFileSync(join(broken.ws, ".superself", "projects", "alpha", "log.jsonl"), "not an event\n");
-    const failed = selfIn(broken.box, broken.beta, ["context"]);
+    const failed = await selfIn(broken.box, broken.beta, ["context"]);
     assert.notEqual(failed.code, 0);
 });
 
 /* ── C. the caps, and the render budget ─────────────────────────────── */
 
-test("C1 and C3: the project tier and the workspace tier fill and gate apart", () =>
+test("C1 and C3: the project tier and the workspace tier fill and gate apart", async () =>
 {
-    const caps = workspaceOf();
+    const caps = await workspaceOf();
     setCaps(caps.ws, { fullTokens: 30 });
-    must(caps.box, caps.alpha, ["goal", "add", "alpha aims here and stops"]);
-    const projectFull = selfIn(caps.box, caps.alpha, ["goal", "add", "one project goal over the line"]);
+    await must(caps.box, caps.alpha, ["goal", "add", "alpha aims here and stops"]);
+    const projectFull = await selfIn(caps.box, caps.alpha, ["goal", "add", "one project goal over the line"]);
     assert.notEqual(projectFull.code, 0);
     assert.match(projectFull.out, /the project full tier holds/);
     // C1: the full project tier does not gate the workspace tier.
-    must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]);
+    await must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]);
     // C3: and a full workspace tier does not gate the project's, either.
     setCaps(caps.ws, { fullTokens: 60 });
-    must(caps.box, caps.alpha, ["goal", "add", "alpha adds one more"]);
+    await must(caps.box, caps.alpha, ["goal", "add", "alpha adds one more"]);
 });
 
-test("C2: past the workspace cap the refusal names that tier and its numbers", () =>
+test("C2: past the workspace cap the refusal names that tier and its numbers", async () =>
 {
-    const caps = workspaceOf();
+    const caps = await workspaceOf();
     setCaps(caps.ws, { fullTokens: 20 });
-    must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]);
-    const refused = selfIn(caps.box, caps.alpha, ["goal", "add", "one company aim too many", "--workspace"]);
+    await must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]);
+    const refused = await selfIn(caps.box, caps.alpha, ["goal", "add", "one company aim too many", "--workspace"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /the workspace full tier holds \d+ of 20 tokens/);
     assert.match(refused.out, /--demote <id>/);
 });
 
-test("C4: --demote of a workspace record frees the workspace tier", () =>
+test("C4: --demote of a workspace record frees the workspace tier", async () =>
 {
-    const caps = workspaceOf();
+    const caps = await workspaceOf();
     setCaps(caps.ws, { fullTokens: 20 });
-    const seat = idIn(must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]).out);
-    const admitted = must(caps.box, caps.alpha,
+    const seat = idIn((await must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"])).out);
+    const admitted = await must(caps.box, caps.alpha,
         ["objective", "add", "reach a hundred", "--workspace", "--demote", seat]);
     assert.equal(admitted.code, 0, admitted.out);
-    assert.match(must(caps.box, caps.alpha, ["state", "show", seat]).out, /placement: workspace · index/);
+    assert.match((await must(caps.box, caps.alpha, ["state", "show", seat])).out, /placement: workspace · index/);
 });
 
-test("C6: a proposal passes a full tier, and the confirm is where it is refused", () =>
+test("C6: a proposal passes a full tier, and the confirm is where it is refused", async () =>
 {
-    const caps = workspaceOf();
+    const caps = await workspaceOf();
     setCaps(caps.ws, { fullTokens: 20 });
-    must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]);
-    const proposal = objectiveIdIn(must(caps.box, caps.alpha,
-        ["objective", "add", "reach a hundred users", "--workspace", "--proposed"]).out);
-    const refused = selfIn(caps.box, caps.alpha, ["objective", "confirm", proposal]);
+    await must(caps.box, caps.alpha, ["goal", "add", "the company ships", "--workspace"]);
+    const proposal = objectiveIdIn((await must(caps.box, caps.alpha,
+        ["objective", "add", "reach a hundred users", "--workspace", "--proposed"])).out);
+    const refused = await selfIn(caps.box, caps.alpha, ["objective", "confirm", proposal]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /workspace full tier/);
 });
 
-test("C7: over budget, the direction is what a project's context keeps", () =>
+test("C7: over budget, the direction is what a project's context keeps", async () =>
 {
-    const budget = workspaceOf();
+    const budget = await workspaceOf();
     // Caps out of the way: this cell is about the render budget, which is the
     // other limit — a tier says what a store may hold, the budget says what one
     // render may spend.
     setCaps(budget.ws, { fullTokens: 1_000_000, indexTokens: 1_000_000 });
-    must(budget.box, budget.alpha, ["goal", "add", "the company ships weekly", "--workspace"]);
+    await must(budget.box, budget.alpha, ["goal", "add", "the company ships weekly", "--workspace"]);
     // Enough of beta's own low-priority records to spend the render budget:
     // conventions sort at priority 30, below the direction's 0 and 10.
     for (let index = 0; index < 30; index++)
     {
-        must(budget.box, budget.beta, ["convention", "add", `beta rule ${index} — ${"x".repeat(200)}`]);
+        await must(budget.box, budget.beta, ["convention", "add", `beta rule ${index} — ${"x".repeat(200)}`]);
     }
-    const rendered = must(budget.box, budget.beta, ["context"]).out;
+    const rendered = (await must(budget.box, budget.beta, ["context"])).out;
     assert.ok(rendered.includes("the company ships weekly"), "the direction was cut before the sections below it");
     assert.match(rendered, /omitted/, `nothing was cut, so this cell proves nothing:\n${rendered.slice(0, 400)}`);
 });
 
-test("C8: the placement a workspace objective reports is the workspace tier", () =>
+test("C8: the placement a workspace objective reports is the workspace tier", async () =>
 {
-    const shown = must(b.box, b.gamma, ["state", "show", gammaObjective]).out;
+    const shown = (await must(b.box, b.gamma, ["state", "show", gammaObjective])).out;
     assert.match(shown, /placement: workspace · full · priority 10/);
 });
 
-/* ── E. the tie-break, and what else sorts through it ───────────────── */
-
-const e = workspaceOf();
-
-test("E2 and E3: at equal priority the workspace record leads, in context and in state list", () =>
+test("E2 and E3: at equal priority the workspace record leads, in context and in state list", async () =>
 {
-    must(e.box, e.alpha, ["convention", "add", "the company reviews every change", "--workspace"]);
-    must(e.box, e.beta, ["convention", "add", "beta squashes its merges"]);
-    const rendered = must(e.box, e.beta, ["context"]).out;
+    await must(e.box, e.alpha, ["convention", "add", "the company reviews every change", "--workspace"]);
+    await must(e.box, e.beta, ["convention", "add", "beta squashes its merges"]);
+    const rendered = (await must(e.box, e.beta, ["context"])).out;
     const company = rendered.indexOf("the company reviews every change");
     const own = rendered.indexOf("beta squashes its merges");
     assert.ok(company !== -1 && own !== -1, rendered);
     assert.ok(company < own, `a workspace convention sorted below the project's own:\n${rendered}`);
     // E3: one comparator, so the two surfaces cannot disagree.
-    const listed = must(e.box, e.beta, ["state", "list"]).out;
+    const listed = (await must(e.box, e.beta, ["state", "list"])).out;
     assert.ok(listed.indexOf("the company reviews every change") < listed.indexOf("beta squashes its merges"), listed);
 });
 
-test("E4: within one scope the old tie-break stands — newest first", () =>
+test("E4: within one scope the old tie-break stands — newest first", async () =>
 {
-    must(e.box, e.beta, ["convention", "add", "beta writes its reasons down"]);
-    const rendered = must(e.box, e.beta, ["context"]).out;
+    await must(e.box, e.beta, ["convention", "add", "beta writes its reasons down"]);
+    const rendered = (await must(e.box, e.beta, ["context"])).out;
     assert.ok(rendered.indexOf("beta writes its reasons down") < rendered.indexOf("beta squashes its merges"),
         `recency stopped breaking the tie inside one scope:\n${rendered}`);
 });

@@ -180,16 +180,51 @@ nothing until it finishes, so a long silence is the normal case and not a
 hang — do not kill it, and give any watchdog wrapping it room for a run that
 long.
 
-The full suite runs once and alone per machine. Each integration test spawns
-the CLI many times and refolds the store each time, so two suites running at
-once slow each other far more than twofold: measured on 2026-08-23, 1003 tests
-took 8,144 seconds on a laptop where six agents ran the suite together, and
-five of those runs were lost to timeouts. A session that is not alone on its
-machine — a parallel agent, a second checkout with a suite already running —
-runs `pnpm typecheck`, `pnpm build`, `pnpm structure` and the test files it
-touched locally, and leaves the full suite to CI's `verify` job, saying so in
-the pull request body. CI runs the whole tier on every pull request either
-way.
+The full suite runs once and alone per machine. Each integration test refolds
+the store many times, so two suites running at once slow each other far more
+than twofold: measured on 2026-08-23, 1003 tests took 8,144 seconds on a laptop
+where six agents ran the suite together, and five of those runs were lost to
+timeouts. A session that is not alone on its machine — a parallel agent, a
+second checkout with a suite already running — runs `pnpm typecheck`,
+`pnpm build`, `pnpm structure` and the test files it touched locally, and
+leaves the full suite to CI's `verify` job, saying so in the pull request body.
+CI runs the whole tier on every pull request either way.
+
+### Reaching the CLI from a test
+
+A case runs a command through `must` or `selfIn` from `test/harness.mjs`, and
+both run it **in the test process** — the same `runCli` the binary calls, with
+the working directory, the environment and the terminal set to what a child
+would have had. Both are `async`, so every call needs an `await`; the structure
+check refuses one that has none, and the driver refuses a second command
+started on top of an unawaited first.
+
+The suite used to spawn `bin/self.mjs` once per case. That is 2,264 process
+launches, and on macOS every launch of a non-notarized `node` goes through the
+OS policy check: the suite spent 94% of its wall clock waiting on that, and
+slowed the whole machine down while it did (#371).
+
+A handful of cells still need a real process, and say so by calling `spawnIn`
+or `mustSpawn` instead:
+
+- the terminal check itself — a driven process has whatever terminal the driver
+  hands it, so "a process with no terminal is refused" needs one that really
+  has none;
+- the three files that set `isTTY` above their imports, because `style.ts`
+  answers "is this run styled" once, at module load, and normalising the
+  terminal per call is too late for that;
+- `smoke.test.mjs`, which is the only place a shebang, the `bin` mapping and
+  the module resolution of a published install are exercised at all;
+- `golden.mjs`, whose fixture is a record of what a **piped run** prints.
+
+Anything else driven as a child is a cell that has not said why. The reason
+belongs beside it, and the list belongs in
+[`docs/maintainers/case-tables/371-in-process-cli-driver.md`](docs/maintainers/case-tables/371-in-process-cli-driver.md).
+
+One process now runs many commands, so nothing a command learns may outlive it.
+`runCli` clears every module-level cache on entry, and the `invocation-state`
+structure rule refuses a new one that no reset reaches — add the reset, or name
+the binding in `invocationStateExemptions` with the reason it needs none.
 
 The integration tests run on a contributor's macOS laptop and on the
 ubuntu CI runner, against whatever git the host has. Write them

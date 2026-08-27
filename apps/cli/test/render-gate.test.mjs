@@ -17,36 +17,36 @@ const box = machine();
 const ws = join(box.root, "ws");
 const demo = join(ws, "demo");
 mkdirSync(demo, { recursive: true });
-must(box, ws, ["init"]);
+await must(box, ws, ["init"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
-must(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
+await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
 
 // The three lang cells run in the order a person would: the language is unset,
 // then it is set, then it is read back.
-test("cell 3: with no language set, a piped `self lang` answers en", () =>
+test("cell 3: with no language set, a piped `self lang` answers en", async () =>
 {
-    const answer = selfIn(box, demo, ["lang"]);
+    const answer = await selfIn(box, demo, ["lang"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, "en\n");
 });
 
-test("cell 4: a piped `self lang ko` prints the confirmation line it always printed", () =>
+test("cell 4: a piped `self lang ko` prints the confirmation line it always printed", async () =>
 {
-    const answer = selfIn(box, demo, ["lang", "ko"]);
+    const answer = await selfIn(box, demo, ["lang", "ko"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, "views now render in \"ko\"\n");
 });
 
-test("cell 1: with the language set, a piped `self lang` answers ko", () =>
+test("cell 1: with the language set, a piped `self lang` answers ko", async () =>
 {
-    const answer = selfIn(box, demo, ["lang"]);
+    const answer = await selfIn(box, demo, ["lang"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, "ko\n");
 });
 
-test("cell 6: `self lang --plain` is still the unknown-option refusal — the gate adds no flags", () =>
+test("cell 6: `self lang --plain` is still the unknown-option refusal — the gate adds no flags", async () =>
 {
-    const answer = selfIn(box, demo, ["lang", "--plain"]);
+    const answer = await selfIn(box, demo, ["lang", "--plain"]);
     assert.equal(answer.code, 1);
     assert.equal(answer.out, "error: unknown option '--plain' — run `self lang --help` for the syntax\n");
 });
@@ -54,11 +54,11 @@ test("cell 6: `self lang --plain` is still the unknown-option refusal — the ga
 // A machine that has never run `self init`: the workspace pointer this one
 // remembers is what makes `self lang` answer from any directory, so the cell
 // needs a machine with no workspace at all rather than a directory outside one.
-test("cell 7: with no workspace to resolve, `self lang` refuses exactly as it did", () =>
+test("cell 7: with no workspace to resolve, `self lang` refuses exactly as it did", async () =>
 {
     const bare = machine();
-    const outside = selfIn(bare, bare.root, ["lang"]);
-    const reference = selfIn(bare, bare.root, ["theme"]);
+    const outside = await selfIn(bare, bare.root, ["lang"]);
+    const reference = await selfIn(bare, bare.root, ["theme"]);
     assert.equal(outside.code, 1, outside.out);
     // The refusal is the workspace resolver's and never reaches the gate: the
     // unmigrated sibling verb is refused with the same sentence.
@@ -66,9 +66,9 @@ test("cell 7: with no workspace to resolve, `self lang` refuses exactly as it di
     assert.match(outside.out, /^error: /);
 });
 
-test("cell 9: a piped event verb prints the recorded line the append always printed", () =>
+test("cell 9: a piped event verb prints the recorded line the append always printed", async () =>
 {
-    const answer = selfIn(box, demo, ["decide", "the gate prints once", "--proposed"]);
+    const answer = await selfIn(box, demo, ["decide", "the gate prints once", "--proposed"]);
     assert.equal(answer.code, 0, answer.out);
     assert.match(answer.out, /^entity\.proposed recorded \[[0-9abcdefghjkmnpqrstvwxyz]{26}\]\n$/);
 });

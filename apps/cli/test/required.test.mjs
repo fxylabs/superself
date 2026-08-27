@@ -27,6 +27,31 @@ function refusal(values, requires)
     }
 }
 
+/* ── the declaration cannot state what nothing could satisfy ───────── */
+
+function declared(options, requires)
+{
+    return [{
+        name: "demo",
+        usage: [{ syntax: "demo do", verbs: ["do"] }],
+        detail: ["  --why <text>          a reason", "  --flag                a switch"],
+        node: branch({
+            name: "demo",
+            unnamed: "refuse",
+            refusal: "usage: self demo do",
+            children: [leaf("do", options, 0, () => {}, { requires })]
+        })
+    }];
+}
+
+const OPTIONS = { why: { type: "string" }, flag: { type: "boolean" } };
+
+/* ── the CLI answers for it ────────────────────────────────────────── */
+
+const box = machine();
+
+const { demo } = await demoWorkspace(box);
+
 test("an option that was given, in any of its shapes, is not asked for again", () =>
 {
     assert.equal(refusal({ why: "because" }, [WHY]), null);
@@ -76,25 +101,6 @@ test("a requirement whose precondition lives on another verb names that verb", (
         + 'no objective yet? `self objective add "<o>" --proposed`');
 });
 
-/* ── the declaration cannot state what nothing could satisfy ───────── */
-
-function declared(options, requires)
-{
-    return [{
-        name: "demo",
-        usage: [{ syntax: "demo do", verbs: ["do"] }],
-        detail: ["  --why <text>          a reason", "  --flag                a switch"],
-        node: branch({
-            name: "demo",
-            unnamed: "refuse",
-            refusal: "usage: self demo do",
-            children: [leaf("do", options, 0, () => {}, { requires })]
-        })
-    }];
-}
-
-const OPTIONS = { why: { type: "string" }, flag: { type: "boolean" } };
-
 test("a well-formed requirement is no problem, and each malformed one is named", () =>
 {
     assert.deepEqual(checkContract(declared(OPTIONS, [WHY])), []);
@@ -123,15 +129,10 @@ test("scoped help lists the required options, and says nothing when there are no
     assert.doesNotMatch(commandUsage(declared(OPTIONS, [])[0]), /required, and refused in one pass/);
 });
 
-/* ── the CLI answers for it ────────────────────────────────────────── */
-
-const box = machine();
-const { demo } = demoWorkspace(box);
-
-test("the gap form reveals its whole brief in one refusal; the standalone form records (#356)", () =>
+test("the gap form reveals its whole brief in one refusal; the standalone form records (#356)", async () =>
 {
-    const linked = must(box, demo, ["objective", "add", "a direction worth closing gaps for"]).out.match(/o-[0-9a-z]{5}/)[0];
-    const refused = selfIn(box, demo, ["work", "propose", "a gap worth closing", "--objective", linked]);
+    const linked = (await must(box, demo, ["objective", "add", "a direction worth closing gaps for"])).out.match(/o-[0-9a-z]{5}/)[0];
+    const refused = await selfIn(box, demo, ["work", "propose", "a gap worth closing", "--objective", linked]);
     assert.equal(refused.code, 1);
     assert.match(refused.out, /work propose needs 8 more options:/);
     for (const flag of ["--value", "--success", "--stop", "--risk", "--capacity",
@@ -139,36 +140,36 @@ test("the gap form reveals its whole brief in one refusal; the standalone form r
     {
         assert.ok(refused.out.includes(flag), `${flag} is missing from the refusal:\n${refused.out}`);
     }
-    const standalone = must(box, demo, ["work", "propose", "a plan that only needs review"]);
+    const standalone = await must(box, demo, ["work", "propose", "a plan that only needs review"]);
     assert.match(standalone.out, /w-[0-9a-z]{5}/);
 });
 
-test("what the refusal asked for is enough to make the call succeed", () =>
+test("what the refusal asked for is enough to make the call succeed", async () =>
 {
-    const objective = must(box, demo, ["objective", "add", "ship the surface"]).out.match(/o-[0-9a-z]{5}/)[0];
-    const proposed = must(box, demo, ["work", "propose", "close the last gap",
+    const objective = (await must(box, demo, ["objective", "add", "ship the surface"])).out.match(/o-[0-9a-z]{5}/)[0];
+    const proposed = await must(box, demo, ["work", "propose", "close the last gap",
         "--objective", objective, "--value", "it unblocks the release", "--success", "the suite passes",
         "--stop", "the release slips", "--risk", "the fold changes shape", "--capacity", "one session",
         "--evidence-plan", "a green run on CI", "--confidence", "high", "--expires", "2027-01-01"]);
     assert.match(proposed.out, /w-[0-9a-z]{5}/);
 });
 
-test("a stray argument and an unknown flag are still answered before the requirements", () =>
+test("a stray argument and an unknown flag are still answered before the requirements", async () =>
 {
-    assert.match(selfIn(box, demo, ["work", "retire", "w-11111", "extra"]).out, /unexpected argument 'extra'/);
-    assert.match(selfIn(box, demo, ["work", "retire", "w-11111", "--nope", "x"]).out, /unknown option '--nope'/);
+    assert.match((await selfIn(box, demo, ["work", "retire", "w-11111", "extra"])).out, /unexpected argument 'extra'/);
+    assert.match((await selfIn(box, demo, ["work", "retire", "w-11111", "--nope", "x"])).out, /unknown option '--nope'/);
 });
 
-test("help is answered, not refused, when the required options are absent", () =>
+test("help is answered, not refused, when the required options are absent", async () =>
 {
-    const asked = selfIn(box, demo, ["work", "propose", "--help"]);
+    const asked = await selfIn(box, demo, ["work", "propose", "--help"]);
     assert.equal(asked.code, 0);
     assert.match(asked.out, /work propose "<plan>"/);
 });
 
-test("the contract is answered before the state: a bad id does not hide a missing option", () =>
+test("the contract is answered before the state: a bad id does not hide a missing option", async () =>
 {
-    const refused = selfIn(box, demo, ["work", "retire", "w-11111"]);
+    const refused = await selfIn(box, demo, ["work", "retire", "w-11111"]);
     assert.equal(refused.code, 1);
     assert.equal(refused.out.trim(), "error: self work retire needs --why: why the outcome was given up or moved");
 });

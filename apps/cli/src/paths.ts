@@ -535,6 +535,20 @@ export function invalidateResolution(): void
     archives.clear();
 }
 
+// The three "said once" sets, forgotten between invocations rather than between
+// appends. They are deliberately not part of `invalidateResolution`: that runs
+// on every append, and clearing them there would print the archived note or the
+// stale-link warning again in the middle of one command. What they must not
+// outlive is the invocation — a second `runCli` in the same process is a second
+// command, and a command that says nothing because an earlier one already did
+// is a command answering for a run the caller never saw.
+export function resetProcessNotices(): void
+{
+    noted.clear();
+    excluded.clear();
+    reported.clear();
+}
+
 export function readRegistry(storeDir: string): RegistryEntry[]
 {
     const cached = registries.get(storeDir);

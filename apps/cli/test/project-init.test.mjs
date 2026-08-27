@@ -17,12 +17,12 @@ import { join } from "node:path";
 import { git, machine, must, selfIn } from "./harness.mjs";
 
 // A machine holding an initialized workspace and nothing registered in it.
-function workspace()
+async function workspace()
 {
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    must(box, ws, ["init"]);
+    await must(box, ws, ["init"]);
     return { box, ws };
 }
 
@@ -59,11 +59,11 @@ function markerIn(dir)
 
 /* ── T1 — self project init ────────────────────────────────────────── */
 
-test("T1.1: init in an unregistered folder registers it and renders its block", () =>
+test("T1.1: init in an unregistered folder registers it and renders its block", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "alpha");
-    const done = must(box, dir, ["project", "init"]);
+    const done = await must(box, dir, ["project", "init"]);
     assert.match(done.out, /project "alpha" registered/);
     assert.match(storeFile(ws, "registry.jsonl"), /"slug":"alpha"/);
     assert.ok(storeFile(ws, "links.jsonl").includes(dir), `no links row for ${dir}`);
@@ -73,38 +73,38 @@ test("T1.1: init in an unregistered folder registers it and renders its block", 
     assert.ok(existsSync(join(dir, "CLAUDE.md")), "CLAUDE.md was not written");
 });
 
-test("T1.2: init in a folder already registered is refused with its slug", () =>
+test("T1.2: init in a folder already registered is refused with its slug", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "alpha");
-    must(box, dir, ["project", "init", "--no-connect"]);
+    await must(box, dir, ["project", "init", "--no-connect"]);
     const before = registration(ws);
-    const refused = selfIn(box, dir, ["project", "init"]);
+    const refused = await selfIn(box, dir, ["project", "init"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /already registered as project "alpha"/);
     assert.deepEqual(registration(ws), before);
 });
 
-test("T1.3: init with no workspace on the machine is refused, pointing at self init", () =>
+test("T1.3: init with no workspace on the machine is refused, pointing at self init", async () =>
 {
     const box = machine();
     const dir = join(box.root, "loose");
     mkdirSync(dir, { recursive: true });
     git(box, dir, ["init", "-q", "-b", "main"]);
-    const refused = selfIn(box, dir, ["project", "init"]);
+    const refused = await selfIn(box, dir, ["project", "init"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /run `self init`/);
     assert.ok(!existsSync(join(dir, ".self")), "a machine with no workspace still wrote a marker");
 });
 
-test("T1.4: a slug held by another directory is refused, naming the holder and --name", () =>
+test("T1.4: a slug held by another directory is refused, naming the holder and --name", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const held = folder(box, ws, join("held", "alpha"));
-    must(box, held, ["project", "init", "--no-connect"]);
+    await must(box, held, ["project", "init", "--no-connect"]);
     const dir = folder(box, ws, join("here", "alpha"));
     const before = registration(ws);
-    const refused = selfIn(box, dir, ["project", "init"]);
+    const refused = await selfIn(box, dir, ["project", "init"]);
     assert.notEqual(refused.code, 0);
     assert.ok(refused.out.includes(`project "alpha" is already registered at ${held}`),
         `the refusal did not name the holder ${held}:\n${refused.out}`);
@@ -112,47 +112,47 @@ test("T1.4: a slug held by another directory is refused, naming the holder and -
     assert.deepEqual(registration(ws), before);
 });
 
-test("T1.5: --name registers the folder under that slug", () =>
+test("T1.5: --name registers the folder under that slug", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "beta");
-    const done = must(box, dir, ["project", "init", "--name", "other", "--no-connect"]);
+    const done = await must(box, dir, ["project", "init", "--name", "other", "--no-connect"]);
     assert.match(done.out, /project "other" registered/);
     assert.match(storeFile(ws, "registry.jsonl"), /"slug":"other"/);
     assert.doesNotMatch(storeFile(ws, "registry.jsonl"), /"slug":"beta"/);
     assert.equal(markerIn(dir), "other");
 });
 
-test("T1.6: --no-connect registers the folder and writes no agent files", () =>
+test("T1.6: --no-connect registers the folder and writes no agent files", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "gamma");
-    must(box, dir, ["project", "init", "--no-connect"]);
+    await must(box, dir, ["project", "init", "--no-connect"]);
     assert.match(storeFile(ws, "registry.jsonl"), /"slug":"gamma"/);
     assert.ok(!existsSync(join(dir, "AGENTS.md")), "--no-connect wrote AGENTS.md");
     assert.ok(!existsSync(join(dir, "CLAUDE.md")), "--no-connect wrote CLAUDE.md");
 });
 
-test("T1.7: a registry row whose marker was never written is refused, naming project link", () =>
+test("T1.7: a registry row whose marker was never written is refused, naming project link", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     appendFileSync(join(ws, ".superself", "registry.jsonl"),
         JSON.stringify({ slug: "ghost", added: new Date().toISOString() }) + "\n");
     const dir = folder(box, ws, "ghost");
     const before = registration(ws);
-    const refused = selfIn(box, dir, ["project", "init"]);
+    const refused = await selfIn(box, dir, ["project", "init"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /project "ghost" is already registered/);
     assert.match(refused.out, /self project link ghost/);
     assert.deepEqual(registration(ws), before);
 });
 
-test("T1.8: a path given to init is refused, and the folder is where it runs", () =>
+test("T1.8: a path given to init is refused, and the folder is where it runs", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "delta");
     const before = registration(ws);
-    const refused = selfIn(box, dir, ["project", "init", "somepath"]);
+    const refused = await selfIn(box, dir, ["project", "init", "somepath"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /takes no path/);
     assert.match(refused.out, /run it inside "somepath"/);
@@ -162,14 +162,14 @@ test("T1.8: a path given to init is refused, and the folder is where it runs", (
 
 /* ── T2 — project add removal ──────────────────────────────────────── */
 
-test("T2.1: project add is refused in one pass naming init and link", () =>
+test("T2.1: project add is refused in one pass naming init and link", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "epsilon");
     const before = registration(ws);
     for (const args of [["project", "add"], ["project", "add", "epsilon", "--name", "epsilon"]])
     {
-        const refused = selfIn(box, dir, args);
+        const refused = await selfIn(box, dir, args);
         assert.notEqual(refused.code, 0, `\`self ${args.join(" ")}\` was not refused`);
         assert.match(refused.out, /`self project add` is gone/);
         assert.match(refused.out, /self project init/);
@@ -181,11 +181,11 @@ test("T2.1: project add is refused in one pass naming init and link", () =>
 
 /* ── T3 — no write before validation ───────────────────────────────── */
 
-test("T3.1: every refused init leaves registry.jsonl and links.jsonl byte-identical", () =>
+test("T3.1: every refused init leaves registry.jsonl and links.jsonl byte-identical", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const registered = folder(box, ws, "zeta");
-    must(box, registered, ["project", "init", "--no-connect"]);
+    await must(box, registered, ["project", "init", "--no-connect"]);
     appendFileSync(join(ws, ".superself", "registry.jsonl"),
         JSON.stringify({ slug: "ghost", added: new Date().toISOString() }) + "\n");
     const taken = folder(box, ws, join("elsewhere", "zeta"));
@@ -200,7 +200,7 @@ test("T3.1: every refused init leaves registry.jsonl and links.jsonl byte-identi
     const before = registration(ws);
     for (const [dir, args] of refusals)
     {
-        const refused = selfIn(box, dir, args);
+        const refused = await selfIn(box, dir, args);
         assert.notEqual(refused.code, 0, `\`self ${args.join(" ")}\` was not refused`);
         assert.deepEqual(registration(ws), before, `\`self ${args.join(" ")}\` changed the registration files`);
     }
@@ -208,21 +208,21 @@ test("T3.1: every refused init leaves registry.jsonl and links.jsonl byte-identi
 
 /* ── T4 — guidance surfaces ────────────────────────────────────────── */
 
-test("T4.1: connect in an unregistered folder names self project init", () =>
+test("T4.1: connect in an unregistered folder names self project init", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     const dir = folder(box, ws, "theta");
-    const refused = selfIn(box, dir, ["connect"]);
+    const refused = await selfIn(box, dir, ["connect"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /run `self project init` here to register it/);
 });
 
-test("T4.2: the project help page documents the no-positional contract", () =>
+test("T4.2: the project help page documents the no-positional contract", async () =>
 {
-    const { box, ws } = workspace();
+    const { box, ws } = await workspace();
     for (const args of [["project", "init", "--help"], ["project", "--help"]])
     {
-        const page = must(box, ws, args).out;
+        const page = (await must(box, ws, args)).out;
         assert.match(page, /project init \[--name s\] \[--desc d\] \[--no-connect\]/);
         assert.match(page, /`init` takes no path/);
         assert.doesNotMatch(page, /project add/);

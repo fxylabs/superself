@@ -23,6 +23,12 @@ function self(args)
     return execFileSync(process.execPath, [bin, ...args], { cwd: home, encoding: "utf8", env: { ...process.env, HOME: home } });
 }
 
+/* ── the block states which CLI wrote it ───────────────────────────── */
+
+const box = machine();
+
+const { demo } = await demoWorkspace(box);
+
 test("every concept page answers from the binary, with its own name and body", () =>
 {
     for (const topic of TOPICS)
@@ -65,11 +71,6 @@ test("an unknown topic falls back to the verb list rather than refusing", () =>
     assert.equal(self(["help", "nonesuch"]), rootUsage(COMMANDS) + "\n");
 });
 
-/* ── the block states which CLI wrote it ───────────────────────────── */
-
-const box = machine();
-const { demo } = demoWorkspace(box);
-
 test("a rendered block carries the version that rendered it", () =>
 {
     const block = readFileSync(join(demo, "CLAUDE.md"), "utf8");
@@ -89,7 +90,7 @@ test("the block points only at concept pages that exist", () =>
 // The marker gained a version after blocks were already checked into projects.
 // An old one has to be replaced where it stands: appending a second block
 // beside it would leave the agent reading two generations at once.
-test("a block written before the version marker is replaced in place", () =>
+test("a block written before the version marker is replaced in place", async () =>
 {
     const file = join(demo, "CLAUDE.md");
     const current = readFileSync(file, "utf8");
@@ -98,7 +99,7 @@ test("a block written before the version marker is replaced in place", () =>
     const legacy = current.slice(0, begin) + "<!-- superself:begin -->\nstale body\n"
         + current.slice(end) + "\ntrailing project text\n";
     writeFileSync(file, legacy);
-    must(box, demo, ["connect"]);
+    await must(box, demo, ["connect"]);
     const rewritten = readFileSync(file, "utf8");
     assert.equal(rewritten.match(/<!-- superself:begin/g).length, 1, "the old block was left beside the new one");
     assert.ok(rewritten.includes(`<!-- superself:begin v${cliVersion()} -->`), "the rewritten block carries no version");
@@ -106,18 +107,18 @@ test("a block written before the version marker is replaced in place", () =>
     assert.ok(rewritten.includes("trailing project text"), "the rewrite ate text the block does not own");
 });
 
-test("recording something rewrites the block without being asked", () =>
+test("recording something rewrites the block without being asked", async () =>
 {
     const file = join(demo, "CLAUDE.md");
     writeFileSync(file, readFileSync(file, "utf8").replace(/<!-- superself:begin[^\n]*-->/, "<!-- superself:begin v0.0.1 -->"));
-    must(box, demo, ["decide", "the block refreshes on a write", "--why", "proving the fold path"]);
+    await must(box, demo, ["decide", "the block refreshes on a write", "--why", "proving the fold path"]);
     assert.ok(readFileSync(file, "utf8").includes(`<!-- superself:begin v${cliVersion()} -->`),
         "an event append did not bring the block forward");
 });
 
-test("a project that never registered a block does not gain one from a write", () =>
+test("a project that never registered a block does not gain one from a write", async () =>
 {
-    const bare = selfIn(box, demo, ["state"]);
+    const bare = await selfIn(box, demo, ["state"]);
     assert.equal(bare.code, 0);
     assert.doesNotMatch(readFileSync(join(demo, "CLAUDE.md"), "utf8"), /superself:begin[^\n]*-->[\s\S]*superself:begin/);
 });

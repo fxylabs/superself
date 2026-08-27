@@ -499,10 +499,22 @@ function age(ts: string): string
     return hours < 24 ? `${hours} hour${hours === 1 ? "" : "s"} ago` : `${Math.floor(hours / 24)} days ago`;
 }
 
+// The command line this invocation was given. `process.argv` answers for the
+// **process**, which was the same thing only while one process ran one command.
+// It no longer is: `runCli` is called directly, more than once, in a process
+// whose own argv is something else entirely — and a refusal whose remedy line
+// tells a person to re-run the test runner is worse than one that says nothing.
+let typedArgv: string[] = [];
+
+export function recordInvocation(argv: string[]): void
+{
+    typedArgv = argv;
+}
+
 // The command exactly as it was typed. Arguments that carried spaces are
 // re-quoted so the line can be pasted back verbatim.
 function typedCommand(): string
 {
-    const args = process.argv.slice(2).map((arg) => /[\s"]/.test(arg) ? `"${arg.replace(/"/g, "\\\"")}"` : arg);
+    const args = typedArgv.map((arg) => /[\s"]/.test(arg) ? `"${arg.replace(/"/g, "\\\"")}"` : arg);
     return ["self", ...args].join(" ");
 }

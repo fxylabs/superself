@@ -53,19 +53,19 @@ import { approvedIn, git, machine, must, workIdIn } from "./harness.mjs";
 // that needs a bystander — one that must answer for neither — asks for gamma;
 // registering a project costs a fold and a commit, so no cell pays for one it
 // does not read.
-function workspaceOf(...slugs)
+async function workspaceOf(...slugs)
 {
     const box = machine();
     const ws = join(box.root, "ws");
     const world = { box, ws };
     mkdirSync(ws, { recursive: true });
-    must(box, ws, ["init"]);
+    await must(box, ws, ["init"]);
     for (const slug of ["alpha", "beta", ...slugs])
     {
         world[slug] = join(ws, slug);
         mkdirSync(world[slug], { recursive: true });
         git(box, world[slug], ["init", "-q", "-b", "main"]);
-        must(box, world[slug], ["project", "init", "--name", slug, "--no-connect"]);
+        await must(box, world[slug], ["project", "init", "--name", slug, "--no-connect"]);
     }
     return world;
 }
@@ -81,9 +81,9 @@ function entityIdIn(text)
     return match[0];
 }
 
-function placedInto(box, dir, scope, text = "the note that renders elsewhere")
+async function placedInto(box, dir, scope, text = "the note that renders elsewhere")
 {
-    return entityIdIn(must(box, dir, ["state", "add", text, "--scope", scope]).out);
+    return entityIdIn((await must(box, dir, ["state", "add", text, "--scope", scope])).out);
 }
 
 function archive(box, cwd, slug = "beta", why = "nobody is on it this quarter")
@@ -108,208 +108,208 @@ function assertSilent(text, id)
 
 // The state cells 1, 4 to 13, 15, 19 and 21 all start from: one record in
 // alpha, scoped into beta, and beta archived afterwards.
-function scopedThenArchived(...slugs)
+async function scopedThenArchived(...slugs)
 {
-    const world = workspaceOf(...slugs);
-    world.id = placedInto(world.box, world.alpha, "beta");
-    archive(world.box, world.ws);
+    const world = await workspaceOf(...slugs);
+    world.id = await placedInto(world.box, world.alpha, "beta");
+    await archive(world.box, world.ws);
     return world;
 }
 
 /* ── the three cells the issue was accepted with ───────────────────── */
 
-test("1: a record scoped to a project archived afterwards is named, with its slug, on the reachability read", () =>
+test("1: a record scoped to a project archived afterwards is named, with its slug, on the reachability read", async () =>
 {
-    const { box, alpha, id } = scopedThenArchived();
-    assertReported(must(box, alpha, ["status"]).out, id);
+    const { box, alpha, id } = await scopedThenArchived();
+    assertReported((await must(box, alpha, ["status"])).out, id);
 });
 
-test("2: restoring the project clears the report, and the record renders there again", () =>
+test("2: restoring the project clears the report, and the record renders there again", async () =>
 {
-    const { box, ws, alpha, beta, id } = scopedThenArchived();
-    must(box, ws, ["project", "restore", "beta"]);
-    const status = must(box, alpha, ["status"]).out;
+    const { box, ws, alpha, beta, id } = await scopedThenArchived();
+    await must(box, ws, ["project", "restore", "beta"]);
+    const status = (await must(box, alpha, ["status"])).out;
     assertSilent(status, id);
     assert.match(status, /health: ok/);
-    assert.match(must(box, beta, ["context"]).out, /the note that renders elsewhere/,
+    assert.match((await must(box, beta, ["context"])).out, /the note that renders elsewhere/,
         "the record did not come back with the project");
 });
 
-test("3: with no archived project anywhere, the read says exactly what it said before the record existed", () =>
+test("3: with no archived project anywhere, the read says exactly what it said before the record existed", async () =>
 {
-    const { box, alpha } = workspaceOf();
-    const before = must(box, alpha, ["status"]).out;
-    placedInto(box, alpha, "beta");
-    assert.equal(must(box, alpha, ["status"]).out, before,
+    const { box, alpha } = await workspaceOf();
+    const before = (await must(box, alpha, ["status"])).out;
+    await placedInto(box, alpha, "beta");
+    assert.equal((await must(box, alpha, ["status"])).out, before,
         "a record scoped into an active project changed the reachability read");
 });
 
 /* ── where the read runs, and in what form ─────────────────────────── */
 
-test("4: --project answers the same from the workspace root as the directory does from the checkout", () =>
+test("4: --project answers the same from the workspace root as the directory does from the checkout", async () =>
 {
-    const { box, ws, alpha, id } = scopedThenArchived();
-    const named = must(box, ws, ["status", "--project", "alpha"]).out;
-    assert.equal(named, must(box, alpha, ["status"]).out);
+    const { box, ws, alpha, id } = await scopedThenArchived();
+    const named = (await must(box, ws, ["status", "--project", "alpha"])).out;
+    assert.equal(named, (await must(box, alpha, ["status"])).out);
     assertReported(named, id);
 });
 
-test("5: --project answers the same standing inside the archived project's own checkout", () =>
+test("5: --project answers the same standing inside the archived project's own checkout", async () =>
 {
-    const { box, alpha, beta, id } = scopedThenArchived();
-    const fromArchived = must(box, beta, ["status", "--project", "alpha"]).out;
-    assert.equal(fromArchived, must(box, alpha, ["status"]).out);
+    const { box, alpha, beta, id } = await scopedThenArchived();
+    const fromArchived = (await must(box, beta, ["status", "--project", "alpha"])).out;
+    assert.equal(fromArchived, (await must(box, alpha, ["status"])).out);
     assertReported(fromArchived, id);
 });
 
-test("6: --workspace carries the signal as a count on the record's own row, and gives the archived project no row", () =>
+test("6: --workspace carries the signal as a count on the record's own row, and gives the archived project no row", async () =>
 {
-    const { box, ws } = scopedThenArchived("gamma");
-    const rows = must(box, ws, ["status", "--workspace"]).out;
+    const { box, ws } = await scopedThenArchived("gamma");
+    const rows = (await must(box, ws, ["status", "--workspace"])).out;
     assert.match(rows, /^alpha .*\[1 health signal\(s\)\]/m, `alpha's row carries no signal:\n${rows}`);
     assert.match(rows, /^gamma .*\(0 active/m);
     assert.doesNotMatch(rows, /^gamma .*health signal/m, `gamma answered for alpha's record:\n${rows}`);
     assert.doesNotMatch(rows, /^beta/m, `the archived project still has a row:\n${rows}`);
 });
 
-test("7: a bare status from outside every project is the workspace form, and carries the same count", () =>
+test("7: a bare status from outside every project is the workspace form, and carries the same count", async () =>
 {
-    const { box, ws } = scopedThenArchived();
-    const bare = must(box, ws, ["status"]).out;
-    assert.equal(bare, must(box, ws, ["status", "--workspace"]).out);
+    const { box, ws } = await scopedThenArchived();
+    const bare = (await must(box, ws, ["status"])).out;
+    assert.equal(bare, (await must(box, ws, ["status", "--workspace"])).out);
     assert.match(bare, /^alpha .*\[1 health signal\(s\)\]/m);
 });
 
-test("8: context prints the same line in its health section", () =>
+test("8: context prints the same line in its health section", async () =>
 {
-    const { box, alpha, id } = scopedThenArchived();
-    const context = must(box, alpha, ["context"]).out;
+    const { box, alpha, id } = await scopedThenArchived();
+    const context = (await must(box, alpha, ["context"])).out;
     assert.match(context, /## Health/, `context has no health section:\n${context}`);
     assertReported(context, id);
 });
 
-test("9: context --project prints that section from the workspace root", () =>
+test("9: context --project prints that section from the workspace root", async () =>
 {
-    const { box, ws, alpha, id } = scopedThenArchived();
-    const named = must(box, ws, ["context", "--project", "alpha"]).out;
-    assert.equal(named, must(box, alpha, ["context"]).out);
+    const { box, ws, alpha, id } = await scopedThenArchived();
+    const named = (await must(box, ws, ["context", "--project", "alpha"])).out;
+    assert.equal(named, (await must(box, alpha, ["context"])).out);
     assertReported(named, id);
 });
 
-test("10: the workspace context carries the signal as a count on the record's own row", () =>
+test("10: the workspace context carries the signal as a count on the record's own row", async () =>
 {
-    const { box, ws } = scopedThenArchived();
-    const rows = must(box, ws, ["context"]).out;
+    const { box, ws } = await scopedThenArchived();
+    const rows = (await must(box, ws, ["context"])).out;
     assert.match(rows, /^alpha .*\[1 health signal\(s\)\]/m, `alpha's row carries no signal:\n${rows}`);
     assert.doesNotMatch(rows, /^beta/m);
 });
 
-test("11: another active project's read does not answer for a record that is not its own", () =>
+test("11: another active project's read does not answer for a record that is not its own", async () =>
 {
-    const { box, gamma, id } = scopedThenArchived("gamma");
-    const status = must(box, gamma, ["status"]).out;
+    const { box, gamma, id } = await scopedThenArchived("gamma");
+    const status = (await must(box, gamma, ["status"])).out;
     assertSilent(status, id);
     assert.match(status, /health: ok/);
 });
 
-test("12: the way back the line names runs from where the line is read", () =>
+test("12: the way back the line names runs from where the line is read", async () =>
 {
-    const { box, alpha, id } = scopedThenArchived();
-    const back = must(box, alpha, ["project", "restore", "beta"]);
+    const { box, alpha, id } = await scopedThenArchived();
+    const back = await must(box, alpha, ["project", "restore", "beta"]);
     assert.match(back.out, /project "beta" is back/);
-    assertSilent(must(box, alpha, ["status"]).out, id);
+    assertSilent((await must(box, alpha, ["status"])).out, id);
 });
 
-test("13: the way out the line names moves the record, and leaves the project archived", () =>
+test("13: the way out the line names moves the record, and leaves the project archived", async () =>
 {
-    const { box, ws, alpha, id } = scopedThenArchived();
-    must(box, alpha, ["state", "place", id, "--scope", "alpha"]);
-    assertSilent(must(box, alpha, ["status"]).out, id);
-    assert.match(must(box, alpha, ["state"]).out, new RegExp(id), "the record did not come home");
-    assert.match(must(box, ws, ["project", "--archived"]).out, /^beta —/m, "moving the record un-archived the project");
+    const { box, ws, alpha, id } = await scopedThenArchived();
+    await must(box, alpha, ["state", "place", id, "--scope", "alpha"]);
+    assertSilent((await must(box, alpha, ["status"])).out, id);
+    assert.match((await must(box, alpha, ["state"])).out, new RegExp(id), "the record did not come home");
+    assert.match((await must(box, ws, ["project", "--archived"])).out, /^beta —/m, "moving the record un-archived the project");
 });
 
 /* ── what is not this report ───────────────────────────────────────── */
 
-test("14: a record scoped to the workspace is untouched by any one project being archived", () =>
+test("14: a record scoped to the workspace is untouched by any one project being archived", async () =>
 {
-    const { box, ws, alpha } = workspaceOf();
-    const id = placedInto(box, alpha, "workspace", "the note that renders everywhere");
-    archive(box, ws);
-    const status = must(box, alpha, ["status"]).out;
+    const { box, ws, alpha } = await workspaceOf();
+    const id = await placedInto(box, alpha, "workspace", "the note that renders everywhere");
+    await archive(box, ws);
+    const status = (await must(box, alpha, ["status"])).out;
     assertSilent(status, id);
     assert.match(status, /health: ok/);
 });
 
-test("15: the archived scope is not also reported as a dangling scope, which is a different state", () =>
+test("15: the archived scope is not also reported as a dangling scope, which is a different state", async () =>
 {
-    const { box, ws, id } = scopedThenArchived();
-    const listed = must(box, ws, ["project"]).out;
+    const { box, ws, id } = await scopedThenArchived();
+    const listed = (await must(box, ws, ["project"])).out;
     assert.doesNotMatch(listed, /dangling scope/, `an archived scope was reported as unregistered:\n${listed}`);
     assertSilent(listed, id);
 });
 
-test("16: a record scoped to its own project is not reported when that project is archived", () =>
+test("16: a record scoped to its own project is not reported when that project is archived", async () =>
 {
-    const { box, ws, alpha } = workspaceOf();
-    const id = entityIdIn(must(box, alpha, ["state", "add", "the note alpha keeps"]).out);
-    archive(box, ws, "alpha");
-    const status = must(box, ws, ["status", "--project", "alpha"]).out;
+    const { box, ws, alpha } = await workspaceOf();
+    const id = entityIdIn((await must(box, alpha, ["state", "add", "the note alpha keeps"])).out);
+    await archive(box, ws, "alpha");
+    const status = (await must(box, ws, ["status", "--project", "alpha"])).out;
     assertSilent(status, id);
     assert.match(status, /health: ok/);
 });
 
-test("17: a record whose own project is archived is not reported by the project it was scoped into", () =>
+test("17: a record whose own project is archived is not reported by the project it was scoped into", async () =>
 {
-    const { box, ws, alpha, beta } = workspaceOf();
-    const id = placedInto(box, beta, "alpha", "the note beta lends to alpha");
-    assert.match(must(box, alpha, ["context"]).out, new RegExp("the note beta lends to alpha"));
-    archive(box, ws);
-    const status = must(box, alpha, ["status"]).out;
+    const { box, ws, alpha, beta } = await workspaceOf();
+    const id = await placedInto(box, beta, "alpha", "the note beta lends to alpha");
+    assert.match((await must(box, alpha, ["context"])).out, new RegExp("the note beta lends to alpha"));
+    await archive(box, ws);
+    const status = (await must(box, alpha, ["status"])).out;
     assertSilent(status, id);
     assert.match(status, /health: ok/);
 });
 
 test("18: a withdrawn record is not reported, because it renders nowhere by its own state", async () =>
 {
-    const { box, ws, alpha } = workspaceOf();
-    const id = placedInto(box, alpha, "beta");
+    const { box, ws, alpha } = await workspaceOf();
+    const id = await placedInto(box, alpha, "beta");
     await approvedIn(box, alpha, ["state", "retract", id, "--why", "it no longer holds"], id);
-    assert.match(must(box, alpha, ["state", "show", id]).out, /retracted/, "the record was not withdrawn");
-    archive(box, ws);
-    const status = must(box, alpha, ["status"]).out;
+    assert.match((await must(box, alpha, ["state", "show", id])).out, /retracted/, "the record was not withdrawn");
+    await archive(box, ws);
+    const status = (await must(box, alpha, ["status"])).out;
     assertSilent(status, id);
     assert.match(status, /health: ok/);
 });
 
-test("19: two records scoped into the archived project are named one line each", () =>
+test("19: two records scoped into the archived project are named one line each", async () =>
 {
-    const { box, ws, alpha } = workspaceOf();
-    const first = placedInto(box, alpha, "beta", "the first note that renders elsewhere");
-    const second = placedInto(box, alpha, "beta", "the second note that renders elsewhere");
-    archive(box, ws);
-    const status = must(box, alpha, ["status"]).out;
+    const { box, ws, alpha } = await workspaceOf();
+    const first = await placedInto(box, alpha, "beta", "the first note that renders elsewhere");
+    const second = await placedInto(box, alpha, "beta", "the second note that renders elsewhere");
+    await archive(box, ws);
+    const status = (await must(box, alpha, ["status"])).out;
     assertReported(status, first);
     assertReported(status, second);
-    assert.match(must(box, ws, ["status", "--workspace"]).out, /^alpha .*\[2 health signal\(s\)\]/m);
+    assert.match((await must(box, ws, ["status", "--workspace"])).out, /^alpha .*\[2 health signal\(s\)\]/m);
 });
 
-test("20: a work unit scoped into the archived project is named the same way", () =>
+test("20: a work unit scoped into the archived project is named the same way", async () =>
 {
-    const { box, ws, alpha } = workspaceOf();
-    const unit = workIdIn(must(box, alpha, ["work", "add", "the outcome that renders elsewhere"]).out);
-    must(box, alpha, ["state", "place", unit, "--scope", "beta"]);
-    archive(box, ws);
-    assertReported(must(box, alpha, ["status"]).out, unit);
+    const { box, ws, alpha } = await workspaceOf();
+    const unit = workIdIn((await must(box, alpha, ["work", "add", "the outcome that renders elsewhere"])).out);
+    await must(box, alpha, ["state", "place", unit, "--scope", "beta"]);
+    await archive(box, ws);
+    assertReported((await must(box, alpha, ["status"])).out, unit);
 });
 
-test("21: archiving, restoring and archiving again reports once, with nothing left over from the round trip", () =>
+test("21: archiving, restoring and archiving again reports once, with nothing left over from the round trip", async () =>
 {
-    const { box, ws, alpha, id } = scopedThenArchived();
-    must(box, ws, ["project", "restore", "beta"]);
-    assertSilent(must(box, alpha, ["status"]).out, id);
-    archive(box, ws, "beta", "set aside a second time");
-    const status = must(box, alpha, ["status"]).out;
+    const { box, ws, alpha, id } = await scopedThenArchived();
+    await must(box, ws, ["project", "restore", "beta"]);
+    assertSilent((await must(box, alpha, ["status"])).out, id);
+    await archive(box, ws, "beta", "set aside a second time");
+    const status = (await must(box, alpha, ["status"])).out;
     assertReported(status, id);
     assert.equal(status.match(new RegExp(`${id} renders in`, "g")).length, 1,
         `the record was reported more than once:\n${status}`);
@@ -317,19 +317,19 @@ test("21: archiving, restoring and archiving again reports once, with nothing le
 
 /* ── the two cells the adversarial pass added ──────────────────────── */
 
-test("22: the record's own project being archived too does not silence the line for a read that names it", () =>
+test("22: the record's own project being archived too does not silence the line for a read that names it", async () =>
 {
-    const { box, ws, alpha, id } = scopedThenArchived();
-    archive(box, ws, "alpha", "set aside as well");
-    assertReported(must(box, ws, ["status", "--project", "alpha"]).out, id);
-    assertReported(must(box, ws, ["context", "--project", "alpha"]).out, id);
+    const { box, ws, alpha, id } = await scopedThenArchived();
+    await archive(box, ws, "alpha", "set aside as well");
+    assertReported((await must(box, ws, ["status", "--project", "alpha"])).out, id);
+    assertReported((await must(box, ws, ["context", "--project", "alpha"])).out, id);
 });
 
-test("23: a proposal scoped into the archived project is named the same way a confirmed record is", () =>
+test("23: a proposal scoped into the archived project is named the same way a confirmed record is", async () =>
 {
-    const { box, ws, alpha } = workspaceOf();
-    const proposed = entityIdIn(must(box, alpha,
-        ["state", "add", "a proposal aimed at beta", "--scope", "beta", "--proposed"]).out);
-    archive(box, ws);
-    assertReported(must(box, alpha, ["status"]).out, proposed);
+    const { box, ws, alpha } = await workspaceOf();
+    const proposed = entityIdIn((await must(box, alpha,
+        ["state", "add", "a proposal aimed at beta", "--scope", "beta", "--proposed"])).out);
+    await archive(box, ws);
+    assertReported((await must(box, alpha, ["status"])).out, proposed);
 });

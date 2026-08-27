@@ -18,10 +18,10 @@ import { approvedIn, demoWorkspace, git, machine, must, workIdIn } from "./harne
 // file carries no control character of its own.
 const ESC = String.fromCharCode(27);
 
-function project()
+async function project()
 {
     const box = machine();
-    const { ws, demo } = demoWorkspace(box);
+    const { ws, demo } = await demoWorkspace(box);
     return { box, ws, demo };
 }
 
@@ -32,9 +32,9 @@ function shortId(text, kind)
     return match[0];
 }
 
-function objectiveIn(box, demo, outcome)
+async function objectiveIn(box, demo, outcome)
 {
-    return shortId(must(box, demo, ["objective", "add", outcome]).out, "o");
+    return shortId((await must(box, demo, ["objective", "add", outcome])).out, "o");
 }
 
 // What `work add` printed, with the announce line and the new id stripped off:
@@ -47,11 +47,11 @@ function offer(printed)
 
 /* ── cell 1: one open objective ───────────────────────────────────── */
 
-test("with one open objective, work add names it, its id and the exact link command", () =>
+test("with one open objective, work add names it, its id and the exact link command", async () =>
 {
-    const { box, demo } = project();
-    const objective = objectiveIn(box, demo, "reach preview");
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    const { box, demo } = await project();
+    const objective = await objectiveIn(box, demo, "reach preview");
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     const work = workIdIn(added.out);
     assert.deepEqual(offer(added.out), [
         `${objective}  unstarted  reach preview`,
@@ -62,12 +62,15 @@ test("with one open objective, work add names it, its id and the exact link comm
 
 /* ── cell 2: several open objectives ──────────────────────────────── */
 
-test("every open objective is listed, each with its own link command", () =>
+test("every open objective is listed, each with its own link command", async () =>
 {
-    const { box, demo } = project();
-    const objectives = ["reach preview", "reach launch", "reach profitability"]
-        .map((outcome) => objectiveIn(box, demo, outcome));
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    const { box, demo } = await project();
+    const objectives = [];
+    for (const outcome of ["reach preview", "reach launch", "reach profitability"])
+    {
+        objectives.push(await objectiveIn(box, demo, outcome));
+    }
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     const work = workIdIn(added.out);
     for (const objective of objectives)
     {
@@ -80,10 +83,10 @@ test("every open objective is listed, each with its own link command", () =>
 
 /* ── cell 3: no objective at all ──────────────────────────────────── */
 
-test("with no objective, work add prints the line work propose prints, and no size line", () =>
+test("with no objective, work add prints the line work propose prints, and no size line", async () =>
 {
-    const { box, demo } = project();
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    const { box, demo } = await project();
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT]);
     // `printSize` says nothing at zero: the empty wording is the size statement.
     assert.ok(!/\d+ open objective/.test(added.out), `a size line was printed at zero:\n${added.out}`);
@@ -93,14 +96,14 @@ test("with no objective, work add prints the line work propose prints, and no si
 
 test("a closed objective is never offered as a link target", async () =>
 {
-    const { box, demo } = project();
-    const reached = objectiveIn(box, demo, "reach preview");
-    const dropped = objectiveIn(box, demo, "reach a dead end");
-    must(box, demo, ["objective", "close", reached, "--as", "reached"]);
+    const { box, demo } = await project();
+    const reached = await objectiveIn(box, demo, "reach preview");
+    const dropped = await objectiveIn(box, demo, "reach a dead end");
+    await must(box, demo, ["objective", "close", reached, "--as", "reached"]);
     const closed = await approvedIn(box, demo,
         ["objective", "close", dropped, "--as", "dropped", "--why", "descoped"], dropped);
     assert.equal(closed.code, 0, `the drop was refused:\n${closed.out}`);
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT]);
     assert.ok(!added.out.includes(reached), "a reached objective was offered as a link target");
     assert.ok(!added.out.includes(dropped), "a dropped objective was offered as a link target");
@@ -108,15 +111,15 @@ test("a closed objective is never offered as a link target", async () =>
 
 /* ── cell 5, with the review's P4: checkpoints, and the size line ─── */
 
-test("checkpoints are offered with --milestone, and several of them do not inflate the size", () =>
+test("checkpoints are offered with --milestone, and several of them do not inflate the size", async () =>
 {
-    const { box, demo } = project();
-    const objective = objectiveIn(box, demo, "reach preview");
-    const first = shortId(must(box, demo,
-        ["milestone", "add", "suite green", "--objective", objective, "--exit", "tests pass"]).out, "m");
-    const second = shortId(must(box, demo,
-        ["milestone", "add", "docs written", "--objective", objective, "--exit", "the page exists"]).out, "m");
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    const { box, demo } = await project();
+    const objective = await objectiveIn(box, demo, "reach preview");
+    const first = shortId((await must(box, demo,
+        ["milestone", "add", "suite green", "--objective", objective, "--exit", "tests pass"])).out, "m");
+    const second = shortId((await must(box, demo,
+        ["milestone", "add", "docs written", "--objective", objective, "--exit", "the page exists"])).out, "m");
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     const work = workIdIn(added.out);
     assert.ok(added.out.includes(`      self work link ${work} --milestone ${first}\n`),
         `the first checkpoint carries no link command:\n${added.out}`);
@@ -129,11 +132,11 @@ test("checkpoints are offered with --milestone, and several of them do not infla
 
 /* ── cell 6: piped output is unstyled ─────────────────────────────── */
 
-test("a piped work add prints the offer without a single escape sequence", () =>
+test("a piped work add prints the offer without a single escape sequence", async () =>
 {
-    const { box, demo } = project();
-    objectiveIn(box, demo, "reach preview");
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    const { box, demo } = await project();
+    await objectiveIn(box, demo, "reach preview");
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     assert.ok(!added.out.includes(ESC), `a piped run carried styling:\n${JSON.stringify(added.out)}`);
 });
 
@@ -147,8 +150,8 @@ test("a piped work add prints the offer without a single escape sequence", () =>
 // no size line.
 test("at a terminal the offer is appended under the id, with no size line", async () =>
 {
-    const { box, demo } = project();
-    const objective = objectiveIn(box, demo, "reach preview");
+    const { box, demo } = await project();
+    const objective = await objectiveIn(box, demo, "reach preview");
     const added = await approvedIn(box, demo, ["work", "add", "the flow works"], "");
     assert.equal(added.code, 0, added.out);
     const work = workIdIn(added.printed);
@@ -164,16 +167,16 @@ test("at a terminal the offer is appended under the id, with no size line", asyn
 
 test("--supersedes names the replaced unit's links, cross-project ones included", async () =>
 {
-    const { box, ws, demo } = project();
+    const { box, ws, demo } = await project();
     const other = join(ws, "other");
     mkdirSync(other, { recursive: true });
     git(box, other, ["init", "-q", "-b", "main"]);
-    must(box, other, ["project", "init", "--name", "other", "--no-connect"]);
-    const foreign = objectiveIn(box, other, "the other project's outcome");
-    const local = objectiveIn(box, demo, "reach preview");
-    const first = workIdIn(must(box, demo, ["work", "add", "the first wording"]).out);
-    must(box, demo, ["work", "link", first, "--objective", local]);
-    must(box, demo, ["work", "link", first, "--objective", foreign, "--objective-project", "other"]);
+    await must(box, other, ["project", "init", "--name", "other", "--no-connect"]);
+    const foreign = await objectiveIn(box, other, "the other project's outcome");
+    const local = await objectiveIn(box, demo, "reach preview");
+    const first = workIdIn((await must(box, demo, ["work", "add", "the first wording"])).out);
+    await must(box, demo, ["work", "link", first, "--objective", local]);
+    await must(box, demo, ["work", "link", first, "--objective", foreign, "--objective-project", "other"]);
     const added = await approvedIn(box, demo,
         ["work", "add", "the corrected wording", "--supersedes", first, "--why", "the outcome was restated"], first);
     assert.equal(added.code, 0, `the correction was refused:\n${added.out}`);
@@ -194,9 +197,9 @@ test("--supersedes names the replaced unit's links, cross-project ones included"
 
 test("a correction of an unattached unit says nothing about carry-over", async () =>
 {
-    const { box, demo } = project();
-    objectiveIn(box, demo, "reach preview");
-    const first = workIdIn(must(box, demo, ["work", "add", "the first wording"]).out);
+    const { box, demo } = await project();
+    await objectiveIn(box, demo, "reach preview");
+    const first = workIdIn((await must(box, demo, ["work", "add", "the first wording"])).out);
     const added = await approvedIn(box, demo,
         ["work", "add", "the corrected wording", "--supersedes", first, "--why", "the outcome was restated"], first);
     assert.equal(added.code, 0, `the correction was refused:\n${added.out}`);
@@ -207,31 +210,31 @@ test("a correction of an unattached unit says nothing about carry-over", async (
 
 /* ── cell 9: an accepted proposal prints no offer ─────────────────── */
 
-test("work accept prints no offer — propose already demanded the attachment", () =>
+test("work accept prints no offer — propose already demanded the attachment", async () =>
 {
-    const { box, demo } = project();
-    const objective = objectiveIn(box, demo, "reach preview");
-    const proposal = workIdIn(must(box, demo, ["work", "propose", "close the gap",
+    const { box, demo } = await project();
+    const objective = await objectiveIn(box, demo, "reach preview");
+    const proposal = workIdIn((await must(box, demo, ["work", "propose", "close the gap",
         "--value", "it unblocks preview", "--success", "the suite is green",
         "--stop", "the approach is wrong", "--risk", "the fix is deeper than it looks",
         "--capacity", "a day", "--evidence-plan", "the suite output",
-        "--confidence", "medium", "--expires", "2099-01-01", "--objective", objective]).out);
-    const accepted = must(box, demo, ["work", "accept", proposal]);
+        "--confidence", "medium", "--expires", "2099-01-01", "--objective", objective])).out);
+    const accepted = await must(box, demo, ["work", "accept", proposal]);
     assert.ok(!accepted.out.includes("self work link"), `accept offered an attachment:\n${accepted.out}`);
     assert.ok(!accepted.out.includes("open objective"), `accept printed a size line:\n${accepted.out}`);
 });
 
 /* ── cell 10: another project's objectives do not leak ────────────── */
 
-test("an objective that only another project has is not offered here", () =>
+test("an objective that only another project has is not offered here", async () =>
 {
-    const { box, ws, demo } = project();
+    const { box, ws, demo } = await project();
     const other = join(ws, "other");
     mkdirSync(other, { recursive: true });
     git(box, other, ["init", "-q", "-b", "main"]);
-    must(box, other, ["project", "init", "--name", "other", "--no-connect"]);
-    const foreign = objectiveIn(box, other, "the other project's outcome");
-    const added = must(box, demo, ["work", "add", "the flow works"]);
+    await must(box, other, ["project", "init", "--name", "other", "--no-connect"]);
+    const foreign = await objectiveIn(box, other, "the other project's outcome");
+    const added = await must(box, demo, ["work", "add", "the flow works"]);
     assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT]);
     assert.ok(!added.out.includes(foreign), "another project's objective was offered");
     assert.ok(!added.out.includes("the other project's outcome"), "another project's outcome text leaked");
@@ -239,11 +242,11 @@ test("an objective that only another project has is not offered here", () =>
 
 /* ── cell 11: the recorded event did not move ─────────────────────── */
 
-test("the event work add records is unchanged — this is an output-only change", () =>
+test("the event work add records is unchanged — this is an output-only change", async () =>
 {
-    const { box, ws, demo } = project();
-    objectiveIn(box, demo, "reach preview");
-    must(box, demo, ["work", "add", "the flow works"]);
+    const { box, ws, demo } = await project();
+    await objectiveIn(box, demo, "reach preview");
+    await must(box, demo, ["work", "add", "the flow works"]);
     const log = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8").trimEnd().split("\n");
     const event = JSON.parse(log[log.length - 1]);
     assert.equal(event.type, "entity.confirmed", "the last event is not the unit that was just recorded");
@@ -258,10 +261,10 @@ test("the event work add records is unchanged — this is an output-only change"
 
 /* ── cell 12: the managed block names work link ───────────────────── */
 
-test("the managed block names work link, in both instruction files", () =>
+test("the managed block names work link, in both instruction files", async () =>
 {
-    const { box, demo } = project();
-    must(box, demo, ["connect"]);
+    const { box, demo } = await project();
+    await must(box, demo, ["connect"]);
     const blocks = ["AGENTS.md", "CLAUDE.md"].map((name) => readFileSync(join(demo, name), "utf8"));
     for (const block of blocks)
     {

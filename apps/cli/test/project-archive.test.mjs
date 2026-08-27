@@ -35,7 +35,7 @@ function streams(box, cwd, args)
 
 // Two registered projects, so an aggregate has something to keep as well as
 // something to drop.
-function two()
+async function two()
 {
     const box = machine();
     const ws = join(box.root, "ws");
@@ -43,30 +43,30 @@ function two()
     const beta = join(ws, "beta");
     mkdirSync(alpha, { recursive: true });
     mkdirSync(beta, { recursive: true });
-    must(box, ws, ["init"]);
+    await must(box, ws, ["init"]);
     git(box, alpha, ["init", "-q", "-b", "main"]);
     git(box, beta, ["init", "-q", "-b", "main"]);
-    must(box, alpha, ["project", "init", "--name", "alpha", "--no-connect"]);
-    must(box, beta, ["project", "init", "--name", "beta", "--no-connect"]);
+    await must(box, alpha, ["project", "init", "--name", "alpha", "--no-connect"]);
+    await must(box, beta, ["project", "init", "--name", "beta", "--no-connect"]);
     return { box, ws, alpha, beta };
 }
 
 // One unit in each open state the fold can hold, so a round trip has something
 // to give back wrongly.
-function mixedWork(box, dir)
+async function mixedWork(box, dir)
 {
-    const active = workIdIn(must(box, dir, ["work", "add", "the active outcome"]).out);
-    must(box, dir, ["work", "start", active]);
-    const blocked = workIdIn(must(box, dir, ["work", "add", "the blocked outcome"]).out);
-    must(box, dir, ["work", "start", blocked]);
-    must(box, dir, ["work", "block", blocked, "--on", "dependency", "--why", "waiting on the other one"]);
-    const next = workIdIn(must(box, dir, ["work", "add", "the next outcome"]).out);
+    const active = workIdIn((await must(box, dir, ["work", "add", "the active outcome"])).out);
+    await must(box, dir, ["work", "start", active]);
+    const blocked = workIdIn((await must(box, dir, ["work", "add", "the blocked outcome"])).out);
+    await must(box, dir, ["work", "start", blocked]);
+    await must(box, dir, ["work", "block", blocked, "--on", "dependency", "--why", "waiting on the other one"]);
+    const next = workIdIn((await must(box, dir, ["work", "add", "the next outcome"])).out);
     return { active, blocked, next };
 }
 
-function statusOf(box, ws, id)
+async function statusOf(box, ws, id)
 {
-    const shown = must(box, ws, ["work", "show", id, "--project", "alpha"]).out;
+    const shown = (await must(box, ws, ["work", "show", id, "--project", "alpha"])).out;
     return shown.match(/- Status: (\w+)/)[1];
 }
 
@@ -83,84 +83,84 @@ function events(ws, slug)
 
 /* ── the archive verb ──────────────────────────────────────────────── */
 
-test("1: archiving a project with no open work takes it out of the listing, context and aggregates", () =>
+test("1: archiving a project with no open work takes it out of the listing, context and aggregates", async () =>
 {
-    const { box, ws } = two();
-    archive(box, ws);
-    const listed = must(box, ws, ["project"]).out;
+    const { box, ws } = await two();
+    await archive(box, ws);
+    const listed = (await must(box, ws, ["project"])).out;
     assert.doesNotMatch(listed, /^alpha/m, `alpha is still in the listing:\n${listed}`);
     assert.match(listed, /^beta/m);
-    const context = must(box, ws, ["context"]).out;
+    const context = (await must(box, ws, ["context"])).out;
     assert.doesNotMatch(context, /alpha/, `alpha is still in the workspace context:\n${context}`);
-    const aggregate = must(box, ws, ["status", "--workspace"]).out;
+    const aggregate = (await must(box, ws, ["status", "--workspace"])).out;
     assert.doesNotMatch(aggregate, /^alpha/m, `alpha is still in the workspace status:\n${aggregate}`);
     assert.match(aggregate, /^beta/m);
 });
 
-test("2: archiving says how many open units went with it, and retires none of them", () =>
+test("2: archiving says how many open units went with it, and retires none of them", async () =>
 {
-    const { box, ws, alpha } = two();
-    const units = mixedWork(box, alpha);
-    const done = archive(box, ws);
+    const { box, ws, alpha } = await two();
+    const units = await mixedWork(box, alpha);
+    const done = await archive(box, ws);
     assert.match(done.out, /3 open work units went with it/);
-    assert.equal(statusOf(box, ws, units.active), "active");
-    assert.equal(statusOf(box, ws, units.blocked), "blocked");
-    assert.equal(statusOf(box, ws, units.next), "next");
-    const open = must(box, ws, ["work", "--project", "alpha"]).out;
+    assert.equal(await statusOf(box, ws, units.active), "active");
+    assert.equal(await statusOf(box, ws, units.blocked), "blocked");
+    assert.equal(await statusOf(box, ws, units.next), "next");
+    const open = (await must(box, ws, ["work", "--project", "alpha"])).out;
     assert.doesNotMatch(open, /retired/, `archiving retired a unit:\n${open}`);
 });
 
-test("3: archiving a project that is already archived is refused, naming restore", () =>
+test("3: archiving a project that is already archived is refused, naming restore", async () =>
 {
-    const { box, ws } = two();
-    archive(box, ws);
-    const again = selfIn(box, ws, ["project", "archive", "alpha", "--why", "again"]);
+    const { box, ws } = await two();
+    await archive(box, ws);
+    const again = await selfIn(box, ws, ["project", "archive", "alpha", "--why", "again"]);
     assert.notEqual(again.code, 0);
     assert.match(again.out, /already archived/);
     assert.match(again.out, /self project restore alpha/);
 });
 
-test("4: archiving without a reason is refused, and the reason is named as required", () =>
+test("4: archiving without a reason is refused, and the reason is named as required", async () =>
 {
-    const { box, ws } = two();
-    const bare = selfIn(box, ws, ["project", "archive", "alpha"]);
+    const { box, ws } = await two();
+    const bare = await selfIn(box, ws, ["project", "archive", "alpha"]);
     assert.notEqual(bare.code, 0);
     assert.match(bare.out, /--why/);
     assert.match(bare.out, /why the project is being set aside/);
-    assert.match(must(box, ws, ["project"]).out, /^alpha/m, "the refused archive still took the project out of the listing");
+    assert.match((await must(box, ws, ["project"])).out, /^alpha/m, "the refused archive still took the project out of the listing");
 });
 
-test("5: archiving a slug this workspace does not have is refused as unknown", () =>
+test("5: archiving a slug this workspace does not have is refused as unknown", async () =>
 {
-    const { box, ws } = two();
-    const unknown = selfIn(box, ws, ["project", "archive", "gamma", "--why", "w"]);
+    const { box, ws } = await two();
+    const unknown = await selfIn(box, ws, ["project", "archive", "gamma", "--why", "w"]);
     assert.notEqual(unknown.code, 0);
     assert.match(unknown.out, /unknown project "gamma"/);
 });
 
 /* ── the way back ──────────────────────────────────────────────────── */
 
-test("6: restoring with no reason brings the project back, with every work unit in the state it was left", () =>
+test("6: restoring with no reason brings the project back, with every work unit in the state it was left", async () =>
 {
-    const { box, ws, alpha } = two();
-    const units = mixedWork(box, alpha);
-    const before = must(box, ws, ["work", "--project", "alpha"]).out;
-    archive(box, ws);
-    const back = must(box, ws, ["project", "restore", "alpha"]);
+    const { box, ws, alpha } = await two();
+    const units = await mixedWork(box, alpha);
+    const before = (await must(box, ws, ["work", "--project", "alpha"])).out;
+    await archive(box, ws);
+    const back = await must(box, ws, ["project", "restore", "alpha"]);
     assert.match(back.out, /project "alpha" is back/);
-    assert.match(must(box, ws, ["project"]).out, /^alpha/m);
-    assert.match(must(box, ws, ["context"]).out, /alpha/);
-    assert.match(must(box, ws, ["status", "--workspace"]).out, /^alpha/m);
-    assert.equal(must(box, ws, ["work", "--project", "alpha"]).out, before);
-    assert.equal(statusOf(box, ws, units.active), "active");
-    assert.equal(statusOf(box, ws, units.blocked), "blocked");
-    assert.equal(statusOf(box, ws, units.next), "next");
+    assert.match((await must(box, ws, ["project"])).out, /^alpha/m);
+    assert.match((await must(box, ws, ["context"])).out, /alpha/);
+    assert.match((await must(box, ws, ["status", "--workspace"])).out, /^alpha/m);
+    assert.equal((await must(box, ws, ["work", "--project", "alpha"])).out, before);
+    assert.equal(await statusOf(box, ws, units.active), "active");
+    assert.equal(await statusOf(box, ws, units.blocked), "blocked");
+    assert.equal(await statusOf(box, ws, units.next), "next");
 });
 
-test("7: restoring a project that is not archived is refused", () =>
+test("7: restoring a project that is not archived is refused", async () =>
 {
-    const { box, ws } = two();
-    const nothing = selfIn(box, ws, ["project", "restore", "alpha"]);
+    const { box, ws } = await two();
+    const nothing = await selfIn(box, ws, ["project", "restore", "alpha"]);
     assert.notEqual(nothing.code, 0);
     assert.match(nothing.out, /not archived/);
     assert.match(nothing.out, /self project --archived/);
@@ -168,22 +168,22 @@ test("7: restoring a project that is not archived is refused", () =>
 
 /* ── what still reads ──────────────────────────────────────────────── */
 
-test("8: the default listing drops the archived slug and leaves the active ones alone", () =>
+test("8: the default listing drops the archived slug and leaves the active ones alone", async () =>
 {
-    const { box, ws, beta } = two();
-    must(box, beta, ["goal", "add", "beta keeps its goal"]);
-    archive(box, ws);
-    const listed = must(box, ws, ["project"]).out;
+    const { box, ws, beta } = await two();
+    await must(box, beta, ["goal", "add", "beta keeps its goal"]);
+    await archive(box, ws);
+    const listed = (await must(box, ws, ["project"])).out;
     assert.doesNotMatch(listed, /^alpha/m);
     assert.match(listed, /^beta/m);
-    assert.match(must(box, ws, ["status", "--project", "beta"]).out, /beta keeps its goal/);
+    assert.match((await must(box, ws, ["status", "--project", "beta"])).out, /beta keeps its goal/);
 });
 
-test("9: --archived lists the archived slug with its reason and the day it was set aside", () =>
+test("9: --archived lists the archived slug with its reason and the day it was set aside", async () =>
 {
-    const { box, ws } = two();
-    archive(box, ws, "alpha", "picked back up next quarter");
-    const listed = must(box, ws, ["project", "--archived"]).out;
+    const { box, ws } = await two();
+    await archive(box, ws, "alpha", "picked back up next quarter");
+    const listed = (await must(box, ws, ["project", "--archived"])).out;
     assert.match(listed, /^alpha —/m);
     assert.match(listed, /picked back up next quarter/);
     assert.match(listed, new RegExp(new Date().toISOString().slice(0, 10)));
@@ -193,25 +193,25 @@ test("9: --archived lists the archived slug with its reason and the day it was s
     assert.doesNotMatch(listed, /^beta/m);
 });
 
-test("10: a --workspace read leaves the archived project's rows out of the aggregate", () =>
+test("10: a --workspace read leaves the archived project's rows out of the aggregate", async () =>
 {
-    const { box, ws, alpha, beta } = two();
-    must(box, alpha, ["work", "add", "an outcome nobody is chasing"]);
-    must(box, beta, ["work", "add", "an outcome someone is chasing"]);
-    archive(box, ws);
-    const merged = must(box, ws, ["log", "--workspace"]).out;
+    const { box, ws, alpha, beta } = await two();
+    await must(box, alpha, ["work", "add", "an outcome nobody is chasing"]);
+    await must(box, beta, ["work", "add", "an outcome someone is chasing"]);
+    await archive(box, ws);
+    const merged = (await must(box, ws, ["log", "--workspace"])).out;
     assert.doesNotMatch(merged, /alpha/, `alpha is still in the merged log:\n${merged}`);
     assert.match(merged, /beta/);
-    const summarized = must(box, ws, ["status", "--workspace"]).out;
+    const summarized = (await must(box, ws, ["status", "--workspace"])).out;
     assert.doesNotMatch(summarized, /^alpha/m);
     assert.match(summarized, /^beta/m);
 });
 
-test("11: --project reads the archived project normally, with one line saying it is archived", () =>
+test("11: --project reads the archived project normally, with one line saying it is archived", async () =>
 {
-    const { box, ws, alpha } = two();
-    const unit = workIdIn(must(box, alpha, ["work", "add", "the outcome that was left standing"]).out);
-    archive(box, ws);
+    const { box, ws, alpha } = await two();
+    const unit = workIdIn((await must(box, alpha, ["work", "add", "the outcome that was left standing"])).out);
+    await archive(box, ws);
     const read = streams(box, ws, ["work", "--project", "alpha"]);
     assert.equal(read.code, 0);
     assert.match(read.out, new RegExp(unit), "the unit stopped being readable through --project");
@@ -219,12 +219,12 @@ test("11: --project reads the archived project normally, with one line saying it
     assert.match(read.err, /self project restore alpha/);
 });
 
-test("12: context inside an archived project's checkout renders, and says how it comes back", () =>
+test("12: context inside an archived project's checkout renders, and says how it comes back", async () =>
 {
-    const { box, ws, alpha } = two();
-    must(box, alpha, ["goal", "add", "the goal alpha was left with"]);
-    archive(box, ws);
-    const context = must(box, alpha, ["context"]);
+    const { box, ws, alpha } = await two();
+    await must(box, alpha, ["goal", "add", "the goal alpha was left with"]);
+    await archive(box, ws);
+    const context = await must(box, alpha, ["context"]);
     assert.match(context.out, /the goal alpha was left with/, "the context stopped rendering");
     assert.match(context.out, /is archived/);
     assert.match(context.out, /self project restore alpha/);
@@ -232,11 +232,11 @@ test("12: context inside an archived project's checkout renders, and says how it
 
 /* ── what does not ─────────────────────────────────────────────────── */
 
-test("13: every write inside an archived project's checkout is refused, naming restore", () =>
+test("13: every write inside an archived project's checkout is refused, naming restore", async () =>
 {
-    const { box, ws, alpha } = two();
-    const unit = workIdIn(must(box, alpha, ["work", "add", "the outcome that was left standing"]).out);
-    archive(box, ws);
+    const { box, ws, alpha } = await two();
+    const unit = workIdIn((await must(box, alpha, ["work", "add", "the outcome that was left standing"])).out);
+    await archive(box, ws);
     const before = events(ws, "alpha").length;
     const refused = [
         ["work", "add", "a new outcome"],
@@ -248,89 +248,89 @@ test("13: every write inside an archived project's checkout is refused, naming r
     ];
     for (const args of refused)
     {
-        const attempt = selfIn(box, alpha, args);
+        const attempt = await selfIn(box, alpha, args);
         assert.notEqual(attempt.code, 0, `\`self ${args.join(" ")}\` was allowed into an archived project`);
         assert.match(attempt.out, /self project restore alpha/, `\`self ${args.join(" ")}\` did not name restore`);
     }
     assert.equal(events(ws, "alpha").length, before, "a refused write still appended to the archived project");
 });
 
-test("14: project init inside an archived project's checkout is refused, naming restore", () =>
+test("14: project init inside an archived project's checkout is refused, naming restore", async () =>
 {
-    const { box, ws, alpha } = two();
-    archive(box, ws);
-    const again = selfIn(box, alpha, ["project", "init"]);
+    const { box, ws, alpha } = await two();
+    await archive(box, ws);
+    const again = await selfIn(box, alpha, ["project", "init"]);
     assert.notEqual(again.code, 0);
     assert.match(again.out, /self project restore alpha/);
     assert.match(again.out, /split its state in two/);
 });
 
-test("15: an archived project cannot receive a retired outcome's successor", () =>
+test("15: an archived project cannot receive a retired outcome's successor", async () =>
 {
-    const { box, ws, alpha, beta } = two();
-    const successor = workIdIn(must(box, alpha, ["work", "add", "where the outcome would go"]).out);
-    const source = workIdIn(must(box, beta, ["work", "add", "the outcome being moved"]).out);
-    archive(box, ws);
-    const moved = selfIn(box, beta, ["work", "retire", source, "--why", "moved", "--successor", successor,
+    const { box, ws, alpha, beta } = await two();
+    const successor = workIdIn((await must(box, alpha, ["work", "add", "where the outcome would go"])).out);
+    const source = workIdIn((await must(box, beta, ["work", "add", "the outcome being moved"])).out);
+    await archive(box, ws);
+    const moved = await selfIn(box, beta, ["work", "retire", source, "--why", "moved", "--successor", successor,
         "--successor-project", "alpha"]);
     assert.notEqual(moved.code, 0);
     assert.match(moved.out, /cannot receive a successor/);
     assert.match(moved.out, /self project restore alpha/);
-    assert.equal(statusOf(box, ws, successor), "next");
+    assert.equal(await statusOf(box, ws, successor), "next");
 });
 
 /* ── restore is the only way back ──────────────────────────────────── */
 
-test("16: undo refuses an archive event and names restore instead", () =>
+test("16: undo refuses an archive event and names restore instead", async () =>
 {
-    const { box, ws, alpha } = two();
-    const archived = idIn(archive(box, ws).out);
-    const refused = selfIn(box, alpha, ["undo", archived, "--why", "the wrong project was named"]);
+    const { box, ws, alpha } = await two();
+    const archived = idIn((await archive(box, ws)).out);
+    const refused = await selfIn(box, alpha, ["undo", archived, "--why", "the wrong project was named"]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /an archive is ended by/);
     assert.match(refused.out, /self project restore alpha/);
     // Refused means refused: the archive is untouched and nothing was appended.
-    assert.match(must(box, ws, ["project", "--archived"]).out, /^alpha —/m);
-    assert.doesNotMatch(must(box, ws, ["project"]).out, /^alpha/m);
+    assert.match((await must(box, ws, ["project", "--archived"])).out, /^alpha —/m);
+    assert.doesNotMatch((await must(box, ws, ["project"])).out, /^alpha/m);
     assert.equal(events(ws, "alpha").filter((event) => event.type === "project.restored").length, 0);
 });
 
-test("17: restoring with a reason carries it on the restoration event", () =>
+test("17: restoring with a reason carries it on the restoration event", async () =>
 {
-    const { box, ws } = two();
-    archive(box, ws);
-    must(box, ws, ["project", "restore", "alpha", "--why", "the wrong project was named"]);
-    assert.match(must(box, ws, ["project"]).out, /^alpha/m);
-    assert.match(must(box, ws, ["project", "--archived"]).out, /no archived projects/);
+    const { box, ws } = await two();
+    await archive(box, ws);
+    await must(box, ws, ["project", "restore", "alpha", "--why", "the wrong project was named"]);
+    assert.match((await must(box, ws, ["project"])).out, /^alpha/m);
+    assert.match((await must(box, ws, ["project", "--archived"])).out, /no archived projects/);
     const restored = events(ws, "alpha").filter((event) => event.type === "project.restored");
     assert.equal(restored.length, 1);
     assert.equal(restored[0].payload.why, "the wrong project was named");
-    assert.match(must(box, ws, ["log", "--project", "alpha"]).out, /the wrong project was named/);
+    assert.match((await must(box, ws, ["log", "--project", "alpha"])).out, /the wrong project was named/);
     // A restore with no reason is a different record, and says nothing.
-    archive(box, ws, "alpha", "set aside on purpose this time");
-    must(box, ws, ["project", "restore", "alpha"]);
+    await archive(box, ws, "alpha", "set aside on purpose this time");
+    await must(box, ws, ["project", "restore", "alpha"]);
     const plain = events(ws, "alpha").filter((event) => event.type === "project.restored").at(-1);
     assert.equal(plain.payload.why, undefined);
     // A blank reason is that same record, not a third one claiming nothing.
-    archive(box, ws, "alpha", "set aside a third time");
-    must(box, ws, ["project", "restore", "alpha", "--why", "   "]);
+    await archive(box, ws, "alpha", "set aside a third time");
+    await must(box, ws, ["project", "restore", "alpha", "--why", "   "]);
     const blank = events(ws, "alpha").filter((event) => event.type === "project.restored").at(-1);
     assert.equal(blank.payload.why, undefined);
 });
 
-test("18: archive, restore and the listing all answer without the project's checkout", () =>
+test("18: archive, restore and the listing all answer without the project's checkout", async () =>
 {
-    const { box, ws, alpha } = two();
-    must(box, alpha, ["work", "add", "the outcome left behind on the other machine"]);
+    const { box, ws, alpha } = await two();
+    await must(box, alpha, ["work", "add", "the outcome left behind on the other machine"]);
     // The store knows the project; this machine no longer holds its checkout,
     // which is the ordinary case for a project being set aside.
     rmSync(alpha, { recursive: true, force: true });
-    archive(box, ws, "alpha", "its checkout lives on another machine");
-    assert.match(must(box, ws, ["project", "--archived"]).out, /^alpha —/m);
-    assert.doesNotMatch(must(box, ws, ["project"]).out, /^alpha/m);
-    const back = must(box, ws, ["project", "restore", "alpha", "--why", "it was never meant to be archived"]);
+    await archive(box, ws, "alpha", "its checkout lives on another machine");
+    assert.match((await must(box, ws, ["project", "--archived"])).out, /^alpha —/m);
+    assert.doesNotMatch((await must(box, ws, ["project"])).out, /^alpha/m);
+    const back = await must(box, ws, ["project", "restore", "alpha", "--why", "it was never meant to be archived"]);
     assert.match(back.out, /project "alpha" is back/);
-    assert.match(must(box, ws, ["project"]).out, /^alpha/m);
+    assert.match((await must(box, ws, ["project"])).out, /^alpha/m);
 });
 
 // #287 cell B19. A project holding live workspace-scoped direction cannot be
@@ -338,10 +338,10 @@ test("18: archive, restore and the listing all answer without the project's chec
 // project's context at once. A *proposal* is not direction the company has
 // taken — it occupies no tier until someone confirms it (#240 R3) — so the
 // gate reads confirmed records only, and this archive goes through.
-test("cell B19 (#287): a proposed workspace objective does not hold the archive", () =>
+test("cell B19 (#287): a proposed workspace objective does not hold the archive", async () =>
 {
-    const { box, ws, alpha } = two();
-    must(box, alpha, ["objective", "add", "the company might reach a hundred teams", "--workspace", "--proposed"]);
-    const archived = archive(box, ws, "alpha", "nobody is working on it this quarter");
+    const { box, ws, alpha } = await two();
+    await must(box, alpha, ["objective", "add", "the company might reach a hundred teams", "--workspace", "--proposed"]);
+    const archived = await archive(box, ws, "alpha", "nobody is working on it this quarter");
     assert.match(archived.out, /project "alpha" is archived/);
 });
