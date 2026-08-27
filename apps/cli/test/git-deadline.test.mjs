@@ -67,10 +67,16 @@ function killSleeper(marker)
 }
 
 // #367's own repro, whole: a store whose post-commit hook backgrounds a
-// process that outlives git. The sleep here runs for ten minutes, so anything
-// that waits on it does not come back inside this suite — the assertion is
-// that the write returns at all, and returns near the deadline rather than
-// near the sleep.
+// process that outlives git. The sleep runs for ten minutes, so anything that
+// waits on it does not come back inside this suite.
+//
+// Which of the two bounded outcomes arrives is the host's to decide, and both
+// are right. Whether git waits on its own hook's output pipe differs between
+// git versions — where it does, git is the one that has to be killed and the
+// command refuses by name; where it does not, git exits on its own, the CLI
+// reads its status and records. What is asserted is what holds either way: the
+// command came back near the deadline rather than near the sleep, and it came
+// back with a definite answer rather than a half-written one.
 test("a git that leaves a live process holding its pipes does not pin the CLI", async () =>
 {
     const remove = hook("post-commit", "( sleep 601 ) &\nexit 0");
@@ -87,6 +93,11 @@ test("a git that leaves a live process holding its pipes does not pin the CLI", 
     }
     const took = Date.now() - started;
     assert.ok(took < BOUND_MS, `the write took ${took}ms, so the deadline did not end the wait`);
+    if (wrote.code === 0)
+    {
+        assert.match(wrote.out, /bounded by the deadline/);
+        return;
+    }
     assert.equal(wrote.code, 1);
     assert.match(wrote.out, /was killed after/);
 });

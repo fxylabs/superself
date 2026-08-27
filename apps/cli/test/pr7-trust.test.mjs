@@ -1225,9 +1225,11 @@ test("cell 171: every environment variable the CLI reads, set to a fixture root,
         // root is what the rest of the variables are being tested for.
         const names = environmentNames();
         assert.deepEqual(names, [
-            "CI", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "NODE_TLS_REJECT_UNAUTHORIZED", "NO_COLOR",
+            "CI", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "GIT_SSH_COMMAND",
+            "NODE_TLS_REJECT_UNAUTHORIZED", "NO_COLOR",
             "SUPERSELF_API_BASE", "SUPERSELF_ATTEMPT_ID", "SUPERSELF_DEBUG", "SUPERSELF_DEV",
-            "SUPERSELF_JSON", "SUPERSELF_NO_JOURNAL", "SUPERSELF_PLUGIN_DEV", "SUPERSELF_PROFILE",
+            "SUPERSELF_GIT_TIMEOUT_MS", "SUPERSELF_JSON", "SUPERSELF_NO_JOURNAL",
+            "SUPERSELF_PLUGIN_DEV", "SUPERSELF_PROFILE",
             "SUPERSELF_SESSION", "SUPERSELF_SESSION_PID", "TERM",
             "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"
         ], "a new environment variable joined the CLI without joining this cell");
