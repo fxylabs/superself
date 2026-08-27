@@ -20,7 +20,7 @@
 // other clone of a store that syncs, and never `git repack -a -d`, which
 // deletes unreachable objects in a previous pack outright instead of leaving
 // them the two-week grace `gc` gives them.
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { Dirent, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { artifactDigest } from "./artifact.js";
 import { branch, Command, leaf } from "./contract.js";
@@ -192,6 +192,10 @@ function walkFiles(dir: string, prefix: string): FileSize[]
 // The same walk that never builds the list. `.git` holds a file per loose
 // object — tens of thousands of them in the store this was written for — and
 // the answer is one number.
+//
+// Every read of the tree goes through `ignoringGone`, because `.git` is a
+// directory git is editing while this walks it: a lock file, a loose object
+// just packed, a whole `objects/pack` directory being rewritten (#396).
 function treeBytes(dir: string, skip?: string): number
 {
     if (!existsSync(dir))
@@ -199,7 +203,7 @@ function treeBytes(dir: string, skip?: string): number
         return 0;
     }
     let bytes = 0;
-    for (const entry of readdirSync(dir, { withFileTypes: true }))
+    for (const entry of ignoringGone(() => readdirSync(dir, { withFileTypes: true }), [] as Dirent[]))
     {
         if (entry.name === skip)
         {
@@ -211,10 +215,38 @@ function treeBytes(dir: string, skip?: string): number
         }
         else if (entry.isFile())
         {
-            bytes += statSync(join(dir, entry.name)).size;
+            bytes += ignoringGone(() => statSync(join(dir, entry.name)).size, 0);
         }
     }
     return bytes;
+}
+
+// An entry that vanished between the listing and the read of it. git's own
+// maintenance deletes files under `.git` whenever it likes, and a measurement
+// that fails because one of them went is a command lost to a race no one can
+// avoid: the bytes are gone or moving, and either way zero is the honest
+// answer for them.
+//
+// ENOENT alone. A permission that changed, a file standing where a directory
+// belongs, a failing device — those are not an entry disappearing, and a
+// number that quietly omitted them would be wrong rather than late.
+export function ignoringGone<T>(read: () => T, gone: T): T
+{
+    try
+    {
+        return read();
+    }
+    catch (error)
+    {
+        // Optional: what a rejected read throws is the platform's to decide,
+        // and reading `.code` off a thrown null would replace the real failure
+        // with a TypeError about this line.
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT")
+        {
+            return gone;
+        }
+        throw error;
+    }
 }
 
 // git's own count, in git's own units: `count-objects -v` reports sizes in
