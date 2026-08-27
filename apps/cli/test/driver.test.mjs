@@ -45,7 +45,7 @@ async function ok(box, cwd, args, options)
 test("cell 1: a successful write answers 0 and reports the event it recorded", async () =>
 {
     const { box, demo } = await scratch();
-    const added = await ok(box, demo, ["work", "add", "ship phase 2"]);
+    const added = await ok(box, demo, ["work", "add", "ship phase 2"], { person: true });
     assert.match(added.out, /entity\.confirmed recorded \[[0-9a-z]+\]/);
     assert.match(added.out, /\bw-[0-9a-z]{5}\b/);
 });
@@ -53,7 +53,7 @@ test("cell 1: a successful write answers 0 and reports the event it recorded", a
 test("cell 2: a successful read answers 0 with the body it was asked for", async () =>
 {
     const { box, demo } = await scratch();
-    const work = workIdIn((await ok(box, demo, ["work", "add", "ship phase 2"])).out);
+    const work = workIdIn((await ok(box, demo, ["work", "add", "ship phase 2"], { person: true })).out);
     const shown = await ok(box, demo, ["work", "show", work]);
     assert.match(shown.out, /ship phase 2/);
 });
@@ -183,7 +183,7 @@ test("cell 12: a git probe taken before a repository existed is not answered fro
 test("cell 13: a record written by one call is read by the next", async () =>
 {
     const { box, demo } = await scratch();
-    const work = workIdIn((await ok(box, demo, ["work", "add", "written then read"])).out);
+    const work = workIdIn((await ok(box, demo, ["work", "add", "written then read"], { person: true })).out);
     assert.match((await ok(box, demo, ["work", "show", work])).out, /written then read/);
 });
 
@@ -195,8 +195,8 @@ test("cell 14: the home directory a refusal is judged against is the box making 
     // rule stayed on the first box's home, the second box's path reads as
     // recordable and the refusal is lost.
     const homePath = (it) => join(it.box.root, "home", "notes.txt");
-    assert.match((await drive(first.box, first.demo, ["work", "add", homePath(first)])).out, /absolute path under this machine's home/);
-    assert.match((await drive(second.box, second.demo, ["work", "add", homePath(second)])).out, /absolute path under this machine's home/);
+    assert.match((await drive(first.box, first.demo, ["work", "add", homePath(first)], { person: true })).out, /absolute path under this machine's home/);
+    assert.match((await drive(second.box, second.demo, ["work", "add", homePath(second)], { person: true })).out, /absolute path under this machine's home/);
 });
 
 test("cell 15: a --json call does not leave the next one in machine mode", async () =>
@@ -216,7 +216,7 @@ test("cell 16: an append hold left open by one command does not refuse the next 
     holdAppends(true);
     try
     {
-        await ok(box, demo, ["work", "add", "recorded after a hold was left open"]);
+        await ok(box, demo, ["work", "add", "recorded after a hold was left open"], { person: true });
     }
     finally
     {
@@ -228,7 +228,7 @@ test("cell 17: the working directory is where it was before the call", async () 
 {
     const { box, demo } = await scratch();
     const was = process.cwd();
-    await ok(box, demo, ["work", "add", "moves the process"]);
+    await ok(box, demo, ["work", "add", "moves the process"], { person: true });
     assert.equal(process.cwd(), was);
 });
 
@@ -236,7 +236,7 @@ test("cell 18: the environment is what it was before the call", async () =>
 {
     const { box, demo } = await scratch();
     const was = { ...process.env };
-    await ok(box, demo, ["work", "add", "replaces the environment"]);
+    await ok(box, demo, ["work", "add", "replaces the environment"], { person: true });
     assert.deepEqual({ ...process.env }, was);
 });
 
@@ -273,8 +273,8 @@ test("cell 21: each exit code the driver reports is the status a real process ex
 test("cell 27: two writes run back to back in one process, and neither waits on the other", async () =>
 {
     const { box, demo } = await scratch();
-    await ok(box, demo, ["work", "add", "first write"]);
-    await ok(box, demo, ["work", "add", "second write"]);
+    await ok(box, demo, ["work", "add", "first write"], { person: true });
+    await ok(box, demo, ["work", "add", "second write"], { person: true });
 });
 
 /* ── cells 28–33: the environment and the terminal ─────────────────── */
@@ -284,7 +284,7 @@ test("cell 27: two writes run back to back in one process, and neither waits on 
 // one command whose answer states what the driver handed it.
 async function retireAttempt(it, options)
 {
-    const work = workIdIn((await ok(it.box, it.demo, ["work", "add", "the gate's subject"])).out);
+    const work = workIdIn((await ok(it.box, it.demo, ["work", "add", "the gate's subject"], { person: true })).out);
     return drive(it.box, it.demo, ["work", "retire", work, "--why", "the outcome moved elsewhere"],
         { ...options, answer: options?.tty === true ? work : undefined });
 }

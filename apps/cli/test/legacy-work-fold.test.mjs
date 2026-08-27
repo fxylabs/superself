@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, git, logFixture, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, git, logFixture, machine, must, mustPerson, personIn, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -95,14 +95,14 @@ test("A2: `context` on the same store folds, with no work section", async () =>
 
 test("A3: a unit whose creation event is `entity.confirmed` lists as it always did", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "A3: an outcome recorded today"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "A3: an outcome recorded today"])).out);
     assert.ok((await must(box, demo, ["work"])).out.includes(work));
 });
 
 test("A4: a legacy unit beside a native one leaves only the native one", async () =>
 {
     const legacy = legacyUnit("A4: the outcome from before");
-    const native = workIdIn((await must(box, demo, ["work", "add", "A4: the outcome from today"])).out);
+    const native = workIdIn((await mustPerson(box, demo, ["work", "add", "A4: the outcome from today"])).out);
     const listed = (await must(box, demo, ["work"])).out;
     assert.ok(listed.includes(native), `the native unit is missing:\n${listed}`);
     assert.ok(!listed.includes(legacy), `the legacy unit is still listed:\n${listed}`);
@@ -136,7 +136,7 @@ test("A6: a project whose work history is entirely legacy folds without an excep
 test("A7: a proposal recorded as `entity.proposed` still becomes a unit on accept", async () =>
 {
     const id = await nativeProposal("A7: an outcome proposed by today's verb");
-    await must(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "accept", id]);
     assert.ok((await must(box, demo, ["work"])).out.includes(id));
 });
 
@@ -153,7 +153,7 @@ test("B1: a `work.proposed` line is in no proposal list and no waiting count", a
 test("B2: accepting a legacy proposal by its event id is refused as no proposal", async () =>
 {
     const id = legacyLine("work.proposed", { outcome: "B2: an outcome nobody can accept", objective, ...BRIEF });
-    const refused = await selfIn(box, demo, ["work", "accept", id]);
+    const refused = await personIn(box, demo, ["work", "accept", id]);
     assert.equal(refused.code, 1);
     assert.match(refused.out, new RegExp(`no work proposal matches "${id}"`));
 });
@@ -196,7 +196,7 @@ test("B6: two legacy proposals written in one millisecond leave no prefix to col
     }
     const shown = await context();
     assert.ok(!shown.includes("B6: one of a burst"), `a legacy proposal from the burst reached the waiting band:\n${shown}`);
-    assert.equal((await selfIn(box, demo, ["work", "accept", millisecond])).code, 1);
+    assert.equal((await personIn(box, demo, ["work", "accept", millisecond])).code, 1);
 });
 
 test("B7: a legacy proposal's text is found by no search", async () =>
@@ -246,14 +246,14 @@ test("C5: `work.linked` from a legacy unit contributes to no objective", async (
 
 test("C6: an entity unit moved by `entity.started` reads in-progress as it always did", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "C6: an outcome moved today"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "C6: an outcome moved today"])).out);
     await must(box, demo, ["work", "start", work]);
     assert.match((await must(box, demo, ["work", "show", work])).out, /- Status: active/);
 });
 
 test("C7: a `work.blocked` line merged onto a native unit is ignored rather than refused", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "C7: an outcome an old clone blocked"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "C7: an outcome an old clone blocked"])).out);
     legacyLine("work.blocked", { work, on: "dependency", why: "C7: the upstream fix" });
     const shown = await must(box, demo, ["work", "show", work]);
     assert.equal(shown.code, 0);
@@ -294,7 +294,7 @@ test("E2: the same report event still prints on `self log`", async () =>
 
 test("E3: a report naming a native unit attaches as it always did", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "E3: an outcome reported on today"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "E3: an outcome reported on today"])).out);
     await must(box, demo, ["report", work, "E3: the report from today"]);
     assert.match((await must(box, demo, ["work", "show", work])).out, /E3: the report from today/);
 });
@@ -337,7 +337,7 @@ test("F2: `work.proposed`, `work.required` and `work.covered` all print, none of
 
 test("F3: an evidence-free `work.done` prints, and closes no unit", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "F3: an outcome an older binary closed"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "F3: an outcome an older binary closed"])).out);
     legacyLine("work.done", { work });
     const shown = (await must(box, demo, ["work", "show", work])).out;
     assert.match(shown, /- Status: next/, `the fold read a legacy done:\n${shown}`);
@@ -365,14 +365,14 @@ test("F5: a legacy id resolves to no record, and refuses rather than throwing", 
 
 test("R1: `work.run-started` puts a native unit's process at running", async () =>
 {
-    const work = workIdIn((await must(runBox, runDemo, ["work", "add", "R1: an outcome with a run"])).out);
+    const work = workIdIn((await mustPerson(runBox, runDemo, ["work", "add", "R1: an outcome with a run"])).out);
     retireFixture(runBox, runWs, "demo", "work.run-started", { work });
     assert.match((await must(runBox, runDemo, ["work", "show", work])).out, /- Process: running at /);
 });
 
 test("R2: `work.run-exited` puts it at exited, with the code it carried", async () =>
 {
-    const work = workIdIn((await must(runBox, runDemo, ["work", "add", "R2: an outcome whose run ended"])).out);
+    const work = workIdIn((await mustPerson(runBox, runDemo, ["work", "add", "R2: an outcome whose run ended"])).out);
     retireFixture(runBox, runWs, "demo", "work.run-started", { work });
     retireFixture(runBox, runWs, "demo", "work.run-exited", { work, code: 0 });
     assert.match((await must(runBox, runDemo, ["work", "show", work])).out, /- Process: exited \(code 0\) at /);
@@ -396,7 +396,7 @@ test("R4: a run event naming a unit nothing knows is ignored, and is no error", 
 
 test("R5: a run event moves the unit's last-event time, so a running unit is not stalled", async () =>
 {
-    const work = workIdIn((await must(runBox, runDemo, ["work", "add", "R5: an outcome running for a while"])).out);
+    const work = workIdIn((await mustPerson(runBox, runDemo, ["work", "add", "R5: an outcome running for a while"])).out);
     logFixture(runWs, "demo", {
         id: "01hz0000000000000000000r51", ts: "2025-01-01T00:00:00.000Z", type: "entity.started", project: "demo",
         payload: { entity: work }, refs: {}, origin: {}
@@ -409,7 +409,7 @@ test("R5: a run event moves the unit's last-event time, so a running unit is not
 
 test("R6: a run event's branch reaches the unit's page", async () =>
 {
-    const work = workIdIn((await must(runBox, runDemo, ["work", "add", "R6: an outcome run on a branch"])).out);
+    const work = workIdIn((await mustPerson(runBox, runDemo, ["work", "add", "R6: an outcome run on a branch"])).out);
     retireFixture(runBox, runWs, "demo", "work.run-started", { work }, { branch: "run/r6" });
     const page = readFileSync(join(runWs, ".superself", "projects", "demo", "work", `${work}.md`), "utf8");
     assert.match(page, /- Branches: run\/r6/);

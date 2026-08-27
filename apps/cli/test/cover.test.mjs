@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -79,9 +79,9 @@ test("C5: milestone met records the same entity.covered, carrying the work and e
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: demo, env: box.env, encoding: "utf8" }).trim();
     const objective = (await must(box, demo, ["objective", "add", "reach preview"])).out.match(/\bo-[0-9a-z]{5}\b/)[0];
     const milestone = (await must(box, demo, ["milestone", "add", "suite green", "--objective", objective, "--exit", "tests pass"])).out.match(/\bm-[0-9a-z]{5}\b/)[0];
-    const work = workIdIn((await must(box, demo, ["work", "add", "make it green"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "make it green"])).out);
     await must(box, demo, ["work", "link", work, "--milestone", milestone]);
-    const unlinked = workIdIn((await must(box, demo, ["work", "add", "unrelated"])).out);
+    const unlinked = workIdIn((await mustPerson(box, demo, ["work", "add", "unrelated"])).out);
     const refused = await self(["milestone", "met", milestone, "--criterion", "c1", "--why", "x", "--work", unlinked]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /does not contribute to/);

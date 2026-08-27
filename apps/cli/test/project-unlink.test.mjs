@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const STORE = (ws) => join(ws, ".superself");
 const LINKS = (ws) => join(STORE(ws), "links.jsonl");
@@ -161,7 +161,7 @@ test("U5: --force detaches the last standing path, says so first, and leaves the
     // a write in A no longer finds the project it used to record into.
     assert.match((await must(box, ws, ["project"])).out, /^alpha/m);
     assert.match((await must(box, a, ["status"])).out, /alpha/);
-    const orphan = await selfIn(box, a, ["work", "add", "something"]);
+    const orphan = await personIn(box, a, ["work", "add", "something"]);
     assert.notEqual(orphan.code, 0);
     assert.ok(orphan.out.includes("not inside a registered project"), orphan.out);
 });
@@ -302,7 +302,7 @@ test("U16: the verdicts are refolded — the detached repository stops being one
     // stays open and its health line names whatever was asked for it.
     const elsewhere = folder(box, ws, "elsewhere");
     const hash = commit(box, elsewhere, "unreachable");
-    const work = workIdIn((await must(box, a, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, a, ["work", "add", "ship it"])).out);
     await must(box, a, ["report", work, "done somewhere else", "--evidence", `commit:${hash}`]);
     assert.equal(verdicts(ws, "alpha")[hash], "unverifiable");
     // The repositories are named by label, not by path, in both places.
@@ -319,7 +319,7 @@ test("U16: the verdicts are refolded — the detached repository stops being one
 test("U16b: a hash already settled stays settled — detaching a repository never unsettles a verified verdict", async () =>
 {
     const { box, ws, a, b } = await twoLinked();
-    const work = workIdIn((await must(box, a, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, a, ["work", "add", "ship it"])).out);
     const hash = commit(box, b, "two");
     await must(box, a, ["report", work, "done in beta", "--evidence", `commit:${hash}`]);
     assert.equal(verdicts(ws, "alpha")[hash], "settled");
@@ -421,7 +421,7 @@ test("U20: a named slug and a named path work from outside every project", async
 test("U21: the project's own record is untouched — no event, and the registry byte-identical", async () =>
 {
     const { box, ws, a, b } = await twoLinked();
-    await must(box, a, ["work", "add", "something to log"]);
+    await mustPerson(box, a, ["work", "add", "something to log"]);
     const log = join(STORE(ws), "projects", "alpha", "log.jsonl");
     const events = readFileSync(log, "utf8");
     const registry = readFileSync(join(STORE(ws), "registry.jsonl"), "utf8");

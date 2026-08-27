@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { git, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { git, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 import { diskTree, packageRoot, printSiteViolations } from "./structure.mjs";
 
 const { renderOutput } = await import("../dist/output.js");
@@ -46,12 +46,12 @@ const objective = idOf((await must(box, demo, ["objective", "add", "the document
 const milestone = idOf((await must(box, demo, ["milestone", "add", "the pages carry both renders",
     "--objective", objective, "--exit", "no page prints for itself"])).out, "m");
 
-const running = workIdIn((await must(box, demo, ["work", "add", "the context renders behind the gate"])).out);
+const running = workIdIn((await mustPerson(box, demo, ["work", "add", "the context renders behind the gate"])).out);
 await must(box, demo, ["work", "start", running]);
 await must(box, demo, ["report", running, "the plain render runs the budget inside its own thunk"]);
 await must(box, demo, ["work", "started", running, "--pid", String(process.pid)]);
 
-const held = workIdIn((await must(box, demo, ["work", "add", "the show pages keep their lead lines"])).out);
+const held = workIdIn((await mustPerson(box, demo, ["work", "add", "the show pages keep their lead lines"])).out);
 await must(box, demo, ["work", "start", held], { SUPERSELF_SESSION: "another-session", SUPERSELF_SESSION_PID: String(process.pid) });
 await must(box, demo, ["state", "place", held, "--scope", "other"]);
 

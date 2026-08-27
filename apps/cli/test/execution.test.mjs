@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -325,7 +325,7 @@ test("execution on a preset record refuses toward its own verbs", async () =>
 
 test("B: no reports and no done-time text refuses, naming the evidence commands", async () =>
 {
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "close with nothing"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "close with nothing"])).out);
     const result = await selfIn(boxB, demoB, ["work", "done", work]);
     assert.notEqual(result.code, 0);
     assert.match(result.out, /has no evidence for done/);
@@ -335,7 +335,7 @@ test("B: no reports and no done-time text refuses, naming the evidence commands"
 
 test("B: bare-summary reports do not satisfy done (ruling 2)", async () =>
 {
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "close on prose"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "close on prose"])).out);
     // No HEAD exists yet, so the report carries neither commit nor artifact.
     await must(boxB, demoB, ["report", work, "went well, feels finished"]);
     const result = await selfIn(boxB, demoB, ["work", "done", work]);
@@ -346,7 +346,7 @@ test("B: bare-summary reports do not satisfy done (ruling 2)", async () =>
 
 test("B: a done-time text report satisfies the gate and is recorded", async () =>
 {
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "trivial but real"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "trivial but real"])).out);
     await must(boxB, demoB, ["work", "done", work, "--report", "renamed the flag, help page regenerated"]);
     const shown = (await must(boxB, demoB, ["work", "show", work])).out;
     assert.ok(shown.includes("- Status: done"), shown);
@@ -359,7 +359,7 @@ test("B: a done-time text report satisfies the gate and is recorded", async () =
 
 test("B: a report carrying an artifact satisfies done", async () =>
 {
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "close on an artifact"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "close on an artifact"])).out);
     const artifact = join(boxB.root, "output.txt");
     writeFileSync(artifact, "rendered result\n");
     await must(boxB, demoB, ["report", work, "result attached", "--artifact", artifact]);
@@ -372,7 +372,7 @@ test("B: a report carrying commit evidence satisfies done", async () =>
     writeFileSync(join(demoB, "change.txt"), "the change\n");
     execFileSync("git", ["add", "."], { cwd: demoB, env: boxB.env, stdio: "ignore" });
     execFileSync("git", ["commit", "-q", "-m", "the change"], { cwd: demoB, env: boxB.env, stdio: "ignore" });
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "close on a commit"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "close on a commit"])).out);
     await must(boxB, demoB, ["report", work, "landed on main"]);
     const done = await selfIn(boxB, demoB, ["work", "done", work]);
     assert.equal(done.code, 0, done.out);
@@ -392,7 +392,7 @@ test("B: uncovered criteria refuse done with the uncovered ones named", async ()
 // reads it, so the evidence rule is the whole rule.
 test("B: a `work.required` line in the log does not gate a unit recorded today", async () =>
 {
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "close beside a legacy criterion"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "close beside a legacy criterion"])).out);
     const line = { id: "01hz00000000000000000000d6", ts: "2025-03-01T00:00:00.000Z", type: "work.required", project: "demo", payload: { work, requirement: "r1", text: "a criterion nobody covered" }, refs: {}, origin: {} };
     appendFileSync(join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl"), JSON.stringify(line) + "\n");
     const done = await selfIn(boxB, demoB, ["work", "done", work, "--report", "closed on a stated fact"]);
@@ -405,7 +405,7 @@ test("B: a `work.required` line in the log does not gate a unit recorded today",
 test("B: uncovered entity criteria do not gate `work done`, which reaches the evidence gate alone", async () =>
 {
     const path = join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl");
-    const seed = workIdIn((await must(boxB, demoB, ["work", "add", "the shape a work entity is recorded in"])).out);
+    const seed = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "the shape a work entity is recorded in"])).out);
     const template = readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line))
         .findLast((event) => event.type === "entity.confirmed" && event.payload.entity === seed);
     const work = "w-d7cr1";
@@ -421,7 +421,7 @@ test("B: uncovered entity criteria do not gate `work done`, which reaches the ev
 
 test("C: blocked on a decision renders as a full waiting row", async () =>
 {
-    rows.decision = workIdIn((await must(boxC, demoC, ["work", "add", "needs a ruling"])).out);
+    rows.decision = workIdIn((await mustPerson(boxC, demoC, ["work", "add", "needs a ruling"])).out);
     await must(boxC, demoC, ["work", "block", rows.decision, "--on", "decision", "--why", "pricing undecided"]);
     const out = await contextC();
     assert.ok(out.includes("## Waiting on you"), out);
@@ -443,10 +443,10 @@ test("C: a pending proposal renders as a waiting row", async () =>
 
 test("C: blocked on dependency or external renders as a count, not a row", async () =>
 {
-    rows.dependency = workIdIn((await must(boxC, demoC, ["work", "add", "parked on upstream api"])).out);
+    rows.dependency = workIdIn((await mustPerson(boxC, demoC, ["work", "add", "parked on upstream api"])).out);
     await must(boxC, demoC, ["work", "start", rows.dependency]);
     await must(boxC, demoC, ["work", "block", rows.dependency, "--on", "dependency", "--why", "upstream api missing"]);
-    rows.external = workIdIn((await must(boxC, demoC, ["work", "add", "parked on a vendor"])).out);
+    rows.external = workIdIn((await mustPerson(boxC, demoC, ["work", "add", "parked on a vendor"])).out);
     await must(boxC, demoC, ["work", "block", rows.external, "--on", "external"]);
     const out = await contextC();
     assert.ok(!out.includes("parked on upstream api"), `a dependency-blocked unit rendered as a row:\n${out}`);
@@ -456,7 +456,7 @@ test("C: blocked on dependency or external renders as a count, not a row", async
 
 test("C: open, unstarted work renders as a count, not a row", async () =>
 {
-    rows.open = workIdIn((await must(boxC, demoC, ["work", "add", "not yet picked up"])).out);
+    rows.open = workIdIn((await mustPerson(boxC, demoC, ["work", "add", "not yet picked up"])).out);
     const out = await contextC();
     assert.ok(!out.includes("not yet picked up"), "an unstarted unit rendered as a row");
     assert.match(out, /- 3 more open work items; run `self work --project 'demo'`/);
@@ -464,9 +464,9 @@ test("C: open, unstarted work renders as a count, not a row", async () =>
 
 test("C: done and retired work render nowhere, not even in the count", async () =>
 {
-    const done = workIdIn((await must(boxC, demoC, ["work", "add", "already delivered"])).out);
+    const done = workIdIn((await mustPerson(boxC, demoC, ["work", "add", "already delivered"])).out);
     await must(boxC, demoC, ["work", "done", done, "--report", "delivered and verified"]);
-    const retired = workIdIn((await must(boxC, demoC, ["work", "add", "already given up"])).out);
+    const retired = workIdIn((await mustPerson(boxC, demoC, ["work", "add", "already given up"])).out);
     await approvedIn(boxC, demoC, ["work", "retire", retired, "--why", "superseded"], retired);
     const out = await contextC();
     assert.ok(!out.includes("already delivered"), "a done unit rendered in context");
@@ -551,7 +551,7 @@ test("E: a report still auto-attaches HEAD as evidence", async () =>
     // demoB's repository gained a commit in section B; the report offers no
     // --evidence, and the recorded commit is the checkout's HEAD.
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: demoB, env: boxB.env, encoding: "utf8" }).trim();
-    const work = workIdIn((await must(boxB, demoB, ["work", "add", "head evidence check"])).out);
+    const work = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "head evidence check"])).out);
     await must(boxB, demoB, ["report", work, "auto evidence"]);
     const shown = (await must(boxB, demoB, ["work", "show", work])).out;
     assert.ok(shown.includes(head.slice(0, 7)), `the report did not attach HEAD:\n${shown}`);

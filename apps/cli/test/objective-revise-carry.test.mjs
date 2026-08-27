@@ -24,7 +24,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const objectiveIdIn = (text) => text.match(/\bo-[0-9a-z]{5}\b/)[0];
 const milestoneIdIn = (text) => text.match(/\bm-[0-9a-z]{5}\b/)[0];
@@ -55,14 +55,14 @@ async function fixture()
     const other = objectiveIdIn(await run(["objective", "add", "other objective"]));
     const m1 = milestoneIdIn(await run(["milestone", "add", "m1 unstarted", "--objective", old, "--exit", "a"]));
     const m2 = milestoneIdIn(await run(["milestone", "add", "m2 on-track", "--objective", old, "--exit", "b"]));
-    const w1 = workIdIn(await run(["work", "add", "w1 for m2"]));
+    const w1 = workIdIn((await mustPerson(box, demo, ["work", "add", "w1 for m2"])).out);
     await run(["work", "link", w1, "--milestone", m2]);
     const m3 = milestoneIdIn(await run(["milestone", "add", "m3 partial", "--objective", old, "--exit", "c", "--exit", "d"]));
-    const w2 = workIdIn(await run(["work", "add", "w2 for m3 and other"]));
+    const w2 = workIdIn((await mustPerson(box, demo, ["work", "add", "w2 for m3 and other"])).out);
     await run(["work", "link", w2, "--milestone", m3, "--objective", other]);
     await run(["milestone", "met", m3, "--criterion", "c1", "--why", "first half", "--work", w2]);
     const m4 = milestoneIdIn(await run(["milestone", "add", "m4 reached", "--objective", old, "--exit", "e"]));
-    const w3 = workIdIn(await run(["work", "add", "w3 for m4"]));
+    const w3 = workIdIn((await mustPerson(box, demo, ["work", "add", "w3 for m4"])).out);
     await run(["work", "link", w3, "--milestone", m4]);
     await run(["milestone", "met", m4, "--criterion", "c1", "--why", "done", "--work", w3]);
     await run(["milestone", "reach", m4]);
@@ -341,7 +341,7 @@ test("cells 25–28: whatever the revise changes, the milestone carries and the 
     {
         const old = objectiveIdIn(await run(["objective", "add", `objective ${cell}`, "--target", "2099-01-01"]));
         const milestone = milestoneIdIn(await run(["milestone", "add", `checkpoint ${cell}`, "--objective", old, "--exit", "one"]));
-        const work = workIdIn(await run(["work", "add", `unit ${cell}`]));
+        const work = workIdIn((await mustPerson(box, demo, ["work", "add", `unit ${cell}`])).out);
         await run(["work", "link", work, "--milestone", milestone]);
         const printed = (await approvedIn(box, demo, ["objective", "revise", old, "--why", `cell ${cell}`, ...flags], old)).printed;
         const successor = objectiveIdIn(printed);
@@ -366,7 +366,7 @@ test("cell 30: a blocked milestone is live and carries with its blocked state", 
     const run = async (args) => (await must(box, demo, args)).out;
     const old = objectiveIdIn(await run(["objective", "add", "blocked plan"]));
     const milestone = milestoneIdIn(await run(["milestone", "add", "blocked checkpoint", "--objective", old, "--exit", "one"]));
-    const work = workIdIn(await run(["work", "add", "stuck unit"]));
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "stuck unit"])).out);
     await run(["work", "link", work, "--milestone", milestone]);
     await run(["work", "block", work, "--on", "external", "--why", "vendor outage"]);
     assert.match(await run(["milestone", "show", milestone]), /^- State: blocked — /m);

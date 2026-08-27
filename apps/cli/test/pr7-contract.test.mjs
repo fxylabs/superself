@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { machine, demoWorkspace, selfIn } from "./harness.mjs";
+import { demoWorkspace, machine, personIn, selfIn } from "./harness.mjs";
 import { COMMANDS } from "../dist/main.js";
 import { checkContract, commandLeaves } from "../dist/contract.js";
 import {
@@ -356,7 +356,7 @@ test("cell 106: an explicit --json on a leaf with no machine contract is refused
 {
     const created = machine();
     const it = { ...created, ...await demoWorkspace(created) };
-    const result = await selfIn(it, it.demo, ["work", "add", "x", "--json"]);
+    const result = await personIn(it, it.demo, ["work", "add", "x", "--json"]);
     assert.equal(result.code, 1);
     assert.match(result.out, /no --json contract yet/);
 });
@@ -367,8 +367,8 @@ test("cell 157: SUPERSELF_JSON=1 is ignored by a leaf with no machine contract",
     const it = { ...created, ...await demoWorkspace(created) };
     for (const args of [["work", "add", "an ordinary unit"], ["alias"], ["state", "list"]])
     {
-        const plain = await selfIn(it, it.demo, args);
-        const exported = await selfIn(it, it.demo, args, { SUPERSELF_JSON: "1" });
+        const plain = await personIn(it, it.demo, args);
+        const exported = await personIn(it, it.demo, args, { SUPERSELF_JSON: "1" });
         assert.equal(exported.code, plain.code, `${args.join(" ")} changed its exit code`);
         if (args[0] !== "work")
         {
@@ -490,7 +490,7 @@ test("cell 117: a machine with no credential and no plugins behaves as 0.6.x did
     ];
     for (const argv of workflow)
     {
-        assert.equal((await selfIn(it, it.demo, argv)).code, 0, `self ${argv.join(" ")} broke`);
+        assert.equal((await personIn(it, it.demo, argv)).code, 0, `self ${argv.join(" ")} broke`);
     }
 });
 

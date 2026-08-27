@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { STATEMENT_TYPES } from "../dist/model.js";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -55,7 +55,7 @@ test("a dropped convention leaves the render and stays reachable by naming it", 
 
 test("the work spine: add, start, report, evidenced done as a judgment", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "ship the fast tier"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "ship the fast tier"])).out);
     await must(box, demo, ["work", "start", work]);
     await must(box, demo, ["report", work, "tier landed, suite green"]);
     // The scratch repo has no commits, so the report is a bare summary and the
@@ -70,7 +70,7 @@ test("the work spine: add, start, report, evidenced done as a judgment", async (
 
 test("a retired unit stops counting as open and keeps its why", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "a direction given up"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "a direction given up"])).out);
     await approved(["work", "retire", work, "--why", "superseded by the fast tier"], work);
     assert.ok(!(await must(box, demo, ["work"])).out.includes("a direction given up"));
     assert.ok((await must(box, demo, ["work", "show", work])).out.includes("superseded by the fast tier"));

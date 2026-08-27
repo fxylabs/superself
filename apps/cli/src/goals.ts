@@ -16,7 +16,9 @@ import {
     supersedeSpelling
 } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
+import { HumanConfirmation, personRefusal } from "./human.js";
 import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
+import { readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
 import {
     allMilestones,
@@ -961,6 +963,8 @@ const LINK_TARGET: Requirement = { flags: ["objective", "milestone"], value: "<i
 const PROPOSAL_OPTIONS = {
     objective: { type: "string" },
     milestone: { type: "string" },
+    supersedes: { type: "string" },
+    why: { type: "string" },
     value: { type: "string" },
     success: { type: "string", multiple: true },
     stop: { type: "string", multiple: true },
@@ -1000,11 +1004,19 @@ const WHY_PLAN_CHANGED: Requirement = { flags: ["why"], hint: "why the plan chan
 
 const REVISE_USAGE = 'work revise <work-id> "<revised plan>" --why "<why the plan changed>"';
 
+const PROPOSE_USAGE = 'work propose "<plan>" [--supersedes <id> --why w] [--objective <id>|--milestone <id> …]';
+
 export const WORK_GOAL_LEAVES: CommandLeaf[] = [
     leaf("link", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, true), { requires: [LINK_TARGET] }),
     leaf("unlink", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, false), { requires: [LINK_TARGET] }),
     leaf("propose", PROPOSAL_OPTIONS, 1, cmdPropose, { undocumented: ["depends"] }),
-    leaf("accept", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true)),
+    // `retiring`, because accepting a plan that carries `--supersedes` retires
+    // the unit it replaces (#389). A plan that carries none destroys nothing
+    // and is refused as an idle line inside a reviewed set, exactly as a bare
+    // `work add` is: marking a leaf that turns out to destroy nothing costs
+    // nothing, and forgetting to mark one that does costs a plan a person
+    // could have run.
+    retiring(leaf("accept", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true))),
     leaf("decline", WHY_OPTION, 1, (input) => cmdProposalDecision(input, false), { requires: [WHY_TURNED_DOWN] }),
     // Deliberately not `retiring`: a revision destroys nothing — one id, no
     // successor, no supersession — which is the opposite of what `objective
@@ -1054,6 +1066,75 @@ function linkEdges(ctx: ProjectContext, model: ProjectModel,
     return edges;
 }
 
+/* ── what a work correction may replace ────────────────────────────── */
+
+// The one answer to "may this unit be retired": known, and not already closed
+// as done. Read by `work retire`, by `work add --supersedes`, which records
+// the same retirement, and by `work propose --supersedes`, which carries it
+// until a person accepts. Already-retired is the caller's case to answer — a
+// no-op for one, a refusal for the others.
+export function requireRetirable(model: ProjectModel, id: string | undefined): WorkState
+{
+    const wanted = requireText(id, "work retire <work-id> — run `self work` to list ids");
+    const work = model.works.find((item) => item.id === wanted);
+    if (work === undefined)
+    {
+        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
+    }
+    if (work.status === "done")
+    {
+        throw new CliError(`${work.id} is already done — retirement records an outcome that was given up, not one that was reached`);
+    }
+    return work;
+}
+
+// The target of `--supersedes` on a work verb, resolved the one way both
+// spellings resolve it (#389). `work add` retires it in the same append and
+// `work propose` records the intention to; a target one accepts and the other
+// refuses would be two corrections wearing one flag.
+export function requireSupersedableWork(ctx: ProjectContext, model: ProjectModel, wanted: string): WorkState
+{
+    requireSupersedeKind(model.entities, wanted, "work");
+    refuseForeignTarget(ctx, model, wanted);
+    const work = requireRetirable(model, wanted);
+    if (work.status === "retired")
+    {
+        // Not the no-op `work retire` answers with: a record is about to be
+        // written claiming a supersession that never happened.
+        throw new CliError(`${work.id} is already retired — ${work.retiredWhy}`);
+    }
+    if (work.status === "review")
+    {
+        // A plan nobody has accepted is corrected by restating it under its own
+        // id (#356), which keeps one plan's history in one record. Superseding
+        // it would mint a second id for a plan that was never approved.
+        throw new CliError(`${work.id} is a plan still awaiting review — restate it instead: `
+            + `\`self work revise ${work.id} "<revised plan>" --why w\` keeps its id`);
+    }
+    return work;
+}
+
+// A correction is recorded in the log that holds the unit it replaces, so an
+// id another registered project owns is refused by naming that project rather
+// than by calling it unknown: the reader is standing in the wrong checkout,
+// not looking at a typo. Only asked where this project does not hold the id,
+// so the ordinary path folds nothing extra.
+function refuseForeignTarget(ctx: ProjectContext, model: ProjectModel, wanted: string): void
+{
+    if (model.works.some((item) => item.id === wanted))
+    {
+        return;
+    }
+    for (const other of workspaceModels(ctx.storeDir, ctx.project))
+    {
+        if (other.slug !== ctx.project && other.works.some((item) => item.id === wanted))
+        {
+            throw new CliError(`${wanted} is ${other.slug}'s unit, and a correction is recorded where the unit is — `
+                + `run this in ${other.slug}'s checkout`);
+        }
+    }
+}
+
 /* ── goal-gap proposals ────────────────────────────────────────────── */
 
 // A proposal is a proposed work entity (#207 B13): the brief rides the
@@ -1063,15 +1144,24 @@ function linkEdges(ctx: ProjectContext, model: ProjectModel,
 function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
-    const outcome = requireText(positionals[0], 'work propose "<plan>" [--objective <id>|--milestone <id> …]');
+    const outcome = requireText(positionals[0], PROPOSE_USAGE);
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const brief = briefFor(model, outcome, values as Record<string, string | string[] | undefined>);
     requireNovel(model, outcome, brief);
-    const row = presetRow(ctx.storeDir, "work");
+    const supersedes = proposedSupersession(ctx, model, values);
     const id = workId();
+    const payload = proposedPayload(ctx, id, outcome, brief, supersedes);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip(payload)), `${outcome}`);
+    return [{ kind: "receipt", text: proposalReceipt(id, supersedes) }];
+}
+
+function proposedPayload(ctx: ProjectContext, id: string, outcome: string,
+    brief: Record<string, unknown>, supersedes: SupersedePlan | undefined): Record<string, unknown>
+{
+    const row = presetRow(ctx.storeDir, "work");
     const { outcome: text, ...rest } = brief;
     void text;
-    const payload: Record<string, unknown> = {
+    return {
         entity: id,
         text: outcome,
         labels: [row.label],
@@ -1080,10 +1170,51 @@ function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTION
         exposure: row.exposure,
         scope: "project",
         priority: row.priority,
-        ...rest
+        ...rest,
+        supersedes
     };
-    recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip(payload)), `${outcome}`);
-    return [{ kind: "receipt", text: id }];
+}
+
+// What a correction proposed rather than recorded carries (#389): the unit it
+// replaces *on acceptance*, and why the outcome moved. It is a payload field
+// and not a supersedes link, because a work correction is a retirement with a
+// successor — the pair `work add --supersedes` writes — and a link would fold
+// the target to a superseded statement instead. Every existing fold pass
+// ignores it; `work accept` is the one reader.
+interface SupersedePlan
+{
+    entity: string;
+    why: string;
+}
+
+function proposedSupersession(ctx: ProjectContext, model: ProjectModel,
+    values: CommandInput<typeof PROPOSAL_OPTIONS>["values"]): SupersedePlan | undefined
+{
+    if (values.supersedes === undefined)
+    {
+        if (values.why !== undefined)
+        {
+            throw new CliError("work propose --why states why a replaced unit gave up its outcome — "
+                + "pass --supersedes <work-id> too, or record the reason with `self report`");
+        }
+        return undefined;
+    }
+    const work = requireSupersedableWork(ctx, model, values.supersedes);
+    return {
+        entity: work.id,
+        why: requireText(values.why, `work propose "<plan>" --supersedes ${work.id} --why "<why the outcome moved to the new unit>"`)
+    };
+}
+
+// The receipt says what acceptance will do, because that is the half a reader
+// cannot see: the target is untouched until then, and a plan that quietly
+// carried a retirement would be one a person accepted without being told.
+function proposalReceipt(id: string, supersedes: SupersedePlan | undefined): string
+{
+    return supersedes === undefined
+        ? id
+        : `${id}\n  replaces ${supersedes.entity} on acceptance — ${supersedes.entity} is untouched `
+            + `until a person runs \`self work accept ${id}\``;
 }
 
 // What the creation event carries beyond the plan text: a gap proposal's full
@@ -1239,8 +1370,101 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
         recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.text}`);
         return [];
     }
-    recordEvents(ctx, acceptEvents(ctx, model, proposal), `${proposal.id} ${proposal.text}`);
+    requirePersonAccepting(ctx, proposal);
+    recordAcceptance(ctx, model, proposal);
     return [{ kind: "receipt", text: proposal.id }];
+}
+
+// Accepting a plan confirms a work record, and a confirmed work record is a
+// person's call (#389). The refusal names the project that holds the plan:
+// this verb resolves it from the record rather than from the directory (#302),
+// so a reader standing anywhere is told whose plan they were handed.
+function requirePersonAccepting(ctx: ProjectScope, proposal: Answerable): void
+{
+    const refused = personRefusal({
+        act: "accepting a plan",
+        disclosure: `${proposal.text.split("\n")[0]}\n${proposal.id} is ${ctx.project}'s plan, `
+            + "and this line resolves it from any directory",
+        personRuns: `self work accept ${proposal.id}`
+    });
+    if (refused !== null)
+    {
+        throw new CliError(refused);
+    }
+}
+
+// The acceptance itself. A plan that carries no supersession is the append it
+// always was; one that carries a correction goes through the retirement gate,
+// so the confirm and the retirement land as one append under one typed
+// confirmation — the pair `work add --supersedes` writes today.
+function recordAcceptance(ctx: ProjectScope, model: ProjectModel, proposal: Answerable): void
+{
+    const carried = carriedSupersession(ctx, proposal);
+    if (carried === undefined)
+    {
+        recordEvents(ctx, acceptEvents(ctx, model, proposal), `${proposal.id} ${proposal.text}`);
+        return;
+    }
+    const target = acceptedTarget(ctx, model, proposal, carried);
+    const successor = model.entities.find((item) => item.id === proposal.id);
+    recordRetirement(ctx, retirementIntent(model, "supersede", [target.id],
+        { successor: supersedingRecord({ text: proposal.text, labels: successor?.labels ?? [] }) }), model,
+        (confirmation) => [...acceptEvents(ctx, model, proposal, confirmation),
+            makeEvent(ctx.project, "entity.retired", strip({
+                entity: target.id, why: carried.why, successor: proposal.id, successorProject: ctx.project, confirmation
+            }), undefined, true)],
+        `${proposal.id} ${proposal.text}`);
+}
+
+// The supersession a proposal carried, read back off its creation event —
+// the one caller of `payload.supersedes`, since no fold pass reads it. Nothing
+// out of the log is trusted to be its declared shape: a field that is not an
+// object naming a work id reads as absent, and the plan accepts as a plain one.
+function carriedSupersession(ctx: ProjectScope, proposal: Answerable): SupersedePlan | undefined
+{
+    const created = readEvents(ctx.storeDir, ctx.project)
+        .find((event) => event.type === "entity.proposed" && event.payload.entity === proposal.id);
+    const carried = created?.payload.supersedes as Partial<SupersedePlan> | undefined;
+    if (typeof carried?.entity !== "string" || carried.entity === "")
+    {
+        return undefined;
+    }
+    return { entity: carried.entity, why: typeof carried.why === "string" ? carried.why : "" };
+}
+
+// The carried target, judged against the model as it stands now. A unit that
+// closed between the proposal and the acceptance is not retired over: the
+// acceptance is refused whole, and the plan stays open for a person to revise
+// or decline.
+function acceptedTarget(ctx: ProjectScope, model: ProjectModel, proposal: Answerable, carried: SupersedePlan): WorkState
+{
+    const work = model.works.find((item) => item.id === carried.entity);
+    if (work === undefined)
+    {
+        throw driftRefusal(ctx, proposal, carried.entity, `no record here answers to ${carried.entity}`);
+    }
+    if (work.status === "done")
+    {
+        throw driftRefusal(ctx, proposal, work.id, `${work.id} is already done`);
+    }
+    if (work.status === "retired")
+    {
+        throw driftRefusal(ctx, proposal, work.id, `${work.id} is already retired — ${work.retiredWhy}`);
+    }
+    return work;
+}
+
+function driftRefusal(ctx: ProjectScope, proposal: Answerable, target: string, reason: string): CliError
+{
+    return new CliError([
+        `${proposal.id} proposes to replace ${target}, and ${reason} — nothing was recorded`,
+        "",
+        `  a person accepts the plan without the replacement by revising it in ${ctx.project}:`,
+        `    self work revise ${proposal.id} "<plan>" --why "${target} closed on its own"`,
+        "",
+        "  or declines it:",
+        `    self work decline ${proposal.id} --why "…"`
+    ].join("\n"));
 }
 
 // The acceptance names the exact revision it approves (#356) — the record's
@@ -1248,9 +1472,15 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
 // written is not authorized by it, however a merged log ordered the two. The
 // grouping edge toward the gap rides the same append, and is left alone where
 // a re-acceptance would only state it twice.
-function acceptEvents(ctx: ProjectScope, model: ProjectModel, proposal: Answerable): SelfEvent[]
+// `confirmation` rides the acceptance wherever one was typed: the person gate
+// this verb passes leaves no artifact of its own, so the only acceptance whose
+// gate is provable from the log afterwards is the one that also displaced a
+// record and read a challenge back for it.
+function acceptEvents(ctx: ProjectScope, model: ProjectModel, proposal: Answerable,
+    confirmation?: HumanConfirmation): SelfEvent[]
 {
-    const events = [makeEvent(ctx.project, "entity.confirmed", { entity: proposal.id }, { confirms: proposal.confirms }, true)];
+    const events = [makeEvent(ctx.project, "entity.confirmed",
+        strip({ entity: proposal.id, confirmation }), { confirms: proposal.confirms }, true)];
     if (proposal.target !== undefined && !alreadyToward(model, proposal))
     {
         events.push(makeEvent(ctx.project, "entity.linked",

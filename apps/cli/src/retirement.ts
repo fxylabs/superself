@@ -13,7 +13,7 @@
 // over more than one call.
 import { CommandLeaf } from "./contract.js";
 import { EntityState } from "./entities.js";
-import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
+import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
 import { ProjectModel } from "./model.js";
 import { CliContext } from "./paths.js";
 import { holdAppends, recordCalls, recordEvents } from "./pipeline.js";
@@ -169,7 +169,7 @@ function targetsOf(disclosed: Disclosed[]): EntityState[]
 function requireHumanRetirement(disclosed: Disclosed[]): HumanConfirmation
 {
     const asked = challenge(disclosed);
-    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    if (!personAtTerminal() || !process.stdout.isTTY)
     {
         throw new CliError(refusal(disclosed, renderDisclosure(disclosed, PLAIN_EMPHASIS)));
     }

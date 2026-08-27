@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, machine, must, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, machine, must, mustPerson, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -36,7 +36,7 @@ const asSession = (session, pid) => ({ SUPERSELF_SESSION: `${session}-${seq}`, S
 async function freshUnit()
 {
     seq += 1;
-    return workIdIn((await must(box, demo, ["work", "add", `outcome ${seq}`])).out);
+    return workIdIn((await mustPerson(box, demo, ["work", "add", `outcome ${seq}`])).out);
 }
 
 function startsOf(id)

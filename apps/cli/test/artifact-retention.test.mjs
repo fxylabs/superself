@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -62,7 +62,7 @@ function tree(name, entries)
 async function unit(at = demo)
 {
     seq += 1;
-    return workIdIn((await must(box, at, ["work", "add", `outcome ${seq}`])).out);
+    return workIdIn((await mustPerson(box, at, ["work", "add", `outcome ${seq}`])).out);
 }
 
 // One report per cell, on a work unit of its own, so no two cells read each

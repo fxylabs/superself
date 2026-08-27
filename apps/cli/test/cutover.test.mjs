@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -192,7 +192,7 @@ test("B12: met covers, reach is the gated done, revise supersedes, drop retires"
 
 test("B13: the work verbs record the entity lifecycle — add, propose, accept, decline, link, retire", async () =>
 {
-    const work = workIdIn((await must(box, demo, ["work", "add", "ship the cutover"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "ship the cutover"])).out);
     assert.deepEqual(eventFor(work, "entity.confirmed").payload.labels, ["work"]);
     assert.equal(eventFor(work, "entity.confirmed").payload.exposure, "search");
     await must(box, demo, ["work", "link", work, "--objective", preview]);
@@ -205,7 +205,7 @@ test("B13: the work verbs record the entity lifecycle — add, propose, accept, 
     const brief = eventFor(proposal, "entity.proposed");
     assert.equal(brief.payload.value, "closes the gap");
     assert.equal(brief.payload.expires, "2099-01-01");
-    await must(box, demo, ["work", "accept", proposal]);
+    await mustPerson(box, demo, ["work", "accept", proposal]);
     assert.notEqual(events().find((event) => event.type === "entity.confirmed" && event.refs?.confirms === proposal), undefined);
     assert.ok((await must(box, demo, ["work"])).out.includes("a proposed direction"), "an accepted proposal did not become an open unit");
     const declined = workIdIn((await must(box, demo, ["work", "propose", "a declined direction", "--objective", preview,
@@ -227,7 +227,7 @@ test("B14: work start/block/unblock/done record the phase 3 execution events thr
     // refuses…" through "B: a report carrying commit evidence satisfies
     // done") and test/lifecycle.test.mjs "the work spine: add, start, report,
     // evidenced done as a judgment". Here: the recorded event types.
-    const work = workIdIn((await must(box, demo, ["work", "add", "exercise the spine"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "exercise the spine"])).out);
     await must(box, demo, ["work", "start", work]);
     assert.notEqual(eventFor(work, "entity.started"), undefined);
     await must(box, demo, ["work", "block", work, "--on", "external", "--why", "vendor wait"]);

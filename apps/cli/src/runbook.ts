@@ -18,7 +18,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { chainHead, chainVersion, EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
-import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
+import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
 import { wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels } from "./model.js";
 import { notice } from "./output.js";
@@ -455,7 +455,7 @@ function runbookApprove({ values, positionals }: CommandInput<typeof APPROVE_OPT
 // approved.
 function approveRun(run: EntityState, key: string): HumanConfirmation
 {
-    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    if (!personAtTerminal() || !process.stdout.isTTY)
     {
         throw new CliError(`approving ${key} is a person's call, and this process has no terminal to make it at`
             + ` — nothing was recorded\n\n  ${run.execution?.why ?? run.text}\n\n`

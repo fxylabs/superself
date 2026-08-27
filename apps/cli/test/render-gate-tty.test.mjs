@@ -99,7 +99,7 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
 // the move — which for `self work` is the ruled list and nothing under it.
 test("stage 3 cell 13: at a terminal, `self work` prints the ruled list with no size line under it", async () =>
 {
-    mustSpawn(box, demo, ["work", "add", "the listings answer with blocks"]);
+    mustSpawn(box, demo, ["work", "propose", "the listings answer with blocks"]);
     const answer = await approvedIn(box, demo, ["work"], "");
     assert.equal(answer.code, 0, answer.out);
     const model = buildModel(join(ws, ".superself"), "demo", new Date());
@@ -134,7 +134,7 @@ function sizeLines(printed)
 // a pipe is absent — the gate chose, not the handler.
 test("stage 4 cell 13: at a terminal, `self work` is the listing block's ruled render", async () =>
 {
-    mustSpawn(box, demo, ["work", "add", "the pages answer with blocks"]);
+    mustSpawn(box, demo, ["work", "propose", "the pages answer with blocks"]);
     const answer = await approvedIn(box, demo, ["work"], "");
     assert.equal(answer.code, 0, answer.out);
     const model = buildModel(join(ws, ".superself"), "demo", new Date());

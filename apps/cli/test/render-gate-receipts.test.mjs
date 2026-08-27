@@ -13,7 +13,7 @@ import { mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NO_OBJECTIVE_HINT } from "../dist/goals.js";
-import { git, machine, must, selfIn } from "./harness.mjs";
+import { git, machine, must, personIn, selfIn } from "./harness.mjs";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const source = fileURLToPath(new URL("../src", import.meta.url));
@@ -33,7 +33,7 @@ await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the recei
 // about.
 test("stage 2 cell 1: a piped `self work add` answers with the bare id, under the announce line", async () =>
 {
-    const answer = await selfIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
+    const answer = await personIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
     assert.equal(answer.code, 0, answer.out);
     assert.match(answer.out,
         new RegExp(`^entity\\.confirmed recorded \\[[0-9abcdefghjkmnpqrstvwxyz]{26}\\]`
@@ -133,7 +133,7 @@ test("stage 2 cell 7: on a machine with no workspace, `self init` answers with t
 // write verb has to prove that.
 test("stage 2 cell 8: outside the project checkout, a migrated write verb refuses as it did", async () =>
 {
-    const outside = await selfIn(box, box.root, ["work", "add", "a unit recorded from nowhere"]);
+    const outside = await personIn(box, box.root, ["work", "add", "a unit recorded from nowhere"]);
     assert.equal(outside.code, 1, outside.out);
     assert.equal(outside.out, "error: not inside a registered project — run `self project init` here to register it, "
         + "or `self project link <slug> --here` if it is a checkout of a project registered on another machine\n");

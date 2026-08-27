@@ -27,7 +27,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, git, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 /* ── the floor every cell stands on ────────────────────────────────── */
 
@@ -632,7 +632,7 @@ test("C10: link states which work unit is carrying the run", async () =>
     const ground = await floor();
     const id = await addRunbook(ground, "content loop", ["plan", "draft"]);
     const run = await startRun(ground, id, "E001");
-    const work = workIdIn((await must(ground.box, ground.demo, ["work", "add", "cut the video"])).out);
+    const work = workIdIn((await mustPerson(ground.box, ground.demo, ["work", "add", "cut the video"])).out);
     const linked = await must(ground.box, ground.demo, ["runbook", "link", "E001", "--work", work]);
     assert.match(linked.out, new RegExp(`E001 is carried by ${work}`));
     const event = events(ground.ws).find((item) => item.type === "entity.linked" && item.payload.entity === run);
@@ -655,8 +655,8 @@ test("C12: a run may name more than one work unit, and naming the same one twice
     const ground = await floor();
     const id = await addRunbook(ground, "content loop", ["plan"]);
     await startRun(ground, id, "E001");
-    const first = workIdIn((await must(ground.box, ground.demo, ["work", "add", "cut the video"])).out);
-    const second = workIdIn((await must(ground.box, ground.demo, ["work", "add", "write the caption"])).out);
+    const first = workIdIn((await mustPerson(ground.box, ground.demo, ["work", "add", "cut the video"])).out);
+    const second = workIdIn((await mustPerson(ground.box, ground.demo, ["work", "add", "write the caption"])).out);
     await must(ground.box, ground.demo, ["runbook", "link", "E001", "--work", first]);
     await must(ground.box, ground.demo, ["runbook", "link", "E001", "--work", second]);
     const shown = (await must(ground.box, ground.demo, ["runbook", "show", id])).out;

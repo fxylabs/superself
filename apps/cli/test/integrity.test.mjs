@@ -26,7 +26,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, cpSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
 
@@ -295,7 +295,7 @@ test("E3: two folds of a mixed store render identically", async () =>
 // this file too.
 test("E5: the done evidence refusal reads exactly as it did before the cutover", async () =>
 {
-    const work = workIdIn((await must(mixedBox, mixedDemo, ["work", "add", "close with nothing"])).out);
+    const work = workIdIn((await mustPerson(mixedBox, mixedDemo, ["work", "add", "close with nothing"])).out);
     const refused = await selfIn(mixedBox, mixedDemo, ["work", "done", work]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /has no evidence for done — attach a report first/);
@@ -316,7 +316,7 @@ test("E6: one representative verb per family prints the entity event it records"
     const milestone = (await must(box, demo, ["milestone", "add", "suite green", "--objective", objective, "--exit", "tests pass"])).out.match(/\bm-[0-9a-z]{5}\b/)[0];
     assert.match((await must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "ran green"])).out, /entity\.covered recorded/);
     assert.match((await must(box, demo, ["milestone", "reach", milestone])).out, /entity\.done recorded/);
-    const work = workIdIn((await must(box, demo, ["work", "add", "ship it"])).out);
+    const work = workIdIn((await mustPerson(box, demo, ["work", "add", "ship it"])).out);
     assert.match((await must(box, demo, ["work", "start", work])).out, /entity\.started recorded/);
     assert.match((await approvedIn(box, demo, ["work", "retire", work, "--why", "moved on"], work)).printed, /entity\.retired recorded/);
     const raw = (await must(box, demo, ["state", "add", "standing note"])).out.match(/\be-[0-9a-z]{5}\b/)[0];

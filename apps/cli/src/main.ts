@@ -14,10 +14,10 @@ import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitatio
 import { entityCharacters, EntityState, Exposure, isEntityCreation, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
-import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, WORK_GOAL_LEAVES } from "./goals.js";
+import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, requireRetirable, requireSupersedableWork, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, resetProbes, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
-import { attemptMarker, confirmHuman, HumanConfirmation } from "./human.js";
+import { confirmHuman, HumanConfirmation, personAtTerminal, personRefusal } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
@@ -981,7 +981,10 @@ export const COMMANDS: Command[] = [
             },
             {
                 syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w]',
-                description: ["create a work unit; --supersedes retires the unit it replaces, naming this one its successor"],
+                description: [
+                    "create a work unit; --supersedes retires the unit it replaces, naming this one its successor",
+                    "(a person's own command: a process with no terminal is refused and told to propose instead)"
+                ],
                 verbs: ["add"]
             },
             {
@@ -1020,10 +1023,11 @@ export const COMMANDS: Command[] = [
                 verbs: ["link", "unlink"]
             },
             {
-                syntax: 'work propose "<plan>" [--milestone m --value v --success s --stop s --risk r]',
+                syntax: 'work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]',
                 description: [
                     "propose work for a person to review; the plan text alone is enough",
-                    "(--objective or --milestone makes it a gap proposal, which owes the full brief)"
+                    "(--objective or --milestone makes it a gap proposal, which owes the full brief)",
+                    "--supersedes proposes a correction: the unit it names is retired on acceptance"
                 ],
                 verbs: ["propose"]
             },
@@ -1035,7 +1039,14 @@ export const COMMANDS: Command[] = [
                 ],
                 verbs: ["revise"]
             },
-            { syntax: "work accept|decline <proposal-id> [--why w]", description: ["act on a goal-gap proposal; decline states why"], verbs: ["accept", "decline"] },
+            {
+                syntax: "work accept|decline <proposal-id> [--why w]",
+                description: [
+                    "act on a proposed plan; decline states why",
+                    "(accepting is a person's call and is refused where no person is at the terminal)"
+                ],
+                verbs: ["accept", "decline"]
+            },
             {
                 syntax: "work started <id> --pid N | exited <id> [--code N]",
                 description: ["record the agent process running a unit, and how it ended", "liveness is judged at read time from the pid on this machine"],
@@ -1064,7 +1075,10 @@ export const COMMANDS: Command[] = [
             '`work add "<corrected outcome>" --supersedes <id> --why w` records the new unit',
             "and retires the one it replaces with the new unit as its successor — the same",
             "pair `work retire --successor` records, spelled the way every other add verb",
-            "spells a correction.",
+            "spells a correction. A session spells the same correction as a plan:",
+            '`work propose "<corrected outcome>" --supersedes <id> --why w` leaves the unit',
+            "it names untouched until a person accepts, and the retirement lands with the",
+            "acceptance.",
             "",
             "done is the judgment that the outcome was reached, and the claim must",
             "carry evidence: a report with a commit or an artifact, or a done-time",
@@ -1074,7 +1088,12 @@ export const COMMANDS: Command[] = [
             "",
             "a plan an agent wrote is reviewed before it is worked: `work propose",
             '"<plan>"` records the plan as work waiting on a person, and `work accept`',
-            "confirms it under the same id. Until it is first started that plan can be",
+            "confirms it under the same id. Both `work add` and `work accept` write a",
+            "confirmed record, so both are a person's own commands: a process with no",
+            "person at its keyboard — a runner's child, or a piped stdin — is refused and",
+            "handed the `work propose` line to run instead. Nothing else about work",
+            "changes, and a person at a terminal still types one command.",
+            "Until it is first started that plan can be",
             "restated in place — `work revise <id> \"<revised plan>\" --why w` keeps the id,",
             "keeps every earlier version in the unit's history, and invalidates the",
             "acceptance, so a person accepts again before it can be picked up. Unlike",
@@ -1095,6 +1114,7 @@ export const COMMANDS: Command[] = [
             "                        and why a superseded or retired unit gave up its outcome",
             "  --supersedes <id>     the unit this one replaces: it retires with this unit as",
             "                        its successor, and --why states why the outcome moved",
+            "                        on `work propose`, the retirement waits for the acceptance",
             "  --report <text>       what verifiably happened, recorded as a report with the done",
             "  --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide",
             "  --successor-project <slug>  the successor's project when its id is ambiguous",
@@ -2488,28 +2508,74 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const id = workId();
     const retirement = supersededRetirement(ctx, id, values);
-    const payload = workPayload(ctx, id, outcome);
-    recordRetirement(ctx, retirementIntent(model, "supersede",
-        retirement === undefined ? [] : [String(retirement.payload.entity)],
-        { successor: supersedingRecord(payload) }), model,
-        (confirmation) =>
-        {
-            const events = [makeEvent(ctx.project, "entity.confirmed", payload)];
-            if (retirement !== undefined)
-            {
-                retirement.payload = confirmation === undefined ? retirement.payload : { ...retirement.payload, confirmation };
-                events.push(retirement);
-            }
-            return events;
-        },
-        `${id} ${outcome}`);
     // The unit is recorded and what it contributes to is still nobody's
     // statement (#286). The model is the one read before the append, which is
     // all this needs: the objectives it names are not changed by the unit.
     const superseded = retirement === undefined
         ? undefined
         : model.works.find((work) => work.id === retirement.payload.entity);
+    requirePersonAdding(outcome, values.why, superseded);
+    const payload = workPayload(ctx, id, outcome);
+    recordRetirement(ctx, retirementIntent(model, "supersede",
+        retirement === undefined ? [] : [String(retirement.payload.entity)],
+        { successor: supersedingRecord(payload) }), model,
+        (confirmation) => addedEvents(ctx, payload, retirement, confirmation),
+        `${id} ${outcome}`);
     return [{ kind: "receipt", text: id }, attachmentListing(model, id, superseded)];
+}
+
+// The unit, and the retirement it displaces where there is one — composed
+// together so both land in the append the gate approved, with what was typed
+// stamped on the retirement it approved.
+function addedEvents(ctx: ProjectContext, payload: Record<string, unknown>,
+    retirement: SelfEvent | undefined, confirmation?: HumanConfirmation): SelfEvent[]
+{
+    const events = [makeEvent(ctx.project, "entity.confirmed", payload)];
+    if (retirement !== undefined)
+    {
+        retirement.payload = confirmation === undefined ? retirement.payload : { ...retirement.payload, confirmation };
+        events.push(retirement);
+    }
+    return events;
+}
+
+// A confirmed work record is written only by a process with a person at its
+// keyboard (#389). Refused after the target is resolved and before anything is
+// appended, so a malformed command is still refused as malformed — and the
+// line handed back is the propose spelling, which is the one this process can
+// run itself.
+function requirePersonAdding(outcome: string, why: string | undefined, superseded: WorkState | undefined): void
+{
+    const replaces = superseded === undefined ? "" : ` --supersedes ${superseded.id} --why ${shellQuoted(why ?? "")}`;
+    const refused = personRefusal({
+        act: "recording confirmed work",
+        disclosure: superseded === undefined
+            ? firstLine(outcome)
+            : `${firstLine(outcome)}\nreplaces ${superseded.id}  ${firstLine(superseded.outcome)}`,
+        agentRuns: {
+            why: superseded === undefined
+                ? "a session proposes it instead, and a person accepts"
+                : "a session proposes the correction instead, and a person accepts",
+            command: `self work propose ${shellQuoted(outcome)}${replaces}`
+        },
+        personRuns: `self work add ${shellQuoted(outcome)}${replaces}`
+    });
+    if (refused !== null)
+    {
+        throw new CliError(refused);
+    }
+}
+
+// The outcome as it goes back into a command line the reader pastes: one
+// argument, double-quoted, with any quote of its own escaped.
+function shellQuoted(text: string): string
+{
+    return `"${firstLine(text).replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
+function firstLine(text: string): string
+{
+    return text.split("\n")[0];
 }
 
 function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<string, unknown>
@@ -2547,14 +2613,7 @@ function supersededRetirement(ctx: ProjectContext, successor: string, values: Co
         return undefined;
     }
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    requireSupersedeKind(model.entities, values.supersedes, "work");
-    const work = requireRetirable(model, values.supersedes);
-    if (work.status === "retired")
-    {
-        // Not the no-op `work retire` answers with: the new unit is about to be
-        // recorded, and it would land claiming a supersession that never happened.
-        throw new CliError(`${work.id} is already retired — ${work.retiredWhy}`);
-    }
+    const work = requireSupersedableWork(ctx, model, values.supersedes);
     const why = requireText(values.why, `work add "<outcome>" --supersedes ${work.id} --why "<why the outcome moved to the new unit>"`);
     return makeEvent(ctx.project, "entity.retired", { entity: work.id, why, successor, successorProject: ctx.project }, undefined, true);
 }
@@ -2914,25 +2973,6 @@ function recordUnitRetirement(ctx: ProjectContext, model: ProjectModel, work: Wo
         `${work.id} ${why}`);
 }
 
-// The one answer to "may this unit be retired": known, and not already closed
-// as done. Read by `work retire` and by `work add --supersedes`, which records
-// the same retirement. Already-retired is the caller's case to answer — a
-// no-op for one, a refusal for the other.
-function requireRetirable(model: ProjectModel, id: string | undefined): WorkState
-{
-    const wanted = requireText(id, "work retire <work-id> — run `self work` to list ids");
-    const work = model.works.find((item) => item.id === wanted);
-    if (work === undefined)
-    {
-        throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
-    }
-    if (work.status === "done")
-    {
-        throw new CliError(`${work.id} is already done — retirement records an outcome that was given up, not one that was reached`);
-    }
-    return work;
-}
-
 // The successor is validated before anything is written: an unknown reference
 // refuses the retirement instead of recording a pointer nothing can follow.
 function successorRef(ctx: ProjectContext, source: string, successor: string | undefined, project: string | undefined): Record<string, unknown>
@@ -3225,7 +3265,7 @@ function recordDesignApproval(ctx: ProjectContext, found: FoundReport, digest: s
 // rule it cannot satisfy.
 function approveDesign(found: FoundReport, challenge: string): HumanConfirmation
 {
-    if (attemptMarker() !== undefined || !process.stdin.isTTY || !process.stdout.isTTY)
+    if (!personAtTerminal() || !process.stdout.isTTY)
     {
         throw new CliError(`approving a design is a person's call, and this process has no terminal to make it at — nothing was recorded\n\n`
             + `  ${found.report.text.split("\n")[0]}\n\n  a person runs this in their own terminal:\n    self report confirm ${found.report.id}`);

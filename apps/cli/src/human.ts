@@ -29,9 +29,52 @@ interface HumanRefusal
 // and must not be merged into one.
 const ATTEMPT_MARKERS = ["SUPERSELF_SESSION", "SUPERSELF_ATTEMPT_ID"];
 
-export function attemptMarker(): string | undefined
+function attemptMarker(): string | undefined
 {
     return ATTEMPT_MARKERS.find((name) => process.env[name] !== undefined);
+}
+
+// Whether a person is at this process's keyboard. The one answer to "is
+// anybody there": a runner stamps an attempt marker on every child it starts,
+// and a scripted or piped stdin never had a person behind it.
+//
+// stdin alone, deliberately. `stdout.isTTY` belongs to the gates that print a
+// question and read the answer back, and this one prints nothing — what makes
+// it a person is a keyboard, and stdout is not the keyboard. Reading it here
+// would refuse a person for redirecting their own output.
+export function personAtTerminal(): boolean
+{
+    return attemptMarker() === undefined && process.stdin.isTTY === true;
+}
+
+// What a verb refused for having nobody behind it hands back, and null when
+// somebody is there — so a caller asks this one question instead of spelling
+// the condition again. `act` names what was refused, `disclosure` is the
+// record's own words, `agentRuns` is the line this process can run instead,
+// and `personRuns` is the line for a person whose shell redirected stdin.
+interface RefusedAct
+{
+    act: string;
+    disclosure: string;
+    agentRuns?: { why: string; command: string };
+    personRuns: string;
+}
+
+export function personRefusal(parts: RefusedAct): string | null
+{
+    if (personAtTerminal())
+    {
+        return null;
+    }
+    return [
+        `${parts.act} is a person's call, and this process has no terminal to make it at — nothing was recorded`,
+        "",
+        ...parts.disclosure.split("\n").map((line) => `  ${line}`),
+        ...(parts.agentRuns === undefined ? [] : ["", `  ${parts.agentRuns.why}:`, `    ${parts.agentRuns.command}`]),
+        "",
+        "  a person runs this in their own terminal:",
+        `    ${parts.personRuns}`
+    ].join("\n");
 }
 
 // The human gate. What makes this input human is the interactive terminal:

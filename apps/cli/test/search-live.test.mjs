@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 /* ── scratch machines ──────────────────────────────────────────────── */
 
@@ -97,11 +97,11 @@ const found = async (dir, args) => (await must(a.box, dir, ["search", ...args]))
 // then taken out of the current set the way its own verb spells it.
 const t17 = idIn((await must(a.box, a.narrow, ["decide", "T1-7 the earlier ruling"])).out);
 const t111 = idIn((await approvedIn(a.box, a.narrow, ["decide", "T1-11 the later ruling", "--supersedes", t17], t17)).printed);
-const t18 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T1-8 the outcome given up"])).out);
+const t18 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T1-8 the outcome given up"])).out);
 await approvedIn(a.box, a.narrow, ["work", "retire", t18, "--why", "the outcome moved"], t18);
 const t19 = entityIn((await must(a.box, a.narrow, ["state", "add", "T1-9 the note taken back"])).out);
 await approvedIn(a.box, a.narrow, ["state", "retract", t19, "--why", "it never held"], t19);
-const t110 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T1-10 the outcome reached"])).out);
+const t110 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T1-10 the outcome reached"])).out);
 await must(a.box, a.narrow, ["work", "done", t110, "--report", "T1-10 the proof passed on this branch"]);
 const t112 = entityIn((await must(a.box, a.narrow, ["state", "add", "T1-12 the wording that was wrong"])).out);
 await approvedIn(a.box, a.narrow, ["state", "retract", t112, "--why", "reworded"], t112);
@@ -112,9 +112,9 @@ const t22 = entityIn((await must(a.box, a.narrow, ["state", "add", "T2-2 the pla
 const t23 = entityIn((await must(a.box, a.narrow, ["state", "add", "T2-3 the record named by its id"])).out);
 await must(a.box, a.narrow, ["state", "add", `T2-3 another record mentioning ${t23}`]);
 const t25 = entityIn((await must(a.box, a.narrow, ["state", "add", "T2-5 the labelled note", "--label", "t2five"])).out);
-const t27 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T2-7 the unit carrying a report"])).out);
+const t27 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T2-7 the unit carrying a report"])).out);
 await must(a.box, a.narrow, ["report", t27, "T2-7 the loader now retries on 429"]);
-const t28 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T2-8 the outcome still wanted"])).out);
+const t28 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T2-8 the outcome still wanted"])).out);
 const t28retired = await approvedIn(a.box, a.narrow, ["work", "retire", t28, "--why", "T2-8 gave up on the ledger"], t28);
 await must(a.box, a.narrow, ["undo", idIn(t28retired.printed), "--why", "the outcome is still wanted"]);
 
@@ -125,11 +125,11 @@ const t33 = entityIn((await must(a.box, a.narrow, ["objective", "add", "T3-3 the
 const t34 = entityIn((await must(a.box, a.narrow, ["milestone", "add", "T3-4 the checkpoint", "--objective", t33, "--exit", "the proof passes"])).out);
 const t35 = idIn((await must(a.box, a.narrow, ["goal", "add", "T3-5 the standing direction"])).out);
 const t36 = entityIn((await must(a.box, a.narrow, ["state", "add", "T3-6 the free note", "--label", "note"])).out);
-const t37 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T3-7 the open outcome"])).out);
-const t38 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T3-8 the outcome waiting on something"])).out);
+const t37 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T3-7 the open outcome"])).out);
+const t38 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T3-8 the outcome waiting on something"])).out);
 await must(a.box, a.narrow, ["work", "start", t38]);
 await must(a.box, a.narrow, ["work", "block", t38, "--on", "dependency", "--why", "the upstream fix"]);
-const t311 = workIdIn((await must(a.box, a.narrow, ["work", "add", "T3-11 the unit carrying an artifact"])).out);
+const t311 = workIdIn((await mustPerson(a.box, a.narrow, ["work", "add", "T3-11 the unit carrying an artifact"])).out);
 writeFileSync(join(a.narrow, "t3-11-evidence.txt"), "T3-11 artifact bytes\n");
 await must(a.box, a.narrow, ["report", t311, "T3-11 evidence attached", "--artifact", join(a.narrow, "t3-11-evidence.txt")]);
 // T4: shape.
@@ -196,7 +196,7 @@ const h1 = entityIn((await must(d.box, d.hist, ["state", "add", "T6-1 the live r
 
 await must(d.box, d.hist, ["state", "place", h1, "--priority", "3"]);
 
-const h2 = workIdIn((await must(d.box, d.hist, ["work", "add", "T6-2 the outcome given up"])).out);
+const h2 = workIdIn((await mustPerson(d.box, d.hist, ["work", "add", "T6-2 the outcome given up"])).out);
 
 await must(d.box, d.hist, ["work", "start", h2]);
 

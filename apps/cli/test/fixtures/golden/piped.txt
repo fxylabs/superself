@@ -10,10 +10,9 @@ workspace already initialized at <root>/ws/.superself
 $ self project init --name demo --desc the render gate scenario --no-connect   (in project, exit 0)
 project "demo" registered
 
-$ self work add stage 1 lands the render gate and its pilot   (in project, exit 0)
-entity.confirmed recorded [<event-id>]
+$ self work propose stage 1 lands the render gate and its pilot   (in project, exit 0)
+entity.proposed recorded [<event-id>]
 <w-id>
-no objective yet? `self objective add "<outcome>" --proposed`, then `self objective confirm <id>`
 
 $ self decide the render gate is the one path to stdout --why one print path   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
@@ -102,12 +101,13 @@ $ self convention   (in project, exit 1)
 error: usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] [--artifact <id|path>] | drop <event-id> --why w
 
 $ self log   (in project, exit 0)
-<ts>  entity.confirmed  [<event-id>]  stage 1 lands the render gate and its pilot
+<ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot
+<ts>  entity.confirmed  [<event-id>]  
 <ts>  entity.confirmed  [<event-id>]  the render gate is the one path to stdout
 <ts>  entity.confirmed  [<event-id>]  a note the search surface can find
 <ts>  entity.started  [<event-id>]  
 <ts>  report.added  [<event-id>]  the fixture was generated
-5 events
+6 events
 
 $ self status   (in workspace, exit 0)
 demo — (no goal) (1 active, 0 blocked, 0 next, 0 done) [1 health signal(s)]
@@ -197,6 +197,7 @@ usage: self <command>
                                              (a terminal gets the ruled table; a pipe gets one line per unit)
   work add "<required outcome>" [--supersedes <work-id> --why w]
                                              create a work unit; --supersedes retires the unit it replaces, naming this one its successor
+                                             (a person's own command: a process with no terminal is refused and told to propose instead)
   work show <id> [--history [--page n]] [--project <slug>]
                                              print full work detail: brief, reports, evidence
                                              (resolves the owning project from any directory)
@@ -210,13 +211,15 @@ usage: self <command>
   work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
                                              state, or withdraw, what a work unit contributes to
                                              (an objective resolves here first, then across every registered project)
-  work propose "<plan>" [--milestone m --value v --success s --stop s --risk r]
+  work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]
                                              propose work for a person to review; the plan text alone is enough
                                              (--objective or --milestone makes it a gap proposal, which owes the full brief)
+                                             --supersedes proposes a correction: the unit it names is retired on acceptance
   work revise <id> "<revised plan>" --why w  restate an unstarted plan under the same work id; acceptance is invalidated
                                              (a plan that has started is corrected by a successor, the way `work add` records one)
   work accept|decline <proposal-id> [--why w]
-                                             act on a goal-gap proposal; decline states why
+                                             act on a proposed plan; decline states why
+                                             (accepting is a person's call and is refused where no person is at the terminal)
   work started <id> --pid N | exited <id> [--code N]
                                              record the agent process running a unit, and how it ended
                                              liveness is judged at read time from the pid on this machine
@@ -337,7 +340,7 @@ usage: self work [--project <slug>] [--pretty|--plain]
        self work block|unblock <id>
        self work done <id> [--report "<what verifiably happened>"] [--why w]
        self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
-       self work propose "<plan>" [--milestone m --value v --success s --stop s --risk r]
+       self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]
        self work revise <id> "<revised plan>" --why w
        self work accept|decline <proposal-id> [--why w]
        self work started <id> --pid N | exited <id> [--code N]
@@ -356,7 +359,10 @@ a unit's outcome is immutable once recorded, so correcting it restates it:
 `work add "<corrected outcome>" --supersedes <id> --why w` records the new unit
 and retires the one it replaces with the new unit as its successor — the same
 pair `work retire --successor` records, spelled the way every other add verb
-spells a correction.
+spells a correction. A session spells the same correction as a plan:
+`work propose "<corrected outcome>" --supersedes <id> --why w` leaves the unit
+it names untouched until a person accepts, and the retirement lands with the
+acceptance.
 
 done is the judgment that the outcome was reached, and the claim must
 carry evidence: a report with a commit or an artifact, or a done-time
@@ -366,7 +372,12 @@ on the outcome, not the block.
 
 a plan an agent wrote is reviewed before it is worked: `work propose
 "<plan>"` records the plan as work waiting on a person, and `work accept`
-confirms it under the same id. Until it is first started that plan can be
+confirms it under the same id. Both `work add` and `work accept` write a
+confirmed record, so both are a person's own commands: a process with no
+person at its keyboard — a runner's child, or a piped stdin — is refused and
+handed the `work propose` line to run instead. Nothing else about work
+changes, and a person at a terminal still types one command.
+Until it is first started that plan can be
 restated in place — `work revise <id> "<revised plan>" --why w` keeps the id,
 keeps every earlier version in the unit's history, and invalidates the
 acceptance, so a person accepts again before it can be picked up. Unlike
@@ -387,6 +398,7 @@ superseded unit names its successor rather than folding it in.
                         and why a superseded or retired unit gave up its outcome
   --supersedes <id>     the unit this one replaces: it retires with this unit as
                         its successor, and --why states why the outcome moved
+                        on `work propose`, the retirement waits for the acceptance
   --report <text>       what verifiably happened, recorded as a report with the done
   --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide
   --successor-project <slug>  the successor's project when its id is ambiguous
@@ -415,7 +427,7 @@ required, and refused in one pass when missing:
 
 A work unit states an outcome — what must become true — not a task list.
 
-  self work add "<required outcome>"      self work start <id>
+  self work propose "<plan>"              self work start <id>
   self work show <id>                     full brief and report history
   self work                               open units
 
@@ -449,11 +461,21 @@ reviews the plan and not the result:
   self work propose "<plan>"                 recorded as work waiting on a person
   self work revise <id> "<revised plan>" --why "<what changed>"
 
+This is not a habit but the rule: `work add` and `work accept` write a
+confirmed record, so a session running either is refused and handed the
+propose line. The person accepts with `self work accept <id>` at their own
+terminal.
+
 One id carries the whole loop. A revision keeps that id, keeps every
 earlier version in `self work show <id> --history`, and invalidates the
 acceptance, so `self work start` is refused until the user accepts again.
-The first start freezes the plan; after it, a correction is a successor
-(`self work add "<corrected plan>" --supersedes <id> --why w`).
+The first start freezes the plan; after it, a correction is a successor —
+propose that one too:
+
+  self work propose "<corrected plan>" --supersedes <id> --why w
+
+The named unit is untouched until the acceptance, which records the new
+unit and retires the one it replaces in one append.
 
 Found a gap between an objective and current state? The same verb closes
 one, with its full brief — value, success, stop, risk, capacity, evidence
@@ -548,10 +570,14 @@ $ self work propose the listings move behind the gate --milestone <m-id> --value
 entity.proposed recorded [<event-id>]
 <w-id>
 
-$ self work accept <w-id>   (in project, exit 0)
-entity.confirmed recorded [<event-id>]
-entity.linked recorded [<event-id>]
-<w-id>
+$ self work accept <w-id>   (in project, exit 1)
+error: accepting a plan is a person's call, and this process has no terminal to make it at — nothing was recorded
+
+  the listings move behind the gate
+  <w-id> is demo's plan, and this line resolves it from any directory
+
+  a person runs this in their own terminal:
+    self work accept <w-id>
 
 $ self work link <w-id> --milestone <m-id>   (in project, exit 0)
 entity.linked recorded [<event-id>]
@@ -670,7 +696,7 @@ $ self log -n 5   (in project, exit 0)
 <ts>  report.added  [<event-id>]  the fixture carries an artifact
 <ts>  report.added  [<event-id>]  the sweep covers every receipt this stage moves
 <ts>  entity.done  [<event-id>]  
-last 5 of 15 events · self log -n 15 --project 'demo'
+last 5 of 16 events · self log -n 16 --project 'demo'
 
 $ self project   (in workspace, exit 0)
 demo — the render gate scenario
@@ -716,8 +742,9 @@ $ self state show <e-id> --history   (in project, exit 0)
 <ts>  entity.confirmed  [<event-id>]  a record the document sweep reads back
 
 $ self work show <w-id> --history   (in project, exit 0)
-<w-id>  done  5 events
-<ts>  entity.confirmed  [<event-id>]  stage 1 lands the render gate and its pilot
+<w-id>  done  6 events
+<ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot
+<ts>  entity.confirmed  [<event-id>]  
 <ts>  entity.started  [<event-id>]  
 <ts>  entity.linked  [<event-id>]  
 <ts>  entity.restored  [<event-id>]  the checkpoint was the wrong one
@@ -761,7 +788,7 @@ $ self setup   (in project, exit 0)
 project    demo
            <root>/ws/demo (via .self)
 workspace  <root>/ws
-store      <root>/ws/.superself (26 commits, <root>/remote.git)
+store      <root>/ws/.superself (25 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo
@@ -770,7 +797,7 @@ projects   demo → <root>/ws/demo
 $ self setup   (in workspace, exit 0)
 project    (none) — this directory is not registered; run `self project init`
 workspace  <root>/ws
-store      <root>/ws/.superself (26 commits, <root>/remote.git)
+store      <root>/ws/.superself (25 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo
@@ -779,7 +806,7 @@ projects   demo → <root>/ws/demo
 $ self setup   (in outside, exit 0)
 project    (none) — this directory is not registered; run `self project init`
 workspace  <root>/ws
-store      <root>/ws/.superself (26 commits, <root>/remote.git)
+store      <root>/ws/.superself (25 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo

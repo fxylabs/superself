@@ -59,7 +59,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, git, idIn, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -77,7 +77,7 @@ function designFile(name, body)
 }
 
 const decide = async (text) => idIn((await must(box, demo, ["decide", text])).out);
-const work = async (outcome) => workIdIn((await must(box, demo, ["work", "add", outcome])).out);
+const work = async (outcome) => workIdIn((await mustPerson(box, demo, ["work", "add", outcome])).out);
 const reportIdIn = (text) => text.match(/design report (\S+) recorded/)[1];
 
 // A design report's artifact digest, read back off the event the CLI wrote —

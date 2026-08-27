@@ -19,7 +19,7 @@ import { dirname, join, relative } from "node:path";
 import { foldProject } from "../dist/fold.js";
 import { foldedCollision, nameRefusal } from "../dist/artifact.js";
 import { artifactName, countedName, encodedPath } from "../dist/types.js";
-import { approvedIn, demoWorkspace, git, idIn, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 // `artifact open` at a terminal really launches the OS opener, so the marker
@@ -86,7 +86,7 @@ function fileAt(name, body)
 async function unit(at = demo, atBox = box)
 {
     seq += 1;
-    return workIdIn((await must(atBox, at, ["work", "add", `outcome ${seq}`])).out);
+    return workIdIn((await mustPerson(atBox, at, ["work", "add", `outcome ${seq}`])).out);
 }
 
 // One report per cell, on a work unit of its own, so no two cells can read
@@ -234,7 +234,7 @@ async function readingFixture()
         writeFileSync(join(root, "assets", `a${index}.js`), `x${index}`);
     }
     writeFileSync(join(root, "assets", "logo.svg"), "<svg/>");
-    const work = workIdIn((await must(reading.box, reading.demo, ["work", "add", "reading outcome"])).out);
+    const work = workIdIn((await mustPerson(reading.box, reading.demo, ["work", "add", "reading outcome"])).out);
     await must(reading.box, reading.demo, ["report", work, "the deliverable", "--artifact", root,
         "--artifact", (() =>
         {
@@ -291,7 +291,7 @@ async function hostileBundle(place, mutate)
     const root = join(place.box.root, `hostile-${seq += 1}`);
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "index.html"), "hi");
-    const work = workIdIn((await must(place.box, place.demo, ["work", "add", `hostile ${seq}`])).out);
+    const work = workIdIn((await mustPerson(place.box, place.demo, ["work", "add", `hostile ${seq}`])).out);
     await must(place.box, place.demo, ["report", work, "attached", "--artifact", root]);
     const file = join(place.ws, ".superself", "projects", "demo", "log.jsonl");
     const lines = readFileSync(file, "utf8").split("\n").map((line) =>
@@ -891,7 +891,7 @@ test("cell 45: a bundle event read without its manifest lists as one directory r
     mkdirSync(join(root, "assets"), { recursive: true });
     writeFileSync(join(root, "index.html"), "hi");
     writeFileSync(join(root, "assets", "app.js"), "j");
-    const work = workIdIn((await must(place.box, place.demo, ["work", "add", "older reader"])).out);
+    const work = workIdIn((await mustPerson(place.box, place.demo, ["work", "add", "older reader"])).out);
     // The friction sentence keeps this cell's subject the unread manifest
     // (#380): a project whose only report records none raises a health line of
     // its own, and what is asserted below is that the manifest raises none.
@@ -915,7 +915,7 @@ test("cell 52: a design report whose manifest is not read refuses confirm, and t
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "index.md"), "the design");
     const decision = idIn((await must(place.box, place.demo, ["decide", "cell 52: a design binds bytes"])).out);
-    const work = workIdIn((await must(place.box, place.demo, ["work", "add", "older confirm"])).out);
+    const work = workIdIn((await mustPerson(place.box, place.demo, ["work", "add", "older confirm"])).out);
     const submitted = await must(place.box, place.demo, ["report", work, "the design", "--design",
         "--implements", decision, "--artifact", root]);
     const report = submitted.out.match(/design report (\S+) recorded/)[1];
@@ -975,7 +975,7 @@ test("cell 48: the bytes land under the owning log's slug, not the project the c
     mkdirSync(other, { recursive: true });
     git(place.box, other, ["init", "-q", "-b", "main"]);
     await must(place.box, other, ["project", "init", "--name", "other", "--no-connect"]);
-    const work = workIdIn((await must(place.box, place.demo, ["work", "add", "shared outcome"])).out);
+    const work = workIdIn((await mustPerson(place.box, place.demo, ["work", "add", "shared outcome"])).out);
     await must(place.box, place.demo, ["state", "place", work, "--scope", "workspace"]);
     const root = join(place.box.root, "dist");
     mkdirSync(root, { recursive: true });
@@ -996,7 +996,7 @@ test("cell 49: the empty listing's advertised command is unchanged, and is refus
     const empty = (await must(place.box, place.ws, ["artifact", "list"])).out;
     assert.ok(empty.includes('no artifacts — attach one with `self report <work-id> "…" --artifact <path>`'),
         `the empty listing's advertisement changed:\n${empty}`);
-    const work = workIdIn((await must(place.box, place.demo, ["work", "add", "outside outcome"])).out);
+    const work = workIdIn((await mustPerson(place.box, place.demo, ["work", "add", "outside outcome"])).out);
     const refused = await selfIn(place.box, outside, ["report", work, "attached", "--artifact", place.demo]);
     assert.equal(refused.code, 1, refused.out);
     assert.match(refused.out, /not inside a registered project — run `self project init` here/);
@@ -1010,7 +1010,7 @@ test("cell 50: work done accepts a unit whose only evidence is a bundle", async 
     const root = join(place.box.root, "dist");
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "index.html"), "the deliverable");
-    const work = workIdIn((await must(place.box, place.demo, ["work", "add", "done by bundle"])).out);
+    const work = workIdIn((await mustPerson(place.box, place.demo, ["work", "add", "done by bundle"])).out);
     await must(place.box, place.demo, ["report", work, "the deliverable", "--artifact", root]);
     const done = await selfIn(place.box, place.demo, ["work", "done", work]);
     assert.equal(done.code, 0, done.out);

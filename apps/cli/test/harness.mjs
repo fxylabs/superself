@@ -37,10 +37,13 @@ export function machine()
         CLAUDE_CODE_SESSION_ID: "",
         CLAUDE_PID: ""
     };
-    // Deleted rather than blanked: `human.ts` treats `SUPERSELF_SESSION`
+    // Deleted rather than blanked: `human.ts` treats either attempt marker
     // existing at all as the mark of an agent's process, so an empty string
-    // here would make every scratch machine one.
+    // here would make every scratch machine one. Both are deleted because the
+    // suite itself may be running inside an agent's session, and a marker the
+    // runner left in this process would refuse every gated verb (#389).
     delete env.SUPERSELF_SESSION;
+    delete env.SUPERSELF_ATTEMPT_ID;
     return { root, env };
 }
 
@@ -92,10 +95,10 @@ export function mustSpawn(box, cwd, args, extra = {})
 // each of the three things `execFileSync` was given — cwd, a complete `env`,
 // and non-terminal stdio — is set here and restored afterwards.
 //
-// `options` is `{ extra, tty, answer }`. `tty` is false unless a caller asks
-// for it: the child ran with `stdio: ["ignore", "pipe", "pipe"]` and therefore
-// never had a terminal, while this process may well have one, and three test
-// files set `isTTY` at their top level on purpose.
+// `options` is `{ extra, tty, person, screen, answer }`. No terminal unless a
+// caller asks for one: the child ran with `stdio: ["ignore", "pipe", "pipe"]`
+// and therefore never had a terminal, while this process may well have one,
+// and three test files set `isTTY` at their top level on purpose.
 export async function drive(box, cwd, args, options = {})
 {
     const restore = enterInvocation(box, cwd, args, options);
@@ -125,7 +128,7 @@ function enterInvocation(box, cwd, args, options)
     // there — so it goes first, while nothing has been changed to undo.
     // `driving` is claimed only once every step has succeeded, which is still
     // before any `await` and therefore still before another call could start.
-    const undo = [enterCwd(cwd), replaceEnv({ ...box.env, ...options.extra }), enterTty(options.tty === true), enterExit()];
+    const undo = [enterCwd(cwd), replaceEnv({ ...box.env, ...options.extra }), enterTty(ttyOf(options)), enterExit()];
     // Always stubbed, including where the caller named no answer. The real
     // reader is a blocking read of fd 0, and a command that reaches it with
     // nobody typing stops the whole file with no output to say why.
@@ -178,12 +181,27 @@ function enterCwd(cwd)
     return () => process.chdir(was);
 }
 
-function enterTty(on)
+// Which ends of the terminal a call has. `tty` is both, which is what a gate
+// that prints a challenge and reads it back needs. `person` is the keyboard
+// alone: the presence gate on `work add` and `work accept` reads stdin and
+// nothing else (#389), so a person whose output is piped is still a person —
+// and `resolveRender` keeps reading stdout, which is why no plain-render
+// assertion moves. `screen` is the other half, and exists to prove the
+// presence gate does not read it.
+function ttyOf(options)
+{
+    return {
+        stdin: options.tty === true || options.person === true,
+        stdout: options.tty === true || options.screen === true
+    };
+}
+
+function enterTty(ends)
 {
     const inWas = process.stdin.isTTY;
     const outWas = process.stdout.isTTY;
-    process.stdin.isTTY = on;
-    process.stdout.isTTY = on;
+    process.stdin.isTTY = ends.stdin;
+    process.stdout.isTTY = ends.stdout;
     return () =>
     {
         process.stdin.isTTY = inWas;
@@ -332,6 +350,23 @@ export async function demoWorkspace(box)
 export async function must(box, cwd, args, extra = {})
 {
     return refuseFailure(await selfIn(box, cwd, args, extra), args);
+}
+
+// A person at their own keyboard, running one command. Recording a confirmed
+// work record is a person's call (#389), so `work add` and `work accept` are
+// driven through these rather than through `must` — this is a keyboard stood
+// in for, not a way past the gate: the command line, the resolution, the gate
+// and the write all execute, and only `stdin.isTTY` is supplied. The gate's
+// own behaviour is asserted in work-entry-gate.test.mjs, where the strongest
+// cell is a really terminal-less child in smoke.test.mjs.
+export async function personIn(box, cwd, args, extra = {})
+{
+    return drive(box, cwd, args, { person: true, extra });
+}
+
+export async function mustPerson(box, cwd, args, extra = {})
+{
+    return refuseFailure(await personIn(box, cwd, args, extra), args);
 }
 
 function refuseFailure(result, args)

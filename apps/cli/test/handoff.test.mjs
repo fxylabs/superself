@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "../dist/ids.js";
-import { demoWorkspace, git, logFixture, machine, must, selfIn, workIdIn } from "./harness.mjs";
+import { demoWorkspace, git, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -15,7 +15,7 @@ git(box, other, ["init", "-q", "-b", "main"]);
 await must(box, other, ["project", "init", "--name", "other"]);
 await must(box, demo, ["convention", "add", "target rule"]);
 await must(box, other, ["convention", "add", "foreign workspace rule", "--workspace"]);
-const work = workIdIn((await must(box, demo, ["work", "add", "compile a fresh-agent packet"])).out);
+const work = workIdIn((await mustPerson(box, demo, ["work", "add", "compile a fresh-agent packet"])).out);
 await must(box, demo, ["work", "start", work], { SUPERSELF_SESSION: "holder-secret", SUPERSELF_SESSION_PID: "999999" });
 
 const oldReport = {
@@ -86,7 +86,7 @@ test("an explicitly named archived target remains readable and names root-safe r
     const archivedBox = machine();
     const archived = await demoWorkspace(archivedBox);
     await must(archivedBox, archived.demo, ["convention", "add", "archived rule"]);
-    const archivedWork = workIdIn((await must(archivedBox, archived.demo, ["work", "add", "inspect archived state"])).out);
+    const archivedWork = workIdIn((await mustPerson(archivedBox, archived.demo, ["work", "add", "inspect archived state"])).out);
     logFixture(archived.ws, "demo", {
         id: ulid(), ts: "2026-08-24T00:00:00.000Z", type: "project.archived",
         origin: { actor: "human", confirmed: true }, project: "demo", payload: { why: "set aside for review" }
