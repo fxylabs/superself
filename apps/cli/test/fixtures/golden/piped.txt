@@ -111,10 +111,10 @@ $ self convention   (in project, exit 1)
 error: usage: self convention add "<text>" [--supersedes <event-id>] [--workspace] [--public] [--artifact <id|path>] | drop <event-id> --why w
 
 $ self log   (in project, exit 0)
-<ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot
-<ts>  entity.confirmed  [<event-id>]  
-<ts>  entity.confirmed  [<event-id>]  the render gate is the one path to stdout
-<ts>  entity.confirmed  [<event-id>]  a note the search surface can find
+<ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot · by agent
+<ts>  entity.confirmed  [<event-id>]   · by agent
+<ts>  entity.confirmed  [<event-id>]  the render gate is the one path to stdout · by agent
+<ts>  entity.confirmed  [<event-id>]  a note the search surface can find · by agent
 <ts>  entity.started  [<event-id>]  
 <ts>  report.added  [<event-id>]  the fixture was generated
 6 events

@@ -559,6 +559,13 @@ and `self work show <id> --history` page over one record's own events, and
 there is no global history search. `self log` prints recent events, and
 `self fold` re-derives canonical files and views from the event log.
 
+Every one of those event rows ends with who wrote it — `· by person`,
+`· by person rayim`, `· by agent (session a1b2c3d4)` — on `self log`, on
+`self log --workspace` and on a record's own history page alike. The note is the
+`by` an undoable verb stamps on its event; a record written before that field
+existed prints its row and says nothing about a writer, rather than being read
+as a person's.
+
 ### Reading back the friction that recurs
 
 `self report --friction "<what differed>"` records what surprised a session as
