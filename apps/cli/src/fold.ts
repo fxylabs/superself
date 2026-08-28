@@ -504,7 +504,13 @@ function reachLines(milestone: MilestoneState): string[]
     return lines;
 }
 
-export function renderMilestoneBody(milestone: MilestoneState, objective: ObjectiveState): string
+// `progress` is where each linked unit stands (#406), passed only by the
+// console show — as `renderObjectiveBody` takes `linked`, and for the same
+// reason. It carries who holds a unit, which is a judgment about a session on
+// this machine, and this render also writes the canonical milestone section
+// inside a synced `objective/<id>.md`; the fold therefore passes nothing, and
+// those lines stay off the page every clone reads.
+export function renderMilestoneBody(milestone: MilestoneState, objective: ObjectiveState, progress: string[] = []): string
 {
     const lines: string[] = [`# ${milestone.id} — ${milestone.outcome}`, "",
         `- Objective: ${objective.id} ${objective.outcome}`,
@@ -512,6 +518,9 @@ export function renderMilestoneBody(milestone: MilestoneState, objective: Object
         `- Revision: ${milestone.revision} (objective revision ${objective.revision})`,
         ...milestoneHeadLines(milestone), ""];
     bullets(lines, "Exit criteria", exitLines(milestone));
+    // Already whole lines, indentation and bullet included, because a unit's
+    // report hangs under its entry — `section` rather than `bullets`.
+    section(lines, "Linked work", progress);
     bullets(lines, "Coverage", milestone.coverage.map(coverageLine));
     return lines.join("\n").replace(/\n+$/, "\n");
 }

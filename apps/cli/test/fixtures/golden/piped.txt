@@ -188,6 +188,7 @@ usage: self <command>
   milestone [--project <slug>]               list milestones with state, reason, and linked work
   milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]
   milestone show <id> [--project <slug>]     print a milestone, its exit criteria, and its coverage
+                                             (with every linked work unit: its state, its criteria, its holder, its latest report)
   milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]
                                              a revision supersedes: a new milestone id carries the revised criteria
   milestone drop <id> --why "<reason>"       give up on a checkpoint with nothing replacing it
@@ -798,6 +799,10 @@ $ self milestone show <m-id>   (in project, exit 0)
 ## Exit criteria
 
 - c1 — no write verb prints for itself _(open)_
+
+## Linked work
+
+- **<w-id>** the listings move behind the gate — next
 
 $ self setup   (in project, exit 0)
 project    demo

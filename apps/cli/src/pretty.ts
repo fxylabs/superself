@@ -36,7 +36,7 @@ import { effectiveSkills, skillRow } from "./skills.js";
 import { claimNote } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { contributionsOf, openObjectives } from "./objectives.js";
-import { bold, dim, displayWidth, dumbTerminal, fitDisplay, green, oneLine, padDisplay, plural, red, termColumns, yellow } from "./style.js";
+import { bold, dim, displayWidth, dumbTerminal, firstLine, fitDisplay, green, oneLine, padDisplay, plural, red, termColumns, yellow } from "./style.js";
 import { CliError, Pointer } from "./types.js";
 
 // A terminal narrower than this cannot hold four ruled columns and still show
@@ -443,11 +443,6 @@ export interface WaitingRow
 // into the identity function while the render still draws, and yellow was the
 // only thing separating an approval row from the lines around it (#264).
 const WAITING_MARK = "▸";
-
-function firstLine(text: string): string
-{
-    return text.split("\n", 1)[0];
-}
 
 // The band a person acts on, built the opposite way round from every other
 // list here: the row states what waits and the command gets its own line at

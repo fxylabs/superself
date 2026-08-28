@@ -42,6 +42,14 @@ export function plural(count: number, noun: string, many = `${noun}s`): string
     return `${count} ${count === 1 ? noun : many}`;
 }
 
+// The opening line of prose that may run to paragraphs. A report, a health
+// sentence and a plan all read this way where the surface has one line to
+// spend, so it is one function rather than a copy per renderer.
+export function firstLine(text: string): string
+{
+    return text.split("\n", 1)[0];
+}
+
 export function markdownHeadings(text: string): string
 {
     return text.split("\n").map((line) => /^#{1,3} /.test(line) ? bold(line) : line).join("\n");
