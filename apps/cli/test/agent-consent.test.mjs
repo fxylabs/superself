@@ -15,6 +15,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { TOPICS } from "../dist/guide.js";
+import { COMMANDS } from "../dist/main.js";
 import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
@@ -391,4 +393,34 @@ test("cell 47b: an event carrying no by is rendered without a writer line", asyn
         events().find((event) => event.payload.by === undefined && typeof event.payload.entity === "string").payload.entity,
         "--history"])).out;
     assert.ok(page.length > 0, "the history printed nothing at all");
+});
+
+// The sentences the person gate wrote, in the words the help pages used to
+// carry them. A page still saying one of these describes a refusal the CLI no
+// longer has — which is the way this change rots: the behaviour moves and a
+// paragraph two files away keeps promising the old rule.
+const RETIRED_CLAIMS = ["own terminal", "person's call", "at its keyboard", "person at a terminal",
+    "no person is at the terminal", "typed back"];
+
+// `artifact` is the one page allowed to keep them: `undo.ts` names
+// `artifact.pruned` as the deletion no event reverses, so its gate — and the
+// sentences describing it — are what this cell holds in place rather than out.
+const GATE_PAGE = "artifact";
+
+test("cell 56: no help page but the artifact one claims a person's terminal", async () =>
+{
+    const names = [...new Set([...COMMANDS.map((command) => command.name), ...TOPICS.map((topic) => topic.name)])];
+    for (const name of names.filter((topic) => topic !== GATE_PAGE))
+    {
+        const page = (await must(box, demo, ["help", name])).out;
+        const claimed = RETIRED_CLAIMS.filter((claim) => page.includes(claim));
+        assert.deepEqual(claimed, [], `\`self help ${name}\` still claims: ${claimed.join(", ")}`);
+    }
+});
+
+test("cell 57: the artifact page keeps the one gate, and states why it is the only one", async () =>
+{
+    const page = (await must(box, demo, ["help", GATE_PAGE])).out;
+    assert.match(page, /still needs a person at a terminal typing the artifact id/);
+    assert.match(page, /`self undo` takes back every other record, and never a deletion/);
 });

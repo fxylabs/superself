@@ -189,6 +189,32 @@ Callers, used as column values throughout:
 | 48 | any | `self help work`, `self work --help` | no longer claim `work add`/`work confirm` need a terminal; the usage line reads `work confirm|decline` |
 | 49 | any | `self help agents` | states that a session records its own decisions and that `self undo` is the way back |
 | 50 | any | `docs.test.mjs`, the golden fixture | regenerated: no document claims a person's terminal for an undoable verb, and every documented line runs from a plain session |
+| 56 | any | every `self help <topic>` and `self help <command>` page but `artifact` | carries none of the gate's retired sentences — the sweep, so a page two files away cannot keep promising the old rule |
+| 57 | any | `self help artifact` | keeps the one surviving gate and states why it is the only one: `self undo` takes back every other record, and never a deletion |
+
+Cell 56 is the sweep behind cells 48 and 49: those two name the pages the issue
+was reported against, and this one holds every other page to the same rule, so
+the change cannot rot into a paragraph two files away that keeps promising the
+old refusal. The documents restated for the same reason, each because it stated
+the rule the CLI no longer enforces:
+
+| Surface | What it said |
+|---|---|
+| `apps/cli/src/guide.ts` | the `agents`, `work` and `records` topics |
+| `apps/cli/src/connect.ts` | the block every session reads first |
+| `apps/cli/src/main.ts` | `work add`/`work confirm`, `report confirm`, `undo` |
+| `apps/cli/src/runbook.ts` | `approve` is the release, not a keyboard |
+| `apps/cli/src/artifact.ts` | the one gate that stays, and why |
+| `ARCHITECTURE.md` | the gate's own paragraph |
+| `docs/reference/cli.md` | `work`, `runbook approve`, `report confirm`, `artifact prune` |
+| `docs/guides/getting-started.md` | "run these in your own terminal" |
+| `docs/concepts/company-state-and-context.md` | demotion is a convention, not a gate |
+| `docs/tutorials/review-one-work.md` + `.ko.md` | the transcript's verb and the two CLI lines it quotes |
+| `docs/content-plans/review-one-work.md` + `.en.md` | step 4 of the sequence |
+
+`docs/maintainers/case-tables/*` and `docs/releases/*` are left as history: they
+record what was true when they were written, and rewriting them would erase the
+reason this table exists.
 
 ### J. the rename (addendum)
 
@@ -208,7 +234,7 @@ help says so, and `work add` stays as the confirmed-at-once form, exactly as
 | 54 | any | `self work bogus` | the unknown-verb refusal lists `confirm`, not `accept` |
 | 55 | any | the typed contract | `checkContract` passes with a dispatchable leaf no usage line documents |
 
-**55 cells.**
+**57 cells.**
 
 ## Out of scope
 

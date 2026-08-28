@@ -385,14 +385,13 @@ a plan is proposed when it wants review before it is worked: `work propose
 it under the same id. `work add` is the confirmed-at-once form, exactly as
 `decide "<text>"` is to `decide --proposed`. Neither asks for a person at a
 keyboard: every record here is one `self undo` takes straight back, and each
-states whether a person or a session wrote it.
-Until it is first started that plan can be
-restated in place — `work revise <id> "<revised plan>" --why w` keeps the id,
-keeps every earlier version in the unit's history, and invalidates the
-acceptance, so a person accepts again before it can be picked up. Unlike
-`objective revise` and `milestone revise`, it mints no new id and supersedes
-nothing. The first `work start` freezes the plan: after it, a correction is a
-successor, the same as for any confirmed record.
+states whether a person or a session wrote it. Until it is first started that
+plan can be restated in place — `work revise <id> "<revised plan>" --why w`
+keeps the id, keeps every earlier version in the unit's history, and
+invalidates the confirmation, so the plan is confirmed again before it can be
+picked up. Unlike `objective revise` and `milestone revise`, it mints no new
+id and supersedes nothing. The first `work start` freezes the plan: after it,
+a correction is a successor, the same as for any confirmed record.
 
 history is per unit and explicit: `work show <id> --history` prints the
 events of that unit alone, oldest first, ten to a page. A retired or

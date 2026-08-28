@@ -270,7 +270,7 @@ self runbook start <id> --instance E001
 self runbook advance E001 --why "the assets are made"
 self runbook advance E001 --to review --why "the cut was reviewed"
 self runbook hold E001 --why "the final cut needs a look"
-self runbook approve E001 --by <person>       # a person, at their own terminal
+self runbook approve E001 --by <person>       # --by records who approved
 self runbook link E001 --work <work-id>
 self runbook stop E001 --why "the story was dropped"
 self runbook resume E001
@@ -301,14 +301,15 @@ self runbook resume E001
   `self state done <id> --report "<what verifiably happened>"` closes the run;
   `runbook advance` prints that exact command. A wrapper would be a second
   implementation of the evidence gate, free to disagree with it.
-- **A human checkpoint is a block, and the release is the person's own act.**
+- **A human checkpoint is a block, and the release is a record of the answer.**
   `runbook hold` parks the run — `entity.blocked` marked `on: "approval"` — and
-  `advance` refuses until it is released. `runbook approve` is the release: it
-  needs an interactive terminal with no agent marker on it and the run's key
-  typed back, and the typed value is recorded in the event. `--by` records who
-  approved and **gates nothing**; no flag, environment variable or payload
-  stands in for the terminal. A held run renders in `## Waiting on you` with
-  the command that releases it, in both the piped and the terminal render.
+  `advance` refuses until it is released. `runbook approve` is the release, and
+  a session records it once the person has answered: the release is
+  `entity.unblocked`, which `self undo` takes straight back, so the event states
+  whether a person or an agent session wrote it rather than demanding a
+  keyboard. `--by` records who approved and **gates nothing**. A held run
+  renders in `## Waiting on you` with the command that releases it, in both the
+  piped and the terminal render.
 - The two state refusals — already held, not held — are the sentences
   `state block` and `state unblock` already write, called from where they are
   written rather than copied.
@@ -466,8 +467,10 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   keeps its row, marked `(pruned)`, so a `done` claim resting on that evidence
   stays auditable, and `artifact open` refuses it by name rather than sending
   anyone to `self sync` for a file that is not coming.
-- It needs a person at an interactive terminal typing the artifact id back. A
-  piped or scripted run is refused and handed the command to pass on.
+- It is the one verb here that still needs a person at an interactive terminal
+  typing the artifact id back: bytes that left the working tree cannot be taken
+  back by `self undo`, so a person types the id. A piped or scripted run is
+  refused and handed the command to pass on.
 - What may be pruned depends on how the bytes got here. A report's or a
   review's evidence is removable once its work unit is **done or retired**, and
   not before; bytes a live record points at are refused until that record is
@@ -483,12 +486,14 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
 - `report --design --implements <decision-id>` submits a design or scope
   proposal. It is refused unless every cited decision exists, still holds, and
   renders in the work unit's project, and the receipt prints each cited
-  decision's own text. `report confirm <report-id>` is how a person approves
-  one: it needs an interactive terminal and the design artifact's hash typed
-  back, so the recorded approval names the exact bytes. `work start` then
-  refuses a unit whose design is unapproved, whose approval names no hash, or
-  whose decision has since been superseded or retracted — the way to change
-  direction is to supersede the decision and cite the successor.
+  decision's own text. `report confirm <report-id>` records the approval: it
+  binds to the design artifact's own hash, so the recorded approval names the
+  exact bytes, and the event states whether a person or an agent session wrote
+  it — a session records the answer the person already gave, and `self undo`
+  takes the ruling back. `work start` then refuses a unit whose design is
+  unapproved, whose approval names no hash, or whose decision has since been
+  superseded or retracted — the way to change direction is to supersede the
+  decision and cite the successor.
 
 The full work transitions and flags are in the `work` declaration of
 [`main.ts`](../../apps/cli/src/main.ts), and the completion rules are implemented by
