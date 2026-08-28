@@ -21,9 +21,9 @@
 //   A15 design with two artifacts                        refused
 //
 //   B. `self report confirm <report-id>` — approval and hash binding
-//   B1  no terminal                                      refused, hands over the command
-//   B2  terminal, digest typed                           report.confirmed, bound
-//   B3  terminal, wrong text typed                       refused, nothing recorded
+//   B1  a session, no terminal                           report.confirmed, by = agent (#400)
+//   B2  a person at a terminal                           report.confirmed, bound, by = person
+//   B3  nothing is typed back                            the digest binds it, not an answer
 //   B4  design with no artifact                          refused, nothing to bind
 //   B5  an ordinary report                               refused, not a design
 //   B6  unknown report id                                refused
@@ -113,7 +113,7 @@ test("A1 a design citing a live decision is recorded, and the receipt echoes the
     const result = await must(box, demo, ["report", unit, "A1 design", "--design",
         "--implements", decision, "--artifact", designFile("a1", "append-only design")]);
     assert.match(result.out, new RegExp(`implements ${decision} \\(confirmed\\) — A1: the store is append-only`));
-    assert.match(result.out, /a person approves it: self report confirm/);
+    assert.match(result.out, /it is approved with: self report confirm/);
 });
 
 test("A2 a proposed decision is live, and the echo says which status it is in", async () =>
@@ -264,20 +264,24 @@ test("A15 a design carrying two artifacts is refused: an approval binds one hash
 
 /* ── B. approval and hash binding ──────────────────────────────────── */
 
-test("B1 approving from a process with no terminal is refused, and hands over the person's command", async () =>
+// B1 read "approving from a process with no terminal is refused". The approval
+// is one `self undo` takes back (#400), so a session records the ruling the
+// person gave it in conversation, and the event names the session.
+test("B1 a session approves, and the approval says which session recorded it", async () =>
 {
     const decision = await decide("B1: a rule");
     const unit = await work("B1 outcome");
     const report = await submitDesign(unit, "B1 design", [decision], "b1");
-    const before = lineCount();
-    const result = await self(demo, ["report", "confirm", report]);
-    assert.equal(result.code, 1);
-    assert.match(result.out, /a person's call, and this process has no terminal/);
-    assert.match(result.out, new RegExp(`self report confirm ${report}`));
-    assert.equal(lineCount(), before);
+    const result = await selfIn(box, demo, ["report", "confirm", report], { SUPERSELF_SESSION: "sess-b1" });
+    assert.equal(result.code, 0, result.out);
+    const written = events().at(-1);
+    assert.equal(written.type, "report.confirmed");
+    assert.equal(written.refs.confirms, report);
+    assert.equal(written.payload.digest, digestOf(report));
+    assert.deepEqual(written.payload.by, { kind: "agent", session: "sess-b1" });
 });
 
-test("B2 typing the artifact's hash records the approval, bound to that digest", async () =>
+test("B2 a person's approval records the same event, bound to the same digest", async () =>
 {
     const decision = await decide("B2: a rule");
     const unit = await work("B2 outcome");
@@ -289,18 +293,23 @@ test("B2 typing the artifact's hash records the approval, bound to that digest",
     assert.equal(written.type, "report.confirmed");
     assert.equal(written.refs.confirms, report);
     assert.equal(written.payload.digest, digest);
-    assert.equal(written.payload.confirmation.method, "tty");
+    assert.deepEqual(written.payload.by, { kind: "person" });
 });
 
-test("B3 a wrong answer at the terminal approves nothing", async () =>
+// B3 asserted that a wrong typed answer approved nothing. Nothing is typed any
+// more; what binds the approval to a set of bytes is the digest the event
+// carries, which is what this asserts instead — the receipt names it, and it is
+// derived from the artifact rather than from anything a caller said.
+test("B3 the approval binds to the artifact's own digest, whatever a caller types", async () =>
 {
     const decision = await decide("B3: a rule");
     const unit = await work("B3 outcome");
     const report = await submitDesign(unit, "B3 design", [decision], "b3");
-    const before = lineCount();
-    const wrong = await approvedIn(box, demo, ["report", "confirm", report], "not-the-hash");
-    assert.equal(wrong.code, 1);
-    assert.equal(lineCount(), before);
+    const digest = digestOf(report);
+    const approved = await approvedIn(box, demo, ["report", "confirm", report], "not-the-hash");
+    assert.equal(approved.code, 0, approved.out);
+    assert.match(approved.out, new RegExp(`bound to artifact ${digest.slice(0, 12)}`));
+    assert.equal(events().at(-1).payload.digest, digest);
 });
 
 test("B4 a design with no artifact cannot be approved: there is nothing to bind to", async () =>

@@ -134,8 +134,8 @@ export function citationLines(cited: CitedDecision[]): string[]
 
 // Dispatch. A unit carrying no design report is not what this gate is about
 // and passes untouched; a unit that carries one may only be picked up against
-// a design that a person approved, whose approval names the exact bytes, and
-// whose citations are still live *now* rather than when it was approved.
+// an approved design, whose approval names the exact bytes, and whose citations
+// are still live *now* rather than when it was approved.
 export function dispatchRefusal(models: ProjectModel[], viewer: string, work: WorkState): string | null
 {
     const designs = work.reports.filter((report) => report.design === true);
@@ -164,7 +164,7 @@ function designProblem(models: ProjectModel[], viewer: string, design: ReportEnt
 {
     if (design.approval === undefined)
     {
-        return `its design ${design.id} is waiting on a person: they run \`self report confirm ${design.id}\` in their own terminal`;
+        return `its design ${design.id} is waiting on an approval: \`self report confirm ${design.id}\``;
     }
     if (design.approval.digest === undefined)
     {

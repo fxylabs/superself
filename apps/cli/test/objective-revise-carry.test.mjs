@@ -24,7 +24,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, logFixture, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, logFixture, machine, must, mustPerson, receiptIn, selfIn, workIdIn } from "./harness.mjs";
 
 const objectiveIdIn = (text) => text.match(/\bo-[0-9a-z]{5}\b/)[0];
 const milestoneIdIn = (text) => text.match(/\bm-[0-9a-z]{5}\b/)[0];
@@ -69,7 +69,7 @@ async function fixture()
     const m5 = milestoneIdIn(await run(["milestone", "add", "m5 dropped", "--objective", old, "--exit", "f"]));
     await approved(["milestone", "drop", m5, "--why", "not needed"], m5);
     const ma = milestoneIdIn(await run(["milestone", "add", "ma superseded", "--objective", old, "--exit", "g"]));
-    const mb = milestoneIdIn((await approved(["milestone", "revise", ma, "--why", "widened", "--exit", "h"], ma)).printed);
+    const mb = milestoneIdIn(receiptIn((await approved(["milestone", "revise", ma, "--why", "widened", "--exit", "h"], ma)).printed));
     const pages = {};
     for (const id of [m1, m2, m3, m4, m5, ma, mb])
     {
@@ -80,7 +80,7 @@ async function fixture()
         confirmed: eventsOf(ws).filter((event) => event.type === "entity.confirmed" && /^m-/.test(String(event.payload.entity)))
     };
     const receipt = (await approved(["objective", "revise", old, "--why", "wording after discussion", "--outcome", "plan v2"], old)).printed;
-    const successor = objectiveIdIn(receipt);
+    const successor = objectiveIdIn(receiptIn(receipt));
     return { box, ws, demo, run, approved, old, other, successor, receipt, before, m1, m2, m3, m4, m5, ma, mb, w1, w2, w3 };
 }
 
@@ -158,7 +158,7 @@ test("cell 8: an objective with no milestones revises with a zero count and no l
 {
     const bare = objectiveIdIn(await F.run(["objective", "add", "bare objective"]));
     const printed = (await F.approved(["objective", "revise", bare, "--why", "reworded", "--outcome", "bare, reworded"], bare)).printed;
-    const successor = objectiveIdIn(printed);
+    const successor = objectiveIdIn(receiptIn(printed));
     assert.match(printed, new RegExp(`^${successor} — carried 0 milestones from ${bare}$`, "m"));
     assert.equal(carryLinks(F.ws, successor).length, 0);
 });
@@ -253,7 +253,7 @@ test("cell 18: milestone drop is the explicit way a carried milestone leaves, an
 test("cell 19: milestone revise after the carry creates the successor milestone under the successor objective only", async () =>
 {
     const printed = (await F.approved(["milestone", "revise", F.m3, "--why", "widened", "--exit", "more"], F.m3)).printed;
-    const next = milestoneIdIn(printed);
+    const next = milestoneIdIn(receiptIn(printed));
     const created = eventsOf(F.ws).find((event) => event.type === "entity.confirmed" && event.payload.entity === next);
     assert.deepEqual(created.payload.links, [{ type: "member-of", target: F.successor }, { type: "supersedes", target: F.m3 }]);
     assert.match(await afterPage(F.m3), new RegExp(`^- State: closed — superseded by ${next} — `, "m"));
@@ -283,15 +283,22 @@ test("cell 23: milestone show --project from the workspace root names the succes
     assert.match(page, new RegExp(`^- Carried from: ${F.old}$`, "m"));
 });
 
-test("cell 24: a revise the supersede gate refuses writes neither the successor nor a single carry link", async () =>
+// This cell read "a revise the supersede gate refuses writes nothing". #400
+// took the gate away and left the disclosure, so what it holds now is the other
+// half of the same guarantee: a piped revise writes the successor and its carry
+// link in one append, and states what it replaced before it does.
+test("cell 24: a piped revise writes the successor and its carry link in one append, disclosed", async () =>
 {
     const gated = objectiveIdIn(await F.run(["objective", "add", "gated objective"]));
     await F.run(["milestone", "add", "gated checkpoint", "--objective", gated, "--exit", "one"]);
     const size = eventsOf(F.ws).length;
     const result = await selfIn(F.box, F.demo, ["objective", "revise", gated, "--why", "piped", "--outcome", "gated, reworded"]);
-    assert.notEqual(result.code, 0);
-    assert.match(result.out, /nothing was recorded/);
-    assert.equal(eventsOf(F.ws).length, size);
+    assert.equal(result.code, 0, result.out);
+    assert.match(result.out, /gated objective/);
+    assert.match(result.out, /`self undo` takes it back/);
+    const written = eventsOf(F.ws).slice(size);
+    assert.deepEqual(written.map((event) => event.type), ["entity.confirmed", "entity.linked"]);
+    assert.deepEqual(written[0].payload.by, { kind: "agent" });
 });
 
 test("cell 16: undoing one carry link returns that milestone alone to the predecessor", async () =>
@@ -310,7 +317,7 @@ test("cell 17: a second revision carries the milestones again, one hop per page"
 {
     const G = await fixture();
     const printed = (await G.approved(["objective", "revise", G.successor, "--why", "again", "--outcome", "plan v3"], G.successor)).printed;
-    const newer = objectiveIdIn(printed);
+    const newer = objectiveIdIn(receiptIn(printed));
     assert.match(printed, new RegExp(`carried 5 milestones from ${G.successor}$`, "m"));
     const ids = [G.m1, G.m2, G.m3, G.m4, G.mb];
     const newest = await G.run(["objective", "show", newer]);
@@ -344,7 +351,7 @@ test("cells 25–28: whatever the revise changes, the milestone carries and the 
         const work = workIdIn((await mustPerson(box, demo, ["work", "add", `unit ${cell}`])).out);
         await run(["work", "link", work, "--milestone", milestone]);
         const printed = (await approvedIn(box, demo, ["objective", "revise", old, "--why", `cell ${cell}`, ...flags], old)).printed;
-        const successor = objectiveIdIn(printed);
+        const successor = objectiveIdIn(receiptIn(printed));
         assert.match(printed, new RegExp(`carried 1 milestone from ${old}$`, "m"), `cell ${cell}`);
         const page = await run(["objective", "show", successor]);
         shows.forEach((pattern) => assert.match(page, pattern, `cell ${cell}: ${pattern}`));
@@ -371,7 +378,7 @@ test("cell 30: a blocked milestone is live and carries with its blocked state", 
     await run(["work", "block", work, "--on", "external", "--why", "vendor outage"]);
     assert.match(await run(["milestone", "show", milestone]), /^- State: blocked — /m);
     const printed = (await approvedIn(box, demo, ["objective", "revise", old, "--why", "reworded", "--outcome", "blocked plan v2"], old)).printed;
-    const successor = objectiveIdIn(printed);
+    const successor = objectiveIdIn(receiptIn(printed));
     assert.match(printed, new RegExp(`carried 1 milestone from ${old}$`, "m"));
     const page = await run(["milestone", "show", milestone]);
     assert.match(page, new RegExp(`^- Objective: ${successor} `, "m"));
@@ -393,7 +400,7 @@ test("cell 29: a legacy milestone carries to the successor like a native one", a
         payload: { objective: "o-lega1", milestone: "m-lega1", outcome: "legacy checkpoint", exit: [{ id: "c1", text: "one" }] }, refs: {}, origin: { actor: "agent", confirmed: true } });
     assert.match(await run(["milestone", "show", "m-lega1"]), /^- Objective: o-lega1 legacy plan$/m);
     const printed = (await approvedIn(box, demo, ["objective", "revise", "o-lega1", "--why", "reworded", "--outcome", "legacy plan v2"], "o-lega1")).printed;
-    const successor = objectiveIdIn(printed);
+    const successor = objectiveIdIn(receiptIn(printed));
     assert.match(printed, /carried 1 milestone from o-lega1$/m);
     const page = await run(["milestone", "show", "m-lega1"]);
     assert.match(page, new RegExp(`^- Objective: ${successor} legacy plan v2$`, "m"));
@@ -416,7 +423,7 @@ test("cell A9 (#287): revising a workspace objective carries workspace scope to 
     const printed = (await approvedIn(box, demo,
         ["objective", "revise", objective, "--why", "restated", "--outcome", "the company reaches two hundred teams"],
         objective)).printed;
-    const successor = objectiveIdIn(printed);
+    const successor = objectiveIdIn(receiptIn(printed));
     assert.notEqual(successor, objective);
     assert.match(await run(["state", "show", successor]), /placement: workspace · full · priority 10/);
 });

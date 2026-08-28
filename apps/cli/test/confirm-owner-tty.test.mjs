@@ -41,7 +41,7 @@ mustSpawn(box, alpha, ["work", "propose", "an outcome a terminal reader is shown
 mustSpawn(box, alpha, ["decide", "a direction a terminal reader is shown", "--why", "it was weighed", "--proposed"]);
 mustSpawn(box, alpha, ["state", "add", "a record a terminal reader is shown", "--proposed"]);
 
-const ADVERTISED = /self (work accept [^\s`]+|decide confirm [^\s`]+|state confirm [^\s`]+)/g;
+const ADVERTISED = /self (work confirm [^\s`]+|decide confirm [^\s`]+|state confirm [^\s`]+)/g;
 
 // The styled render carries escape sequences around the notes, and a command
 // with one inside it is not the command a reader copies.
@@ -66,14 +66,13 @@ test("cell 26: every line self status --project prints at a terminal runs where 
     // advertised there and not here. What this cell holds is that every command
     // this render does print runs where the render was read.
     const kinds = new Set(lines.map((argv) => argv.slice(0, 2).join(" ")));
-    assert.deepEqual([...kinds].sort(), ["state confirm", "work accept"],
+    assert.deepEqual([...kinds].sort(), ["state confirm", "work confirm"],
         `self status --project advertised something other than the two kinds it prints:\n${plain(read.out)}`);
     for (const argv of lines)
     {
-        // Driven in this process with a keyboard, not spawned: one of the two
-        // advertised lines is `work accept`, which a process with no person at
-        // it cannot run (#389), and a child cannot be given one. Only the exit
-        // code is read here, so the painted output costs this cell nothing.
+        // Driven in this process rather than spawned, because this render only
+        // prints its waiting rows at a terminal and a child has none. Only the
+        // exit code is read here, so the painted output costs this cell nothing.
         const ran = await personIn(box, ws, argv);
         assert.equal(ran.code, 0, `\`self ${argv.join(" ")}\` failed where the render was read:\n${ran.out}`);
     }

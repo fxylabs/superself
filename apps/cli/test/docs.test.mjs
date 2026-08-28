@@ -126,11 +126,11 @@ async function floorState(box)
     return { cwd: enteredDir(box, join(box.env.HOME, "my-project")) };
 }
 
-// The documents show a person at their own terminal, and two of the verbs they
-// show write a confirmed work record — which is a person's call, refused where
-// no person is there (#389). Those lines are driven with a keyboard, so what a
-// document claims is judged against the run it describes.
-const PERSON_LINES = [["work", "add"], ["work", "accept"]];
+// The documents show a person at their own terminal recording work. Those
+// lines are driven with a keyboard, so the events they write say `person` —
+// what a document claims is judged against the run it describes, and since
+// #400 that includes who the run says wrote each record.
+const PERSON_LINES = [["work", "add"], ["work", "confirm"]];
 
 function personLine(argv)
 {
@@ -187,7 +187,7 @@ async function writeCurrentVocabulary(box, demo)
     const milestone = entityIdIn((await must(box, demo, ["milestone", "add", "a checkpoint", "--objective", objective, "--exit", "the proof passes"])).out);
     const plan = workIdIn((await must(box, demo, ["work", "propose", "review the flow before it is worked"])).out);
     await must(box, demo, ["work", "revise", plan, "review the flow, then work it", "--why", "the first plan skipped the review"]);
-    await mustPerson(box, demo, ["work", "accept", plan]);
+    await mustPerson(box, demo, ["work", "confirm", plan]);
     const unit = workIdIn((await mustPerson(box, demo, ["work", "add", "the flow works"])).out);
     await must(box, demo, ["work", "link", unit, "--milestone", milestone]);
     await must(box, demo, ["work", "unlink", unit, "--milestone", milestone]);
@@ -210,8 +210,9 @@ async function writeCurrentVocabulary(box, demo)
     await approvedIn(box, demo, ["skill", "drop", skill, "--why", "the deploy moved to the pipeline"], skill);
     writeFileSync(join(demo, "registered-guide.md"), "a guide no report is about\n");
     const guide = (await must(box, demo, ["artifact", "add", "registered-guide.md"])).out.match(/\ba-[0-9a-z]{5}\b/)[0];
-    // Removing stored bytes is a person's call, so the last verb in the
-    // vocabulary is driven the way every other gated one above it is.
+    // Removing stored bytes is the one act that still asks for a person: it is
+    // what `self undo` cannot take back, so the last verb in the vocabulary is
+    // driven with a keyboard rather than through a plain call.
     await approvedIn(box, demo, ["artifact", "prune", guide, "--why", "the guide is folded into the rule"], guide);
 }
 

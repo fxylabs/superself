@@ -176,46 +176,51 @@ test("cell 73: the receipt says the target is untouched until a person accepts",
         "--supersedes", target, "--why", "the outcome moved"]);
     const id = workIdIn(proposed.out);
     assert.match(proposed.out, new RegExp(`replaces ${target} on acceptance`));
-    assert.match(proposed.out, new RegExp(`self work accept ${id}`));
+    assert.match(proposed.out, new RegExp(`self work confirm ${id}`));
 });
 
 /* ── E: acceptance, and the drift a target can have gone through ───── */
 
-test("cell 42: a person's acceptance records the confirm and the retirement in one append", async () =>
+test("cell 42: a person's confirm records the confirm and the retirement in one append", async () =>
 {
     const target = await unit("cell 42: the outcome being replaced");
     const id = await correction("cell 42: the corrected outcome", target);
     const before = events().length;
-    const accepted = await approvedIn(box, demo, ["work", "accept", id], target);
+    const accepted = await approvedIn(box, demo, ["work", "confirm", id], target);
     assert.equal(accepted.code, 0, accepted.out);
     assert.match(accepted.out, new RegExp(id));
     const written = events().slice(before);
     assert.deepEqual(written.map((event) => event.type), ["entity.confirmed", "entity.retired"]);
-    const retired = written[1];
-    assert.deepEqual(
-        { ...retired.payload, confirmation: retired.payload.confirmation.method },
-        {
-            entity: target,
-            why: "the outcome moved to the new unit",
-            successor: id,
-            successorProject: "demo",
-            confirmation: "tty"
-        });
-    // The gate's passing is provable from the log: the acceptance carries what
-    // was typed, not only a bit any process can set.
-    assert.equal(written[0].payload.confirmation.challenge, target);
+    assert.deepEqual(written[1].payload, {
+        entity: target,
+        why: "the outcome moved to the new unit",
+        successor: id,
+        successorProject: "demo",
+        by: { kind: "person" }
+    });
+    // Who confirmed it is provable from the log: both halves of the append say
+    // it, so a reader need not know which event to look at (#400).
+    assert.deepEqual(written[0].payload.by, { kind: "person" });
     assert.equal(written[0].refs.confirms, id);
 });
 
-test("cell 43: a wrong challenge writes neither half, and the plan stays open", async () =>
+// Cell 43 asserted that a mistyped challenge wrote neither half. There is no
+// challenge since #400; what holds the pair together is the single append,
+// which is what this asserts instead — a session's confirm writes both halves
+// or neither, and `self undo` takes the pair back as one.
+test("cell 43: a session's confirm writes both halves, and one undo takes the pair back", async () =>
 {
-    const target = await unit("cell 43: the outcome a mistyped answer left alone");
+    const target = await unit("cell 43: the outcome a session confirmed over");
     const id = await correction("cell 43: the corrected outcome", target);
     const before = events().length;
-    const refused = await approvedIn(box, demo, ["work", "accept", id], "not the challenge");
-    assert.equal(refused.code, 1);
-    assert.equal(events().length, before, "a refused acceptance still appended");
+    const confirmed = await selfIn(box, demo, ["work", "confirm", id]);
+    assert.equal(confirmed.code, 0, confirmed.out);
+    const written = events().slice(before);
+    assert.deepEqual(written.map((event) => event.type), ["entity.confirmed", "entity.retired"]);
+    written.forEach((event) => assert.deepEqual(event.payload.by, { kind: "agent" }, event.type));
+    assert.equal((await selfIn(box, demo, ["undo", written[0].id])).code, 0);
     assert.match((await must(box, demo, ["work", "show", id])).out, /review/);
+    assert.doesNotMatch((await must(box, demo, ["work", "show", target])).out, /Status: retired/);
 });
 
 test("cell 44: a target started since the proposal still retires", async () =>
@@ -223,7 +228,7 @@ test("cell 44: a target started since the proposal still retires", async () =>
     const target = await unit("cell 44: the outcome somebody picked up");
     const id = await correction("cell 44: the corrected outcome", target);
     await must(box, demo, ["work", "start", target]);
-    const accepted = await approvedIn(box, demo, ["work", "accept", id], target);
+    const accepted = await approvedIn(box, demo, ["work", "confirm", id], target);
     assert.equal(accepted.code, 0, accepted.out);
     assert.equal(retirementOf(target).payload.successor, id);
 });
@@ -235,7 +240,7 @@ test("cell 45: a target that went done refuses the acceptance and records nothin
     await must(box, demo, ["work", "start", target]);
     await must(box, demo, ["work", "done", target, "--report", "the outcome verifiably happened"]);
     const before = events().length;
-    const refused = await approvedIn(box, demo, ["work", "accept", id], target);
+    const refused = await approvedIn(box, demo, ["work", "confirm", id], target);
     assert.equal(refused.code, 1);
     assert.match(refused.out, new RegExp(`${id} proposes to replace ${target}, and ${target} is already done`));
     assert.match(refused.out, new RegExp(`self work revise ${id}`));
@@ -250,7 +255,7 @@ test("cell 46: a target retired in the meantime refuses, naming its own reason",
     const id = await correction("cell 46: the corrected outcome", target);
     await approvedIn(box, demo, ["work", "retire", target, "--why", "it was dropped from the release"], target);
     const before = events().length;
-    const refused = await approvedIn(box, demo, ["work", "accept", id], target);
+    const refused = await approvedIn(box, demo, ["work", "confirm", id], target);
     assert.equal(refused.code, 1);
     assert.match(refused.out, /is already retired — it was dropped from the release/);
     assert.equal(events().length, before);
@@ -260,7 +265,7 @@ test("cell 47: a carried target this store never saw refuses the acceptance", as
 {
     const id = proposalFixture("cell 47: a plan naming a unit nothing answers to", { entity: "w-zzzzz", why: "the outcome moved" });
     const before = events().length;
-    const refused = await approvedIn(box, demo, ["work", "accept", id], "w-zzzzz");
+    const refused = await approvedIn(box, demo, ["work", "confirm", id], "w-zzzzz");
     assert.equal(refused.code, 1);
     assert.match(refused.out, /no record here answers to w-zzzzz/);
     assert.equal(events().length, before);
@@ -272,7 +277,7 @@ test("cell 49: a revision leaves the carried supersession alone", async () =>
     const id = await correction("cell 49: the corrected outcome", target);
     await must(box, demo, ["work", "revise", id, "cell 49: the corrected outcome, restated", "--why", "the wording was wrong"]);
     assert.equal(creationOf(id).payload.supersedes.entity, target);
-    const accepted = await approvedIn(box, demo, ["work", "accept", id], target);
+    const accepted = await approvedIn(box, demo, ["work", "confirm", id], target);
     assert.equal(accepted.code, 0, accepted.out);
     assert.equal(retirementOf(target).payload.successor, id);
 });
@@ -284,7 +289,7 @@ test("cell 50: a supersession and a gap target land as three events in one appen
     const id = workIdIn((await must(box, demo, ["work", "propose", "cell 50: the corrected outcome",
         "--supersedes", target, "--why", "the outcome moved", "--objective", objective, ...BRIEF])).out);
     const before = events().length;
-    const accepted = await approvedIn(box, demo, ["work", "accept", id], target);
+    const accepted = await approvedIn(box, demo, ["work", "confirm", id], target);
     assert.equal(accepted.code, 0, accepted.out);
     assert.deepEqual(events().slice(before).map((event) => event.type),
         ["entity.confirmed", "entity.linked", "entity.retired"]);
@@ -373,7 +378,7 @@ test("cell 63: a second retirement of the same target does not displace the firs
 {
     const target = await unit("cell 63: the outcome two clones both closed");
     const id = await correction("cell 63: the corrected outcome", target);
-    await approvedIn(box, demo, ["work", "accept", id], target);
+    await approvedIn(box, demo, ["work", "confirm", id], target);
     logFixture(ws, "demo", {
         id: ulid(),
         ts: new Date(Date.now() + 60_000).toISOString(),
@@ -392,7 +397,7 @@ test("cell 64: a supersedes that is not an object reads as absent", async () =>
     for (const shape of ["a string", 7, {}, { entity: "" }])
     {
         const id = proposalFixture(`cell 64: a plan carrying ${JSON.stringify(shape)}`, shape);
-        const accepted = await mustPerson(box, demo, ["work", "accept", id]);
+        const accepted = await mustPerson(box, demo, ["work", "confirm", id]);
         assert.match(accepted.out, new RegExp(id));
         assert.equal(events().filter((event) => event.type === "entity.retired"
             && event.payload.successor === id).length, 0);
@@ -410,7 +415,7 @@ test("cell 66: the same retirement merged in twice folds once", async () =>
 {
     const target = await unit("cell 66: the outcome a duplicated event names");
     const id = await correction("cell 66: the corrected outcome", target);
-    await approvedIn(box, demo, ["work", "accept", id], target);
+    await approvedIn(box, demo, ["work", "confirm", id], target);
     const written = retirementOf(target);
     logFixture(ws, "demo", { ...written, id: ulid() });
     const shown = (await must(box, demo, ["work", "show", target])).out;
@@ -422,7 +427,7 @@ test("cell 67: the pair reads back the way work add --supersedes reads", async (
 {
     const target = await unit("cell 67: the outcome the history names");
     const id = await correction("cell 67: the corrected outcome", target);
-    await approvedIn(box, demo, ["work", "accept", id], target);
+    await approvedIn(box, demo, ["work", "confirm", id], target);
     const history = (await must(box, demo, ["work", "show", id, "--history"])).out;
     assert.match(history, /entity\.proposed/);
     assert.match(history, /entity\.confirmed/);
@@ -438,7 +443,7 @@ test("cell 68: an open correction is one row a person is waiting on", async () =
     const target = await unit("cell 68: the outcome a waiting row names");
     const id = await correction("cell 68: the corrected outcome", target);
     const context = (await must(box, demo, ["context"])).out;
-    assert.match(context, new RegExp(`self work accept ${id}`));
+    assert.match(context, new RegExp(`self work confirm ${id}`));
     assert.equal(context.split("\n").filter((line) => line.includes(id)).length, 1, context);
 });
 

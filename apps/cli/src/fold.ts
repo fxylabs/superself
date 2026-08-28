@@ -376,7 +376,7 @@ function proposalSummaryLines(model: ProjectModel): string[]
 {
     return openProposals(model.goals).map((proposal) =>
         `- ${proposal.outcome} → ${proposal.milestone ?? proposal.objective} — ${proposal.confidence} confidence, ` +
-        `${proposal.capacity}, expires ${proposal.expires} _(\`self work accept ${proposal.id}\`)_`);
+        `${proposal.capacity}, expires ${proposal.expires} _(\`self work confirm ${proposal.id}\`)_`);
 }
 
 function decisionLines(decisions: DecisionState[]): string[]
@@ -670,7 +670,7 @@ function planLines(work: WorkState): string[]
     {
         return [];
     }
-    return [`- Plan: ${planNote(work)}`, `- A person accepts it: self work accept ${work.id}`];
+    return [`- Plan: ${planNote(work)}`, `- Confirm it with: self work confirm ${work.id}`];
 }
 
 // Marked, never dropped (#239): a unit's section states what it attached, and

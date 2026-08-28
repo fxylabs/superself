@@ -136,7 +136,7 @@ test("A6: a project whose work history is entirely legacy folds without an excep
 test("A7: a proposal recorded as `entity.proposed` still becomes a unit on accept", async () =>
 {
     const id = await nativeProposal("A7: an outcome proposed by today's verb");
-    await mustPerson(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "confirm", id]);
     assert.ok((await must(box, demo, ["work"])).out.includes(id));
 });
 
@@ -153,7 +153,7 @@ test("B1: a `work.proposed` line is in no proposal list and no waiting count", a
 test("B2: accepting a legacy proposal by its event id is refused as no proposal", async () =>
 {
     const id = legacyLine("work.proposed", { outcome: "B2: an outcome nobody can accept", objective, ...BRIEF });
-    const refused = await personIn(box, demo, ["work", "accept", id]);
+    const refused = await personIn(box, demo, ["work", "confirm", id]);
     assert.equal(refused.code, 1);
     assert.match(refused.out, new RegExp(`no work proposal matches "${id}"`));
 });
@@ -196,7 +196,7 @@ test("B6: two legacy proposals written in one millisecond leave no prefix to col
     }
     const shown = await context();
     assert.ok(!shown.includes("B6: one of a burst"), `a legacy proposal from the burst reached the waiting band:\n${shown}`);
-    assert.equal((await personIn(box, demo, ["work", "accept", millisecond])).code, 1);
+    assert.equal((await personIn(box, demo, ["work", "confirm", millisecond])).code, 1);
 });
 
 test("B7: a legacy proposal's text is found by no search", async () =>

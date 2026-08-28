@@ -3,7 +3,7 @@
 // cell's stated outcome.
 //
 // The defect the table is drawn around: `self context --project <slug>` prints
-// `self work accept`, `self decide confirm` and `self state confirm` beside the
+// `self work confirm`, `self decide confirm` and `self state confirm` beside the
 // rows waiting on a person, and each of those verbs resolved its project from
 // the working directory — so the line could not be run at the place the context
 // was read. The ruling is that the record's own id names the project, which is
@@ -85,9 +85,9 @@ function entityIn(text)
 // without reading the fold twice.
 const VERBS = [
     {
-        name: "work accept",
+        name: "work confirm",
         make: (cwd, outcome) => proposalIn(cwd, outcome),
-        answer: (id) => ["work", "accept", id],
+        answer: (id) => ["work", "confirm", id],
         again: /is already accepted/
     },
     {
@@ -202,7 +202,7 @@ function setCaps(activeBox, caps)
 // print these lines get one, because they share the row builder and a fix that
 // reached only `self context` would leave `self status` saying the same thing
 // and meaning something unrunnable.
-const ADVERTISED = /`self (work accept [^`\s]+|decide confirm [^`\s]+|state confirm [^`\s]+)`/g;
+const ADVERTISED = /`self (work confirm [^`\s]+|decide confirm [^`\s]+|state confirm [^`\s]+)`/g;
 
 function advertisedIn(text)
 {
@@ -249,7 +249,7 @@ test("cells 13-16 setup: the owning project's checkout is removed after its reco
         "--value", BRIEF.value, "--success", BRIEF.success, "--stop", BRIEF.stop,
         "--risk", BRIEF.risk, "--capacity", BRIEF.capacity, "--evidence-plan", BRIEF.evidencePlan,
         "--confidence", BRIEF.confidence, "--expires", BRIEF.expires])).out);
-    goneRecords["work accept"] = await propose("an outcome answered from a machine without the checkout");
+    goneRecords["work confirm"] = await propose("an outcome answered from a machine without the checkout");
     goneRecords["work decline"] = await propose("an outcome turned down from a machine without the checkout");
     goneRecords["decide confirm"] = idIn((await must(goneBox, dir, ["decide", "a direction was chosen", "--why", "it was weighed", "--proposed"])).out);
     goneRecords["state confirm"] = entityIn((await must(goneBox, dir, ["state", "add", "a record with no checkout left", "--proposed"])).out);
@@ -375,12 +375,13 @@ test("cell 25: every line self context --project prints runs where it was read",
     const read = (await must(box, ws, ["context", "--project", "alpha"])).out;
     const lines = advertisedIn(read);
     const kinds = new Set(lines.map((argv) => argv.slice(0, 2).join(" ")));
-    assert.deepEqual([...kinds].sort(), ["decide confirm", "state confirm", "work accept"],
+    assert.deepEqual([...kinds].sort(), ["decide confirm", "state confirm", "work confirm"],
         `self context --project did not advertise all three kinds:\n${read}`);
     for (const argv of lines)
     {
-        // An advertised line is one a person runs, and one of the three is a
-        // person's call at their own terminal (#389).
+        // Every advertised line runs from wherever the render was read. Since
+        // #400 that includes a session's process, and this one still drives a
+        // person's, because who runs it is not what the cell is about.
         const ran = await personIn(box, ws, argv);
         assert.equal(ran.code, 0, `\`self ${argv.join(" ")}\` failed where the render was read:\n${ran.out}`);
     }

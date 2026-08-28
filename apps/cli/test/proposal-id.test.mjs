@@ -56,9 +56,9 @@ function advertised(text, outcome)
     }
     for (const row of lines.slice(start))
     {
-        if (row.includes("self work accept"))
+        if (row.includes("self work confirm"))
         {
-            return row.match(/self work accept ([0-9a-z-]+)/)[1];
+            return row.match(/self work confirm ([0-9a-z-]+)/)[1];
         }
         if (row !== lines[start] && row.includes("work proposal "))
         {
@@ -74,7 +74,7 @@ test("cell 9: a native proposal is advertised by its own short id", async () =>
     const id = await nativeProposal(outcome);
     assert.match(id, /^w-[0-9a-z]{5}$/);
     assert.equal(advertised(await surface("terminal"), outcome), id);
-    assert.equal((await personIn(box, demo, ["work", "accept", id])).code, 0);
+    assert.equal((await personIn(box, demo, ["work", "confirm", id])).code, 0);
 });
 
 test("cell 10: a native proposal's row is the row it always was", async () =>
@@ -83,5 +83,5 @@ test("cell 10: a native proposal's row is the row it always was", async () =>
     const id = await nativeProposal(outcome);
     const shown = await surface("piped");
     assert.ok(shown.includes(`- work proposal ${id}: ${outcome}`), `the row's shape changed:\n${shown}`);
-    assert.ok(shown.includes(`expires ${BRIEF.expires} — \`self work accept ${id}\``), "the accept line's shape changed");
+    assert.ok(shown.includes(`expires ${BRIEF.expires} — \`self work confirm ${id}\``), "the accept line's shape changed");
 });

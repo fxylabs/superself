@@ -54,7 +54,7 @@ The person and the agent work from the same work record.
 1. Before implementation, the agent records the complete plan with `work propose`.
 2. The person or a separate review agent reads the plan.
 3. If the review finds a defect, the plan is corrected under the same ID with `work revise`.
-4. The person accepts only the reviewed revision with `work accept`, and then the agent starts.
+4. Only the reviewed revision is confirmed with `work confirm` — by the person, or by the session once the person has said yes in the conversation — and then the agent starts.
 5. The agent reports the commit and checks. The person uses that evidence to decide whether the work is complete.
 
 The tutorial teaches manual review for one task that requires judgment. It does not set a policy that every routine task must wait for individual human approval.

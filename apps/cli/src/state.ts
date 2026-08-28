@@ -33,6 +33,7 @@ import {
     uncoveredCriteria
 } from "./entities.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
+import { writtenBy } from "./human.js";
 import { entityId, wrongKindHint } from "./ids.js";
 import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
 import { sessionToken } from "./machine.js";
@@ -372,9 +373,9 @@ function recordAdd(ctx: ProjectContext, models: ProjectModel[],
     const displaced = proposed ? [] : supersedeTargets(payload);
     recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced,
         { successor: supersedingRecord(payload) }), models[0],
-        (confirmation) => [
+        (by) => [
             makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
-                confirmation === undefined ? payload : { ...payload, confirmation }, undefined, !proposed),
+                { ...payload, by }, undefined, !proposed),
             ...demotionEvents(demotions, record.id, proposed)
         ],
         `${record.id} ${record.text}`);
@@ -520,12 +521,16 @@ function statePlace({ values, positionals }: CommandInput<typeof PLACE_OPTIONS>)
     const scale = tokenScale(config);
     const usage = usageReader(models, scale);
     const demotions = demotionsFor(records, values.demote ?? [], move.entered, found.entity.id, PLACE_USAGE, ctx.project);
-    requireRoom(usage, caps, move.entered, entityCharacters(found.entity), demotions, scale, ctx.project, 0, false);
+    // A proposal holds no seat in the tier it names until it is confirmed, and
+    // the confirm is where the cap judges it — the same rule `state add
+    // --proposed` passes under (#240 R3).
+    requireRoom(usage, caps, move.entered, entityCharacters(found.entity), demotions, scale, ctx.project, 0,
+        found.entity.status === "proposed");
     const from = scopeTarget(found.entity, found.owner);
     requireDemotionRoom(usage, caps, move.entered?.target ?? from, demotions, vacatedSeat(found, move.entered), scale, ctx.project);
     const proposed = values.proposed === true;
     recordEvents(ctx, [
-        makeEvent(found.owner, "entity.placed", placePayload(found, move, proposed), undefined, !proposed),
+        makeEvent(found.owner, "entity.placed", { ...placePayload(found, move, proposed), by: writtenBy() }, undefined, !proposed),
         ...demotionEvents(demotions, found.entity.id, proposed)
     ], `${found.entity.id} ${found.entity.text}`);
 }
@@ -536,6 +541,7 @@ function requestedPlacement(ctx: ProjectContext, found: Placed, values: CommandI
     const exposure = values.exposure === undefined ? undefined : validExposure(values.exposure);
     const target = values.scope === undefined ? undefined : validScope(ctx, values.scope);
     requirePlacementChange(found, priority, exposure, target);
+    refuseDemotedProposal(found.entity, exposure);
     return {
         priority,
         exposure,
@@ -592,16 +598,17 @@ function placePayload(found: Placed, move: Placement, proposed: boolean): Record
     return payload;
 }
 
-// Placement moves live, confirmed records: a proposal has nothing rendered to
-// move yet, and a withdrawn or replaced record no longer renders at all.
+// Placement moves live records: a withdrawn or replaced one no longer renders
+// at all, so it has no placement left to change.
+//
+// A proposal does move (#400). It renders nowhere yet, so widening its scope or
+// raising its priority hides nothing from anybody and settles where the record
+// lands the moment it is confirmed. What it cannot do is demote its own
+// exposure, which is refused below by the move rather than by the status.
 function requirePlaceable(records: Placed[], value: string | undefined): Placed
 {
     const found = requirePlaced(records, value, PLACE_USAGE);
     const entity = found.entity;
-    if (entity.status === "proposed")
-    {
-        throw new CliError(`${entity.id} is still proposed — placement moves confirmed records; confirm it first, or state its placement at add time`);
-    }
     if (entity.status === "retracted")
     {
         throw new CliError(`${entity.id} was retracted — a withdrawn record no longer renders, so it has no placement to change`);
@@ -626,6 +633,21 @@ function requirePlacementChange(found: Placed, priority: number | undefined, exp
     {
         throw new CliError(`${entity.id} already sits at that placement — nothing changes`);
     }
+}
+
+// The one move a proposal cannot make (#400). Every other placement value on a
+// proposal states where it will land once confirmed, and nothing is hidden by
+// stating it. A demotion is the exception in the other direction: a proposal
+// renders nowhere to be demoted *from*, so the move asserts a loss that never
+// happened, and the record it would describe reads as one that used to render.
+function refuseDemotedProposal(entity: EntityState, exposure: Exposure | undefined): void
+{
+    if (entity.status !== "proposed" || exposure === undefined || !isDemotion(entity.exposure, exposure))
+    {
+        return;
+    }
+    throw new CliError(`${entity.id} is still proposed, so it renders nowhere to be demoted from — `
+        + `confirm it with \`self state confirm ${entity.id}\` and demote it then, or propose it at ${exposure} instead`);
 }
 
 // --why is demanded exactly where a record leaves rendered ground: exposure
@@ -948,13 +970,18 @@ function requireDemotableSeat(found: Placed, entered: CappedTier, here: string):
 // The demotion lands in the log that owns the record it demotes, which is not
 // always the log the admitted record is written to (#181 D3): a seat in the
 // destination's tier is freed by a record the destination's own log holds.
+// It carries the same `by` the add or placement beside it does (#400): a seat
+// freed is a record moved, and a reader asking who moved it is owed an answer
+// on the event that moved it rather than on the one it made room for.
 export function demotionEvents(demotions: Placed[], admit: string, proposed: boolean): SelfEvent[]
 {
+    const by = writtenBy();
     return demotions.map((item) => makeEvent(item.owner, "entity.placed", {
         entity: item.entity.id,
         exposure: DEMOTION_TARGET[item.entity.exposure as "full" | "index"],
         why: `demoted to admit ${admit} under the ${item.entity.exposure} cap`,
-        ...(proposed ? { proposed: true } : {})
+        ...(proposed ? { proposed: true } : {}),
+        by
     }, { admits: admit }, !proposed));
 }
 
@@ -1112,7 +1139,7 @@ export function confirmEntityUnit(ctx: ProjectScope, id: string): void
 function confirmEvent(project: string, member: ConfirmMember): SelfEvent
 {
     const confirms = member.kind === "record" ? member.entity.id : member.entity.pending?.event ?? member.entity.id;
-    return makeEvent(project, "entity.confirmed", { entity: member.entity.id }, { confirms }, true);
+    return makeEvent(project, "entity.confirmed", { entity: member.entity.id, by: writtenBy() }, { confirms }, true);
 }
 
 /* ── the coverage grammar (#207 C) ─────────────────────────────────── */
@@ -1229,7 +1256,7 @@ function stateRetract({ values, positionals }: CommandInput<typeof WHY_OPTION>):
     }
     const why = required(values.why);
     recordRetirement(ctx, retirementIntent(model, "retract", [entity.id], { why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why, confirmation }, { retracts: entity.id }, true)],
+        (by) => [makeEvent(ctx.project, "entity.retracted", { entity: entity.id, why, by }, { retracts: entity.id }, true)],
         entity.text);
 }
 
@@ -1402,7 +1429,7 @@ function stateExecRetire({ values, positionals }: CommandInput<typeof RETIRE_OPT
         payload.successor = requireSuccessor(model, entity, values.successor).id;
     }
     recordRetirement(ctx, retirementIntent(model, "retire", [entity.id], { why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retired", { ...payload, confirmation })],
+        (by) => [makeEvent(ctx.project, "entity.retired", { ...payload, by })],
         entity.text);
 }
 

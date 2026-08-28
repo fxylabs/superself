@@ -106,7 +106,7 @@ export const SKILL_COMMAND: Command = {
         },
         {
             syntax: 'skill drop <id|name> --why "<why it no longer helps>"',
-            description: ["withdraw a skill — a person at a terminal, exactly as any record is withdrawn"],
+            description: ["withdraw a skill; what it destroys is disclosed first, exactly as any record is"],
             verbs: ["drop"]
         }
     ],
@@ -450,11 +450,11 @@ function skillDrop({ values, positionals }: CommandInput<typeof DROP_OPTIONS>): 
     refuseForeign(models, positionals[0]);
     const target = requireDroppable(model, positionals[0]);
     const payload = { entity: target.id, why: required(values.why) };
-    // Every withdrawal carries its reason, and the gate is the one
-    // `convention drop` passes: a person at a terminal, typing the id back.
+    // Every withdrawal carries its reason, and the path is the one `convention
+    // drop` takes: what is lost is disclosed, and the event says who wrote it.
     recordRetirement(ctx, retirementIntent(model, "retract", [target.id], { why: payload.why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
-            confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: target.id }, true)],
+        (by) => [makeEvent(ctx.project, "entity.retracted",
+            { ...payload, by }, { retracts: target.id }, true)],
         target.text);
     return [{ kind: "receipt", text: `${target.id} "${target.text}" was dropped: ${payload.why}` }];
 }

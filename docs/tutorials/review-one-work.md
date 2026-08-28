@@ -42,7 +42,7 @@ An unaccepted plan cannot start. Before approval, `work start` stopped here:
 
 ```text
 $ self work start w-cs7dj
-error: w-cs7dj is waiting on review — its plan (v1) has not been accepted; a person runs `self work accept w-cs7dj`
+error: w-cs7dj is waiting on review — its plan (v1) has not been accepted; it is confirmed with `self work confirm w-cs7dj`
 ```
 
 The review agent found two defects: v1 omitted handling for the fragment link already in `README.md`, and its `docs/*.md` input conflicted with recursive discovery. Both had to change before implementation.
@@ -54,17 +54,19 @@ Tell the agent to cover nested docs and strip fragments before file lookup. `wor
 ```text
 $ self work revise w-cs7dj "Add a zero-dependency local Markdown link checker to this repository. Plan: inspect README.md and every Markdown file recursively under docs/**/*.md; add scripts/check-links.mjs to check that relative Markdown file targets exist; for a link to another Markdown file with a #fragment, strip the fragment before resolving the file and do not validate the anchor itself; ignore external URLs and same-page anchors; add node:test cases for valid links, missing files, a nested docs directory, and a cross-file fragment; expose npm run check:links and document its supported scope; run npm test and npm run check:links; commit the implementation and attach the verification as a self report. Do not access the network or change files outside the checker, its tests, package.json, and README.md." --why "Review found that v1 did not define cross-file fragment handling and conflicted between docs/*.md and recursive discovery. v2 strips fragments before file lookup, keeps anchor validation out of scope, fixes the supported input to docs/**/*.md, and adds both cases to the test plan."
 entity.revised recorded [01m0rpawj2bn6y3qj9jp6etdq7]
-w-cs7dj — v2; a person runs `self work accept w-cs7dj`
+w-cs7dj — v2; confirm it with `self work confirm w-cs7dj`
 ```
 
 Run `self work show w-cs7dj --history` to see v1 followed by v2. The second review found no remaining material defect.
 
-## Step 4. Accept the reviewed revision
+## Step 4. Confirm the reviewed revision
 
-Run `self work accept` for v2. The agent can then start the work.
+Run `self work confirm` for v2. The agent can then start the work. The session
+you are talking to can run this line itself once you have said yes: the record
+it writes states that a session wrote it, and `self undo` takes it back.
 
 ```text
-$ self work accept w-cs7dj
+$ self work confirm w-cs7dj
 entity.confirmed recorded [01m0rpc9hx9n9rx90wfpf7m73v]
 w-cs7dj
 
@@ -110,7 +112,7 @@ The final `self work show w-cs7dj` should contain `Status: done` and settled evi
 | --- | --- | --- |
 | After proposing v1 | `review` | v1 is not accepted |
 | After revising v2 | `review` | same ID, v2 is not accepted |
-| After accepting v2 | `next` | the current revision is accepted |
+| After confirming v2 | `next` | the current revision is accepted |
 | After starting | `entity.started` | the accepted plan has started once |
 | After `self work done` | `done` | settled evidence and the final report remain |
 
@@ -121,4 +123,4 @@ After one complete work loop, follow [Run a long-term project](../guides/running
 ## Sources
 
 - [Run record and fact table](../../examples/2026-08-24-one-work-review/README.md)
-- Superself `5e3cdb7`, real runs of `work propose`, `work revise`, `work accept`, `work start`, `report`, and `work done`
+- Superself `5e3cdb7`, real runs of `work propose`, `work revise`, `work confirm`, `work start`, `report`, and `work done`. The run was recorded when the verb was spelled `work accept`; the command lines and CLI messages above are restated in the current spelling, which the hidden `accept` alias still answers to.

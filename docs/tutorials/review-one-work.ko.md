@@ -42,7 +42,7 @@ w-cs7dj
 
 ```text
 $ self work start w-cs7dj
-error: w-cs7dj is waiting on review — its plan (v1) has not been accepted; a person runs `self work accept w-cs7dj`
+error: w-cs7dj is waiting on review — its plan (v1) has not been accepted; it is confirmed with `self work confirm w-cs7dj`
 ```
 
 리뷰 에이전트는 기존 `README.md`의 fragment 링크 처리와 `docs/*.md`의 재귀 범위가 빠졌다고 지적했습니다. 두 항목은 구현 전에 고쳐야 했습니다.
@@ -54,17 +54,17 @@ error: w-cs7dj is waiting on review — its plan (v1) has not been accepted; a p
 ```text
 $ self work revise w-cs7dj "Add a zero-dependency local Markdown link checker to this repository. Plan: inspect README.md and every Markdown file recursively under docs/**/*.md; add scripts/check-links.mjs to check that relative Markdown file targets exist; for a link to another Markdown file with a #fragment, strip the fragment before resolving the file and do not validate the anchor itself; ignore external URLs and same-page anchors; add node:test cases for valid links, missing files, a nested docs directory, and a cross-file fragment; expose npm run check:links and document its supported scope; run npm test and npm run check:links; commit the implementation and attach the verification as a self report. Do not access the network or change files outside the checker, its tests, package.json, and README.md." --why "Review found that v1 did not define cross-file fragment handling and conflicted between docs/*.md and recursive discovery. v2 strips fragments before file lookup, keeps anchor validation out of scope, fixes the supported input to docs/**/*.md, and adds both cases to the test plan."
 entity.revised recorded [01m0rpawj2bn6y3qj9jp6etdq7]
-w-cs7dj — v2; a person runs `self work accept w-cs7dj`
+w-cs7dj — v2; confirm it with `self work confirm w-cs7dj`
 ```
 
 `self work show w-cs7dj --history`에는 v1과 v2가 시간순으로 남습니다. 두 번째 리뷰는 실행을 막을 결함이 더 없다고 판정했습니다.
 
 ## 4단계. 리뷰가 끝난 revision 승인하기
 
-운영자가 v2를 승인한 뒤 에이전트가 작업을 시작합니다. 순서를 바꾸지 마세요.
+운영자가 v2를 승인한 뒤 에이전트가 작업을 시작합니다. 순서를 바꾸지 마세요. 대화에서 승인했다면 그 세션이 직접 `self work confirm`을 실행해도 됩니다. 기록에는 사람이 썼는지 세션이 썼는지가 남고, 잘못 기록했다면 `self undo`로 되돌립니다.
 
 ```text
-$ self work accept w-cs7dj
+$ self work confirm w-cs7dj
 entity.confirmed recorded [01m0rpc9hx9n9rx90wfpf7m73v]
 w-cs7dj
 
@@ -121,4 +121,4 @@ work 하나의 수명 주기를 익혔다면 [장기 프로젝트 운영하기](
 ## 출처
 
 - [실행 기록과 fact table](../../examples/2026-08-24-one-work-review/README.md)
-- Superself `5e3cdb7`, `work propose`, `work revise`, `work accept`, `work start`, `report`, `work done` 실제 실행
+- Superself `5e3cdb7`, `work propose`, `work revise`, `work confirm`, `work start`, `report`, `work done` 실제 실행. 기록 당시 이 동사의 이름은 `work accept`였습니다. 위의 명령줄과 CLI 메시지는 현재 이름으로 다시 적었고, 숨은 별칭 `accept`도 여전히 동작합니다.

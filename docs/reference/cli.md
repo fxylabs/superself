@@ -169,16 +169,16 @@ exact line that takes it back, so a wrong id is caught before anything is built
 on it. `--meant "<what you meant>"` adds the caller's own restatement beside it
 and records it on the event; it is printed, never judged.
 
-### Approving a reviewed set at once
+### Applying a reviewed set at once
 
-Destroying a record is a person's call, so `decide retract`, `convention drop`,
-`work retire` and the rest refuse to run from a process with no terminal. An
-agent auditing project state produces many of those calls at once, and running
-them one at a time prices the judgment per record instead of per decision.
+`decide retract`, `convention drop`, `work retire` and the rest each state what
+they destroy and then record it. An agent auditing project state produces many
+of those calls at once, and writing them one at a time is many appends any one
+of which can be the one that fails.
 
-`self apply <file>` is the one human action that covers the set. The file holds
-one command per line, exactly as it would be typed, with or without the leading
-`self`; blank lines and lines beginning with `#` are notes:
+`self apply <file>` runs the set as one append. The file holds one command per
+line, exactly as it would be typed, with or without the leading `self`; blank
+lines and lines beginning with `#` are notes:
 
 ```text
 # duplicates the audit found
@@ -270,7 +270,7 @@ self runbook start <id> --instance E001
 self runbook advance E001 --why "the assets are made"
 self runbook advance E001 --to review --why "the cut was reviewed"
 self runbook hold E001 --why "the final cut needs a look"
-self runbook approve E001 --by <person>       # a person, at their own terminal
+self runbook approve E001 --by <person>       # --by records who approved
 self runbook link E001 --work <work-id>
 self runbook stop E001 --why "the story was dropped"
 self runbook resume E001
@@ -301,14 +301,15 @@ self runbook resume E001
   `self state done <id> --report "<what verifiably happened>"` closes the run;
   `runbook advance` prints that exact command. A wrapper would be a second
   implementation of the evidence gate, free to disagree with it.
-- **A human checkpoint is a block, and the release is the person's own act.**
+- **A human checkpoint is a block, and the release is a record of the answer.**
   `runbook hold` parks the run — `entity.blocked` marked `on: "approval"` — and
-  `advance` refuses until it is released. `runbook approve` is the release: it
-  needs an interactive terminal with no agent marker on it and the run's key
-  typed back, and the typed value is recorded in the event. `--by` records who
-  approved and **gates nothing**; no flag, environment variable or payload
-  stands in for the terminal. A held run renders in `## Waiting on you` with
-  the command that releases it, in both the piped and the terminal render.
+  `advance` refuses until it is released. `runbook approve` is the release, and
+  a session records it once the person has answered: the release is
+  `entity.unblocked`, which `self undo` takes straight back, so the event states
+  whether a person or an agent session wrote it rather than demanding a
+  keyboard. `--by` records who approved and **gates nothing**. A held run
+  renders in `## Waiting on you` with the command that releases it, in both the
+  piped and the terminal render.
 - The two state refusals — already held, not held — are the sentences
   `state block` and `state unblock` already write, called from where they are
   written rather than copied.
@@ -375,8 +376,8 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   `self context`, which carries one row for the skill a name actually reaches.
 - `list` and `show` read, so they take `--project <slug>`. `add` and `drop`
   write, so they take no read-scope flag and record into the project they run
-  in. `drop` is a withdrawal like any other: a person at a terminal, typing the
-  id back.
+  in. `drop` is a withdrawal like any other: what it destroys is disclosed
+  first, and `self undo` takes it back.
 
 ### Outcome and work commands
 
@@ -403,20 +404,21 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   claim must carry evidence: a report with a commit or an artifact, or a
   done-time `--report` stating what verifiably happened. A bare claim is
   refused.
-- `work add` and `work accept` write a confirmed work record, which is a
-  person's call: a process with no person at its keyboard — one a runner
-  started, or one whose stdin is not a terminal — is refused, nothing is
-  recorded, and the refusal hands back the exact `work propose` line to run
-  instead. A person at their own terminal loses nothing: both stay one command,
-  with no prompt to answer. Only stdin is read, so piping a command's output
-  changes nothing about who is running it.
-- `work propose "<plan>"` records work for a person to review. The plan text
-  alone is enough; naming `--objective` or `--milestone` makes it a gap
-  proposal, which owes the full brief. `work accept` confirms it under the
-  same id, and the acceptance binds the exact version of the plan it read.
+- `work add` and `work confirm` write a confirmed work record. Neither asks for
+  a person at a keyboard: both write a record `self undo` takes straight back,
+  and each event states whether a person or an agent session wrote it. `work
+  accept` is the spelling `work confirm` had before, kept as an undocumented
+  alias so a script written against it keeps working.
+- `work propose "<plan>"` records work that wants review before it is built.
+  The plan text alone is enough; naming `--objective` or `--milestone` makes it
+  a gap proposal, which owes the full brief. `work confirm` confirms it under
+  the same id, binding the exact version of the plan it read. Proposing is a
+  statement about the plan, not about the caller: `work add` records the same
+  unit confirmed at once, the way `decide "<text>"` does against
+  `decide --proposed`.
 - `work propose "<plan>" --supersedes <work-id> --why w` proposes a correction
   of a unit that has already started. The named unit is untouched while the
-  plan waits: the acceptance records the new unit and retires the one it
+  plan waits: the confirm records the new unit and retires the one it
   replaces, naming it the successor — the same pair `work add --supersedes`
   records in one command. A unit that closed between the proposal and the
   acceptance refuses the acceptance rather than being retired over it, and the
@@ -465,8 +467,10 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   keeps its row, marked `(pruned)`, so a `done` claim resting on that evidence
   stays auditable, and `artifact open` refuses it by name rather than sending
   anyone to `self sync` for a file that is not coming.
-- It needs a person at an interactive terminal typing the artifact id back. A
-  piped or scripted run is refused and handed the command to pass on.
+- It is the one verb here that still needs a person at an interactive terminal
+  typing the artifact id back: bytes that left the working tree cannot be taken
+  back by `self undo`, so a person types the id. A piped or scripted run is
+  refused and handed the command to pass on.
 - What may be pruned depends on how the bytes got here. A report's or a
   review's evidence is removable once its work unit is **done or retired**, and
   not before; bytes a live record points at are refused until that record is
@@ -482,12 +486,14 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
 - `report --design --implements <decision-id>` submits a design or scope
   proposal. It is refused unless every cited decision exists, still holds, and
   renders in the work unit's project, and the receipt prints each cited
-  decision's own text. `report confirm <report-id>` is how a person approves
-  one: it needs an interactive terminal and the design artifact's hash typed
-  back, so the recorded approval names the exact bytes. `work start` then
-  refuses a unit whose design is unapproved, whose approval names no hash, or
-  whose decision has since been superseded or retracted — the way to change
-  direction is to supersede the decision and cite the successor.
+  decision's own text. `report confirm <report-id>` records the approval: it
+  binds to the design artifact's own hash, so the recorded approval names the
+  exact bytes, and the event states whether a person or an agent session wrote
+  it — a session records the answer the person already gave, and `self undo`
+  takes the ruling back. `work start` then refuses a unit whose design is
+  unapproved, whose approval names no hash, or whose decision has since been
+  superseded or retracted — the way to change direction is to supersede the
+  decision and cite the successor.
 
 The full work transitions and flags are in the `work` declaration of
 [`main.ts`](../../apps/cli/src/main.ts), and the completion rules are implemented by

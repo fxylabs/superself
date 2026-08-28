@@ -80,7 +80,7 @@ test("A3: a third goal is recorded and all three stand", async () =>
 
 /* ── B: replacing a goal is stated, and reaches the gate ───────────── */
 
-test("B1: an approved supersession records the add and the lineage as one event", async () =>
+test("B1: a person's supersession records the add and the lineage as one event", async () =>
 {
     const dir = await project("b1");
     const first = await addGoal(dir, "B1 the first direction");
@@ -90,30 +90,34 @@ test("B1: an approved supersession records the add and the lineage as one event"
     assert.equal(written.type, "entity.confirmed");
     assert.deepEqual(written.payload.labels, ["goal"]);
     assert.deepEqual(written.payload.links, [{ type: "supersedes", target: first }]);
-    assert.equal(written.payload.confirmation.method, "tty");
+    assert.deepEqual(written.payload.by, { kind: "person" });
     assert.match((await must(box, dir, ["state", "show", first])).out, /superseded/);
 });
 
-test("B2: a supersession from a process with no terminal refuses and records nothing", async () =>
+// B2 and B3 asserted the terminal gate #400 removed. What they hold now is the
+// other half of the same guarantee: the supersession records from a session,
+// says so, and still discloses what it replaced.
+test("B2: a supersession from a process with no terminal records, and says an agent wrote it", async () =>
 {
     const dir = await project("b2");
     const first = await addGoal(dir, "B2 the standing direction");
     const before = logLines("b2").length;
-    const refused = await selfIn(box, dir, ["goal", "add", "B2 a replacement", "--supersedes", first]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /nothing was recorded/);
-    assert.match(refused.out, /B2 the standing direction/);
-    assert.equal(logLines("b2").length, before);
+    const recorded = await selfIn(box, dir, ["goal", "add", "B2 a replacement", "--supersedes", first]);
+    assert.equal(recorded.code, 0, recorded.out);
+    assert.match(recorded.out, /B2 the standing direction/);
+    assert.equal(logLines("b2").length, before + 1);
+    assert.deepEqual(JSON.parse(logLines("b2").at(-1)).payload.by, { kind: "agent" });
 });
 
-test("B3: a wrong answer at the terminal records nothing", async () =>
+test("B3: nothing is typed back — what a caller types changes neither the write nor its by", async () =>
 {
     const dir = await project("b3");
     const first = await addGoal(dir, "B3 the standing direction");
     const before = logLines("b3").length;
-    const wrong = await approvedIn(box, dir, ["goal", "add", "B3 a replacement", "--supersedes", first], "not-the-id");
-    assert.equal(wrong.code, 1);
-    assert.equal(logLines("b3").length, before);
+    const recorded = await approvedIn(box, dir, ["goal", "add", "B3 a replacement", "--supersedes", first], "not-the-id");
+    assert.equal(recorded.code, 0, recorded.out);
+    assert.equal(logLines("b3").length, before + 1);
+    assert.deepEqual(JSON.parse(logLines("b3").at(-1)).payload.by, { kind: "person" });
 });
 
 test("B4: superseding two of three goals leaves the third standing", async () =>
@@ -227,15 +231,17 @@ test("D2: retracting the last goal leaves the one-line surfaces reading not set"
     assert.match((await must(box, dir, ["status"])).out, /not set/);
 });
 
-test("D3: a retraction from a process with no terminal refuses and records nothing", async () =>
+test("D3: a retraction from a process with no terminal records, disclosed and attributed", async () =>
 {
     const dir = await project("d3");
     const only = await addGoal(dir, "D3 the standing direction");
     const before = logLines("d3").length;
-    const refused = await selfIn(box, dir, ["goal", "retract", only, "--why", "no longer holds"]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /nothing was recorded/);
-    assert.equal(logLines("d3").length, before);
+    const recorded = await selfIn(box, dir, ["goal", "retract", only, "--why", "no longer holds"]);
+    assert.equal(recorded.code, 0, recorded.out);
+    assert.match(recorded.out, /D3 the standing direction/);
+    assert.match(recorded.out, /`self undo` takes it back/);
+    assert.equal(logLines("d3").length, before + 1);
+    assert.deepEqual(JSON.parse(logLines("d3").at(-1)).payload.by, { kind: "agent" });
 });
 
 test("D4: goal retract without --why is refused before anything is disclosed", async () =>

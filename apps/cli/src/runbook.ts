@@ -18,7 +18,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { chainHead, chainVersion, EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
-import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
+import { writtenBy } from "./human.js";
 import { wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels } from "./model.js";
 import { notice } from "./output.js";
@@ -63,7 +63,8 @@ const ADVANCE_OPTIONS = { to: { type: "string" }, why: { type: "string" } } as c
 
 const WHY_OPTION = { why: { type: "string" } } as const;
 
-// `--by` records who approved, and is not the gate: the gate is the terminal.
+// `--by` names whoever gave the approval, beside the kind of process that
+// recorded it. It authorizes nothing on its own — nothing here checks a name.
 const APPROVE_OPTIONS = { by: { type: "string" } } as const;
 
 const LINK_OPTIONS = { work: { type: "string" } } as const;
@@ -122,12 +123,12 @@ export const RUNBOOK_COMMAND: Command = {
         },
         {
             syntax: 'runbook hold <key> --why "<what a person is being asked to approve>"',
-            description: ["park the run on a person; it waits in context until they answer at a terminal"],
+            description: ["park the run on a person; it waits in context until they answer"],
             verbs: ["hold"]
         },
         {
             syntax: "runbook approve <key> [--by <person>]",
-            description: ["release a held run — a person at a terminal, typing the key back"],
+            description: ["release a held run; the event says who approved and what recorded it"],
             verbs: ["approve"]
         },
         {
@@ -172,10 +173,11 @@ export const RUNBOOK_COMMAND: Command = {
         "gate that a second one would have to implement twice.",
         "",
         "hold parks a run on a person: it waits in context, and advance refuses",
-        "until it is released. approve is the release, and it is the person's own",
-        "act — it needs an interactive terminal with no agent marker on it, and the",
-        "run's key typed back. --by records who approved and gates nothing; no flag,",
-        "environment variable or payload substitutes for the terminal.",
+        "until it is released. approve is the release, and a session records it once",
+        "the person has answered — the release is `entity.unblocked`, which `self undo`",
+        "takes straight back, so the event states whether a person or a session wrote",
+        "it rather than demanding a keyboard. --by records who approved and gates",
+        "nothing; it authorizes no one on its own.",
         "",
         "  --stage <text>        one stage of the procedure, repeatable; declaration order",
         "                        is the order the run passes them in",
@@ -183,8 +185,8 @@ export const RUNBOOK_COMMAND: Command = {
         "                        instead; the path is read now and never recorded",
         "  --instance <key>      the key this run is named by, such as E001",
         "  --to <stage>          the stage `advance` is passing, stated rather than implied",
-        "  --by <person>         who approved a held run — recorded beside the approval, and",
-        "                        never the gate: the approval itself happens at a terminal",
+        "  --by <person>         who approved a held run, recorded beside the kind of process",
+        "                        that wrote the record; it authorizes nothing on its own",
         "  --work <id>           the work unit carrying this run; repeat the verb to name more",
         "  --why <text>          why the procedure changed, what was done to pass a stage,",
         "                        what a hold asks a person to approve, or why a run was stopped",
@@ -424,10 +426,12 @@ function runbookHold({ values, positionals }: CommandInput<typeof WHY_OPTION>): 
     return [{ kind: "receipt", text: `${instanceKey(run)} waits on a person: ${why}` }];
 }
 
-// Releasing it, which is the person's own act. The gate is the interactive
-// terminal, exactly as it is for a destruction and for a design approval:
-// `--by` is a name recorded beside the approval, and no flag, environment
-// variable or payload stands in for the keyboard.
+// Releasing it. The hold is a person's to lift, and until #400 that meant a
+// person's keyboard: the verb refused a process with no terminal. The hold is
+// lifted by an `entity.unblocked` that `self undo` takes straight back, so a
+// session records the answer the person already gave it, and the event says
+// who wrote it — `--by` names them inside the same field, because who approved
+// and what kind of process recorded it are one statement about one event.
 function runbookApprove({ values, positionals }: CommandInput<typeof APPROVE_OPTIONS>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
@@ -439,35 +443,9 @@ function runbookApprove({ values, positionals }: CommandInput<typeof APPROVE_OPT
         throw new CliError(clear);
     }
     const key = instanceKey(run);
-    const payload: Record<string, unknown> = { entity: run.id, confirmation: approveRun(run, key) };
-    if (values.by !== undefined)
-    {
-        payload.by = values.by;
-    }
+    const payload = { entity: run.id, by: writtenBy(values.by) };
     recordEvent(ctx, makeEvent(ctx.project, "entity.unblocked", payload, undefined, true), run.text);
     return [{ kind: "receipt", text: `${key} is approved and moving again` }];
-}
-
-// The same refusal shape `retirement.ts` gives a process with no person behind
-// it: the agent is handed the exact line for a person to run, rather than a
-// rule it cannot satisfy. The challenge is the run's key — short enough to
-// read and type, and specific enough that typing it states which run is being
-// approved.
-function approveRun(run: EntityState, key: string): HumanConfirmation
-{
-    if (!personAtTerminal() || !process.stdout.isTTY)
-    {
-        throw new CliError(`approving ${key} is a person's call, and this process has no terminal to make it at`
-            + ` — nothing was recorded\n\n  ${run.execution?.why ?? run.text}\n\n`
-            + `  a person runs this in their own terminal:\n    self runbook approve ${key}`);
-    }
-    const confirmed = confirmHuman(`${bold(`approve ${key}?`)}\n\n  ${run.execution?.why ?? run.text}`, key,
-        `type ${bold(key)} to approve exactly this run`);
-    if ("code" in confirmed)
-    {
-        throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
-    }
-    return confirmed;
 }
 
 /* ── giving a run up, and picking one back up ──────────────────────── */
@@ -482,7 +460,7 @@ function runbookStop({ values, positionals }: CommandInput<typeof WHY_OPTION>): 
     const run = requireLiveRun(model, positionals[0], "stop");
     const why = required(values.why);
     recordRetirement(ctx, retirementIntent(model, "retire", [run.id], { why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retired", { entity: run.id, why, confirmation })],
+        (by) => [makeEvent(ctx.project, "entity.retired", { entity: run.id, why, by })],
         run.text);
     return [{ kind: "receipt", text: `${instanceKey(run)} was stopped: ${why}` }];
 }

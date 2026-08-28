@@ -17,7 +17,7 @@ import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, requireRetirable, requireSupersedableWork, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, resetProbes, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
-import { confirmHuman, HumanConfirmation, personAtTerminal, personRefusal } from "./human.js";
+import { WrittenBy, writtenBy } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
@@ -66,7 +66,7 @@ import { resetHomeRule } from "./redact.js";
 import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
 import { SKILL_COMMAND } from "./skill.js";
-import { dropCollected, recordInvocation, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
+import { dropCollected, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
@@ -1014,7 +1014,7 @@ export const COMMANDS: Command[] = [
                 syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w]',
                 description: [
                     "create a work unit; --supersedes retires the unit it replaces, naming this one its successor",
-                    "(a person's own command: a process with no terminal is refused and told to propose instead)"
+                    "(the confirmed-at-once form; `work propose` is the one that asks for review first)"
                 ],
                 verbs: ["add"]
             },
@@ -1058,7 +1058,7 @@ export const COMMANDS: Command[] = [
                 description: [
                     "propose work for a person to review; the plan text alone is enough",
                     "(--objective or --milestone makes it a gap proposal, which owes the full brief)",
-                    "--supersedes proposes a correction: the unit it names is retired on acceptance"
+                    "--supersedes proposes a correction: the unit it names is retired when the plan is confirmed"
                 ],
                 verbs: ["propose"]
             },
@@ -1071,12 +1071,12 @@ export const COMMANDS: Command[] = [
                 verbs: ["revise"]
             },
             {
-                syntax: "work accept|decline <proposal-id> [--why w]",
+                syntax: "work confirm|decline <proposal-id> [--why w]",
                 description: [
-                    "act on a proposed plan; decline states why",
-                    "(accepting is a person's call and is refused where no person is at the terminal)"
+                    "answer a proposed plan; decline states why",
+                    "(the record says who confirmed it, and `self undo` takes it back)"
                 ],
-                verbs: ["accept", "decline"]
+                verbs: ["confirm", "decline"]
             },
             {
                 syntax: "work started <id> --pid N | exited <id> [--code N]",
@@ -1108,8 +1108,8 @@ export const COMMANDS: Command[] = [
             "pair `work retire --successor` records, spelled the way every other add verb",
             "spells a correction. A session spells the same correction as a plan:",
             '`work propose "<corrected outcome>" --supersedes <id> --why w` leaves the unit',
-            "it names untouched until a person accepts, and the retirement lands with the",
-            "acceptance.",
+            "it names untouched until the plan is confirmed, and the retirement lands with",
+            "the confirm.",
             "",
             "done is the judgment that the outcome was reached, and the claim must",
             "carry evidence: a report with a commit or an artifact, or a done-time",
@@ -1117,20 +1117,18 @@ export const COMMANDS: Command[] = [
             "satisfies. Done is allowed while blocked: completion is a judgment",
             "on the outcome, not the block.",
             "",
-            "a plan an agent wrote is reviewed before it is worked: `work propose",
-            '"<plan>"` records the plan as work waiting on a person, and `work accept`',
-            "confirms it under the same id. Both `work add` and `work accept` write a",
-            "confirmed record, so both are a person's own commands: a process with no",
-            "person at its keyboard — a runner's child, or a piped stdin — is refused and",
-            "handed the `work propose` line to run instead. Nothing else about work",
-            "changes, and a person at a terminal still types one command.",
-            "Until it is first started that plan can be",
-            "restated in place — `work revise <id> \"<revised plan>\" --why w` keeps the id,",
-            "keeps every earlier version in the unit's history, and invalidates the",
-            "acceptance, so a person accepts again before it can be picked up. Unlike",
-            "`objective revise` and `milestone revise`, it mints no new id and supersedes",
-            "nothing. The first `work start` freezes the plan: after it, a correction is a",
-            "successor, the same as for any confirmed record.",
+            "a plan is proposed when it wants review before it is worked: `work propose",
+            '"<plan>"` records it as work waiting on an answer, and `work confirm` confirms',
+            "it under the same id. `work add` is the confirmed-at-once form, exactly as",
+            '`decide "<text>"` is to `decide --proposed`. Neither asks for a person at a',
+            "keyboard: every record here is one `self undo` takes straight back, and each",
+            "states whether a person or a session wrote it. Until it is first started that",
+            "plan can be restated in place — `work revise <id> \"<revised plan>\" --why w`",
+            "keeps the id, keeps every earlier version in the unit's history, and",
+            "invalidates the confirmation, so the plan is confirmed again before it can be",
+            "picked up. Unlike `objective revise` and `milestone revise`, it mints no new",
+            "id and supersedes nothing. The first `work start` freezes the plan: after it,",
+            "a correction is a successor, the same as for any confirmed record.",
             "",
             "history is per unit and explicit: `work show <id> --history` prints the",
             "events of that unit alone, oldest first, ten to a page. A retired or",
@@ -1167,7 +1165,7 @@ export const COMMANDS: Command[] = [
         node: branch({
             name: "work",
             unnamed: "options",
-            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|revise|accept|decline`,
+            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|revise|confirm|decline`,
             children: WORK_CHILDREN
         })
     },
@@ -1203,21 +1201,22 @@ export const COMMANDS: Command[] = [
             "No --why is owed. \"This was a mistake\" is the whole statement, and the",
             "annulment already names the event it reversed.",
             "",
-            "One append is one undo: a `work done --report` and a `work accept` each",
+            "One append is one undo: a `work done --report` and a `work confirm` each",
             "write more than one event as a single state change, and undoing either",
             "half takes back the whole of it. A record something was already built on",
             "is refused with the list of what stands on it and the lines to take those",
             "back first — never a cascade nobody asked for.",
             "",
             "A few kinds are refused by name, each naming the verb that does the job:",
-            "a person's ruling on a design report (record a new design report), a",
-            "registered artifact and a prune (`self artifact prune`; nothing takes back",
+            "a registered artifact and a prune (`self artifact prune`; nothing takes back",
             "a deletion), a project archive or restore (`self project restore|archive",
             "<slug>`, which run from anywhere this verb cannot), process telemetry",
             "(a process really ran), and an undo itself.",
             "",
-            "No terminal is needed. Retiring a record is a person's call because it",
-            "cannot be taken back; this is the taking back, and it asserts nothing.",
+            "No terminal is needed, here or anywhere else that records. This verb is",
+            "why: a record a session wrote is a record a person takes back in one line,",
+            "so nothing recording had to ask for a keyboard first. Removing stored bytes",
+            "is the one act it cannot reach, and `self artifact prune` still asks.",
             "",
             "  --supersession  take back only what a creation displaced, leaving the",
             "                  record itself standing",
@@ -1240,7 +1239,7 @@ export const COMMANDS: Command[] = [
             },
             {
                 syntax: "report confirm <report-id>",
-                description: ["approve a design at a terminal, binding the approval to the artifact's hash"],
+                description: ["approve a design, binding the approval to the artifact's hash"],
                 verbs: ["confirm"]
             }
         ],
@@ -1277,11 +1276,13 @@ export const COMMANDS: Command[] = [
             "visible at submission. Changing direction is spelled by superseding the",
             "decision and citing the successor — no flag skips the citation.",
             "",
-            "`report confirm` is how a person approves a design. It needs an interactive",
-            "terminal and the artifact's hash typed back, so the approval records which",
-            "exact bytes were ruled on. `self work start` refuses a unit whose design is",
-            "unapproved, whose approval names no hash, or whose decision has since been",
-            "superseded or retracted.",
+            "`report confirm` records the approval of a design. It binds to the design",
+            "artifact's own hash, so the approval names which exact bytes were ruled on,",
+            "and the event states whether a person or a session wrote it — a session",
+            "records the answer the person already gave, and `self undo` takes the ruling",
+            "back. `self work start` refuses a unit whose design is unapproved, whose",
+            "approval names no hash, or whose decision has since been superseded or",
+            "retracted.",
             "",
             "both forms write, so neither takes a read scope: they record into the",
             "project the named work unit belongs to."
@@ -2285,18 +2286,15 @@ function presetEntityEvent(ctx: ProjectContext, models: ProjectModel[], verb: st
     const payload = presetPayload(row, event.id, text, extra);
     event.payload = payload;
     const demotions = presetDemotions(ctx, models, verb, row.exposure, payload, values, text);
-    // Every preset kind corrects a record the same way, so they all reach the
-    // gate through this one line rather than each add verb deciding. A
-    // proposal displaces nothing until it is confirmed, and passes through.
+    // Every preset kind corrects a record the same way, so they all disclose
+    // through this one line rather than each add verb deciding. A proposal
+    // displaces nothing until it is confirmed, and discloses nothing.
     const displaced = proposed ? [] : supersedeTargets(payload);
     recordRetirement(ctx, retirementIntent(models[0], "supersede", displaced,
         { successor: supersedingRecord(payload) }), models[0],
-        (confirmation) =>
+        (by) =>
         {
-            if (confirmation !== undefined)
-            {
-                event.payload = { ...payload, confirmation };
-            }
+            event.payload = { ...payload, by };
             return [event, ...demotionEvents(demotions, event.id, proposed)];
         },
         text);
@@ -2359,8 +2357,8 @@ function goalRetract({ values, positionals }: CommandInput<typeof GOAL_OPTIONS>)
     }
     const payload = { entity: goal.id, why: required(values.why) };
     recordRetirement(ctx, retirementIntent(model, "retract", [goal.id], { why: payload.why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
-            confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: goal.id }, true)],
+        (by) => [makeEvent(ctx.project, "entity.retracted",
+            { ...payload, by }, { retracts: goal.id }, true)],
         goal.text);
 }
 
@@ -2486,8 +2484,8 @@ function withdrawDecision(ctx: ProjectContext, verb: "retract" | "decline", pref
     // of a confirmed decision reaches the gate.
     const withdrawn = verb === "retract" ? [decision.id] : [];
     recordRetirement(ctx, retirementIntent(model, "retract", withdrawn, { why: payload.why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
-            confirmation === undefined ? payload : { ...payload, confirmation }, refs, true)],
+        (by) => [makeEvent(ctx.project, "entity.retracted",
+            { ...payload, by }, refs, true)],
         decision.text);
 }
 
@@ -2552,68 +2550,27 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
     const superseded = retirement === undefined
         ? undefined
         : model.works.find((work) => work.id === retirement.payload.entity);
-    requirePersonAdding(outcome, values.why, superseded);
     const payload = workPayload(ctx, id, outcome);
     recordRetirement(ctx, retirementIntent(model, "supersede",
         retirement === undefined ? [] : [String(retirement.payload.entity)],
         { successor: supersedingRecord(payload) }), model,
-        (confirmation) => addedEvents(ctx, payload, retirement, confirmation),
+        (by) => addedEvents(ctx, payload, retirement, by),
         `${id} ${outcome}`);
     return [{ kind: "receipt", text: id }, attachmentListing(model, id, superseded)];
 }
 
 // The unit, and the retirement it displaces where there is one — composed
-// together so both land in the append the gate approved, with what was typed
-// stamped on the retirement it approved.
+// together so both land in one append, each saying who wrote it (#400).
 function addedEvents(ctx: ProjectContext, payload: Record<string, unknown>,
-    retirement: SelfEvent | undefined, confirmation?: HumanConfirmation): SelfEvent[]
+    retirement: SelfEvent | undefined, by: WrittenBy): SelfEvent[]
 {
-    const events = [makeEvent(ctx.project, "entity.confirmed", payload)];
+    const events = [makeEvent(ctx.project, "entity.confirmed", { ...payload, by })];
     if (retirement !== undefined)
     {
-        retirement.payload = confirmation === undefined ? retirement.payload : { ...retirement.payload, confirmation };
+        retirement.payload = { ...retirement.payload, by };
         events.push(retirement);
     }
     return events;
-}
-
-// A confirmed work record is written only by a process with a person at its
-// keyboard (#389). Refused after the target is resolved and before anything is
-// appended, so a malformed command is still refused as malformed — and the
-// line handed back is the propose spelling, which is the one this process can
-// run itself.
-function requirePersonAdding(outcome: string, why: string | undefined, superseded: WorkState | undefined): void
-{
-    const replaces = superseded === undefined ? "" : ` --supersedes ${superseded.id} --why ${shellQuoted(why ?? "")}`;
-    const refused = personRefusal({
-        act: "recording confirmed work",
-        disclosure: superseded === undefined
-            ? firstLine(outcome)
-            : `${firstLine(outcome)}\nreplaces ${superseded.id}  ${firstLine(superseded.outcome)}`,
-        agentRuns: {
-            why: superseded === undefined
-                ? "a session proposes it instead, and a person accepts"
-                : "a session proposes the correction instead, and a person accepts",
-            command: `self work propose ${shellQuoted(outcome)}${replaces}`
-        },
-        personRuns: `self work add ${shellQuoted(outcome)}${replaces}`
-    });
-    if (refused !== null)
-    {
-        throw new CliError(refused);
-    }
-}
-
-// The outcome as it goes back into a command line the reader pastes: one
-// argument, double-quoted, with any quote of its own escaped.
-function shellQuoted(text: string): string
-{
-    return `"${firstLine(text).replace(/(["\\$`])/g, "\\$1")}"`;
-}
-
-function firstLine(text: string): string
-{
-    return text.split("\n")[0];
 }
 
 function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<string, unknown>
@@ -3019,8 +2976,8 @@ function recordUnitRetirement(ctx: ProjectContext, model: ProjectModel, work: Wo
 {
     const payload = { entity: work.id, why, ...successorRef(ctx, work.id, values.successor, values["successor-project"]) };
     recordRetirement(ctx, retirementIntent(model, "retire", [work.id], { why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retired",
-            confirmation === undefined ? payload : { ...payload, confirmation }, undefined, true)],
+        (by) => [makeEvent(ctx.project, "entity.retired",
+            { ...payload, by }, undefined, true)],
         `${work.id} ${why}`);
 }
 
@@ -3260,7 +3217,7 @@ function designCitations(ctx: ProjectContext, owner: string,
 function designReceipt(report: string, work: string, cited: CitedDecision[], bound: boolean): OutputBlock
 {
     const next = bound
-        ? `  a person approves it: self report confirm ${report}`
+        ? `  it is approved with: self report confirm ${report}`
         : "  no artifact attached, so this design binds no hash — `self work start` refuses until an approved design carries one";
     return {
         kind: "receipt",
@@ -3270,18 +3227,22 @@ function designReceipt(report: string, work: string, cited: CitedDecision[], bou
 
 // The approval half (#316). There is no approval verb left in the CLI —
 // decision 01kz2nczhtde554qx5tqpqzrt3 removed the whole governance layer — so
-// this composes the one human ruling mechanism that survived it, `human.ts`
-// `confirmHuman`, under the spelling every other person-ruled proposal uses.
-// The typed challenge is the design artifact's digest: what is approved is a
-// set of bytes, and the record says which.
+// this is the one ruling on a design there is. What it binds to is the design
+// artifact's digest: what is approved is a set of bytes, and the record says
+// which, whoever recorded it.
+//
+// It asked for a person at a terminal until #400. The ruling is undoable —
+// `self undo` takes a `report.confirmed` back like any other record — so the
+// approval is recorded from wherever the person said yes, and the event states
+// who wrote it.
 function cmdReportConfirm({ positionals }: CommandInput<Record<string, never>>): CommandOutput
 {
     const ctx = requireProject(process.cwd());
     const wanted = requireText(positionals[0], "report confirm <report-id> — `self work show <work-id>` lists a unit's reports");
     const found = requireDesignReport(ctx, wanted);
-    // A bundle stores no digest of its own, so the challenge is derived from
-    // its manifest (#362): a stored hash could contradict the member list, and
-    // a derived one cannot.
+    // A bundle stores no digest of its own, so the digest is derived from its
+    // manifest (#362): a stored hash could contradict the member list, and a
+    // derived one cannot.
     const digest = artifactDigest(found.report.artifacts[0]);
     if (digest === undefined)
     {
@@ -3303,33 +3264,10 @@ interface FoundReport
 
 function recordDesignApproval(ctx: ProjectContext, found: FoundReport, digest: string): CommandOutput
 {
-    const challenge = digest.slice(0, 12);
-    const confirmation = approveDesign(found, challenge);
-    const payload = { report: found.report.id, digest, confirmation };
+    const payload = { report: found.report.id, digest, by: writtenBy() };
     const refs: EventRefs = { work: found.work.id, confirms: found.report.id, artifacts: found.report.artifacts.map((meta) => meta.id) };
     recordEvent(ctx, makeEvent(found.owner, "report.confirmed", payload, refs, true), `${found.work.id} design ${found.report.id} approved`);
-    return [{ kind: "receipt", text: `${found.report.id} approved for ${found.work.id}, bound to artifact ${challenge}` }];
-}
-
-// The same refusal shape `retirement.ts` gives a process with no person behind
-// it: the agent is handed the exact line for a person to run, rather than a
-// rule it cannot satisfy.
-function approveDesign(found: FoundReport, challenge: string): HumanConfirmation
-{
-    if (!personAtTerminal() || !process.stdout.isTTY)
-    {
-        throw new CliError(`approving a design is a person's call, and this process has no terminal to make it at — nothing was recorded\n\n`
-            + `  ${found.report.text.split("\n")[0]}\n\n  a person runs this in their own terminal:\n    self report confirm ${found.report.id}`);
-    }
-    const confirmed = confirmHuman(
-        `${bold(`approve the design ${found.report.id} for ${found.work.id}?`)}\n\n  ${found.report.text.split("\n")[0]}`,
-        challenge,
-        `type ${bold(challenge)} — the design artifact's hash — to approve exactly these bytes`);
-    if ("code" in confirmed)
-    {
-        throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
-    }
-    return confirmed;
+    return [{ kind: "receipt", text: `${found.report.id} approved for ${found.work.id}, bound to artifact ${digest.slice(0, 12)}` }];
 }
 
 // A report is named by its own event id, and it is found wherever the unit
@@ -3541,8 +3479,8 @@ function conventionDrop({ values, positionals }: CommandInput<typeof CONVENTION_
     const payload = { entity: id, why: required(values.why) };
     const text = model.conventions.find((item) => item.id === id)?.text ?? id;
     recordRetirement(ctx, retirementIntent(model, "retract", [id], { why: payload.why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retracted",
-            confirmation === undefined ? payload : { ...payload, confirmation }, { retracts: id }, true)],
+        (by) => [makeEvent(ctx.project, "entity.retracted",
+            { ...payload, by }, { retracts: id }, true)],
         text);
 }
 
@@ -3748,8 +3686,8 @@ function namedNote(event: SelfEvent, named: string): string
     }
     if (event.type === "entity.confirmed" && event.refs?.confirms !== undefined)
     {
-        return `${named} is proposed again — its acceptance was taken back; a person accepts it with `
-            + `\`self work accept ${named}\``;
+        return `${named} is proposed again — its confirm was taken back; it is confirmed again with `
+            + `\`self work confirm ${named}\``;
     }
     if (event.type === "entity.proposed" || event.type === "entity.confirmed")
     {
@@ -3829,9 +3767,8 @@ function resolveUndoPrefix(ctx: ProjectContext, prefix: string): SelfEvent
 // predecessor found there. The structure check's `invocation-state` rule holds
 // this list complete: a new module-level cache is a violation until a reset
 // here covers it or an exemption names why it needs none.
-function resetInvocation(argv: string[]): void
+function resetInvocation(): void
 {
-    recordInvocation(argv);
     resetProbes();
     invalidateResolution();
     resetProcessNotices();
@@ -3846,7 +3783,7 @@ function resetInvocation(argv: string[]): void
 
 export async function runCli(argv: string[]): Promise<void>
 {
-    resetInvocation(argv);
+    resetInvocation();
     process.exitCode = 0;
     try
     {

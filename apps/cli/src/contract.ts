@@ -51,15 +51,25 @@ export interface CommandLeaf
     // What the verb cannot run without. The parse gate refuses all of them in
     // one pass and the help page states them, both from this one declaration.
     requires: Requirement[];
+    // A spelling that still dispatches and is deliberately absent from every
+    // help page: the old name of a renamed verb, kept so a script or a document
+    // written against it does not break the day the name changes. The help
+    // checks skip it in both directions — it needs no usage line, and a usage
+    // line naming it would advertise the spelling this exists to retire.
+    //
+    // For a rename and nothing else. A verb that behaves differently from the
+    // one it stands in for is a second verb, and owes its own usage line.
+    hidden: boolean;
     run: CommandRun;
 }
 
-// What a leaf declares beyond its options and positionals. Both fields are
-// rare enough that a verb states them by name rather than by position.
+// What a leaf declares beyond its options and positionals. All three are rare
+// enough that a verb states them by name rather than by position.
 interface LeafExtras
 {
     undocumented?: string[];
     requires?: Requirement[];
+    hidden?: boolean;
 }
 
 // How a first token that names no child is read.
@@ -129,6 +139,7 @@ export function leaf<const T extends OptionSpecs>(
         positionals,
         undocumented: extras.undocumented ?? [],
         requires: extras.requires ?? [],
+        hidden: extras.hidden === true,
         run: run as unknown as CommandRun
     };
 }
@@ -377,7 +388,7 @@ function checkCoverage(command: Command, leaves: CommandLeafEntry[], documented:
             problems.push(`${command.name}: a usage line documents "${label(command, verb)}", which no command dispatches`);
         }
     }
-    for (const entry of leaves)
+    for (const entry of leaves.filter((entry) => !entry.leaf.hidden))
     {
         const lines = documented.filter((verb) => verb === entry.verb).length;
         if (lines !== 1)
@@ -498,7 +509,7 @@ function undeclared(named: Flags, leaves: CommandLeafEntry[]): string[]
 function checkDeclared(command: Command, leaves: CommandLeafEntry[]): string[]
 {
     const listed = flagsIn(glossary(command.detail));
-    return leaves.flatMap((entry) =>
+    return leaves.filter((entry) => !entry.leaf.hidden).flatMap((entry) =>
     {
         const shown = flagsIn(command.usage.filter((line) => line.verbs.includes(entry.verb)).flatMap(usageText));
         return Object.entries(entry.leaf.options)

@@ -17,7 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, git, machine, must, receiptIn, selfIn } from "./harness.mjs";
 
 // A workspace holding the named projects, each its own git repository, so
 // every assertion below reads a slug rather than a path.
@@ -261,7 +261,7 @@ test("T2.3: --supersedes with a new parent records the correction, and the first
     const corrected = await approvedIn(t2.box, t2.dirs.c,
         ["project", "from", "q", "--why", "p was never where it came from", "--supersedes", t2First], t2First);
     assert.equal(corrected.code, 0, corrected.out);
-    t2Second = entityIn(corrected.printed);
+    t2Second = entityIn(receiptIn(corrected.printed));
     assert.match((await must(t2.box, t2.dirs.c, ["state", "show", t2First])).out, /superseded/);
     assert.match((await must(t2.box, t2.dirs.c, ["state", "show", t2Second])).out, new RegExp(`link: supersedes ${t2First}`));
     assert.match(rowOf((await must(t2.box, t2.dirs.c, ["project"])).out, "c"), /came from q/);
@@ -272,7 +272,7 @@ test("T2.4: --supersedes with the same parent and a corrected why records under 
     const corrected = await approvedIn(t2.box, t2.dirs.c,
         ["project", "from", "q", "--why", "the reason was stated wrong", "--supersedes", t2Second], t2Second);
     assert.equal(corrected.code, 0, corrected.out);
-    t2Third = entityIn(corrected.printed);
+    t2Third = entityIn(receiptIn(corrected.printed));
     assert.match((await must(t2.box, t2.dirs.c, ["state", "show", t2Second])).out, /superseded/);
     assert.match((await must(t2.box, t2.dirs.c, ["state", "show", t2Third])).out, /why: the reason was stated wrong/);
 });

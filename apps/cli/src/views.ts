@@ -361,7 +361,7 @@ function checkoutGuidance(snapshot: HandoffSnapshot): string[]
     }
     if (snapshot.work.status === "review")
     {
-        return [`review status: a person may run \`self work accept ${snapshot.work.id}\` from the workspace root; starting remains checkout-only`];
+        return [`review status: \`self work confirm ${snapshot.work.id}\` runs from the workspace root; starting remains checkout-only`];
     }
     if (snapshot.packetProject === snapshot.targetProject && snapshot.ownerCheckoutAvailable)
     {
@@ -1071,13 +1071,13 @@ function workProposalItems(model: ProjectModel): WaitingItem[]
 
 // A standalone plan (#356) has no brief to travel with it, so the row states
 // what a reader has to weigh instead: which version is current, which one
-// they already accepted, and the first line of the plan itself.
+// they already confirmed, and the first line of the plan itself.
 function planReviewItems(model: ProjectModel): WaitingItem[]
 {
     return reviewWork(model).map((work): WaitingItem => ({
-        action: `self work accept ${work.id}`,
+        action: `self work confirm ${work.id}`,
         full: `work proposal ${work.id} (${planNote(work)}): ${firstLine(work.outcome)}`
-            + ` — \`self work accept ${work.id}\``,
+            + ` — \`self work confirm ${work.id}\``,
         identity: `work proposal ${work.id}`,
         recovery: { verb: "work-show", id: work.id }
     }));
@@ -1094,7 +1094,7 @@ function firstLine(text: string): string
 // The id travels whole (#304). A proposal made before the cutover is named by
 // its event id, whose first ten characters are the millisecond it was written
 // in, so eight of them name every record from the same quarter-second — three
-// proposals written by one script answered to one prefix, and the accept line
+// proposals written by one script answered to one prefix, and the confirm line
 // this row printed refused as ambiguous. A native proposal's id is a short id
 // already, so nothing about that kind of row changes. Cutting to a unique
 // prefix instead would print a line that stops resolving the moment the next
@@ -1103,14 +1103,14 @@ function gapProposalItems(model: ProjectModel): WaitingItem[]
 {
     const project = shellArgument(model.slug);
     return openProposals(model.goals).map((proposal): WaitingItem => ({
-        action: `self work accept ${proposal.id}`,
+        action: `self work confirm ${proposal.id}`,
         full: [
             `work proposal ${proposal.id}: ${proposal.outcome}`,
             `  toward ${proposal.milestone ?? proposal.objective} · value: ${proposal.value}`,
             `  success: ${proposal.success.join("; ")} · stop: ${proposal.stop.join("; ")}`,
             `  depends: ${proposal.depends.length === 0 ? "nothing" : proposal.depends.join(", ")} · risk: ${proposal.risk}`,
             `  capacity: ${proposal.capacity} · evidence plan: ${proposal.evidencePlan}`,
-            `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work accept ${proposal.id}\``
+            `  confidence: ${proposal.confidence} · expires ${proposal.expires} — \`self work confirm ${proposal.id}\``
         ].join("\n"),
         identity: `work proposal ${proposal.id}`,
         recovery: { verb: "search", id: proposal.id }
@@ -1489,10 +1489,32 @@ function historyLines(record: HistoryRecord, page: number): string[]
 // One page of a record's own history. The annulled set is read once for the
 // page rather than once per row: it is a pass over the log, and asking it
 // inside the map would make the render quadratic in the log's length.
+//
+// Who wrote each event is stated here and not in `self log` (#400). This is the
+// page a reader opens to ask what happened to one record and on whose say-so;
+// `self log` is the workspace timeline and a machine contract, and a column
+// every reader of it has to skip is one it does not owe.
 function pageRows(events: SelfEvent[], start: number): string[]
 {
     const annulled = annulledEvents(events);
-    return events.slice(start, start + HISTORY_PAGE).map((event) => logLine(event, undefined, annulled));
+    return events.slice(start, start + HISTORY_PAGE)
+        .map((event) => `${logLine(event, undefined, annulled)}${writerNote(event)}`);
+}
+
+// The `by` a #400 verb stamped, in the reader's words. Silent where there is
+// none: every record written before #400 carries no `by`, and inventing
+// "person" for it would state something the log never said.
+function writerNote(event: SelfEvent): string
+{
+    const by = event.payload.by as { kind?: unknown; session?: unknown; name?: unknown } | undefined;
+    if (by === null || typeof by !== "object" || (by.kind !== "person" && by.kind !== "agent"))
+    {
+        return "";
+    }
+    const who = typeof by.name === "string" && by.name !== "" ? ` ${by.name}` : "";
+    const session = by.kind === "agent" && typeof by.session === "string" && by.session !== ""
+        ? ` (session ${by.session})` : "";
+    return dim(` · by ${by.kind}${who}${session}`);
 }
 
 // A page is counted from one. A page past the last is answered rather than

@@ -226,7 +226,7 @@ export interface EntityState
 // Which version of a record's plan is current, the id an acceptance of it
 // names, and the newest version an acceptance has named. The current
 // revision's id is the record's own id until the plan is first restated:
-// every `work accept` ever written names the record, so a log from before
+// every work confirm ever written names the record, so a log from before
 // #356 already says which version it approved.
 export interface PlanState
 {

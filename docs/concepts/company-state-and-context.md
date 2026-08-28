@@ -153,7 +153,10 @@ per label — one convention may be full while another has decayed to index.
 
 A demotion — exposure moving toward less-rendered — always records `--why`.
 Demotion out of full is human-owned by convention: an agent records the move
-with `--proposed`, and it waits until a person runs `self state confirm`.
+with `--proposed`, and it waits for the answer `self state confirm` records.
+The convention is the rule here, not a gate — `state confirm` writes a record
+`self undo` takes straight back, so it runs from an agent session too, and the
+event states whether a person or a session wrote it.
 
 ### Retention caps
 

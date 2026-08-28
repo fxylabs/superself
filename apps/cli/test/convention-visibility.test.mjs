@@ -151,9 +151,9 @@ test("a legacy convention.added event reads as internal", async () =>
 
 /* ── cell 8: public restated as internal ──────────────────────────── */
 
-// A supersession retires the rule it replaces, and retiring a record is a
-// person's call (#173) — so both restatement cells run through the terminal
-// gate rather than a spawned process, exactly as cell 12's drop does.
+// A supersession retires the rule it replaces. These cells drive a person's
+// terminal because that is the caller they are about; since #400 a session
+// reaches the same write, and the record says which of the two wrote it.
 test("restating a public rule without --public takes it out of the block", async () =>
 {
     const { box, demo } = await project();

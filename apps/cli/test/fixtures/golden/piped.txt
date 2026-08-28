@@ -15,6 +15,11 @@ entity.proposed recorded [<event-id>]
   stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 <w-id>
 
+$ self work confirm <w-id>   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+  <w-id> stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
+<w-id>
+
 $ self decide the render gate is the one path to stdout --why one print path   (in project, exit 0)
 entity.confirmed recorded [<event-id>]
   the render gate is the one path to stdout — verify; wrong? self undo <event-id>
@@ -202,7 +207,7 @@ usage: self <command>
                                              (a terminal gets the ruled table; a pipe gets one line per unit)
   work add "<required outcome>" [--supersedes <work-id> --why w]
                                              create a work unit; --supersedes retires the unit it replaces, naming this one its successor
-                                             (a person's own command: a process with no terminal is refused and told to propose instead)
+                                             (the confirmed-at-once form; `work propose` is the one that asks for review first)
   work show <id> [--history [--page n]] [--project <slug>]
                                              print full work detail: brief, reports, evidence
                                              (resolves the owning project from any directory)
@@ -219,12 +224,12 @@ usage: self <command>
   work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]
                                              propose work for a person to review; the plan text alone is enough
                                              (--objective or --milestone makes it a gap proposal, which owes the full brief)
-                                             --supersedes proposes a correction: the unit it names is retired on acceptance
+                                             --supersedes proposes a correction: the unit it names is retired when the plan is confirmed
   work revise <id> "<revised plan>" --why w  restate an unstarted plan under the same work id; acceptance is invalidated
                                              (a plan that has started is corrected by a successor, the way `work add` records one)
-  work accept|decline <proposal-id> [--why w]
-                                             act on a proposed plan; decline states why
-                                             (accepting is a person's call and is refused where no person is at the terminal)
+  work confirm|decline <proposal-id> [--why w]
+                                             answer a proposed plan; decline states why
+                                             (the record says who confirmed it, and `self undo` takes it back)
   work started <id> --pid N | exited <id> [--code N]
                                              record the agent process running a unit, and how it ended
                                              liveness is judged at read time from the pid on this machine
@@ -233,12 +238,12 @@ usage: self <command>
                                              history stays inspectable; the unit stops counting as open work
   handoff <work-id> [--project <slug>]       compile one deterministic, self-contained read-only packet for a fresh agent
   undo [<event-id>] [--supersession] [--why <text>]
-  apply <file>                               run a reviewed file of record-destroying commands on one confirmation
-                                             (nothing is recorded until the whole set is confirmed at a terminal)
+  apply <file>                               run a reviewed file of record-destroying commands as one append
+                                             (the whole set lands together, or the first refusal stops all of it)
   report <work-id> "<summary>" [--file path] [--evidence v] [--artifact path] [--entry file] [--next n] [--friction f]
                                              add --design --implements <decision-id> to submit a design or scope proposal,
                                              which is refused unless every decision it cites still holds
-  report confirm <report-id>                 approve a design at a terminal, binding the approval to the artifact's hash
+  report confirm <report-id>                 approve a design, binding the approval to the artifact's hash
   artifact add <path> [--entry <file>] [--why <text>]
                                              store a file or directory with no report behind it
   artifact list [--work id] [--project slug]
@@ -286,8 +291,8 @@ usage: self <command>
   runbook advance <key> --why "<what was done>" [--to "<stage>"]
                                              pass the run's current stage; --to names it, and skipping one is refused
   runbook hold <key> --why "<what a person is being asked to approve>"
-                                             park the run on a person; it waits in context until they answer at a terminal
-  runbook approve <key> [--by <person>]      release a held run — a person at a terminal, typing the key back
+                                             park the run on a person; it waits in context until they answer
+  runbook approve <key> [--by <person>]      release a held run; the event says who approved and what recorded it
   runbook stop <key> --why "<why it was given up>" | resume <key>
                                              give the run up, or pick a parked one back up
   runbook link <key> --work <id>             state which work unit is carrying this run; one or more
@@ -296,7 +301,7 @@ usage: self <command>
                                              register a reusable line; --file <path> registers a longer markdown recipe instead
   skill show <id|name> [--project <slug>]    print the line or the recipe, ready to use, with the placeholders it declares
   skill drop <id|name> --why "<why it no longer helps>"
-                                             withdraw a skill — a person at a terminal, exactly as any record is withdrawn
+                                             withdraw a skill; what it destroys is disclosed first, exactly as any record is
   connect [--global]                         render the agent-onboarding block into AGENTS.md and CLAUDE.md
                                              (--global: into this machine's agent instruction files)
   view [slug]                                open the live workspace or project view in the browser at a terminal
@@ -347,7 +352,7 @@ usage: self work [--project <slug>] [--pretty|--plain]
        self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
        self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]
        self work revise <id> "<revised plan>" --why w
-       self work accept|decline <proposal-id> [--why w]
+       self work confirm|decline <proposal-id> [--why w]
        self work started <id> --pid N | exited <id> [--code N]
        self work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]
 
@@ -366,8 +371,8 @@ and retires the one it replaces with the new unit as its successor — the same
 pair `work retire --successor` records, spelled the way every other add verb
 spells a correction. A session spells the same correction as a plan:
 `work propose "<corrected outcome>" --supersedes <id> --why w` leaves the unit
-it names untouched until a person accepts, and the retirement lands with the
-acceptance.
+it names untouched until the plan is confirmed, and the retirement lands with
+the confirm.
 
 done is the judgment that the outcome was reached, and the claim must
 carry evidence: a report with a commit or an artifact, or a done-time
@@ -375,20 +380,18 @@ carry evidence: a report with a commit or an artifact, or a done-time
 satisfies. Done is allowed while blocked: completion is a judgment
 on the outcome, not the block.
 
-a plan an agent wrote is reviewed before it is worked: `work propose
-"<plan>"` records the plan as work waiting on a person, and `work accept`
-confirms it under the same id. Both `work add` and `work accept` write a
-confirmed record, so both are a person's own commands: a process with no
-person at its keyboard — a runner's child, or a piped stdin — is refused and
-handed the `work propose` line to run instead. Nothing else about work
-changes, and a person at a terminal still types one command.
-Until it is first started that plan can be
-restated in place — `work revise <id> "<revised plan>" --why w` keeps the id,
-keeps every earlier version in the unit's history, and invalidates the
-acceptance, so a person accepts again before it can be picked up. Unlike
-`objective revise` and `milestone revise`, it mints no new id and supersedes
-nothing. The first `work start` freezes the plan: after it, a correction is a
-successor, the same as for any confirmed record.
+a plan is proposed when it wants review before it is worked: `work propose
+"<plan>"` records it as work waiting on an answer, and `work confirm` confirms
+it under the same id. `work add` is the confirmed-at-once form, exactly as
+`decide "<text>"` is to `decide --proposed`. Neither asks for a person at a
+keyboard: every record here is one `self undo` takes straight back, and each
+states whether a person or a session wrote it. Until it is first started that
+plan can be restated in place — `work revise <id> "<revised plan>" --why w`
+keeps the id, keeps every earlier version in the unit's history, and
+invalidates the confirmation, so the plan is confirmed again before it can be
+picked up. Unlike `objective revise` and `milestone revise`, it mints no new
+id and supersedes nothing. The first `work start` freezes the plan: after it,
+a correction is a successor, the same as for any confirmed record.
 
 history is per unit and explicit: `work show <id> --history` prints the
 events of that unit alone, oldest first, ten to a page. A retired or
@@ -463,23 +466,22 @@ and never leave it falsely blocked.
 Wrote the plan yourself? Propose it rather than starting it, so the user
 reviews the plan and not the result:
 
-  self work propose "<plan>"                 recorded as work waiting on a person
+  self work propose "<plan>"                 recorded as work waiting on review
   self work revise <id> "<revised plan>" --why "<what changed>"
 
-This is not a habit but the rule: `work add` and `work accept` write a
-confirmed record, so a session running either is refused and handed the
-propose line. The person accepts with `self work accept <id>` at their own
-terminal.
+Propose means "I want this reviewed before I build it", not "I am an
+agent": `work add` records the same unit confirmed at once, and both say
+who wrote them. The user answers with `self work confirm <id>`.
 
 One id carries the whole loop. A revision keeps that id, keeps every
 earlier version in `self work show <id> --history`, and invalidates the
-acceptance, so `self work start` is refused until the user accepts again.
+confirm, so `self work start` is refused until the user confirms again.
 The first start freezes the plan; after it, a correction is a successor —
 propose that one too:
 
   self work propose "<corrected plan>" --supersedes <id> --why w
 
-The named unit is untouched until the acceptance, which records the new
+The named unit is untouched until the confirm, which records the new
 unit and retires the one it replaces in one append.
 
 Found a gap between an objective and current state? The same verb closes
@@ -578,14 +580,12 @@ entity.proposed recorded [<event-id>]
   the listings move behind the gate — verify; wrong? self undo <event-id>
 <w-id>
 
-$ self work accept <w-id>   (in project, exit 1)
-error: accepting a plan is a person's call, and this process has no terminal to make it at — nothing was recorded
-
-  the listings move behind the gate
-  <w-id> is demo's plan, and this line resolves it from any directory
-
-  a person runs this in their own terminal:
-    self work accept <w-id>
+$ self work confirm <w-id>   (in project, exit 0)
+entity.confirmed recorded [<event-id>]
+  <w-id> the listings move behind the gate — verify; wrong? self undo <event-id>
+entity.linked recorded [<event-id>]
+  <w-id> the listings move behind the gate — verify; wrong? self undo <event-id>
+<w-id>
 
 $ self work link <w-id> --milestone <m-id>   (in project, exit 0)
 entity.linked recorded [<event-id>]
@@ -754,12 +754,12 @@ recorded: <date>
 
 $ self state show <e-id> --history   (in project, exit 0)
 <e-id>  live  1 event
-<ts>  entity.confirmed  [<event-id>]  a record the document sweep reads back
+<ts>  entity.confirmed  [<event-id>]  a record the document sweep reads back · by agent
 
 $ self work show <w-id> --history   (in project, exit 0)
 <w-id>  done  6 events
-<ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot
-<ts>  entity.confirmed  [<event-id>]  
+<ts>  entity.proposed  [<event-id>]  stage 1 lands the render gate and its pilot · by agent
+<ts>  entity.confirmed  [<event-id>]   · by agent
 <ts>  entity.started  [<event-id>]  
 <ts>  entity.linked  [<event-id>]   · undone
 <ts>  entity.annulled  [<event-id>]  undone entity.linked [<event-id>] — the checkpoint was the wrong one
@@ -803,7 +803,7 @@ $ self setup   (in project, exit 0)
 project    demo
            <root>/ws/demo (via .self)
 workspace  <root>/ws
-store      <root>/ws/.superself (25 commits, <root>/remote.git)
+store      <root>/ws/.superself (27 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo
@@ -812,7 +812,7 @@ projects   demo → <root>/ws/demo
 $ self setup   (in workspace, exit 0)
 project    (none) — this directory is not registered; run `self project init`
 workspace  <root>/ws
-store      <root>/ws/.superself (25 commits, <root>/remote.git)
+store      <root>/ws/.superself (27 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo
@@ -821,7 +821,7 @@ projects   demo → <root>/ws/demo
 $ self setup   (in outside, exit 0)
 project    (none) — this directory is not registered; run `self project init`
 workspace  <root>/ws
-store      <root>/ws/.superself (25 commits, <root>/remote.git)
+store      <root>/ws/.superself (27 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo

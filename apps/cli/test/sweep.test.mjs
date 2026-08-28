@@ -331,7 +331,7 @@ test("C2: the proposal reaches a person through the unchanged Waiting on you row
     const row = out.split("\n").find((line) => line.includes(proposal));
     assert.ok(row !== undefined, `no Waiting on you row for ${proposal}:\n${out}`);
     assert.ok(out.includes("## Waiting on you"), out);
-    assert.ok(row.includes(`self work accept ${proposal}`), row);
+    assert.ok(row.includes(`self work confirm ${proposal}`), row);
     assert.ok(row.includes(SAID), row);
 });
 
@@ -392,10 +392,10 @@ test("C16: one more piece of evidence the next day does not produce a second pro
 
 test("C3: accepting it goes through the unchanged acceptance path", async () =>
 {
-    assert.equal((await personIn(recorded.box, recorded.demo, ["work", "accept", proposal])).code, 0);
+    assert.equal((await personIn(recorded.box, recorded.demo, ["work", "confirm", proposal])).code, 0);
     const shown = (await must(recorded.box, recorded.demo, ["work", "show", proposal])).out;
     assert.ok(shown.includes(SAID), shown);
-    assert.ok(!(await must(recorded.box, recorded.demo, ["context"])).out.includes(`self work accept ${proposal}`));
+    assert.ok(!(await must(recorded.box, recorded.demo, ["context"])).out.includes(`self work confirm ${proposal}`));
 });
 
 test("C4: declining a swept proposal is the unchanged decline", async () =>
@@ -408,7 +408,7 @@ test("C4: declining a swept proposal is the unchanged decline", async () =>
     await sweep(declined.box, declined.demo, "--record");
     const first = proposalsOf(declined.ws, "demo")[0].payload.entity;
     assert.equal((await selfIn(declined.box, declined.demo, ["work", "decline", first, "--why", "not worth systemizing yet"])).code, 0);
-    assert.ok(!(await must(declined.box, declined.demo, ["context"])).out.includes(`self work accept ${first}`));
+    assert.ok(!(await must(declined.box, declined.demo, ["context"])).out.includes(`self work confirm ${first}`));
 });
 
 test("C6: the same friction is proposed again after a decline, by design", async () =>

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, receiptIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -138,7 +138,7 @@ test("B9: objective revise supersedes with a new id carrying the links and targe
 {
     preview = (await must(box, demo, ["objective", "add", "old target", "--target", "2099-03-01"])).out.match(/\bo-[0-9a-z]{5}\b/)[0];
     const printed = (await approved(["objective", "revise", preview, "--why", "slipped", "--target", "2099-06-30"], preview)).printed;
-    const successor = printed.match(/\bo-[0-9a-z]{5}\b/)[0];
+    const successor = receiptIn(printed).match(/\bo-[0-9a-z]{5}\b/)[0];
     assert.notEqual(successor, preview, "a revision kept the record id");
     assert.ok((await shown(preview)).includes(`superseded by: ${successor}`));
     const page = await shown(successor);
@@ -183,7 +183,7 @@ test("B12: met covers, reach is the gated done, revise supersedes, drop retires"
     await must(box, demo, ["milestone", "met", milestone, "--criterion", "c2", "--why", "docs regenerated"]);
     assert.match((await must(box, demo, ["milestone", "reach", milestone])).out, /entity\.done recorded/);
     const revised = (await must(box, demo, ["milestone", "add", "next checkpoint", "--objective", preview, "--exit", "one thing"])).out.match(/\bm-[0-9a-z]{5}\b/)[0];
-    const successor = (await approved(["milestone", "revise", revised, "--why", "widened", "--exit", "another thing"], revised)).printed.match(/\bm-[0-9a-z]{5}\b/)[0];
+    const successor = receiptIn((await approved(["milestone", "revise", revised, "--why", "widened", "--exit", "another thing"], revised)).printed).match(/\bm-[0-9a-z]{5}\b/)[0];
     assert.notEqual(successor, revised, "a revision kept the milestone id");
     assert.ok((await shown(revised)).includes(`superseded by: ${successor}`));
     assert.match((await approved(["milestone", "drop", successor, "--why", "checkpoint removed"], successor)).printed, /entity\.retired recorded/);
@@ -205,7 +205,7 @@ test("B13: the work verbs record the entity lifecycle — add, propose, accept, 
     const brief = eventFor(proposal, "entity.proposed");
     assert.equal(brief.payload.value, "closes the gap");
     assert.equal(brief.payload.expires, "2099-01-01");
-    await mustPerson(box, demo, ["work", "accept", proposal]);
+    await mustPerson(box, demo, ["work", "confirm", proposal]);
     assert.notEqual(events().find((event) => event.type === "entity.confirmed" && event.refs?.confirms === proposal), undefined);
     assert.ok((await must(box, demo, ["work"])).out.includes("a proposed direction"), "an accepted proposal did not become an open unit");
     const declined = workIdIn((await must(box, demo, ["work", "propose", "a declined direction", "--objective", preview,

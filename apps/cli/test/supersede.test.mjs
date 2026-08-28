@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STATEMENT_TYPES } from "../dist/model.js";
-import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, receiptIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { ws, demo } = await demoWorkspace(box);
@@ -92,7 +92,7 @@ test("K2: objective add --supersedes replaces the objective", async () =>
     const replacing = await approved(["objective", "add", "K2 corrected outcome", "--supersedes", first], first);
     assert.equal(replacing.code, 0, replacing.out);
     assert.match((await must(box, demo, ["state", "show", first])).out, /superseded/);
-    assert.match((await must(box, demo, ["state", "show", entityIn(replacing.printed)])).out, /confirmed/);
+    assert.match((await must(box, demo, ["state", "show", entityIn(receiptIn(replacing.printed))])).out, /confirmed/);
 });
 
 test("K3: milestone add --supersedes replaces the checkpoint under its objective", async () =>
@@ -134,14 +134,14 @@ test("K5: the events a work supersession records are the events retire --success
     const successor = await work("K5 oracle: the unit that carries it now");
     await approved(["work", "retire", spelled, "--why", "moved to the successor", "--successor", successor], spelled);
     const superseded = await work("K5 oracle: the unit --supersedes moves");
-    const created = workIdIn((await approved(["work", "add", "K5 oracle: the unit that carries it now, too",
-        "--supersedes", superseded, "--why", "moved to the successor"], superseded)).printed);
+    const created = workIdIn(receiptIn((await approved(["work", "add", "K5 oracle: the unit that carries it now, too",
+        "--supersedes", superseded, "--why", "moved to the successor"], superseded)).printed));
     const byRetire = retirementOf(spelled);
     const bySupersede = retirementOf(superseded);
     assert.deepEqual(Object.keys(bySupersede.payload).sort(), Object.keys(byRetire.payload).sort());
     assert.deepEqual(bySupersede.payload, {
         entity: superseded, why: "moved to the successor", successor: created, successorProject: "demo",
-        confirmation: { method: "tty", challenge: superseded }
+        by: { kind: "person" }
     });
     assert.equal(bySupersede.type, byRetire.type);
     assert.equal(bySupersede.origin.confirmed, byRetire.origin.confirmed);
@@ -161,8 +161,8 @@ test("K6: state add --supersedes replaces the entity, exactly as the link form d
 {
     const byFlag = await entity("K6 first text");
     const byLink = await entity("K6 first text, other copy");
-    const flagged = (await approved(["state", "add", "K6 corrected text", "--supersedes", byFlag], byFlag)).printed;
-    const linked = (await approved(["state", "add", "K6 corrected text, other copy", "--link", `supersedes:${byLink}`], byLink)).printed;
+    const flagged = receiptIn((await approved(["state", "add", "K6 corrected text", "--supersedes", byFlag], byFlag)).printed);
+    const linked = receiptIn((await approved(["state", "add", "K6 corrected text, other copy", "--link", `supersedes:${byLink}`], byLink)).printed);
     const flaggedLinks = events().find((event) => event.payload.entity === flagged.match(/\be-[0-9a-z]{5}\b/)[0]).payload.links;
     const linkedLinks = events().find((event) => event.payload.entity === linked.match(/\be-[0-9a-z]{5}\b/)[0]).payload.links;
     assert.deepEqual(flaggedLinks, [{ type: "supersedes", target: byFlag }]);
@@ -282,7 +282,7 @@ test("B5: one target named in both spellings records one supersedes link", async
 {
     const target = await entity("B5 text");
     const created = await approved(["state", "add", "B5 corrected text", "--supersedes", target, "--link", `supersedes:${target}`], target);
-    const id = created.printed.match(/\be-[0-9a-z]{5}\b/)[0];
+    const id = receiptIn(created.printed).match(/\be-[0-9a-z]{5}\b/)[0];
     assert.deepEqual(events().find((event) => event.payload.entity === id).payload.links,
         [{ type: "supersedes", target }]);
     assert.equal(((await must(box, demo, ["state", "show", id])).out.match(/link: supersedes/g) ?? []).length, 1);

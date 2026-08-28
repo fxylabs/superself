@@ -1067,12 +1067,14 @@ export const ARTIFACT_COMMAND: Command = {
         "reuse of bytes the project already stores apply to both verbs.",
         "",
         "`prune` removes a stored artifact's bytes and keeps the record naming",
-        "them, so a done claim resting on that evidence stays auditable. It needs",
-        "a person at a terminal typing the artifact id back. Evidence is removable",
-        "once its work unit is done or retired, bytes a live record points at are",
-        "not, and bytes a design approval named never are. Where two artifacts",
-        "share one stored path, each is pruned by name and the last one reclaims",
-        "the bytes. Only the working tree shrinks: history is never rewritten.",
+        "them, so a done claim resting on that evidence stays auditable. It is the",
+        "one verb here that still needs a person at a terminal typing the artifact id",
+        "back: `self undo` takes back every other record, and never a deletion.",
+        "Evidence is removable once its work unit is done or retired, bytes a live",
+        "record points at are not, and bytes a design approval named never are.",
+        "Where two artifacts share one stored path, each is pruned by name and the",
+        "last one reclaims the bytes. Only the working tree shrinks: history is",
+        "never rewritten.",
         "",
         "  --entry <file>      which member of a directory a person opens",
         "  --why <text>        what this file is for, kept beside the record;",
@@ -1525,10 +1527,15 @@ function storedBytes(path: string): number
         : 0;
 }
 
-// The human gate, in the shape `retirement.ts` established for every act that
-// destroys something: the disclosure is rendered once and ends two ways — a
-// refusal where no person can answer, a challenge prompt where one can — so
-// what an agent reads and what a person reads cannot drift apart.
+// The last human gate in the CLI (#400). Every other verb that used to ask for
+// a person at a keyboard writes a record `self undo` takes straight back, so
+// what the gate bought there was a retyped line; here it buys the only thing
+// nothing else can — `undo.ts` names `artifact.pruned` as the deletion no event
+// reverses, and bytes that left the working tree are gone whoever asked.
+//
+// The disclosure is rendered once and ends two ways — a refusal where no person
+// can answer, a challenge prompt where one can — so what an agent reads and
+// what a person reads cannot drift apart.
 //
 // The challenge is the artifact's own id, so what a person types back is the
 // exact record being removed. One id is all one answer covers, which is why a
@@ -1538,8 +1545,9 @@ function requireHumanPrune(record: ArtifactRecord, shared: number, bytes: number
     const disclosure = pruneDisclosure(record, shared, bytes).join("\n");
     if (!personAtTerminal() || !process.stdout.isTTY)
     {
-        throw new CliError([`removing stored bytes is a person's call, and this process has no terminal to make it at — `
-            + "nothing was removed", "", disclosure, "", "  a person runs this in their own terminal:",
+        throw new CliError(["removing stored bytes cannot be taken back by `self undo`, so a person types the id — "
+            + "this process has no terminal to type it at, and nothing was removed",
+        "", disclosure, "", "  a person runs this in their own terminal:",
         `    self artifact prune ${record.id} --why "…"`].join("\n"));
     }
     const confirmed = confirmHuman(

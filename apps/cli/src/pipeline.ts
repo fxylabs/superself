@@ -15,12 +15,11 @@ import { CliError, EventRefs, SelfEvent } from "./types.js";
 // the JSON and nothing else to parse around.
 let machineMode = false;
 
-// While a reviewed set is being collected, nothing may reach the log: the
-// person has not been asked yet (#312). `retirement.ts` opens the hold, queues
-// each gated call it collects, and releases it before writing what one
-// confirmation covered — so a call that records rather than destroys cannot
-// ride into the batch beside the ones that do.
-let heldForApproval = false;
+// While a reviewed set is being collected, nothing may reach the log (#312).
+// `retirement.ts` opens the hold, queues each destroying call it collects, and
+// releases it before writing them as one append — so a call that records
+// rather than destroys cannot ride into the batch beside the ones that do.
+let heldForSet = false;
 
 // What the caller said it meant by this call (#390), from the `--meant` host
 // flag. Recorded beside what the command actually resolved, so the receipt can
@@ -31,7 +30,7 @@ let statedIntent: string | undefined = undefined;
 
 export function holdAppends(on: boolean): void
 {
-    heldForApproval = on;
+    heldForSet = on;
 }
 
 export function stateIntent(text: string | undefined): void
@@ -47,7 +46,7 @@ export function stateIntent(text: string | undefined): void
 export function resetPipeline(): void
 {
     machineMode = false;
-    heldForApproval = false;
+    heldForSet = false;
     statedIntent = undefined;
 }
 
@@ -88,7 +87,7 @@ export function recordEvent(ctx: CliContext, event: SelfEvent, summary: string, 
 // Events that are one state change are appended in one write, so a reader can
 // never find half of it: a work unit created by an accepted proposal without
 // the link and the acceptance that explain it would be a unit nothing points
-// at, and a re-run of `work accept` would create a second one.
+// at, and a re-run of `work confirm` would create a second one.
 export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: string, onRecorded?: () => void): void
 {
     refuseHeld();
@@ -107,11 +106,11 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
 }
 
 // One state change several verbs composed, written once (#312). A reviewed set
-// is approved by one answer, so it has to land as one write: checking and
-// appending each call in turn would let a call the sanitizer or the archive
-// gate refuses stop the set *after* the calls before it were already appended,
-// folded and committed — records destroyed under a confirmation whose set never
-// happened, and an exit code saying nothing was.
+// lands as one write: checking and appending each call in turn would let a call
+// the sanitizer or the archive gate refuses stop the set *after* the calls
+// before it were already appended, folded and committed — records destroyed
+// under a disclosure whose set never happened, and an exit code saying nothing
+// was.
 //
 // Everything the whole set owes is therefore checked before any of it is
 // written, and then the events go through the same single writer one call's do.
@@ -149,7 +148,7 @@ function oneStore(calls: RecordedCall[]): string
 {
     if (new Set(calls.map((call) => call.ctx.storeDir)).size > 1)
     {
-        throw new CliError("these calls write into more than one store, and one confirmation covers one store");
+        throw new CliError("these calls write into more than one store, and one append covers one store");
     }
     return calls[0].ctx.storeDir;
 }
@@ -179,14 +178,14 @@ function writeThrough(storeDir: string, events: SelfEvent[], types: string, summ
 
 // What `self apply` covers, refused where a line asks for something else. A
 // reviewed set is a set of records being destroyed, so a verb that records
-// something instead has nothing for one confirmation to cover — and letting it
-// write here would put state in the log before the person was asked at all.
+// something instead has nothing for that append to cover — and letting it write
+// here would put state in the log outside the set that was reviewed.
 function refuseHeld(): void
 {
-    if (heldForApproval)
+    if (heldForSet)
     {
-        throw new CliError("this records something rather than destroying a record, and one confirmation covers "
-            + "only the calls that need a person's approval");
+        throw new CliError("this records something rather than destroying a record, and one append covers "
+            + "only the calls that do");
     }
 }
 
