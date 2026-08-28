@@ -395,7 +395,13 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   why an objective is open, confirmed, revised, reached, or dropped.
 - `milestone` manages checkpoints and exit criteria under an objective. A
   milestone is reached only after every live criterion is covered by evidence;
-  finishing a work unit does not reach it automatically.
+  finishing a work unit does not reach it automatically. `milestone show` reads
+  the linked work beside those criteria, under `## Linked work`: each unit's
+  working state — with the dependency a blocked one waits on — how many of the
+  criteria it declared are covered, which session holds it, and the first line
+  of its latest report. Those lines are the console's alone; the canonical
+  page a fold writes carries none of them, because who holds a unit is a
+  judgment about this machine's sessions.
 - `decide` records a confirmed decision by default. `--proposed` records one
   awaiting confirmation; `decide confirm <event-id>` confirms it.
 - `work` creates and moves outcomes, links them to objectives or milestones,

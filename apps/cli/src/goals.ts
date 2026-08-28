@@ -13,13 +13,16 @@ import {
     requireSupersedeKind,
     rendersIn,
     scopeTarget,
-    supersedeSpelling
+    supersedeSpelling,
+    uncoveredCriteria
 } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { WrittenBy, writtenBy } from "./human.js";
 import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
+import { claimNote } from "./ledger.js";
 import { readEvents } from "./logfile.js";
-import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
+import { sessionToken } from "./machine.js";
+import { buildModel, ProjectModel, reportProjection, workspaceModels, WorkState } from "./model.js";
 import {
     allMilestones,
     contributionsOf,
@@ -43,7 +46,7 @@ import {
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
-import { dim, errYellow, markdownHeadings, plural, styled } from "./style.js";
+import { dim, errYellow, firstLine, markdownHeadings, plural, styled } from "./style.js";
 import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
@@ -628,7 +631,10 @@ export const MILESTONE_COMMAND: Command = {
         { syntax: 'milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]', verbs: ["add"] },
         {
             syntax: "milestone show <id> [--project <slug>]",
-            description: ["print a milestone, its exit criteria, and its coverage"],
+            description: [
+                "print a milestone, its exit criteria, and its coverage",
+                "(with every linked work unit: its state, its criteria, its holder, its latest report)"
+            ],
             verbs: ["show"]
         },
         {
@@ -703,11 +709,85 @@ function milestoneList({ values }: CommandInput<typeof SCOPE_OPTIONS>): CommandO
 
 function milestoneShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
-    const found = requireMilestone(scopeModel(readScopes(process.cwd(), values)[0]), positionals[0]);
+    const model = scopeModel(readScopes(process.cwd(), values)[0]);
+    const found = requireMilestone(model, positionals[0]);
+    const progress = milestoneProgressLines(model, found.milestone);
     return [{
         kind: "document",
-        plain: () => markdownHeadings(renderMilestoneBody(found.milestone, found.objective).trimEnd()).split("\n")
+        plain: () => markdownHeadings(renderMilestoneBody(found.milestone, found.objective, progress).trimEnd()).split("\n")
     }];
+}
+
+/* ── where the linked work stands (#406) ───────────────────────────── */
+
+// The one screen that answers "where are we": every unit linked to the
+// checkpoint, beside the criteria it is meant to close. Composed here rather
+// than in `fold.ts` because it names who holds a unit, which is this machine's
+// judgment and must not reach a synced page — the reason `main.ts` composes
+// `self work show`'s holder line outside `renderWorkBody`.
+//
+// The linked ids come from `milestone.works`, which `deriveMilestone` already
+// resolved and ordered; a second scan of `model.works` here would be a second
+// answer to which units a checkpoint has.
+function milestoneProgressLines(model: ProjectModel, milestone: MilestoneState): string[]
+{
+    const byId = new Map(model.works.map((work) => [work.id, work]));
+    return milestone.works.flatMap((id) =>
+    {
+        const work = byId.get(id);
+        return work === undefined ? [] : unitProgressLines(model, work);
+    });
+}
+
+// One unit as the milestone page states it: where it stands, how much of what
+// it declared is covered, who holds it, and the opening line of its newest
+// report under all three.
+function unitProgressLines(model: ProjectModel, work: WorkState): string[]
+{
+    const marks = [unitStanding(work), ...criteriaNote(model, work), ...holderNote(work)];
+    return [`- **${work.id}** ${work.outcome} — ${marks.join(", ")}`, ...latestReportLines(work)];
+}
+
+// The working state in the vocabulary `self work show` prints it in, with the
+// dependency `work block --on` named and its reason where one was recorded. A
+// milestone page that renamed the states would be a second spelling of one
+// answer, and the reader who follows an id from here would meet the other one.
+function unitStanding(work: WorkState): string
+{
+    if (work.status !== "blocked")
+    {
+        return work.status;
+    }
+    return `blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`;
+}
+
+// What the unit declared for itself, judged by the same function `self state
+// done` is refused by. A unit that declared nothing says nothing: the count
+// would read as progress toward a bar it never set.
+function criteriaNote(model: ProjectModel, work: WorkState): string[]
+{
+    const entity = model.entities.find((item) => item.id === work.id);
+    if (entity === undefined || entity.criteria.length === 0)
+    {
+        return [];
+    }
+    const covered = entity.criteria.length - uncoveredCriteria(entity).length;
+    return [`${covered} of ${entity.criteria.length} criteria covered`];
+}
+
+function holderNote(work: WorkState): string[]
+{
+    const held = claimNote(work.claim, sessionToken(), work.process);
+    return held === null ? [] : [held];
+}
+
+// The newest report's opening line, hung under the unit it belongs to. A
+// report can be pages; what this screen has room for is the sentence that says
+// where the unit got to, and `self work show <id>` prints the rest.
+function latestReportLines(work: WorkState): string[]
+{
+    const latest = reportProjection(work.reports)[0];
+    return latest === undefined ? [] : [`  - report ${latest.ts.slice(0, 10)}: ${firstLine(latest.text)}`];
 }
 
 // What a milestone write speaks about: the project it runs in, that project's
