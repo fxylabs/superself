@@ -66,8 +66,8 @@ test("C4: done with uncovered criteria refuses naming exactly the uncovered ones
     await must(box, demo, ["state", "cover", id, "--criterion", "left", "--why", "landed"]);
     const result = await self(["state", "done", id, "--report", "feels done"]);
     assert.notEqual(result.code, 0);
-    assert.match(result.out, /"right"/);
-    assert.ok(!result.out.includes('"left"'), "a covered criterion was named as uncovered");
+    assert.match(result.out, /c2 {2}open — right/);
+    assert.ok(!result.out.includes("left"), "a covered criterion was named as uncovered");
     assert.match(result.out, /state cover/);
 });
 

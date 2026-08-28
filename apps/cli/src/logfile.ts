@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED } from "./entities.js";
 import { projectStateDir } from "./paths.js";
 import { CliError, SelfEvent } from "./types.js";
+
+const CRITERION_EVENTS = [CRITERION_DECLARED, CRITERION_BLOCKED, CRITERION_UNBLOCKED];
 
 export function readEvents(storeDir: string, slug: string): SelfEvent[]
 {
@@ -79,8 +82,21 @@ export function eventSummary(event: SelfEvent): string
         const why = event.payload.why === undefined ? "" : ` — ${String(event.payload.why)}`;
         return `undone ${String(event.payload.undid ?? "an event")} [${String(event.refs?.annuls ?? "")}]${why}`;
     }
+    // The criterion axis names the record as well as the criterion (#408): a
+    // criterion's text stands alone in a log row without saying whose it is,
+    // and every one of these events is about one unit's own conditions.
+    if (CRITERION_EVENTS.includes(event.type))
+    {
+        return criterionSummary(event);
+    }
+    return statedParts(event).filter((value) => value !== undefined).map((value) => String(value)).join(" ");
+}
+
+// What the rest of the vocabulary says about itself, most specific first.
+function statedParts(event: SelfEvent): unknown[]
+{
     const payload = event.payload;
-    const parts = [payload.work, payload.objective, payload.milestone, payload.proposal, payload.criterion,
+    return [payload.work, payload.objective, payload.milestone, payload.proposal, payload.criterion,
         payload.attempt, payload.text ?? payload.outcome ?? payload.why ?? payload.as ?? payload.detail,
         // What differed from expectation, on the report's own line (#380).
         // The log is where a reader scans for it, and a friction sentence that
@@ -89,10 +105,26 @@ export function eventSummary(event: SelfEvent): string
         // A revision states the new plan and why it changed, and the reason is
         // readable nowhere else: the record keeps only the text it now states
         // (#356), so the unit's own history is where that reason lives.
-        event.type === "entity.revised" ? payload.why : undefined]
-        .filter((value) => value !== undefined)
-        .map((value) => String(value));
-    return parts.join(" ");
+        event.type === "entity.revised" ? payload.why : undefined];
+}
+
+// A criterion row: the unit, the criterion in its own words, and what this
+// event said about it. `cN` is deliberately absent — it is a read-time
+// position in the current declared list, and a log row states what was
+// recorded rather than what the list looks like now.
+function criterionSummary(event: SelfEvent): string
+{
+    const named = `${String(event.payload.entity ?? "")} "${String(event.payload.criterion ?? "")}"`;
+    if (event.type === CRITERION_BLOCKED)
+    {
+        const why = event.payload.why === undefined ? "" : `: ${String(event.payload.why)}`;
+        return `${named} — blocked on ${String(event.payload.on ?? "external")}${why}`;
+    }
+    if (event.type === CRITERION_UNBLOCKED)
+    {
+        return `${named} — released`;
+    }
+    return `${named}${event.payload.verify === undefined ? "" : ` · verify: ${String(event.payload.verify)}`}`;
 }
 
 // Marked rather than run together with the summary text, so a scan can tell

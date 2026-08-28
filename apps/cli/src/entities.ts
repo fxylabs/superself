@@ -139,6 +139,25 @@ interface CoverageClaim
     commits: string[];
 }
 
+// One declared criterion, folded from its own ordered event stream (#408).
+// Three states: open — declared, nothing since; blocked — the newest fact is a
+// block; covered — a claim names it, and the claim ends any block, because the
+// newest fact wins on this axis exactly as it does on the unit's own.
+export interface CriterionState
+{
+    // c1..cN — its 1-based place in the declared list, computed here and never
+    // written to the log. That is what lets an undo of a mid-list declaration
+    // renumber the addressing without detaching a single claim.
+    id: string;
+    text: string;
+    // How this criterion is checked. Recorded prose, never executed.
+    verify?: string;
+    // The claim that covered it. Absent while open or blocked.
+    covered?: CoverageClaim;
+    // What it waits on, when the newest fact about it is a block.
+    blocked?: { on: string; why?: string; ts: string };
+}
+
 export interface EntityState
 {
     id: string;
@@ -151,7 +170,15 @@ export interface EntityState
     // refuses anything else, and the fold ignores unknown keys a hand-appended
     // line might carry.
     target?: string;
+    // Derived from `criterionStates` at the end of the fold and never
+    // maintained beside it (#408): every shipped reader — `uncoveredCriteria`,
+    // `resolveCriterion`, `state show`, the milestone exit projection, every
+    // runbook stage reader — keeps reading this list, and the two cannot drift
+    // because only one of them is ever written.
     criteria: string[];
+    // The same list with each criterion's own state: its `cN` address, how it
+    // is verified, the claim that covered it, and what it waits on.
+    criterionStates: CriterionState[];
     // Which project this one came from, by slug (#75). A slug rather than a
     // record id, which is why it is reserved metadata and not an `EntityLink`,
     // and a machine-read value rather than a free label spelling, which is why
@@ -233,6 +260,37 @@ export interface PlanState
     current: number;
     event: string;
     accepted?: number;
+}
+
+// The declared list in both shapes it is read in, minted together so no caller
+// can state one without the other (#408 cell 74). `verify` is the sparse map a
+// creation payload carries, keyed by the position it was declared at; a key
+// nothing is declared at simply never matches.
+function declaredCriteria(texts: string[], verify: Record<string, string> = {}): Pick<EntityState, "criteria" | "criterionStates">
+{
+    // Two criteria with one text are one criterion: the text is a criterion's
+    // identity in the log — `entity.covered` and the whole criterion axis name
+    // it that way — so a claim on the second could never be told from a claim
+    // on the first. The verbs refuse minting one; a duplicate can still arrive
+    // hand-appended or from a store written before that refusal, and it folds
+    // to the one criterion it always meant rather than to a record gated
+    // forever on a `cN` that resolves to the other. `verify` is read at the
+    // position the payload declared, because that is what its author counted.
+    const states = texts.flatMap((text, at) =>
+        texts.indexOf(text) === at ? [criterionState(text, at, verify[`c${at + 1}`])] : []);
+    return { criteria: states.map((item) => item.text), criterionStates: renumbered(states) };
+}
+
+// `cN` is a position in the list a reader sees, so it is assigned after the
+// duplicates have gone rather than from the payload's own indexes.
+function renumbered(states: CriterionState[]): CriterionState[]
+{
+    return states.map((state, at) => ({ ...state, id: `c${at + 1}` }));
+}
+
+function criterionState(text: string, at: number, verify: string | undefined): CriterionState
+{
+    return { id: `c${at + 1}`, text, ...(verify === undefined ? {} : { verify }) };
 }
 
 export function isLive(entity: EntityState): boolean
@@ -427,6 +485,36 @@ interface RevisionEvent
 
 const EXECUTION_EVENTS = ["entity.started", "entity.blocked", "entity.unblocked", "entity.done", "entity.retired"];
 
+// The criterion axis (#408). Its own event types rather than `entity.blocked`
+// with a `criterion` field, because the fold's answer is different: a 0.11.0
+// CLI has no criterion branch in `collectExecution`, so it would read a
+// criterion's block as the *unit's* — and, worse, read a criterion's unblock
+// as clearing a unit-level block a person recorded. An unknown `entity.*` type
+// costs nothing by comparison: `reconcileEntity` matches no collector and
+// applies nothing, so the older CLI reads the criterion as open and its done
+// gate is looser, never tighter.
+export const CRITERION_DECLARED = "entity.criterion-declared";
+export const CRITERION_BLOCKED = "entity.criterion-blocked";
+export const CRITERION_UNBLOCKED = "entity.criterion-unblocked";
+
+const CRITERION_EVENTS = [CRITERION_DECLARED, CRITERION_BLOCKED, CRITERION_UNBLOCKED];
+
+// One line on the criterion axis. `criterion` is the criterion's text, never
+// its `cN` — exactly as `entity.covered` already stores it, which is what lets
+// an undo of a mid-list declaration renumber the addressing without detaching
+// a single claim.
+interface CriterionEvent
+{
+    event: string;
+    ts: string;
+    entity: string;
+    type: string;
+    criterion: string;
+    verify?: string;
+    on?: string;
+    why?: string;
+}
+
 export interface EntityFold
 {
     entities: EntityState[];
@@ -440,6 +528,10 @@ export interface EntityFold
     retractions: RetractEvent[];
     links: LinkEvent[];
     coverage: CoverageEvent[];
+    // Every declaration, block and unblock on the criterion axis (#408),
+    // collected like the rest so a union-merged log can order one above the
+    // record it names.
+    criteria: CriterionEvent[];
     // Every restatement of a record's text (#356). Accumulates rather than
     // settles: the newest one is the record's text, and the whole list is
     // what an acceptance binds a version number to.
@@ -479,6 +571,7 @@ export function emptyEntityFold(): EntityFold
         retractions: [],
         links: [],
         coverage: [],
+        criteria: [],
         revisions: [],
         confirmations: new Set(),
         annulled: new Set(),
@@ -598,7 +691,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         labels,
         links: createdLinks(fold, event),
         target: str(event.payload.target),
-        criteria: stringList(event.payload.criteria),
+        ...declaredCriteria(stringList(event.payload.criteria), readVerify(event.payload.verify)),
         from: str(event.payload.from),
         artifact: str(event.payload.artifact),
         visibility: readVisibility(event.payload.visibility),
@@ -630,7 +723,7 @@ function applyGoal(fold: EntityFold, event: SelfEvent): void
         text: String(event.payload.text ?? ""),
         labels: ["goal"],
         links: live.map((item) => ({ type: "supersedes" as const, target: item.id })),
-        criteria: [],
+        ...declaredCriteria([]),
         covered: [],
         scope: "project",
         priority: 0,
@@ -662,6 +755,7 @@ const COLLECTORS: ReadonlyArray<readonly [(event: SelfEvent) => boolean, Collect
     [(event) => event.type === "entity.placed", collectPlacement],
     [(event) => event.type === "entity.linked" || event.type === "entity.unlinked", collectLink],
     [(event) => event.type === "entity.covered", collectCoverage],
+    [(event) => CRITERION_EVENTS.includes(event.type), collectCriterion],
     [(event) => event.type === "entity.revised", collectRevision],
     [(event) => EXECUTION_EVENTS.includes(event.type), collectExecution]
 ];
@@ -743,6 +837,30 @@ function collectCoverage(fold: EntityFold, event: SelfEvent): void
             work: str(event.refs?.work),
             commits: stringList(event.refs?.commits)
         }
+    });
+}
+
+// A criterion event names the criterion by its text, so an empty or
+// non-string one says nothing this fold can attach: it is ignored, and the
+// record declares what it declared. The event-id guard is what makes a
+// declaration a merge carried in twice fold to one criterion.
+function collectCriterion(fold: EntityFold, event: SelfEvent): void
+{
+    const entity = String(event.payload.entity ?? "");
+    const criterion = typeof event.payload.criterion === "string" ? event.payload.criterion : "";
+    if (entity === "" || criterion === "" || fold.criteria.some((item) => item.event === event.id))
+    {
+        return;
+    }
+    fold.criteria.push({
+        event: event.id,
+        ts: event.ts,
+        entity,
+        type: event.type,
+        criterion,
+        verify: str(event.payload.verify),
+        on: str(event.payload.on),
+        why: str(event.payload.why)
     });
 }
 
@@ -855,7 +973,12 @@ export function deriveEntities(fold: EntityFold, legacy: LegacySources): EntityS
     // settled status, so a withdrawn or superseded record is past reviewing.
     applyPlans(entities, fold, revisions);
     applyPlacements(entities, fold);
+    // Before the coverage pass, which reads `criteria`: a claim may name a
+    // criterion a later declaration added, and it folds to nothing unless the
+    // list already holds it.
+    applyDeclarations(entities, fold);
     applyCoverage(entities, fold);
+    settleCriteria(entities, fold);
     applyExecutions(entities, fold);
     return entities;
 }
@@ -1028,6 +1151,140 @@ function applyCoverage(entities: EntityState[], fold: EntityFold): void
 function ordered<T extends { ts: string; event: string }>(items: T[]): T[]
 {
     return [...items].sort((left, right) => left.ts.localeCompare(right.ts) || left.event.localeCompare(right.event));
+}
+
+/* ── the criterion axis (#408) ─────────────────────────────────────── */
+
+// Criteria declared after the record was created, appended in `(ts, event id)`
+// order so two clones of one store address the same criterion as the same
+// `cN`. Appended, never inserted: a declaration states one more condition, and
+// a text the record already declares is the same criterion said twice.
+// `criteria` is re-derived from the states at the end, so the list every
+// shipped reader uses can never drift from the one this axis maintains.
+function applyDeclarations(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    for (const item of ordered(fold.criteria.filter((event) => event.type === CRITERION_DECLARED)))
+    {
+        const target = fold.annulled.has(item.event) ? undefined : byId.get(item.entity);
+        if (target !== undefined && !target.criterionStates.some((state) => state.text === item.criterion))
+        {
+            target.criterionStates.push(criterionState(item.criterion, target.criterionStates.length, item.verify));
+        }
+    }
+    for (const entity of entities)
+    {
+        entity.criteria = entity.criterionStates.map((state) => state.text);
+    }
+}
+
+// What each criterion waits on and what covered it, replayed as one ordered
+// stream: a coverage claim and a block are facts on the same axis, so covering
+// a blocked criterion ends the block by being the newer fact rather than by an
+// implicit second write — and taking the claim back gives the block straight
+// back with it.
+function settleCriteria(entities: EntityState[], fold: EntityFold): void
+{
+    const byId = new Map(entities.map((item) => [item.id, item]));
+    for (const fact of ordered([...criterionFacts(fold), ...coverageFacts(fold)]))
+    {
+        // A fact naming a criterion the record never declared folds to nothing,
+        // the same rule coverage claims already follow: a hand-appended line
+        // cannot mint a criterion.
+        const state = byId.get(fact.entity)?.criterionStates.find((item) => item.text === fact.criterion);
+        if (state !== undefined)
+        {
+            settleCriterion(state, fact);
+        }
+    }
+}
+
+// One fact on one criterion, applied where the verbs could have reached it.
+// The fold refuses no history: a line the verb matrix would have refused — a
+// block on a covered criterion, an unblock on one that waits on nothing — is
+// dropped rather than applied, exactly as `nextExecution` drops one.
+function settleCriterion(state: CriterionState, fact: CriterionFact): void
+{
+    if (fact.claim !== undefined)
+    {
+        state.covered = fact.claim;
+        state.blocked = undefined;
+        return;
+    }
+    if (fact.blocked !== undefined)
+    {
+        state.blocked = state.covered === undefined && state.blocked === undefined ? fact.blocked : state.blocked;
+        return;
+    }
+    state.blocked = undefined;
+}
+
+// One fact about one criterion: a claim that covered it, a block it waits on,
+// or neither — the release of a block.
+interface CriterionFact
+{
+    event: string;
+    ts: string;
+    entity: string;
+    criterion: string;
+    claim?: CoverageClaim;
+    blocked?: { on: string; why?: string; ts: string };
+}
+
+function criterionFacts(fold: EntityFold): CriterionFact[]
+{
+    return fold.criteria
+        .filter((item) => item.type !== CRITERION_DECLARED && !fold.annulled.has(item.event))
+        .map((item) => ({
+            ...item,
+            // An `--on` a hand-append left off still names a wait; the verb's
+            // own enum is what keeps a recorded one to the three words.
+            ...(item.type === CRITERION_BLOCKED
+                ? { blocked: { on: item.on ?? "external", why: item.why, ts: item.ts } }
+                : {})
+        }));
+}
+
+function coverageFacts(fold: EntityFold): CriterionFact[]
+{
+    return fold.coverage.filter((item) => !fold.annulled.has(item.event))
+        .map((item) => ({ ...item, criterion: item.claim.criterion, claim: item.claim }));
+}
+
+// What a record's declared criteria have come to. Composed once, so `work
+// show`, `self work`, `self context` and #406's milestone row cannot disagree
+// about the same unit. Undefined where nothing was declared: a record that
+// declares no criteria says nothing about them anywhere.
+interface CriteriaProgress
+{
+    covered: number;
+    total: number;
+    // Each blocked criterion as `c3 blocked on decision`, in cN order — what
+    // the listings name, so a reader deciding what to pick up is owed the
+    // `--on` the block was recorded with.
+    waiting: string[];
+}
+
+export function criteriaProgress(states: CriterionState[]): CriteriaProgress | undefined
+{
+    if (states.length === 0)
+    {
+        return undefined;
+    }
+    return {
+        covered: states.filter((item) => item.covered !== undefined).length,
+        total: states.length,
+        waiting: states.filter((item) => item.blocked !== undefined)
+            .map((item) => `${item.id} blocked on ${item.blocked?.on}`)
+    };
+}
+
+// The sentence a listing row carries: how far the unit is, and what is
+// standing still. One spelling for `self work` and `self context`, so the two
+// surfaces cannot describe the same unit differently.
+export function criteriaNote(progress: CriteriaProgress): string
+{
+    return [`${progress.covered} of ${progress.total} criteria covered`, ...progress.waiting].join(" · ");
 }
 
 // The criteria no claim covers yet — what still gates a done or a reach.
@@ -1420,7 +1677,7 @@ function decisionEntity(decision: DecisionSource): EntityState
         text: decision.text,
         labels: ["decision"],
         links: decision.supersedes.map((target) => ({ type: "supersedes" as const, target })),
-        criteria: [],
+        ...declaredCriteria([]),
         covered: [],
         why: decision.why,
         scope: "project",
@@ -1444,7 +1701,7 @@ function conventionEntity(convention: ConventionSource): EntityState
         text: convention.text,
         labels: ["convention"],
         links: convention.supersedes.map((target) => ({ type: "supersedes" as const, target })),
-        criteria: [],
+        ...declaredCriteria([]),
         covered: [],
         scope: "project",
         priority: 30,
@@ -1471,7 +1728,7 @@ function objectiveEntity(objective: ObjectiveState): EntityState
         labels: ["objective"],
         links: objective.supersedes.map((target) => ({ type: "supersedes" as const, target })),
         target: objective.target,
-        criteria: [],
+        ...declaredCriteria([]),
         covered: [],
         scope: "project",
         priority: 10,
@@ -1509,7 +1766,7 @@ function milestoneEntity(milestone: MilestoneState): EntityState
         target: milestone.target,
         // The live exit criteria are what still gates a reach; dropped ones
         // are revision history the milestone's own page keeps.
-        criteria: milestone.exit.filter((item) => item.dropped !== true).map((item) => item.text),
+        ...declaredCriteria(milestone.exit.filter((item) => item.dropped !== true).map((item) => item.text)),
         covered: [],
         scope: "project",
         priority: 20,
@@ -1683,4 +1940,22 @@ function str(value: unknown): string | undefined
 function stringList(value: unknown): string[]
 {
     return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
+
+// The verification texts a creation payload declared, keyed by the position
+// they were declared at (#408). Sparse and keyed rather than a parallel array,
+// because most criteria carry no verification text and an array of holes is a
+// shape every reader has to defend against. Read defensively like everything
+// else from the log: a string, an array, or a key naming a position nothing
+// was declared at reads as absent for whatever it cannot key — the criteria
+// stand, their verification texts do not.
+function readVerify(value: unknown): Record<string, string>
+{
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+    {
+        return {};
+    }
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .flatMap(([key, text]) => /^c[1-9]\d*$/.test(key) && typeof text === "string" && text !== ""
+            ? [[key, text] as [string, string]] : []));
 }

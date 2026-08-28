@@ -292,3 +292,71 @@ test("D5: the nudge fits the budget, and a cut one leaves the stated elision", a
     assert.ok(!NUDGE.test(cut), `the nudge rendered past the budget:\n${cut.slice(-400)}`);
     assert.match(cut, /- … 1 health signal omitted; run `self status --project 'd5'`/);
 });
+
+/* ── #408 I: the criteria progress on the work-in-progress row ─────── */
+
+// Cells 81, 81a and 82 of `docs/maintainers/case-tables/408-work-criteria.md`.
+// A separate machine, so the rows below are the only work in progress and the
+// section can be read whole.
+const criteriaBox = machine();
+let criteriaDemo = null;
+
+async function criteriaProject()
+{
+    criteriaDemo ??= (async () => (await demoWorkspace(criteriaBox)).demo)();
+    return criteriaDemo;
+}
+
+async function unitDeclaring(outcome, criteria)
+{
+    const dir = await criteriaProject();
+    const id = workIdIn((await mustPerson(criteriaBox, dir, ["work", "add", outcome,
+        ...criteria.flatMap((text) => ["--criteria", text])])).out);
+    await must(criteriaBox, dir, ["work", "start", id]);
+    return id;
+}
+
+function workRow(context, id)
+{
+    return context.split("\n").find((line) => line.startsWith(`- ${id} `));
+}
+
+test("cell 81: the work-in-progress row carries the progress, after [toward …] and before the held note", async () =>
+{
+    const dir = await criteriaProject();
+    const id = await unitDeclaring("cell 81", ["a", "b", "c", "d", "e"]);
+    const objective = shortIdIn((await must(criteriaBox, dir, ["objective", "add", "cell 81 objective"])).out, "o");
+    await must(criteriaBox, dir, ["work", "link", id, "--objective", objective]);
+    await must(criteriaBox, dir, ["work", "cover", id, "--criterion", "c1", "--why", "landed"]);
+    await must(criteriaBox, dir, ["work", "cover", id, "--criterion", "c2", "--why", "landed"]);
+    // Another session holds it, so the held note is there to be placed after.
+    await must(criteriaBox, dir, ["work", "start", id], { SUPERSELF_SESSION: "s-other" });
+    const row = workRow((await must(criteriaBox, dir, ["context"])).out, id);
+    assert.match(row, new RegExp(`^- ${id} cell 81 \\[toward ${objective}\\] — 2 of 5 criteria covered  \\[`));
+});
+
+test("cell 81a: a blocked criterion is named on the row with its --on, in cN order", async () =>
+{
+    const dir = await criteriaProject();
+    const id = await unitDeclaring("cell 81a", ["a", "b", "c", "d", "e"]);
+    await must(criteriaBox, dir, ["work", "cover", id, "--criterion", "c1", "--why", "landed"]);
+    await must(criteriaBox, dir, ["work", "cover", id, "--criterion", "c2", "--why", "landed"]);
+    await must(criteriaBox, dir, ["work", "block", id, "--criterion", "c5", "--on", "external", "--why", "the vendor is silent"]);
+    await must(criteriaBox, dir, ["work", "block", id, "--criterion", "c3", "--on", "decision", "--why", "pricing undecided"]);
+    const row = workRow((await must(criteriaBox, dir, ["context"])).out, id);
+    assert.match(row, / — 2 of 5 criteria covered · c3 blocked on decision · c5 blocked on external/);
+});
+
+test("cell 82: a criterion's block adds no waiting row, and the unit is not counted among blocked ones", async () =>
+{
+    const dir = await criteriaProject();
+    const id = await unitDeclaring("cell 82", ["a", "b", "c"]);
+    await must(criteriaBox, dir, ["work", "block", id, "--criterion", "c3", "--on", "decision", "--why", "pricing undecided"]);
+    const context = (await must(criteriaBox, dir, ["context"])).out;
+    const waiting = context.split("## ").find((section) => section.startsWith("Waiting on you"));
+    assert.ok(waiting === undefined || !waiting.includes(id), `a criterion's block grew a waiting row:\n${waiting}`);
+    assert.ok(workRow(context, id) !== undefined, "the unit left the work-in-progress block");
+    const status = (await must(criteriaBox, dir, ["status"])).out;
+    const counts = status.split("\n").find((line) => line.startsWith("work: "));
+    assert.match(counts, /0 blocked/);
+});

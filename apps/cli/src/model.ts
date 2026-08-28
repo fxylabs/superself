@@ -1,6 +1,6 @@
 import { completionRefusal } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, awaitsReview, collectAnnulled, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn } from "./entities.js";
+import { applyEntity, awaitsReview, collectAnnulled, CriterionState, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -214,6 +214,11 @@ export interface WorkState
     // outcome was deliberately given up or moved, never achieved here.
     retiredWhy?: string;
     successor?: { work: string; project?: string };
+    // The completion conditions this unit declares, addressed c1..cN in the
+    // order they were declared, each with what covered it or what it waits on
+    // (#408). Empty on a unit that declares none, which is every unit written
+    // before this issue — and a unit that declares none is gated on none.
+    criteria: CriterionState[];
     reports: ReportEntry[];
     // The `report.added` ids a swept proposal cited as its evidence (#381),
     // read off the creation event's `refs.friction`. Empty on every unit that
@@ -1494,6 +1499,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
             : { work: entity.execution.successor, project: entity.execution.successorProject },
         claim: entity.claim,
         plan: entity.plan,
+        criteria: entity.criterionStates,
         reports: [],
         frictionEvidence: stringList(creation?.refs?.friction),
         evidence: [],

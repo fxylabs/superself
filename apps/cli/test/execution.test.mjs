@@ -383,8 +383,8 @@ test("B: uncovered criteria refuse done with the uncovered ones named", async ()
     const id = entityIdIn((await must(box, demo, ["state", "add", "gated outcome", "--criteria", "suite green", "--criteria", "docs updated"])).out);
     const result = await selfIn(box, demo, ["state", "done", id, "--report", "feels done"]);
     assert.notEqual(result.code, 0);
-    assert.match(result.out, /"suite green"/);
-    assert.match(result.out, /"docs updated"/);
+    assert.match(result.out, /c1 {2}open — suite green/);
+    assert.match(result.out, /c2 {2}open — docs updated/);
 });
 
 // #305 D6. `work.required` declared a criterion in the pre-cutover grammar and
@@ -399,10 +399,12 @@ test("B: a `work.required` line in the log does not gate a unit recorded today",
     assert.equal(done.code, 0, done.out);
 });
 
-// #305 D7. The entity criteria gate is `self state done`'s — the cell above
-// this pair is its coverage. `self work done` reaches the evidence gate alone,
-// so a work unit carrying uncovered entity criteria closes on evidence.
-test("B: uncovered entity criteria do not gate `work done`, which reaches the evidence gate alone", async () =>
+// #305 D7, reversed by #408 cell 44. The criteria gate lived on `self state
+// done` between the cutover and #408; it is now spelled once and both families
+// reach it, so a work unit carrying an uncovered criterion is refused by the
+// criterion — in the `work` family's own words — rather than closing on
+// evidence alone.
+test("B: uncovered entity criteria gate `work done`, refused in the work family's words", async () =>
 {
     const path = join(boxB.root, "ws", ".superself", "projects", "demo", "log.jsonl");
     const seed = workIdIn((await mustPerson(boxB, demoB, ["work", "add", "the shape a work entity is recorded in"])).out);
@@ -416,7 +418,11 @@ test("B: uncovered entity criteria do not gate `work done`, which reaches the ev
     await must(boxB, demoB, ["fold"]);
     assert.match((await must(boxB, demoB, ["state", "show", work])).out, /a criterion nobody covered/);
     const done = await selfIn(boxB, demoB, ["work", "done", work, "--report", "closed on a stated fact"]);
-    assert.equal(done.code, 0, done.out);
+    assert.notEqual(done.code, 0);
+    assert.match(done.out, /c1 {2}open — a criterion nobody covered/);
+    assert.match(done.out, /self work cover/);
+    await must(boxB, demoB, ["work", "cover", work, "--criterion", "c1", "--why", "the criterion was judged"]);
+    assert.equal((await selfIn(boxB, demoB, ["work", "done", work, "--report", "closed on a stated fact"])).code, 0);
 });
 
 test("C: blocked on a decision renders as a full waiting row", async () =>

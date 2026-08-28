@@ -6,9 +6,14 @@
 
 import { required, requireText, Requirement } from "./args.js";
 import { resolveArtifactRef } from "./artifact.js";
+import { criteriaRefusal } from "./completion.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import {
+    CRITERION_BLOCKED,
+    CRITERION_DECLARED,
+    CRITERION_UNBLOCKED,
+    CriterionState,
     DEMOTION_TARGET,
     entityCharacters,
     EntityLink,
@@ -29,8 +34,7 @@ import {
     rendersIn,
     requireSupersedeKind,
     scopeTarget,
-    tierCharacters,
-    uncoveredCriteria
+    tierCharacters
 } from "./entities.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { writtenBy } from "./human.js";
@@ -38,6 +42,7 @@ import { entityId, wrongKindHint } from "./ids.js";
 import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { buildModel, ProjectModel, projectsHolding, workspaceModels } from "./model.js";
+import { RUNBOOK_LABEL, RUNBOOK_RUN_LABEL } from "./runbooks.js";
 import {
     ProjectContext,
     ProjectScope,
@@ -102,7 +107,20 @@ const PLACE_OPTIONS = {
     demote: { type: "string", multiple: true }
 } as const;
 
-const COVER_OPTIONS = {
+// The completion conditions an add verb declares (#408), repeatable and
+// ordered c1..cN. `--verify` names the criterion it verifies, because one call
+// declares several and nothing else in the flag says which. Declared here
+// rather than beside either add verb, so `work add` and `work propose` cannot
+// come to accept different halves of one grammar.
+export const DECLARE_OPTIONS = {
+    criteria: { type: "string", multiple: true },
+    verify: { type: "string", multiple: true }
+} as const;
+
+// Exported so `work cover` parses with exactly the raw verb's option set: the
+// alias is the same handler, and a second declaration would let the two
+// spellings drift into two verbs (#408).
+export const COVER_OPTIONS = {
     criterion: { type: "string" },
     why: { type: "string" },
     evidence: { type: "string", multiple: true },
@@ -130,7 +148,7 @@ const RETIRE_WHY: Requirement = { flags: ["why"], hint: "why the outcome was giv
 
 const DONE_REPORT: Requirement = { flags: ["report"], hint: "what verifiably happened — done must carry evidence" };
 
-const COVERAGE_REQUIRED: Requirement[] = [
+export const COVERAGE_REQUIRED: Requirement[] = [
     { flags: ["criterion"], value: "<c>", hint: "the declared criterion this claim covers" },
     { flags: ["why"], hint: "how the evidence covers it" }
 ];
@@ -267,7 +285,7 @@ export const STATE_COMMAND: Command = {
             leaf("place", PLACE_OPTIONS, 1, statePlace),
             leaf("confirm", {}, 1, stateConfirm),
             retiring(leaf("retract", WHY_OPTION, 1, stateRetract, { requires: [WHY_NO_LONGER_HOLDS] })),
-            leaf("cover", COVER_OPTIONS, 1, stateCover, { requires: COVERAGE_REQUIRED }),
+            leaf("cover", COVER_OPTIONS, 1, coverRecord, { requires: COVERAGE_REQUIRED }),
             leaf("start", {}, 1, stateStart),
             leaf("block", BLOCK_OPTIONS, 1, stateBlock),
             leaf("unblock", {}, 1, stateUnblock),
@@ -441,7 +459,11 @@ function addPayload(
         text,
         labels,
         links: supersedeLinks(model, values.link ?? [], values.supersedes ?? []),
-        criteria: (values.criteria ?? []).map((criterion) => validText(criterion, "--criteria", "one criterion's text")),
+        // Through the shared declaration grammar since #408, so the raw path
+        // cannot mint a record whose criteria nothing can address: two with one
+        // text fold to one criterion, and a record declaring both would be
+        // gated forever on a `cN` that resolves to the other.
+        ...declarationOf(values, "state add"),
         exposure,
         scope
     };
@@ -1149,23 +1171,30 @@ function confirmEvent(project: string, member: ConfirmMember): SelfEvent
 // which is what makes `milestone met` sugar over this rather than a second
 // grammar. The claim binds to the entity id: a superseding revision starts
 // uncovered, and re-covering the successor is what `milestone recheck` does.
-function stateCover({ values, positionals }: CommandInput<typeof COVER_OPTIONS>): void
+//
+// `self work cover` is an alias in the strict sense (#408): the same handler,
+// the same writer, a byte-identical `entity.covered`. Only the usage line and
+// the verb name in the refusals differ, so a session working a unit never has
+// to leave the `work` family to say what it finished.
+export function coverRecord({ values, positionals }: CommandInput<typeof COVER_OPTIONS>, verb = "state cover", usage = COVER_USAGE): void
 {
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
-    const entity = requireCoverable(model, positionals[0]);
+    const entity = requireCoverable(model, positionals[0], usage);
     const criterion = resolveCriterion(entity, required(values.criterion));
     const why = required(values.why);
     if (entity.covered.some((claim) => claim.criterion === criterion))
     {
         throw new CliError(`${entity.id} "${criterion}" is already covered — a criterion is judged once per record; a superseding revision starts uncovered`);
     }
-    recordCoverage(ctx, model, entity.id, criterion, why, values, "state cover");
+    recordCoverage(ctx, model, entity.id, criterion, why, values, verb);
 }
 
-// The one writer of `entity.covered` — `state cover`, `milestone met` and
-// `milestone recheck` all land here, so the claim's shape cannot drift
-// between the raw verb and its sugar (#207 C5).
+// The one writer of `entity.covered` — `state cover`, `work cover`, `milestone
+// met`, `milestone recheck` and `runbook advance` all land here, so the claim's
+// shape cannot drift between the raw verb and its sugar (#207 C5). Since #408
+// the claim also says who wrote it, the way every other verb has since #400;
+// nothing else about the event moved, so every caller's claim is what it was.
 export function recordCoverage(
     ctx: ProjectContext,
     model: ProjectModel,
@@ -1186,13 +1215,13 @@ export function recordCoverage(
     {
         refs.commits = commits;
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.covered", { entity, criterion, why }, refs, true),
+    recordEvent(ctx, makeEvent(ctx.project, "entity.covered", { entity, criterion, why, by: writtenBy() }, refs, true),
         `${entity} ${criterion} ${why}`);
 }
 
-function requireCoverable(model: ProjectModel, value: string | undefined): EntityState
+function requireCoverable(model: ProjectModel, value: string | undefined, usage: string): EntityState
 {
-    const entity = requireEntity(model, value, COVER_USAGE);
+    const entity = requireEntity(model, value, usage);
     if (entity.criteria.length === 0)
     {
         throw new CliError(`${entity.id} declares no criteria — a coverage claim answers a declared criterion; declare them with --criteria at add time`);
@@ -1212,7 +1241,7 @@ function requireCoverable(model: ProjectModel, value: string | undefined): Entit
 
 // A criterion is named by its text, or by cN — its 1-based place in the
 // declared list, the spelling the milestone surface has always used.
-function resolveCriterion(entity: EntityState, wanted: string): string
+export function resolveCriterion(entity: EntityState, wanted: string): string
 {
     if (entity.criteria.includes(wanted))
     {
@@ -1225,6 +1254,139 @@ function resolveCriterion(entity: EntityState, wanted: string): string
     }
     throw new CliError(`"${wanted}" is not a declared criterion of ${entity.id} — it declares: `
         + entity.criteria.map((criterion, at) => `c${at + 1} "${criterion}"`).join("; "));
+}
+
+/* ── the criterion axis (#408) ─────────────────────────────────────── */
+
+// What an add verb declares, validated before a byte is written. Repeatable
+// and ordered: the criteria are addressed c1..cN in the order the flags were
+// given, and `--verify` names the one it verifies, because one call declares
+// several and nothing else in the flag says which.
+export interface Declaration
+{
+    criteria: string[];
+    // Sparse and keyed by position rather than a parallel array: most criteria
+    // carry no verification text, and an array of holes is a shape every
+    // reader has to defend against.
+    verify?: Record<string, string>;
+}
+
+export function declarationOf(values: { criteria?: string[]; verify?: string[] }, verb: string): Declaration
+{
+    const criteria = (values.criteria ?? []).map((criterion) => validText(criterion, "--criteria", "one criterion's text"));
+    const duplicate = criteria.find((text, at) => criteria.indexOf(text) !== at);
+    if (duplicate !== undefined)
+    {
+        throw new CliError(`${verb} --criteria declares "${duplicate}" twice — a criterion is judged once, and two `
+            + "with one text could never be told apart");
+    }
+    return { criteria, ...verifyMap(values.verify ?? [], criteria.length, verb) };
+}
+
+// `--verify "cN <how it is checked>"`, read into the sparse map the creation
+// event carries. Every refusal names the range this call actually declares, so
+// a caller who miscounted is told the number rather than left to guess it.
+function verifyMap(stated: string[], declared: number, verb: string): { verify?: Record<string, string> }
+{
+    const verify: Record<string, string> = {};
+    for (const text of stated)
+    {
+        const [at, how] = verifiedCriterion(text, declared, verb);
+        if (verify[at] !== undefined)
+        {
+            throw new CliError(`${verb} --verify names ${at} twice — one criterion states one verification method`);
+        }
+        verify[at] = how;
+    }
+    return Object.keys(verify).length === 0 ? {} : { verify };
+}
+
+function verifiedCriterion(stated: string, declared: number, verb: string): [string, string]
+{
+    if (declared === 0)
+    {
+        throw new CliError(`${verb} --verify states how one declared criterion is checked — pass --criteria "<text>" too`);
+    }
+    const named = /^(c[1-9]\d*)\s+(\S.*)$/.exec(stated.trim());
+    if (named === null)
+    {
+        throw new CliError(`${verb} --verify must begin with the criterion it verifies — "c1 <how it is checked>"; `
+            + `this call declares ${declaredRange(declared)}`);
+    }
+    if (Number(named[1].slice(1)) > declared)
+    {
+        throw new CliError(`${verb} --verify names ${named[1]}, and this call declares ${declaredRange(declared)}`);
+    }
+    return [named[1], named[2]];
+}
+
+function declaredRange(declared: number): string
+{
+    return declared === 1 ? "c1" : `c1–c${declared}`;
+}
+
+// The two record kinds no criterion may be declared on, refused by the writer
+// rather than by one verb's id check: a runbook run's stages *are* its
+// criteria, copied from the edition it follows, so appending one would drift
+// `stageDigest` from the procedure it claims to be running. The guard lives
+// here so a later `state criteria add` cannot slip past it.
+const NO_DECLARING: Record<string, (id: string) => string> = {
+    [RUNBOOK_RUN_LABEL]: (id) => `${id} is a runbook run — its stages come from the procedure it follows, and a `
+        + `stage is added by revising the runbook (\`self runbook revise <id> --stage "<text>" --why w\`)`,
+    [RUNBOOK_LABEL]: (id) => `${id} is a runbook — its stages are the procedure itself, and one is added by `
+        + `\`self runbook revise ${id} --stage "<text>" --why w\`, which mints the next edition`
+};
+
+// The one writer of `entity.criterion-declared`. Appends a completion
+// condition to a record that already holds: nothing removes a criterion, so
+// declaring one is the only way the list ever changes and `self undo` is the
+// only way back.
+export function recordDeclaration(ctx: ProjectContext, owner: string, entity: EntityState, text: string,
+    verify: string | undefined): void
+{
+    const refused = entity.labels.map((label) => NO_DECLARING[label]).find((stated) => stated !== undefined);
+    if (refused !== undefined)
+    {
+        throw new CliError(refused(entity.id));
+    }
+    const declared = entity.criterionStates.find((item) => item.text === text);
+    if (declared !== undefined)
+    {
+        throw new CliError(`${entity.id} already declares ${declared.id} "${text}" — a criterion is judged once, `
+            + "and two with one text could never be told apart");
+    }
+    const payload = { entity: entity.id, criterion: text, ...(verify === undefined ? {} : { verify }), by: writtenBy() };
+    recordEvent(ctx, makeEvent(owner, CRITERION_DECLARED, payload, undefined, true), `${entity.id} ${text}`);
+}
+
+// The one writer of the criterion block and its release. The verb is shared
+// with the unit's own block — one blocking act, one `--on` enum, the scope
+// named by a flag — and only the event type differs, because the fold's answer
+// does: a criterion's block never changes the unit's own status.
+export function recordCriterionBlock(ctx: ProjectContext, owner: string, entity: EntityState, state: CriterionState,
+    on: string, why: string | undefined): void
+{
+    if (state.covered !== undefined)
+    {
+        throw new CliError(`${entity.id} ${state.id} is already covered — a covered criterion waits on nothing`);
+    }
+    if (state.blocked !== undefined)
+    {
+        throw new CliError(`${entity.id} ${state.id} is already blocked on ${state.blocked.on}`
+            + `${state.blocked.why === undefined ? "" : ` — ${state.blocked.why}`}`);
+    }
+    const payload = { entity: entity.id, criterion: state.text, on, ...(why === undefined ? {} : { why }), by: writtenBy() };
+    recordEvent(ctx, makeEvent(owner, CRITERION_BLOCKED, payload, undefined, true), `${entity.id} ${state.text}`);
+}
+
+export function recordCriterionUnblock(ctx: ProjectContext, owner: string, entity: EntityState, state: CriterionState): void
+{
+    if (state.blocked === undefined)
+    {
+        throw new CliError(`${entity.id} ${state.id} is not blocked — there is nothing to release`);
+    }
+    const payload = { entity: entity.id, criterion: state.text, by: writtenBy() };
+    recordEvent(ctx, makeEvent(owner, CRITERION_UNBLOCKED, payload, undefined, true), `${entity.id} ${state.text}`);
 }
 
 // Coverage cites a work unit the log knows; the milestone sugar tightens this
@@ -1402,19 +1564,16 @@ function stateDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): 
     recordEvent(ctx, makeEvent(ctx.project, "entity.done", { entity: entity.id, report: required(values.report).trim() }), entity.text);
 }
 
-// The criteria gate, spelled once: `state done` and the preset done claims —
-// `milestone reach`, `objective close --as reached` — refuse through the same
-// check, naming the uncovered criteria and the verb that covers one.
+// The criteria gate, spelled once in `completion.ts` and reached from both
+// families: the raw path names `self state cover`, the work path names `self
+// work cover`, and neither has a second copy of the sentence to keep correct.
 function requireCriteriaCovered(entity: EntityState): void
 {
-    const open = uncoveredCriteria(entity);
-    if (open.length === 0)
+    const refusal = criteriaRefusal(entity.id, entity.criterionStates, "state");
+    if (refusal !== null)
     {
-        return;
+        throw new CliError(refusal);
     }
-    throw new CliError(`${entity.id} declared criteria its done claim is gated on, and these are uncovered — `
-        + open.map((criterion) => `"${criterion}"`).join("; ")
-        + ` — cover each with \`self state cover ${entity.id} --criterion "<c>" --why "<how>"\`, or retire the entity if the outcome was given up`);
 }
 
 function stateExecRetire({ values, positionals }: CommandInput<typeof RETIRE_OPTIONS>): void
@@ -1520,6 +1679,21 @@ function stateLine(entity: EntityState): string
     return `${entity.id}  ${labels}  ${place}  ${truncate(entity.text, 70)}${mark}`;
 }
 
+// One declared criterion and what is known about it: its `cN` address and
+// text, how it is verified, and what it waits on. The shipped `covered:` line
+// below states the claims and is unchanged — every judgment stays on record,
+// in landing order, while this says where the criterion stands now.
+function criterionLines(criterion: CriterionState): string[]
+{
+    const blocked = criterion.blocked;
+    return [
+        `criterion: ${criterion.id} ${criterion.text}`,
+        ...(criterion.verify === undefined ? [] : [`  verify: ${criterion.verify}`]),
+        ...(blocked === undefined ? []
+            : [`  blocked: on ${blocked.on}${blocked.why === undefined ? "" : ` — ${blocked.why}`}`])
+    ];
+}
+
 function renderEntity(found: Placed): string
 {
     const entity = found.entity;
@@ -1528,7 +1702,7 @@ function renderEntity(found: Placed): string
     optional(lines, "why", entity.why);
     optional(lines, "target", entity.target);
     optional(lines, "artifact", entity.artifact);
-    entity.criteria.forEach((criterion) => lines.push(`criterion: ${criterion}`));
+    entity.criterionStates.forEach((criterion) => lines.push(...criterionLines(criterion)));
     entity.covered.forEach((claim) =>
         lines.push(`covered: ${claim.criterion} — ${claim.why} (${claim.actor} ${claim.ts.slice(0, 10)}${claim.work === undefined ? "" : `, ${claim.work}`})`));
     entity.links.forEach((link) => lines.push(`link: ${link.type} ${link.target}`));

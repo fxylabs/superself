@@ -5,6 +5,8 @@ import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js"
 import { validDate } from "./dates.js";
 import {
     awaitsReview,
+    criteriaNote,
+    criteriaProgress,
     EntityState,
     entityCharacters,
     Exposure,
@@ -14,8 +16,7 @@ import {
     requireSupersedeKind,
     rendersIn,
     scopeTarget,
-    supersedeSpelling,
-    uncoveredCriteria
+    supersedeSpelling
 } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { WrittenBy, writtenBy } from "./human.js";
@@ -46,7 +47,7 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
-import { admittingDemotions, confirmEntityUnit, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
+import { admittingDemotions, confirmEntityUnit, Declaration, declarationOf, DECLARE_OPTIONS, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
 import { dim, errYellow, firstLine, markdownHeadings, plural, styled } from "./style.js";
 import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
 
@@ -740,16 +741,16 @@ function milestoneProgressLines(model: ProjectModel, milestone: MilestoneState):
     return milestone.works.flatMap((id) =>
     {
         const work = byId.get(id);
-        return work === undefined ? [] : unitProgressLines(model, work);
+        return work === undefined ? [] : unitProgressLines(work);
     });
 }
 
 // One unit as the milestone page states it: where it stands, how much of what
 // it declared is covered, who holds it, and the opening line of its newest
 // report under all three.
-function unitProgressLines(model: ProjectModel, work: WorkState): string[]
+function unitProgressLines(work: WorkState): string[]
 {
-    const marks = [unitStanding(work), ...criteriaNote(model, work), ...holderNote(work)];
+    const marks = [unitStanding(work), ...criteriaMark(work), ...holderNote(work)];
     return [`- **${work.id}** ${work.outcome} — ${marks.join(", ")}`, ...latestReportLines(work)];
 }
 
@@ -766,18 +767,15 @@ function unitStanding(work: WorkState): string
     return `blocked on ${work.blockedOn}${work.blockedWhy === undefined ? "" : `: ${work.blockedWhy}`}`;
 }
 
-// What the unit declared for itself, judged by the same function `self state
-// done` is refused by. A unit that declared nothing says nothing: the count
-// would read as progress toward a bar it never set.
-function criteriaNote(model: ProjectModel, work: WorkState): string[]
+// What the unit declared for itself, in the sentence `self work`, `self
+// context` and `self work show` print for the same unit (#408 cell 85) — each
+// blocked criterion named with the `--on` its block was recorded with. A unit
+// that declared nothing says nothing: the count would read as progress toward
+// a bar it never set.
+function criteriaMark(work: WorkState): string[]
 {
-    const entity = model.entities.find((item) => item.id === work.id);
-    if (entity === undefined || entity.criteria.length === 0)
-    {
-        return [];
-    }
-    const covered = entity.criteria.length - uncoveredCriteria(entity).length;
-    return [`${covered} of ${entity.criteria.length} criteria covered`];
+    const progress = criteriaProgress(work.criteria);
+    return progress === undefined ? [] : [criteriaNote(progress)];
 }
 
 function holderNote(work: WorkState): string[]
@@ -1058,7 +1056,8 @@ const PROPOSAL_OPTIONS = {
     capacity: { type: "string" },
     "evidence-plan": { type: "string" },
     confidence: { type: "string" },
-    expires: { type: "string" }
+    expires: { type: "string" },
+    ...DECLARE_OPTIONS
 } as const;
 
 // One statement of what a *gap* proposal has to say for itself. It is applied
@@ -1083,7 +1082,11 @@ const GAP_PROPOSAL_REQUIRED: Requirement[] = [
     }
 ];
 
-const REVISE_OPTIONS = { why: { type: "string" } } as const;
+// `--criteria` is declared here only to be refused by name (#408 cell 53). A
+// revision restates the plan text and says nothing about the list, so a caller
+// who reached for it here is sent to the verb that appends one rather than
+// having the flag dropped without a word.
+const REVISE_OPTIONS = { why: { type: "string" }, criteria: { type: "string", multiple: true } } as const;
 
 const WHY_PLAN_CHANGED: Requirement = { flags: ["why"], hint: "why the plan changed" };
 
@@ -1112,7 +1115,7 @@ export const WORK_GOAL_LEAVES: CommandLeaf[] = [
     // Deliberately not `retiring`: a revision destroys nothing — one id, no
     // successor, no supersession — which is the opposite of what `objective
     // revise` and `milestone revise` do, and the help says so.
-    leaf("revise", REVISE_OPTIONS, 2, cmdWorkRevise, { requires: [WHY_PLAN_CHANGED] })
+    leaf("revise", REVISE_OPTIONS, 2, cmdWorkRevise, { requires: [WHY_PLAN_CHANGED], undocumented: ["criteria"] })
 ];
 
 // Stating what a unit contributes to is a grouping edge in the shared
@@ -1241,13 +1244,13 @@ function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTION
     requireNovel(model, outcome, brief);
     const supersedes = proposedSupersession(ctx, model, values);
     const id = workId();
-    const payload = proposedPayload(ctx, id, outcome, brief, supersedes);
+    const payload = proposedPayload(ctx, id, outcome, brief, supersedes, declarationOf(values, "work propose"));
     recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip({ ...payload, by: writtenBy() })), `${outcome}`);
     return [{ kind: "receipt", text: proposalReceipt(id, supersedes) }];
 }
 
-function proposedPayload(ctx: ProjectContext, id: string, outcome: string,
-    brief: Record<string, unknown>, supersedes: SupersedePlan | undefined): Record<string, unknown>
+function proposedPayload(ctx: ProjectContext, id: string, outcome: string, brief: Record<string, unknown>,
+    supersedes: SupersedePlan | undefined, declared: Declaration): Record<string, unknown>
 {
     const row = presetRow(ctx.storeDir, "work");
     const { outcome: text, ...rest } = brief;
@@ -1257,7 +1260,10 @@ function proposedPayload(ctx: ProjectContext, id: string, outcome: string,
         text: outcome,
         labels: [row.label],
         links: [],
-        criteria: [],
+        // What the plan declares, in the order it was declared. The hard-coded
+        // empty list this carried until #408 is what a call declaring nothing
+        // still writes, so a proposal from before this issue is unchanged.
+        ...declared,
         exposure: row.exposure,
         scope: "project",
         priority: row.priority,
@@ -1578,6 +1584,13 @@ function cmdWorkRevise({ values, positionals }: CommandInput<typeof REVISE_OPTIO
     const wanted = requireText(positionals[0], REVISE_USAGE);
     const text = requireText(positionals[1], REVISE_USAGE);
     const { entity, owner } = requireRevisable(ctx, wanted);
+    // Before the no-op check: the flag is refused whatever the text says,
+    // because a revision restates the plan and says nothing about the list.
+    if (values.criteria !== undefined)
+    {
+        throw new CliError("work revise restates the plan text — declare a criterion with "
+            + `\`self work criteria add ${entity.id} "<text>"\`, which appends it to the ones already declared`);
+    }
     if (entity.text === text)
     {
         throw new CliError(`${entity.id} already states this plan — a revision restates it, and this changes nothing`);

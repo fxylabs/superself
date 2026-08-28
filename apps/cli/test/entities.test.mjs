@@ -170,8 +170,8 @@ test("a legacy milestone folds to an index entity with criteria and its objectiv
     const shown = (await must(box, demo, ["state", "show", "m-lega1"])).out;
     assert.ok(shown.includes("labels: milestone"));
     assert.ok(shown.includes("placement: project · index · priority 20"));
-    assert.ok(shown.includes("criterion: all tests pass"));
-    assert.ok(shown.includes("criterion: docs updated"));
+    assert.ok(shown.includes("criterion: c1 all tests pass"));
+    assert.ok(shown.includes("criterion: c2 docs updated"));
     assert.ok(shown.includes("link: member-of o-lega4"));
     await appendLegacy([
         { id: "01hz0000000000000000000m02", ts: "2025-01-02T00:09:00.000Z", type: "milestone.created", project: "demo", payload: { objective: "o-lega4", milestone: "m-lega2", outcome: "suite green on ci", exit: [{ id: "c1", text: "ci green" }], supersedes: "m-lega1" }, refs: {}, origin: {} }
@@ -264,4 +264,121 @@ test("an acceptance naming a revision event confirms the record it belongs to", 
     const again = (await must(box, demo, ["work", "show", id])).out;
     assert.ok(again.includes("- Plan: v3 (current) · v2 accepted"), `the stale acceptance is not stated:\n${again}`);
     assert.ok(again.includes("- Status: review"));
+});
+
+/* ── #408 H: the criterion axis folds one way on every clone ───────── */
+
+// The criterion axis (#408, section H). Hand-appended, because what makes the
+// fold worth stating is exactly what no local run produces: two clones
+// declaring against one unit, the same line merged in twice, and a
+// hand-appended claim on a criterion nobody declared.
+const CRITERION_UNIT = "w-crit1";
+
+function criterionLine(id, ts, type, payload)
+{
+    return { id, ts, type, project: "demo", refs: {}, origin: { actor: "agent", confirmed: true },
+        payload: { entity: CRITERION_UNIT, ...payload } };
+}
+
+// Seeded on first use rather than at module load: the driver runs one command
+// at a time, and a top-level await here would overlap the first cell.
+let seeded = null;
+
+async function seedMergedUnit()
+{
+    seeded ??= await appendEntity([
+        { id: "01hz00000000000000000cr00", ts: "2026-01-01T00:00:00.000Z", type: "entity.confirmed", project: "demo", refs: {},
+            origin: { actor: "agent", confirmed: true },
+            payload: { entity: CRITERION_UNIT, text: "the merged unit", labels: ["work"], links: [],
+                criteria: ["c one", "c two", "c three"], verify: { c2: "the note has the line" }, exposure: "search", scope: "project" } }
+    ]);
+    return seeded;
+}
+
+function criteriaOf(shown)
+{
+    return shown.split("\n").filter((line) => line.startsWith("criterion: ")).map((line) => line.slice("criterion: ".length));
+}
+
+test("cell 69: two clones' declarations settle into one order on both, by (ts, event id)", async () =>
+{
+    await seedMergedUnit();
+    // Appended in the reverse of the order they must fold in, so log order
+    // cannot be what produces the answer.
+    await appendEntity([
+        criterionLine("01hz00000000000000000cr05", "2026-01-03T00:00:00.000Z", "entity.criterion-declared", { criterion: "c five" }),
+        criterionLine("01hz00000000000000000cr04", "2026-01-02T00:00:00.000Z", "entity.criterion-declared", { criterion: "c four" })
+    ]);
+    assert.deepEqual(criteriaOf((await must(box, demo, ["state", "show", CRITERION_UNIT])).out),
+        ["c1 c one", "c2 c two", "c3 c three", "c4 c four", "c5 c five"]);
+});
+
+test("cell 70: the same declaration merged in twice declares one criterion", async () =>
+{
+    await seedMergedUnit();
+    await appendEntity([
+        criterionLine("01hz00000000000000000cr04", "2026-01-02T00:00:00.000Z", "entity.criterion-declared", { criterion: "c four" })
+    ]);
+    const declared = criteriaOf((await must(box, demo, ["state", "show", CRITERION_UNIT])).out);
+    assert.deepEqual(declared.filter((line) => line.endsWith("c four")), ["c4 c four"]);
+});
+
+test("cell 71: a block naming a criterion the unit never declared folds to nothing", async () =>
+{
+    await seedMergedUnit();
+    await appendEntity([
+        criterionLine("01hz00000000000000000cr06", "2026-01-04T00:00:00.000Z", "entity.criterion-blocked",
+            { criterion: "a criterion nobody declared", on: "external", why: "invented" })
+    ]);
+    const shown = (await must(box, demo, ["state", "show", CRITERION_UNIT])).out;
+    assert.doesNotMatch(shown, /a criterion nobody declared/);
+    assert.doesNotMatch(shown, /blocked:/);
+});
+
+test("cell 72: a declaration with an empty or non-string criterion is ignored", async () =>
+{
+    await seedMergedUnit();
+    const before = criteriaOf((await must(box, demo, ["state", "show", CRITERION_UNIT])).out);
+    await appendEntity([
+        criterionLine("01hz00000000000000000cr07", "2026-01-05T00:00:00.000Z", "entity.criterion-declared", { criterion: "" }),
+        criterionLine("01hz00000000000000000cr08", "2026-01-06T00:00:00.000Z", "entity.criterion-declared", { criterion: { text: "shaped wrong" } }),
+        criterionLine("01hz00000000000000000cr09", "2026-01-07T00:00:00.000Z", "entity.criterion-declared", {})
+    ]);
+    assert.deepEqual(criteriaOf((await must(box, demo, ["state", "show", CRITERION_UNIT])).out), before);
+});
+
+test("cell 73: a verify map it cannot key reads as absent, and the criteria stand", async () =>
+{
+    const shapes = [
+        ["w-vrfy1", "a bare string", ["one", "two"]],
+        ["w-vrfy2", ["c1 an array"], ["one", "two"]],
+        ["w-vrfy3", { c9: "names a position nothing declares" }, ["one", "two"]]
+    ];
+    for (const [id, verify, criteria] of shapes)
+    {
+        await appendEntity([
+            { id: `01hz0000000000000000${id.slice(2)}`, ts: "2026-02-01T00:00:00.000Z", type: "entity.confirmed", project: "demo",
+                refs: {}, origin: { actor: "agent", confirmed: true },
+                payload: { entity: id, text: `the ${id} unit`, labels: ["work"], links: [], criteria, verify, exposure: "search", scope: "project" } }
+        ]);
+        const shown = (await must(box, demo, ["state", "show", id])).out;
+        assert.deepEqual(criteriaOf(shown), ["c1 one", "c2 two"], `${id} lost its criteria to a verify it could not key`);
+        assert.doesNotMatch(shown, /verify:/, `${id} kept a verification text from a shape it could not key`);
+    }
+});
+
+test("cell 74: `criteria` is `criterionStates.map(item => item.text)`, asserted directly", async () =>
+{
+    await seedMergedUnit();
+    const { buildModel } = await import("../dist/model.js");
+    const model = buildModel(join(box.root, "ws", ".superself"), "demo", new Date());
+    assert.ok(model.entities.length > 0);
+    for (const entity of model.entities)
+    {
+        assert.deepEqual(entity.criteria, entity.criterionStates.map((item) => item.text),
+            `${entity.id}'s derived criteria drifted from its criterion states`);
+    }
+    const merged = model.entities.find((item) => item.id === CRITERION_UNIT);
+    assert.deepEqual(merged.criterionStates.map((item) => item.id), ["c1", "c2", "c3", "c4", "c5"]);
+    assert.equal(merged.criterionStates[1].verify, "the note has the line");
 });

@@ -1,4 +1,4 @@
-import { artifactPointer, EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
+import { artifactPointer, criteriaNote, criteriaProgress, EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
 import { commonProtocolLines } from "./connect.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
@@ -830,7 +830,12 @@ function inProgressLines(model: ProjectModel, linked: ForeignObjectiveView): str
             ...contributionsOf(model.goals, work).map((item) => item.id),
             ...work.foreignObjectives.map((link) => foreignTowardLabel(link, linked))
         ].join(", ");
-        return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${heldNote(work)}${report}${next}`;
+        // The progress reads with the unit and ahead of the disclosures: what
+        // the unit declared is part of what it is, and who is holding it is a
+        // fact about this moment (#408 cell 81).
+        const progress = criteriaProgress(work.criteria);
+        const criteria = progress === undefined ? "" : ` — ${criteriaNote(progress)}`;
+        return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${criteria}${heldNote(work)}${report}${next}`;
     });
 }
 
@@ -1400,7 +1405,17 @@ function plainWorkLine(work: WorkState, toward: string, project: string): string
     const reports = work.reports.length > 0
         ? `  — ${work.reports.length} report(s), see \`${pointerTo({ verb: "work-show", id: work.id }, project)}\`` : "";
     return `${work.id}  ${work.status}${blocked}  ${work.outcome}${toward === "" ? "" : `  [toward ${toward}]`}`
-        + `${gatedNote(work)}${heldNote(work)}${reports}`;
+        + `${criteriaSegment(work)}${gatedNote(work)}${heldNote(work)}${reports}`;
+}
+
+// How far the unit is against what it declared, as one more bracketed segment
+// beside `[toward …]` and `[gated by …]` (#408). A piped line is one line per
+// unit, so the count alone stands here; the terminal render has a note under
+// the row and names what each blocked criterion waits on.
+function criteriaSegment(work: WorkState): string
+{
+    const progress = criteriaProgress(work.criteria);
+    return progress === undefined ? "" : `  [${progress.covered} of ${progress.total} criteria covered]`;
 }
 
 // A unit that never started can still be gated, which is the whole point of

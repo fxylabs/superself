@@ -131,6 +131,23 @@ concern.
 | `artifact.registered`, `artifact.pruned` | bytes stored with no report behind them (#238), and bytes removed under a person's confirmation (#239); `registry.ts` owns the fold, beside the registry the store's other artifact readings derive from | `artifact.ts` |
 | `goal.*`, `decision.*`, `convention.*`, `objective.*`, `milestone.*`, the rest of `work.*` | the pre-cutover record kinds — read forever (#197 §8), written by no verb | nothing |
 
+The criterion axis of `entity.*` is three types of its own (#408), because the
+fold's answer is different rather than because the act is:
+
+| Type | What it records | An older fold |
+| --- | --- | --- |
+| `entity.criterion-declared` | one completion condition a record is judged on, declared after its creation | ignored by an older fold — `reconcileEntity` matches no collector, so the record reads with its birth criteria alone |
+| `entity.criterion-blocked` | what one declared criterion waits on, with its `--on` and reason | ignored by an older fold — the criterion reads open, and the record's own working state is untouched |
+| `entity.criterion-unblocked` | the release of that wait | ignored by an older fold — the criterion was already reading open |
+
+Reusing `entity.blocked` with a `criterion` field would have replaced every
+"ignored" above with a wrong answer: `entity.blocked` and `entity.unblocked`
+are in `EXECUTION_EVENTS`, so a 0.11.0 CLI would read a criterion's block as
+the *record's* block, and a criterion's unblock as clearing a record-level
+block a person had put there. An unknown `entity.*` type costs nothing by
+comparison, and the loss it does cost is one-directional: the older CLI's done
+gate is looser, never tighter.
+
 `artifact.registered` is a namespace about stored bytes rather than about a
 record, which is why it is its own and not an extension of `report.*`: a
 report is a claim about a work unit and this is not one, which is exactly the

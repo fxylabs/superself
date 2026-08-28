@@ -32,7 +32,7 @@ test("state add records an entity with placement, metadata and rationale", async
     assert.ok(shown.includes("labels: ritual, ops"));
     assert.ok(shown.includes("placement: project · full · priority 15"));
     assert.ok(shown.includes("target: 2030-03-01"));
-    assert.ok(shown.includes("criterion: retro notes exist"));
+    assert.ok(shown.includes("criterion: c1 retro notes exist"));
     assert.ok(shown.includes("why: keeps cadence"));
     assert.ok((await must(box, demo, ["state", "list"])).out.includes("weekly retro"));
 });

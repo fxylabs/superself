@@ -5,8 +5,12 @@
 // at the bottom.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildModel } from "../dist/model.js";
 import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, receiptIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
@@ -239,4 +243,134 @@ test("B14: work start/block/unblock/done record the phase 3 execution events thr
     const report = events().find((event) => event.type === "report.added" && event.refs?.work === work);
     assert.notEqual(report, undefined, "the done-time report did not land as report.added");
     assert.ok(!(await must(box, demo, ["work"])).out.includes("exercise the spine"), "a done unit still lists as open");
+});
+
+/* ── #408 K: a 0.11.0 CLI reading a store written here ─────────────── */
+
+// Section K of the #408 case table is a claim about *another* CLI's fold, so
+// it is asserted against that CLI rather than against a description of it: the
+// tree at the merge base — 0.11.0 plus #405, the last commit before this
+// issue — is checked out and built once here, and its `buildModel` is pointed
+// at a store this branch's verbs wrote.
+//
+// `resolveBase` is the structure gate's own base resolution, so a checkout
+// that cannot answer this fails loudly with the sentence that gate gives
+// rather than quietly skipping the section.
+const baseModel = await buildBaseCli();
+
+async function buildBaseCli()
+{
+    const { resolveBase } = await import("./structure.mjs");
+    const repo = fileURLToPath(new URL("../../..", import.meta.url));
+    const base = resolveBase(undefined, repo);
+    const root = mkdtempSync(join(tmpdir(), "self-0-11-"));
+    const tar = execFileSync("git", ["archive", base, "apps/cli/src", "apps/cli/tsconfig.json", "apps/cli/package.json"],
+        { cwd: repo, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+    writeFileSync(join(root, "base.tar"), tar);
+    execFileSync("tar", ["-xf", join(root, "base.tar")], { cwd: root });
+    const cli = join(root, "apps", "cli");
+    symlinkSync(fileURLToPath(new URL("../node_modules", import.meta.url)), join(cli, "node_modules"));
+    execFileSync(join(cli, "node_modules", ".bin", "tsc"), [], { cwd: cli, stdio: "inherit" });
+    return (await import(pathToFileURL(join(cli, "dist", "model.js")).href)).buildModel;
+}
+
+const storeDir = join(box.root, "ws", ".superself");
+const readHere = () => buildModel(storeDir, "demo", new Date());
+const readThere = () => baseModel(storeDir, "demo", new Date());
+
+// One unit carrying every shape section K is about: birth criteria with a
+// `verify` map, a criterion declared afterwards and covered, and a criterion
+// blocked and then released.
+const mixed = { id: null };
+
+async function mixedUnit()
+{
+    if (mixed.id === null)
+    {
+        mixed.id = workIdIn((await mustPerson(box, demo, ["work", "add", "the mixed-version unit",
+            "--criteria", "declared at birth", "--criteria", "waited on",
+            "--verify", "c1 the fixture regenerates"])).out);
+        await must(box, demo, ["work", "start", mixed.id]);
+        await must(box, demo, ["work", "criteria", "add", mixed.id, "declared afterwards"]);
+        await must(box, demo, ["work", "cover", mixed.id, "--criterion", "c3", "--why", "judged here"]);
+        await must(box, demo, ["work", "block", mixed.id, "--criterion", "c2", "--on", "external", "--why", "the vendor is silent"]);
+        await must(box, demo, ["work", "block", mixed.id, "--on", "decision", "--why", "the unit's own block"]);
+    }
+    return mixed.id;
+}
+
+test("cell 91: payload.verify on a creation event is ignored there — the criteria read, the methods do not", async () =>
+{
+    const id = await mixedUnit();
+    const there = readThere().entities.find((item) => item.id === id);
+    assert.deepEqual(there.criteria, ["declared at birth", "waited on"]);
+    assert.equal(there.verify, undefined, "the older fold grew a field for a key it does not read");
+    assert.equal(readHere().entities.find((item) => item.id === id).criterionStates[0].verify,
+        "the fixture regenerates", "this CLI lost the verification text it recorded");
+});
+
+test("cell 92: entity.criterion-declared is ignored there — k of n counts low", async () =>
+{
+    const id = await mixedUnit();
+    assert.equal(readThere().entities.find((item) => item.id === id).criteria.length, 2);
+    assert.equal(readHere().entities.find((item) => item.id === id).criteria.length, 3);
+});
+
+test("cell 93: a claim on a criterion it never read folds to nothing, so its done gate is looser", async () =>
+{
+    const id = await mixedUnit();
+    const there = readThere().entities.find((item) => item.id === id);
+    assert.deepEqual(there.covered.map((claim) => claim.criterion), [],
+        "the older fold attached a claim to a criterion it never declared");
+    const here = readHere().entities.find((item) => item.id === id);
+    const openThere = there.criteria.filter((text) => !there.covered.some((claim) => claim.criterion === text));
+    const openHere = here.criteria.filter((text) => !here.covered.some((claim) => claim.criterion === text));
+    assert.ok(openThere.every((text) => openHere.includes(text)),
+        "the older gate refuses a done this CLI would allow");
+});
+
+test("cell 94: the criterion block is ignored there, and the unit's own block is untouched", async () =>
+{
+    const id = await mixedUnit();
+    const there = readThere().entities.find((item) => item.id === id);
+    assert.equal(there.execution.status, "blocked");
+    assert.equal(there.execution.on, "decision", "a criterion's block replaced the unit's own");
+    assert.equal(there.execution.why, "the unit's own block");
+    assert.equal(readHere().works.find((item) => item.id === id).blockedOn, "decision");
+});
+
+test("cell 95: an entity.covered `work cover` wrote folds normally there", async () =>
+{
+    const unit = workIdIn((await mustPerson(box, demo, ["work", "add", "cell 95", "--criteria", "judged by the alias"])).out);
+    await must(box, demo, ["work", "cover", unit, "--criterion", "c1", "--why", "the alias wrote it"]);
+    const there = readThere().entities.find((item) => item.id === unit);
+    assert.deepEqual(there.covered.map((claim) => claim.criterion), ["judged by the alias"]);
+    assert.equal(there.covered[0].why, "the alias wrote it");
+});
+
+test("cell 96: a unit written before this issue declares what its creation payload declared, and no more", async () =>
+{
+    const id = "w-pre011";
+    appendFileSync(log, JSON.stringify({
+        id: "01hz00000000000000000k96a", ts: "2026-01-01T00:00:00.000Z", type: "entity.confirmed", project: "demo",
+        refs: {}, origin: { actor: "human", confirmed: true },
+        payload: { entity: id, text: "written by 0.11.0", labels: ["work"], links: [],
+            criteria: ["the one it declared"], exposure: "search", scope: "project" }
+    }) + "\n");
+    await must(box, demo, ["fold"]);
+    const here = readHere().entities.find((item) => item.id === id);
+    assert.deepEqual(here.criteria, ["the one it declared"]);
+    assert.deepEqual(here.criterionStates.map((item) => ({ id: item.id, text: item.text })),
+        [{ id: "c1", text: "the one it declared" }]);
+    const bare = "w-pre012";
+    appendFileSync(log, JSON.stringify({
+        id: "01hz00000000000000000k96b", ts: "2026-01-01T00:01:00.000Z", type: "entity.confirmed", project: "demo",
+        refs: {}, origin: { actor: "human", confirmed: true },
+        payload: { entity: bare, text: "declared nothing before this issue", labels: ["work"], links: [],
+            criteria: [], exposure: "search", scope: "project" }
+    }) + "\n");
+    await must(box, demo, ["fold"]);
+    await must(box, demo, ["work", "start", bare]);
+    assert.equal((await selfIn(box, demo, ["work", "done", bare, "--report", "it verifiably happened"])).code, 0,
+        "a unit that declares nothing is gated on something");
 });
