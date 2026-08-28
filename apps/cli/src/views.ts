@@ -833,8 +833,8 @@ function inProgressLines(model: ProjectModel, linked: ForeignObjectiveView): str
         // The progress reads with the unit and ahead of the disclosures: what
         // the unit declared is part of what it is, and who is holding it is a
         // fact about this moment (#408 cell 81).
-        const progress = criteriaProgress(work.criteria);
-        const criteria = progress === undefined ? "" : ` — ${criteriaNote(progress)}`;
+        const note = criteriaNote(work.criteria);
+        const criteria = note === undefined ? "" : ` — ${note}`;
         return `- ${work.id} ${work.outcome}${toward === "" ? "" : ` [toward ${toward}]`}${criteria}${heldNote(work)}${report}${next}`;
     });
 }

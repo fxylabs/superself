@@ -10,7 +10,7 @@ workspace already initialized at <root>/ws/.superself
 $ self project init --name demo --desc the render gate scenario --no-connect   (in project, exit 0)
 project "demo" registered
 
-$ self work propose stage 1 lands the render gate and its pilot --criteria the fixture regenerates clean --criteria the release note names the flag --verify c2 the note carries the line   (in project, exit 0)
+$ self work propose stage 1 lands the render gate and its pilot --criteria the fixture regenerates clean --criteria the release note names the flag --verify c2 the note carries the line --owner c2 person   (in project, exit 0)
 entity.proposed recorded [<event-id>]
   stage 1 lands the render gate and its pilot — verify; wrong? self undo <event-id>
 <w-id>
@@ -41,9 +41,9 @@ entity.started recorded [<event-id>]
 - Status: next
 - Criteria: 1 of 2 covered
   - c1 covered — the fixture regenerated clean (agent <date>)
-  - c2 open — the release note names the flag · verify: the note carries the line
+  - c2 open — the release note names the flag · verify: the note carries the line (person)
 - Not done yet: <w-id> declares 2 criteria and 1 is not covered:
-    c2  open — the release note names the flag
+    c2  open — the release note names the flag (person)
   cover each with `self work cover <w-id> --criterion c2 --why "<how>"` — a covered criterion's block ends with it — or retire the unit if the outcome was given up
 
 $ self report <w-id> the fixture was generated   (in project, exit 0)
@@ -60,7 +60,11 @@ the render gate scenario
 
 ## Work in progress
 
-- <w-id> stage 1 lands the render gate and its pilot — 1 of 2 criteria covered — latest report: the fixture was generated (full: `self work show <w-id> --project 'demo'`)
+- <w-id> stage 1 lands the render gate and its pilot — 1 of 2 criteria covered · c2 (person) — latest report: the fixture was generated (full: `self work show <w-id> --project 'demo'`)
+
+## Waiting on you
+
+- <w-id> c2 the release note names the flag — yours (cover with `self work cover <w-id> --criterion c2 --why "<how>"`)
 
 ## Health
 
@@ -75,7 +79,7 @@ $ self status   (in project, exit 0)
 demo — goal: (not set)
 work: 1 active, 0 blocked, 0 next, 0 done
 objectives: 0 open, 0 of 0 milestones reached, 0 of 0 exit criteria covered
-waiting on you: 0
+waiting on you: 1
 unshipped: nothing waiting to ship
 health: no friction on 1 of this project's 1 report in the last 30 days — self report … --friction "<what differed>"
 
@@ -89,9 +93,9 @@ $ self work show <w-id>   (in project, exit 0)
 - Status: active
 - Criteria: 1 of 2 covered
   - c1 covered — the fixture regenerated clean (agent <date>)
-  - c2 open — the release note names the flag · verify: the note carries the line
+  - c2 open — the release note names the flag · verify: the note carries the line (person)
 - Not done yet: <w-id> declares 2 criteria and 1 is not covered:
-    c2  open — the release note names the flag
+    c2  open — the release note names the flag (person)
   cover each with `self work cover <w-id> --criterion c2 --why "<how>"` — a covered criterion's block ends with it — or retire the unit if the outcome was given up
 
 ## Reports (latest first)
@@ -221,10 +225,10 @@ usage: self <command>
   work [--project <slug>] [--pretty|--plain]
                                              list open work, from any directory with --project
                                              (a terminal gets the ruled table; a pipe gets one line per unit)
-  work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"]
+  work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
                                              create a work unit; --supersedes retires the unit it replaces, naming this one its successor
                                              (the confirmed-at-once form; `work propose` is the one that asks for review first)
-                                             --criteria declares what the unit is judged on, ordered c1..cN
+                                             --criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task
   work show <id> [--history [--page n]] [--project <slug>]
                                              print full work detail: brief, reports, evidence
                                              (resolves the owning project from any directory)
@@ -233,9 +237,10 @@ usage: self <command>
                                              (if another session holds it, that is disclosed — never refused)
   work block|unblock <id> [--criterion cN]   move a work unit (block: --on decision|dependency|external [--why w])
                                              --criterion moves one declared criterion instead; the unit's own status never changes
-  work criteria add <id> "<text>" [--verify "<how it is checked>"]
+  work criteria add <id> "<text>" [--verify "<how it is checked>"] [--owner person]
                                              declare one more completion condition on a unit that already exists
                                              (appended as the next cN, never inserted; nothing removes one but `self undo`)
+                                             --owner person makes it that person's task rather than this session's
   work cover <id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]
                                              judge one declared criterion covered; the same claim `state cover` records
                                              (a criterion no longer needed is covered with a reason and no evidence)
@@ -246,11 +251,11 @@ usage: self <command>
   work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
                                              state, or withdraw, what a work unit contributes to
                                              (an objective resolves here first, then across every registered project)
-  work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"]
+  work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
                                              propose work for a person to review; the plan text alone is enough
                                              (--objective or --milestone makes it a gap proposal, which owes the full brief)
                                              --supersedes proposes a correction: the unit it names is retired when the plan is confirmed
-                                             --criteria declares what the unit is judged on, ordered c1..cN
+                                             --criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task
   work revise <id> "<revised plan>" --why w  restate an unstarted plan under the same work id; acceptance is invalidated
                                              (a plan that has started is corrected by a successor, the way `work add` records one)
   work confirm|decline <proposal-id> [--why w]
@@ -370,15 +375,15 @@ concepts: self help <topic>
 
 $ self work --help   (in project, exit 0)
 usage: self work [--project <slug>] [--pretty|--plain]
-       self work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"]
+       self work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
        self work show <id> [--history [--page n]] [--project <slug>]
        self work start <id>
        self work block|unblock <id> [--criterion cN]
-       self work criteria add <id> "<text>" [--verify "<how it is checked>"]
+       self work criteria add <id> "<text>" [--verify "<how it is checked>"] [--owner person]
        self work cover <id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]
        self work done <id> [--report "<what verifiably happened>"] [--why w]
        self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
-       self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"]
+       self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
        self work revise <id> "<revised plan>" --why w
        self work confirm|decline <proposal-id> [--why w]
        self work started <id> --pid N | exited <id> [--code N]
@@ -420,6 +425,14 @@ nothing deletes a criterion: a mistaken one is undone with `self undo`, and
 one no longer needed is covered with a reason and no evidence. Covering a
 blocked criterion is allowed and ends its block — the claim is the newer
 fact — and a blocked criterion never changes the unit's own status.
+
+a criterion can be somebody else's task: --owner "cN person" on the add, or
+--owner person on `work criteria add`, and `self context` lists it under
+Waiting on you with the command that covers it. `by` is who wrote the record;
+--owner is whose task the criterion is — a session records a criterion a
+person will do, and neither field implies the other. Ownership is stated when
+the criterion is declared and nothing re-states it: a wrong one is undone and
+declared again.
 
 a runbook is a procedure this project repeats — registered once, run per
 piece of work, with the same stages every run. A work unit's criteria are
@@ -475,6 +488,10 @@ superseded unit names its successor rather than folding it in.
                         and ordered c1..cN
   --verify "cN <how>"   how one declared criterion is checked — recorded, never
                         executed (bare on `work criteria add`, which declares one)
+  --owner "cN person"   the criterion is a person's own task rather than this
+                        session's — it waits on them in `self context`; stated
+                        at declaration and never re-stated (bare on `work
+                        criteria add`, which declares one)
   --criterion <cN>      which declared criterion a claim or a block answers
   --evidence <commit>   a commit recorded with the coverage claim
   --work <id>           the unit a coverage claim cites as its evidence
@@ -509,6 +526,18 @@ done itself states one:
 Declared criteria gate it further: each must be covered — `self state
 cover <id> --criterion "<c>" --why "<how the evidence covers it>"` —
 before the claim is admitted.
+
+A criterion can be somebody else's task rather than this session's:
+
+  self work add "<outcome>" --criteria "<text>" --owner "c1 person"
+  self work criteria add <id> "<text>" --owner person
+
+`self context` then lists it under Waiting on you with the command that
+covers it, and the unit's own status is untouched. `by` is who wrote the
+record; `--owner` is whose task the criterion is — a session records a
+criterion a person will do, and neither implies the other. Ownership is
+stated when the criterion is declared and nothing re-states it: a wrong
+one is undone and declared again.
 
 When work stops for a reason that is not completion:
 

@@ -8,8 +8,8 @@ Where each section's cells are expected to live:
 
 | Section | File |
 |---|---|
-| A–H (declaring, the waiting row, the renders, undo, the fold, who wrote it) | `apps/cli/test/person-owned-criterion.test.mjs` |
-| I (help, documentation, the contract) | `apps/cli/test/person-owned-criterion.test.mjs`, `apps/cli/test/docs.test.mjs` |
+| A–F, H, I (declaring, the waiting row, the renders, undo, the fold, who wrote it, help) | `apps/cli/test/person-owned-criterion.test.mjs` |
+| G (mixed version) | `apps/cli/test/cutover.test.mjs`, beside #408's section K |
 | the fixture the renders are pinned in | `apps/cli/test/golden.test.mjs` |
 | what #408 shipped and this must not move | `apps/cli/test/work-criteria*.test.mjs`, unchanged |
 
@@ -245,6 +245,11 @@ dropped the mark on covering would disagree with the log about what was
 declared, and the `(person)` there is what tells a reader the claim records
 somebody else's word.
 
+The mark is spelled once, as `ownerMark(criterion)` in `entities.ts`, and read
+by all three renders that carry it — the unit's page, the listing sentence and
+the done refusal (cell 41a). Three literals would be three chances to say it
+three ways.
+
 ## The two fields called who
 
 `by` and `owner` are one word apart and answer opposite questions, so both
@@ -285,6 +290,7 @@ says otherwise.
 | 8 | — | `work add "x" --criteria "a" --owner "c1 person" --verify "c1 how"` | both ride the one creation event as separate keys, each naming c1; neither refusal fires |
 | 9 | — | `work add "x" --criteria "a" --verify "the fixture regenerates"` | #408 cell A5's refusal is **byte-identical** to what it was: the shared parser did not move `--verify`'s wording |
 | 10 | R | `work propose "p" --criteria "a" --criteria "b" --owner "c1 person"` | one `entity.proposed` carrying the same map; every other field of `proposedPayload` is unchanged |
+| 10a | — | `state add "x" --criteria "a" --owner "c1 person"`, and `work revise <id> "y" --why w --owner "c1 person"` | both refused by the parser as an unknown option — the flag is on the two add verbs' option set and on no other, because the row it produces carries a `self work cover` line and that line needs a unit |
 
 ### B. Declaring later — `work criteria add --owner person`
 
@@ -309,8 +315,8 @@ says otherwise.
 | 22 | U, c3 blocked and **not** person-owned | `self context` | still no waiting row, and the unit is not counted among blocked ones — #408 cell 82 holds unchanged for a criterion nobody owns |
 | 23 | U, c1 and c3 both person-owned and open | `self context` | two rows, in cN order, each naming its own criterion — one row per thing to do |
 | 24 | a plan awaiting review declaring a person-owned criterion | `self context` | **no** row: nothing is actionable before the confirm, and the review already has a row of its own |
-| 25 | U done, its person-owned criterion covered at the done | `self context` | no row; the same for a retired and for an undone unit — `isOpenWork` is the filter |
-| 26 | U with a person-owned criterion | `self work` | the unit's status is still `active`; it is not rendered as blocked and not counted among blocked units |
+| 25 | U done, and U retired | `self context` | no row for either — `isOpenWork` is the filter, and it answers for an undone unit the same way |
+| 26 | U with a person-owned criterion | `self work`, `self status` | the row still reads `active`, and the status counts still say `0 blocked` |
 | 27 | U with a person-owned criterion, read from a sibling directory | `self context --project <slug>` | the row renders under that project's context, naming that project's unit — carried by `model.waiting` exactly as every other waiting row is, and absent from a sibling project's own context |
 | 28 | same | `self status` | the row is counted once in `waiting on you: n`, and appears once in the open questions |
 
@@ -319,11 +325,11 @@ says otherwise.
 | # | State | Operation | Expected |
 |---|---|---|---|
 | 29 | U, c2 open and person-owned with a verify text | `work show <U>` | `c2 open — <text> · verify: <how> (person)` |
-| 30 | U, c1 covered and person-owned | `work show <U>` | `c1 covered — <why> (<actor> <date>) (person)` — the mark stays after covering, because it says what was declared |
+| 30 | U, c2 covered and person-owned | `work show <U>` | `c2 covered — <why> (<actor> <date>) (person)` — the mark stays after covering, because it says what was declared. `<actor>` is who wrote the claim, which is the session unless a person ran the cover: the two fields keep answering different questions on one line |
 | 31 | U, c2 blocked on external and person-owned | `work show <U>` | `c2 blocked on external — <why> (person)` |
 | 32 | U declaring criteria, none owned | `work show <U>` | byte-identical to #408 cell 75 |
 | 33 | U, 3 criteria, c2 person-owned and open, c3 blocked and unowned | `work show <U>` | the header is `- Criteria: 0 of 3 covered (1 blocked)` — ownership never changes the blocked count |
-| 34 | cell 33's unit | `self work` at a terminal | the note reads `0 of 3 criteria covered · c3 blocked on decision · c2 (person)`, in cN order |
+| 34 | cell 33's unit | `self work` at a terminal | the sentence is `0 of 3 criteria covered · c2 (person) · c3 blocked on decision`, in cN order, and the note under the row is that sentence through `noteLine`'s own fit |
 | 35 | U, c3 blocked **and** person-owned | `self work` at a terminal | one entry, not two: `… · c3 blocked on decision (person)` |
 | 36 | cell 33's unit | `self work` piped | the bracketed segment is the count alone — `[0 of 3 criteria covered]`, unchanged from #408 cell 78 |
 | 37 | cell 33's unit | `self context` Work-in-progress row | the same sentence as cell 34, in the ` — …` position #408 cell 81 put it |
@@ -331,6 +337,8 @@ says otherwise.
 | 39 | any unit | `criteriaProgress()` | unchanged: `covered`, `total` and `waiting` mean exactly what they meant, and the k-of-n sentence carries no owner clause |
 | 40 | cell 29's unit | the synced `work/<id>.md` | carries the identical criteria block, mark included — every value in it is folded |
 | 41 | U, c2 person-owned | `self log` | the declaration's row is #408's, unchanged: the log names the unit and the criterion, and the owner is a field of the record rather than of the act |
+| 41a | U, c1 covered, c2 person-owned and open, c3 open | `work done <U>` | the refusal's rows carry the mark: `c2  open — <text> (person)` beside an unmarked `c3`. **Added by the adversarial pass:** the criteria clause is a criteria render, and a session told to cover a row is owed the fact that one of them is not its own |
+| 41b | same | `work done <U>` | the `cover each with …` line names **c1**, not c2 — the same reasoning `nextToCover` already applied to a blocked criterion: the line a reader pastes should be one nothing stands in front of. With every unowned criterion covered it falls back to the owned one rather than naming nothing |
 
 ### E. `self undo`
 
@@ -353,16 +361,30 @@ says otherwise.
 
 ### G. Mixed version — an older CLI reading a store written here
 
-| # | What the store carries | The older fold | Consequence |
+Asserted the way #408's section K is: against that CLI, built from the tree at
+a named commit, rather than against a description of it. The commit these
+cells name is `fb0a402` — #408 merged, `--owner` not yet — because it is the
+only reading that isolates ownership: a CLI without the criterion axis at all
+ignores the declaration event whole and would prove nothing about the field
+riding it.
+
+| # | What the store carries | That fold's answer | Consequence |
 |---|---|---|---|
-| 51 | `payload.owner` on a creation event | ignored by `newEntity`, which reads named keys only | the criteria read; whose task they are does not. The unit is gated on exactly the same list |
-| 52 | `owner` on an `entity.criterion-declared` | the whole event is already ignored (#408 cell 92) | nothing new is lost: the criterion does not appear there at all |
-| 53 | a store written by 0.11.0 or 0.12.0, read here | every criterion is unowned | no back-fill, no migration, no row — the answer this CLI gave before #413 |
+| 51 | `payload.owner` on a creation event | ignored by `newEntity`, which reads named keys only | the criteria read, in full; whose task they are does not |
+| 52 | `owner` on an `entity.criterion-declared` | the criterion is read (it has #408) and its ownership is not | the same one-directional loss, on the axis's own event. A CLI without the axis reads neither, which is #408 cell 92 |
+| 53 | either store, read by either CLI | every criterion is unowned there | both CLIs owe exactly the same criteria: ownership gates nothing, so no done either would allow is refused by the other |
 
 The loss is one-directional and safe in both directions, and it is the loss of
 a *render*: an older CLI's done gate is not affected by ownership at all,
 because ownership gates nothing. That is the property that let this ride the
 shipped events rather than mint a type.
+
+**The base commit is pinned, and that is a fix this issue carries.** #408's
+section K resolved the merge base, which reads correctly on the branch that
+adds a section and stops meaning anything the moment that branch lands: from
+then on the merge base *is* the CLI under test, so every "ignored there"
+becomes "read there". `main` has been red on cells 91, 92 and 93 since #408
+merged for exactly that reason. Both sections now name their commit.
 
 ### H. Who wrote it, and whose it is
 
@@ -381,9 +403,9 @@ shipped events rather than mint a type.
 | 59 | any | `self connect` / the checked-in managed blocks | the agent block carries the same one sentence; `docs.test.mjs`'s managed-block proof passes against the template |
 | 60 | any | `docs/reference/cli.md` | the work section documents `--owner`; the entity-grammar section names `owner` beside `verify` as a payload field an older fold ignores |
 | 61 | any | `contract.test.mjs` | `checkContract` passes: the flag is declared on the leaves that document it |
-| 62 | any | the golden fixture | regenerated: the scenario's unit owns c2, so the waiting row, the `(person)` marks and the note are pinned in bytes rather than described |
+| 62 | any | the golden fixture | regenerated: the scenario's unit owns c2, so the waiting row, the `(person)` marks — on the criteria bullet and in the done refusal — and the listing note are pinned in bytes rather than described |
 
-**62 cells.**
+**62 cells, plus 10a, 41a and 41b from the adversarial pass — 65.**
 
 ## Out of scope
 

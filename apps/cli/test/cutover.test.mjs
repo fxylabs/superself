@@ -249,22 +249,37 @@ test("B14: work start/block/unblock/done record the phase 3 execution events thr
 
 // Section K of the #408 case table is a claim about *another* CLI's fold, so
 // it is asserted against that CLI rather than against a description of it: the
-// tree at the merge base — 0.11.0 plus #405, the last commit before this
-// issue — is checked out and built once here, and its `buildModel` is pointed
-// at a store this branch's verbs wrote.
+// tree at the named commit is checked out and built here, and its `buildModel`
+// is pointed at a store this branch's verbs wrote.
 //
-// `resolveBase` is the structure gate's own base resolution, so a checkout
-// that cannot answer this fails loudly with the sentence that gate gives
-// rather than quietly skipping the section.
-const baseModel = await buildBaseCli();
+// **The commit is pinned, and it has to be.** This resolved the merge base
+// once, which reads correctly on the branch that adds a section and stops
+// meaning anything the moment that branch lands: from then on the merge base
+// *is* the CLI under test, so every "ignored there" becomes "read there" and
+// the section fails against its own subject. Pinning states what the cells
+// actually claim — a *named older release* — and keeps saying it after merges.
+// A section added later pins the commit before *it*, which is how the two
+// below name different trees.
+const PRE_408 = "229a5dc88f70";
 
-async function buildBaseCli()
+const PRE_413 = "fb0a402e5471";
+
+const built = new Map();
+
+async function baseCliAt(ref)
 {
-    const { resolveBase } = await import("./structure.mjs");
+    if (!built.has(ref))
+    {
+        built.set(ref, buildCliAt(ref));
+    }
+    return built.get(ref);
+}
+
+async function buildCliAt(ref)
+{
     const repo = fileURLToPath(new URL("../../..", import.meta.url));
-    const base = resolveBase(undefined, repo);
-    const root = mkdtempSync(join(tmpdir(), "self-0-11-"));
-    const tar = execFileSync("git", ["archive", base, "apps/cli/src", "apps/cli/tsconfig.json", "apps/cli/package.json"],
+    const root = mkdtempSync(join(tmpdir(), `self-base-${ref.slice(0, 7)}-`));
+    const tar = execFileSync("git", ["archive", ref, "apps/cli/src", "apps/cli/tsconfig.json", "apps/cli/package.json"],
         { cwd: repo, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
     writeFileSync(join(root, "base.tar"), tar);
     execFileSync("tar", ["-xf", join(root, "base.tar")], { cwd: root });
@@ -273,6 +288,10 @@ async function buildBaseCli()
     execFileSync(join(cli, "node_modules", ".bin", "tsc"), [], { cwd: cli, stdio: "inherit" });
     return (await import(pathToFileURL(join(cli, "dist", "model.js")).href)).buildModel;
 }
+
+// 0.11.0 plus #405, #406 and #407 — the last commit before #408, which is the
+// CLI section K's cells are about.
+const baseModel = await baseCliAt(PRE_408);
 
 const storeDir = join(box.root, "ws", ".superself");
 const readHere = () => buildModel(storeDir, "demo", new Date());
@@ -373,4 +392,69 @@ test("cell 96: a unit written before this issue declares what its creation paylo
     await must(box, demo, ["work", "start", bare]);
     assert.equal((await selfIn(box, demo, ["work", "done", bare, "--report", "it verifiably happened"])).code, 0,
         "a unit that declares nothing is gated on something");
+});
+
+/* ── #413 G: the same older CLI reading a criterion's owner ────────── */
+
+// Section G of `docs/maintainers/case-tables/413-person-owned-criterion.md`,
+// asserted the same way as section K above and against the commit before
+// *this* issue — the CLI that has the whole criterion axis and no notion of an
+// owner, which is the only reading that proves anything about `owner` alone.
+// `owner` gates nothing, so what that fold loses is a render, never a
+// judgment.
+const ownerModel = await baseCliAt(PRE_413);
+
+const readWithout = () => ownerModel(storeDir, "demo", new Date());
+
+const owned = { id: null };
+
+async function ownedUnit()
+{
+    if (owned.id === null)
+    {
+        owned.id = workIdIn((await mustPerson(box, demo, ["work", "add", "the person-owned unit",
+            "--criteria", "declared at birth", "--criteria", "the user signs the agreement",
+            "--owner", "c2 person"])).out);
+        await must(box, demo, ["work", "start", owned.id]);
+        await must(box, demo, ["work", "criteria", "add", owned.id, "the user raises the quota", "--owner", "person"]);
+    }
+    return owned.id;
+}
+
+test("cell 51: payload.owner on a creation event is invisible to the older fold", async () =>
+{
+    const id = await ownedUnit();
+    const there = readWithout().entities.find((item) => item.id === id);
+    assert.deepEqual(there.criteria,
+        ["declared at birth", "the user signs the agreement", "the user raises the quota"]);
+    assert.deepEqual(there.criterionStates.map((item) => item.owner), [undefined, undefined, undefined],
+        "the older fold read an owner it has no field for");
+    assert.equal(readHere().entities.find((item) => item.id === id).criterionStates[1].owner, "person",
+        "this CLI lost the ownership it recorded");
+});
+
+test("cell 52: owner on a declaration is read by that fold, and its ownership is not", async () =>
+{
+    const id = await ownedUnit();
+    const there = readWithout().entities.find((item) => item.id === id);
+    // That CLI has #408, so it reads the criterion the declaration added — and
+    // nothing of the owner riding the same event.
+    assert.equal(there.criteria.length, 3);
+    assert.deepEqual(there.criterionStates.map((item) => item.owner), [undefined, undefined, undefined]);
+    // A CLI without the axis at all reads neither, which is #408 cell 92.
+    assert.equal(readThere().entities.find((item) => item.id === id).criteria.length, 2);
+});
+
+test("cell 53: ownership gates nothing, so both CLIs owe the same criteria", async () =>
+{
+    const id = await ownedUnit();
+    const uncovered = (model) =>
+    {
+        const record = model.entities.find((item) => item.id === id);
+        return record.criteria.filter((text) => !record.covered.some((claim) => claim.criterion === text));
+    };
+    assert.deepEqual(uncovered(readWithout()), uncovered(readHere()),
+        "ownership changed what one of the two CLIs owes");
+    assert.deepEqual(uncovered(readWithout()),
+        ["declared at birth", "the user signs the agreement", "the user raises the quota"]);
 });

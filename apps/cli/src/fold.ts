@@ -8,7 +8,7 @@ import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectiv
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
 import { artifactSignals, askedRepositories, entityArtifactSignals, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
-import { chainVersion, criteriaProgress, CriterionState, EntityState, isCurrent } from "./entities.js";
+import { chainVersion, criteriaProgress, CriterionState, EntityState, isCurrent, ownerMark } from "./entities.js";
 import { readInstance, runbookChain, runbookDefinitions, runbookInstances, stageDigest } from "./runbooks.js";
 import { errYellow } from "./style.js";
 import { ArtifactMeta, artifactName } from "./types.js";
@@ -569,10 +569,17 @@ function criteriaLines(work: WorkState): string[]
     ];
 }
 
-// One criterion in cN order: what covered it and on whose word, what it waits
+// One criterion in cN order, marked `(person)` where the task is somebody's
+// own rather than the session's (#413).
+function criterionLine(criterion: CriterionState): string
+{
+    return `${criterionStanding(criterion)}${ownerMark(criterion)}`;
+}
+
+// Where the criterion stands: what covered it and on whose word, what it waits
 // on, or the text it still states — with the verification method beside an
 // open one, because that is the reader's next action.
-function criterionLine(criterion: CriterionState): string
+function criterionStanding(criterion: CriterionState): string
 {
     const claim = criterion.covered;
     if (claim !== undefined)

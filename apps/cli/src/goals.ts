@@ -6,7 +6,6 @@ import { validDate } from "./dates.js";
 import {
     awaitsReview,
     criteriaNote,
-    criteriaProgress,
     EntityState,
     entityCharacters,
     Exposure,
@@ -769,13 +768,14 @@ function unitStanding(work: WorkState): string
 
 // What the unit declared for itself, in the sentence `self work`, `self
 // context` and `self work show` print for the same unit (#408 cell 85) — each
-// blocked criterion named with the `--on` its block was recorded with. A unit
-// that declared nothing says nothing: the count would read as progress toward
-// a bar it never set.
+// blocked criterion named with the `--on` its block was recorded with, and
+// each one a person owns marked `(person)` (#413). A unit that declared
+// nothing says nothing: the count would read as progress toward a bar it never
+// set.
 function criteriaMark(work: WorkState): string[]
 {
-    const progress = criteriaProgress(work.criteria);
-    return progress === undefined ? [] : [criteriaNote(progress)];
+    const note = criteriaNote(work.criteria);
+    return note === undefined ? [] : [note];
 }
 
 function holderNote(work: WorkState): string[]

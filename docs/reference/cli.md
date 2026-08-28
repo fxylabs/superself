@@ -421,6 +421,17 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   `cN`, never inserted. Nothing removes a criterion: a mistaken one is taken
   back with `self undo`, and one no longer needed is covered with a reason and
   no evidence.
+- `--owner "cN person"` says one declared criterion is a person's own task
+  rather than the recording session's; `work criteria add` takes it bare, as
+  `--owner person`. `person` is the only value, and absent means the session.
+  An open criterion a person owns lists under **Waiting on you** in `self
+  context`, with the `work cover` line that closes it, and it is marked
+  `(person)` wherever the criteria render. The unit's own status, its blocked
+  count and its `k of n` sentence are untouched. `by` is who wrote the record
+  and `--owner` is whose task the criterion is: a session records a criterion a
+  person will do, and neither implies the other. Ownership is stated when the
+  criterion is declared and nothing re-states it — a wrong one is undone and
+  declared again.
 - `work cover <id> --criterion cN --why "<how it is covered>"` judges one
   declared criterion covered. It is an alias in the strict sense: the same
   handler and a byte-identical `entity.covered` as `state cover <id>`, which
@@ -687,7 +698,8 @@ The CLI writes one shared event grammar. Every asserted record uses the
 `entity.revised`, `entity.superseded`, `entity.retracted`, `entity.placed`,
 `entity.linked`, `entity.unlinked`, `entity.covered` — the criterion axis
 `entity.criterion-declared`, `entity.criterion-blocked`,
-`entity.criterion-unblocked`, whose `verify` text is recorded, never executed —
+`entity.criterion-unblocked`, whose `verify` text is recorded, never executed,
+and whose `owner` names a criterion a person owes rather than the session —
 and the execution facts `entity.started`, `entity.blocked`,
 `entity.unblocked`, `entity.done`, `entity.retired`. Beside them,
 `report.added` records progress,
