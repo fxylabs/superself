@@ -1489,32 +1489,10 @@ function historyLines(record: HistoryRecord, page: number): string[]
 // One page of a record's own history. The annulled set is read once for the
 // page rather than once per row: it is a pass over the log, and asking it
 // inside the map would make the render quadratic in the log's length.
-//
-// Who wrote each event is stated here and not in `self log` (#400). This is the
-// page a reader opens to ask what happened to one record and on whose say-so;
-// `self log` is the workspace timeline and a machine contract, and a column
-// every reader of it has to skip is one it does not owe.
 function pageRows(events: SelfEvent[], start: number): string[]
 {
     const annulled = annulledEvents(events);
-    return events.slice(start, start + HISTORY_PAGE)
-        .map((event) => `${logLine(event, undefined, annulled)}${writerNote(event)}`);
-}
-
-// The `by` a #400 verb stamped, in the reader's words. Silent where there is
-// none: every record written before #400 carries no `by`, and inventing
-// "person" for it would state something the log never said.
-function writerNote(event: SelfEvent): string
-{
-    const by = event.payload.by as { kind?: unknown; session?: unknown; name?: unknown } | undefined;
-    if (by === null || typeof by !== "object" || (by.kind !== "person" && by.kind !== "agent"))
-    {
-        return "";
-    }
-    const who = typeof by.name === "string" && by.name !== "" ? ` ${by.name}` : "";
-    const session = by.kind === "agent" && typeof by.session === "string" && by.session !== ""
-        ? ` (session ${by.session})` : "";
-    return dim(` · by ${by.kind}${who}${session}`);
+    return events.slice(start, start + HISTORY_PAGE).map((event) => logLine(event, undefined, annulled));
 }
 
 // A page is counted from one. A page past the last is answered rather than
@@ -1583,20 +1561,54 @@ export function workspaceLog(scopes: ProjectScope[], limit: number): CommandOutp
 // One event, styled for a terminal and plain for everything else. The plain
 // form is the machine contract, so the project column appears only in the
 // workspace form — the surface where a line without it is ambiguous.
+//
+// Who wrote the event closes every row, here and not per caller (#405). #400
+// read `self log` as a machine contract that owed no column a reader has to
+// skip, and left the note to the history page; the ruling that replaced it is
+// that `by` is the audit trail #400 introduced, and an audit trail absent from
+// the one surface that lists events is not one. `self log`, its `--workspace`
+// form and a record's own history page are three callers of one row, so the
+// note is appended where the row is built — a fourth caller that composed its
+// own would be free to drop it again.
 function logLine(event: SelfEvent, slug: string | undefined, annulled: Set<string> = new Set()): string
 {
     // The mark, not a filter: an undone event keeps its place in the log, and
     // the row says it no longer holds (#390 R3).
     const undone = annulled.has(event.id) ? " · undone" : "";
+    const writer = writerNote(event);
     if (!styled)
     {
-        return `${slug === undefined ? "" : slug + "  "}${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}${undone}`;
+        return `${slug === undefined ? "" : slug + "  "}${event.ts}  ${event.type}  [${event.id}]  ${eventSummary(event)}${undone}${writer}`;
     }
     const lead = slug === undefined ? 0 : displayWidth(slug) + 2;
     const ts = event.ts.slice(5, 16).replace("T", " ");
-    const summary = fit(eventSummary(event).split("\n", 1)[0], Math.max(20, termWidth() - 37 - lead - event.id.length));
+    // The note is charged to the summary's budget rather than added past it: a
+    // row that says who wrote it and then wraps has spent two terminal lines to
+    // state one event, which is what the width arithmetic exists to prevent.
+    const summary = fit(eventSummary(event).split("\n", 1)[0],
+        Math.max(20, termWidth() - 37 - lead - event.id.length - displayWidth(writer)));
     return `${slug === undefined ? "" : dim(slug + "  ")}${dim(ts)}  ` +
-        `${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}${dim(undone)}`;
+        `${eventStyle(event.type)(event.type.padEnd(18))}  ${summary}  ${dim(`[${event.id}]`)}${dim(`${undone}${writer}`)}`;
+}
+
+// The `by` a #400 verb stamped, in the reader's words. Silent where there is
+// none: every record written before #400 carries no `by`, and inventing
+// "person" for it would state something the log never said.
+//
+// Undimmed text, dimmed by the row that places it: `dim` is a no-op off a
+// terminal, and the width the note costs has to be measured before the escape
+// sequence goes round it.
+function writerNote(event: SelfEvent): string
+{
+    const by = event.payload.by as { kind?: unknown; session?: unknown; name?: unknown } | undefined;
+    if (by === null || typeof by !== "object" || (by.kind !== "person" && by.kind !== "agent"))
+    {
+        return "";
+    }
+    const who = typeof by.name === "string" && by.name !== "" ? ` ${by.name}` : "";
+    const session = by.kind === "agent" && typeof by.session === "string" && by.session !== ""
+        ? ` (session ${by.session})` : "";
+    return ` · by ${by.kind}${who}${session}`;
 }
 
 function eventStyle(type: string): (text: string) => string
