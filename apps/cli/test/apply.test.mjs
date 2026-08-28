@@ -1,9 +1,12 @@
-// One person's judgment over a reviewed set (#312). An agent prepares the
-// gated calls a cleanup needs and hands the file over; the person reads one
-// disclosure and confirms once. The proofs below are about what that costs and
-// what it cannot do: nothing is written before the confirmation, nothing
-// outside the file is written after it, and a file with one bad line writes
-// nothing at all.
+// One reviewed set, applied as one append (#312, #400). A cleanup produces a
+// dozen record-destroying calls at once; the file collects them, one disclosure
+// states the whole of what they destroy, and one write lands them. The proofs
+// below are about what that write cannot do: nothing outside the file is
+// written, and a file with one bad line writes nothing at all.
+//
+// The typed confirmation these cells were written around went in #400 — every
+// record here is one `self undo` takes straight back — so the cells that
+// asserted a refusal now assert the write and the `by` it carries.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -44,7 +47,7 @@ function plan(name, lines)
     return path;
 }
 
-test("a plan of three withdrawals refuses without a terminal, discloses all three, and records nothing", async () =>
+test("a plan of three withdrawals runs without a terminal, discloses all three, and records them as one", async () =>
 {
     const ids = [];
     for (const text of ["A1 the duplicate", "A2 the superseded scope", "A3 the spent scope"])
@@ -59,19 +62,20 @@ test("a plan of three withdrawals refuses without a terminal, discloses all thre
         `self decide retract ${ids[2]} --why "the scope is spent"`
     ]);
     const before = events().length;
-    const refused = await selfIn(box, demo, ["apply", path]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /this takes back 3 confirmed decisions, and nothing was recorded/);
-    ids.forEach((id) => assert.ok(refused.out.includes(id), `${id} was not disclosed`));
-    assert.ok(refused.out.includes("A1 the duplicate"), "the record's own text was not disclosed");
-    assert.ok(refused.out.includes("retracted because: the scope is spent"),
+    const applied = await selfIn(box, demo, ["apply", path]);
+    assert.equal(applied.code, 0, applied.out);
+    assert.match(applied.out, /this takes back 3 confirmed decisions/);
+    ids.forEach((id) => assert.ok(applied.out.includes(id), `${id} was not disclosed`));
+    assert.ok(applied.out.includes("A1 the duplicate"), "the record's own text was not disclosed");
+    assert.ok(applied.out.includes("retracted because: the scope is spent"),
         "the reason the line carries was not disclosed");
-    assert.match(refused.out, /a person runs this in their own terminal/);
-    assert.ok(refused.out.includes(`self apply ${path}`), "the refusal did not name the command to hand over");
-    assert.equal(events().length, before, "a refused plan wrote to the log");
+    assert.match(applied.out, /`self undo` takes it back/);
+    const written = events().slice(before);
+    assert.equal(written.length, 3, "the set did not land as three retractions");
+    written.forEach((event) => assert.deepEqual(event.payload.by, { kind: "agent" }));
 });
 
-test("one typed confirmation records every withdrawal in the file, each with its own reason", async () =>
+test("one append records every withdrawal in the file, each with its own reason", async () =>
 {
     const ids = [];
     for (const text of ["B1 the duplicate", "B2 the superseded scope", "B3 the spent scope"])
@@ -81,19 +85,22 @@ test("one typed confirmation records every withdrawal in the file, each with its
     const path = plan("approved.txt", ids.map((id, at) => `decide retract ${id} --why "reason ${at + 1}"`));
     const applied = await approvedIn(box, demo, ["apply", path], "retract 3");
     assert.equal(applied.code, 0, applied.out);
-    assert.match(applied.printed, /3 records retired on one confirmation/);
+    assert.match(applied.printed, /3 records retired in one append/);
     for (const [at, id] of ids.entries())
     {
         const written = events().find((event) => event.type === "entity.retracted" && event.payload.entity === id);
         assert.ok(written !== undefined, `${id} was not retracted`);
         assert.equal(written.payload.why, `reason ${at + 1}`);
-        assert.equal(written.payload.confirmation.method, "tty");
-        assert.equal(written.payload.confirmation.challenge, "retract 3");
+        assert.deepEqual(written.payload.by, { kind: "person" });
     }
     assert.doesNotMatch((await must(box, demo, ["context"])).out, /B1 the duplicate/);
 });
 
-test("a wrong answer at the terminal records nothing from the plan", async () =>
+// This cell asserted that a wrong typed answer applied nothing. There is no
+// answer to get wrong since #400, and what replaced it is the fact that
+// replaced it: nothing is read from the terminal, so a set applies whatever a
+// caller types and the records come back with one `self undo`.
+test("nothing is read from the terminal — the set applies, and one undo takes it back", async () =>
 {
     const ids = [];
     for (const text of ["C1 a live decision", "C2 another live decision"])
@@ -102,16 +109,15 @@ test("a wrong answer at the terminal records nothing from the plan", async () =>
     }
     const path = plan("wrong.txt", ids.map((id) => `decide retract ${id} --why "not this time"`));
     const before = events().length;
-    const wrong = await approvedIn(box, demo, ["apply", path], "yes");
-    assert.equal(wrong.code, 1);
-    assert.equal(events().length, before, "a refused confirmation still wrote to the log");
-    for (const id of ids)
-    {
-        assert.match((await must(box, demo, ["state", "show", id])).out, /confirmed/);
-    }
+    const applied = await approvedIn(box, demo, ["apply", path], "yes");
+    assert.equal(applied.code, 0, applied.out);
+    assert.equal(events().length, before + 2);
+    const undone = await selfIn(box, demo, ["undo", events().at(-1).id, "--why", "the set was wrong"]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.match((await must(box, demo, ["state", "show", ids[1]])).out, /confirmed/);
 });
 
-test("two ids are short enough to type back, so the challenge is still the ids themselves", async () =>
+test("two records retired by a plan are two records, counted in the receipt", async () =>
 {
     const ids = [];
     for (const text of ["D1 the duplicate", "D2 the other duplicate"])
@@ -121,7 +127,7 @@ test("two ids are short enough to type back, so the challenge is still the ids t
     const path = plan("pair.txt", ids.map((id) => `decide retract ${id} --why "one of a pair"`));
     const applied = await approvedIn(box, demo, ["apply", path], ids.join(" "));
     assert.equal(applied.code, 0, applied.out);
-    assert.match(applied.printed, /2 records retired on one confirmation/);
+    assert.match(applied.printed, /2 records retired in one append/);
 });
 
 test("a line that records rather than destroys refuses the whole plan, with nothing written", async () =>
@@ -154,7 +160,7 @@ test("a plan the store's own verb refuses names the line, and the earlier lines 
     assert.equal(events().length, before);
 });
 
-test("a plan naming one record twice is refused before anybody is asked", async () =>
+test("a plan naming one record twice is refused before anything is written", async () =>
 {
     const live = await decided("G1 a decision named twice");
     const path = plan("repeat.txt", [
@@ -163,7 +169,7 @@ test("a plan naming one record twice is refused before anybody is asked", async 
     ]);
     const refused = await selfIn(box, demo, ["apply", path]);
     assert.equal(refused.code, 1);
-    assert.match(refused.out, /is named twice, and one confirmation covers each record once/);
+    assert.match(refused.out, /is named twice, and one append covers each record once/);
 });
 
 test("a plan mixing record kinds says how many records, not how many decisions", async () =>
@@ -174,9 +180,9 @@ test("a plan mixing record kinds says how many records, not how many decisions",
         `decide retract ${decision} --why "spent"`,
         `work retire ${unit} --why "the outcome moved"`
     ]);
-    const refused = await selfIn(box, demo, ["apply", path]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /this retires 2 confirmed records/);
+    const applied = await selfIn(box, demo, ["apply", path]);
+    assert.equal(applied.code, 0, applied.out);
+    assert.match(applied.out, /this retires 2 confirmed records/);
 });
 
 test("a line no command dispatches, an unreadable file, and an empty plan are each named", async () =>
@@ -232,10 +238,10 @@ test("an alias verb's supersession is a line a plan runs", async () =>
     const first = (await must(box, demo, ["note", "add", "M1 the note that is replaced"])).out.match(/\be-[0-9a-z]{5}\b/);
     assert.ok(first !== null, "the alias verb recorded no entity id");
     const path = plan("alias.txt", [`note add "M2 the note that replaces it" --supersedes ${first[0]}`]);
-    const refused = await selfIn(box, demo, ["apply", path]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /this retires a confirmed note/);
-    assert.ok(refused.out.includes(first[0]), "the alias line's target was not disclosed");
+    const applied = await selfIn(box, demo, ["apply", path]);
+    assert.equal(applied.code, 0, applied.out);
+    assert.match(applied.out, /this retires a confirmed note/);
+    assert.ok(applied.out.includes(first[0]), "the alias line's target was not disclosed");
 });
 
 test("a plan cannot apply another plan", async () =>
@@ -376,15 +382,15 @@ test("a supersession discloses the record it would write, not only the one it re
     const decision = await decided("R2 the decision as first taken");
     await must(box, demo, ["alias", "add", "memo", "--exposure", "search"]);
     const memo = (await must(box, demo, ["memo", "add", "R3 the memo as first written"])).out.match(/\be-[0-9a-z]{5}\b/)[0];
-    const refused = await selfIn(box, demo, ["apply", plan("successors.txt", [
+    const applied = await selfIn(box, demo, ["apply", plan("successors.txt", [
         `convention add "R1 the rule as it now reads" --supersedes ${rule}`,
         `decide "R2 the decision as it now stands" --supersedes ${decision}`,
         `memo add "R3 the memo as it now reads" --supersedes ${memo}`
     ])]);
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /replaced by this new convention: R1 the rule as it now reads/);
-    assert.match(refused.out, /replaced by this new decision: R2 the decision as it now stands/);
-    assert.match(refused.out, /replaced by this new memo: R3 the memo as it now reads/);
+    assert.equal(applied.code, 0, applied.out);
+    assert.match(applied.out, /replaced by this new convention: R1 the rule as it now reads/);
+    assert.match(applied.out, /replaced by this new decision: R2 the decision as it now stands/);
+    assert.match(applied.out, /replaced by this new memo: R3 the memo as it now reads/);
 });
 
 // `${ACTION[kind]}ed` spelled this "retireed" on every verb that gives up an
@@ -392,13 +398,14 @@ test("a supersession discloses the record it would write, not only the one it re
 test("a retirement's reason is spelled retired, in a plan and in a single command", async () =>
 {
     const unit = workIdIn((await mustPerson(box, demo, ["work", "add", "S1 an outcome that moved"])).out);
-    const single = await selfIn(box, demo, ["work", "retire", unit, "--why", "the outcome moved to another unit"]);
-    assert.equal(single.code, 1);
-    assert.match(single.out, /retired because: the outcome moved to another unit/);
-    assert.doesNotMatch(single.out, /retireed/);
     const inPlan = await selfIn(box, demo, ["apply",
         plan("retire.txt", [`work retire ${unit} --why "the outcome moved to another unit"`])]);
-    assert.equal(inPlan.code, 1);
+    assert.equal(inPlan.code, 0, inPlan.out);
     assert.match(inPlan.out, /retired because: the outcome moved to another unit/);
     assert.doesNotMatch(inPlan.out, /retireed/);
+    const other = workIdIn((await mustPerson(box, demo, ["work", "add", "S2 another outcome that moved"])).out);
+    const single = await selfIn(box, demo, ["work", "retire", other, "--why", "the outcome moved to another unit"]);
+    assert.equal(single.code, 0, single.out);
+    assert.match(single.out, /retired because: the outcome moved to another unit/);
+    assert.doesNotMatch(single.out, /retireed/);
 });

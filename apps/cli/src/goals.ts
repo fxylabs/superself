@@ -16,7 +16,7 @@ import {
     supersedeSpelling
 } from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
-import { HumanConfirmation, personRefusal } from "./human.js";
+import { WrittenBy, writtenBy } from "./human.js";
 import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
 import { readEvents } from "./logfile.js";
 import { buildModel, ProjectModel, workspaceModels, WorkState } from "./model.js";
@@ -432,8 +432,8 @@ function objectiveAdd({ values, positionals }: CommandInput<typeof OBJECTIVE_ADD
     const demotions = presetGate(ctx, models, 'objective add "<outcome>"', row.exposure, values, outcome, payload);
     recordRetirement(ctx, retirementIntent(model, "supersede", proposed ? [] : supersedeTargets(payload),
         { successor: supersedingRecord(payload) }), model,
-        (confirmation) => [makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, !proposed),
+        (by) => [makeEvent(ctx.project, proposed ? "entity.proposed" : "entity.confirmed",
+            strip({ ...payload, by }), undefined, !proposed),
         ...demotionEvents(demotions, id, proposed)],
         `${id} ${outcome}`);
     return [{ kind: "receipt", text: id }];
@@ -508,8 +508,8 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
     const carried = liveMilestones(objective);
     recordRetirement(ctx, retirementIntent(model, "supersede", [objective.id],
         { successor: supersedingRecord(payload) }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
+        (by) => [makeEvent(ctx.project, "entity.confirmed",
+            strip({ ...payload, by }), undefined, true),
         ...carryEvents(ctx, carried, id)],
         `${id} ${why}`);
     return [{ kind: "receipt", text: `${id} — carried ${plural(carried.length, "milestone")} from ${objective.id}` }];
@@ -606,8 +606,8 @@ function objectiveClose({ values, positionals }: CommandInput<typeof OBJECTIVE_C
         : { entity: objective.id, why: values.why };
     recordRetirement(ctx, retirementIntent(model, "retire", values.as === "reached" ? [] : [objective.id],
         { why: values.why }), model,
-        (confirmation) => [makeEvent(ctx.project, values.as === "reached" ? "entity.done" : "entity.retired",
-            confirmation === undefined ? payload : { ...payload, confirmation }, undefined, true)],
+        (by) => [makeEvent(ctx.project, values.as === "reached" ? "entity.done" : "entity.retired",
+            { ...payload, by }, undefined, true)],
         `${objective.id} ${values.as}`);
 }
 
@@ -763,8 +763,8 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
     const demotions = presetGate(ctx, models, 'milestone add "<outcome>"', row.exposure, values, outcome, payload);
     recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload),
         { successor: supersedingRecord(payload) }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true),
+        (by) => [makeEvent(ctx.project, "entity.confirmed",
+            strip({ ...payload, by }), undefined, true),
         ...demotionEvents(demotions, id, false)],
         `${id} ${outcome}`);
     return [{ kind: "receipt", text: id }];
@@ -827,8 +827,8 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
     };
     recordRetirement(ctx, retirementIntent(model, "supersede", [milestone.id],
         { successor: supersedingRecord(payload) }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.confirmed",
-            strip(confirmation === undefined ? payload : { ...payload, confirmation }), undefined, true)],
+        (by) => [makeEvent(ctx.project, "entity.confirmed",
+            strip({ ...payload, by }), undefined, true)],
         `${id} ${why}`);
     return [{ kind: "receipt", text: id }];
 }
@@ -849,8 +849,8 @@ function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>)
         throw new CliError(`${milestone.id} is already closed — ${milestone.reason}`);
     }
     recordRetirement(ctx, retirementIntent(model, "retire", [milestone.id], { why }), model,
-        (confirmation) => [makeEvent(ctx.project, "entity.retired",
-            { entity: milestone.id, why, ...(confirmation === undefined ? {} : { confirmation }) }, undefined, true)],
+        (by) => [makeEvent(ctx.project, "entity.retired",
+            { entity: milestone.id, why, by }, undefined, true)],
         `${milestone.id} ${why}`);
 }
 
@@ -1010,13 +1010,19 @@ export const WORK_GOAL_LEAVES: CommandLeaf[] = [
     leaf("link", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, true), { requires: [LINK_TARGET] }),
     leaf("unlink", LINK_OPTIONS, 1, (input) => cmdWorkLink(input, false), { requires: [LINK_TARGET] }),
     leaf("propose", PROPOSAL_OPTIONS, 1, cmdPropose, { undocumented: ["depends"] }),
-    // `retiring`, because accepting a plan that carries `--supersedes` retires
+    // `retiring`, because confirming a plan that carries `--supersedes` retires
     // the unit it replaces (#389). A plan that carries none destroys nothing
     // and is refused as an idle line inside a reviewed set, exactly as a bare
     // `work add` is: marking a leaf that turns out to destroy nothing costs
     // nothing, and forgetting to mark one that does costs a plan a person
     // could have run.
-    retiring(leaf("accept", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true))),
+    retiring(leaf("confirm", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true))),
+    // The spelling this verb had until #400, still dispatching and no longer
+    // documented. It records the identical event: a plan is confirmed the way
+    // every other proposed record is, and one grammar across the record kinds
+    // is worth more than the word "accept" — but a script or a doc written
+    // against the old name keeps working rather than breaking on the rename.
+    retiring(leaf("accept", WHY_OPTION, 1, (input) => cmdProposalDecision(input, true), { hidden: true })),
     leaf("decline", WHY_OPTION, 1, (input) => cmdProposalDecision(input, false), { requires: [WHY_TURNED_DOWN] }),
     // Deliberately not `retiring`: a revision destroys nothing — one id, no
     // successor, no supersession — which is the opposite of what `objective
@@ -1151,7 +1157,7 @@ function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTION
     const supersedes = proposedSupersession(ctx, model, values);
     const id = workId();
     const payload = proposedPayload(ctx, id, outcome, brief, supersedes);
-    recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip(payload)), `${outcome}`);
+    recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip({ ...payload, by: writtenBy() })), `${outcome}`);
     return [{ kind: "receipt", text: proposalReceipt(id, supersedes) }];
 }
 
@@ -1180,7 +1186,7 @@ function proposedPayload(ctx: ProjectContext, id: string, outcome: string,
 // and not a supersedes link, because a work correction is a retirement with a
 // successor — the pair `work add --supersedes` writes — and a link would fold
 // the target to a superseded statement instead. Every existing fold pass
-// ignores it; `work accept` is the one reader.
+// ignores it; `work confirm` is the one reader.
 interface SupersedePlan
 {
     entity: string;
@@ -1214,7 +1220,7 @@ function proposalReceipt(id: string, supersedes: SupersedePlan | undefined): str
     return supersedes === undefined
         ? id
         : `${id}\n  replaces ${supersedes.entity} on acceptance — ${supersedes.entity} is untouched `
-            + `until a person runs \`self work accept ${id}\``;
+            + `until it is confirmed with \`self work confirm ${id}\``;
 }
 
 // What the creation event carries beyond the plan text: a gap proposal's full
@@ -1354,7 +1360,7 @@ export function normalize(text: string): string
 // outcome it closes lands in the same append.
 //
 // Both resolve their project from the proposal rather than from the directory
-// (#302): `self work accept <id>` is the call to action a `--project` context
+// (#302): `self work confirm <id>` is the call to action a `--project` context
 // prints under Waiting on you, and a reader outside that project was handed a
 // line they could not run.
 function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OPTION>, accept: boolean): CommandOutput
@@ -1367,51 +1373,32 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
         const why = required(values.why);
         // Declining answers with the append's own line and nothing more: the
         // proposal is gone, so there is no id left worth handing back.
-        recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why }, { declines: proposal.id }, true), `${proposal.text}`);
+        recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why, by: writtenBy() }, { declines: proposal.id }, true), `${proposal.text}`);
         return [];
     }
-    requirePersonAccepting(ctx, proposal);
     recordAcceptance(ctx, model, proposal);
     return [{ kind: "receipt", text: proposal.id }];
 }
 
-// Accepting a plan confirms a work record, and a confirmed work record is a
-// person's call (#389). The refusal names the project that holds the plan:
-// this verb resolves it from the record rather than from the directory (#302),
-// so a reader standing anywhere is told whose plan they were handed.
-function requirePersonAccepting(ctx: ProjectScope, proposal: Answerable): void
-{
-    const refused = personRefusal({
-        act: "accepting a plan",
-        disclosure: `${proposal.text.split("\n")[0]}\n${proposal.id} is ${ctx.project}'s plan, `
-            + "and this line resolves it from any directory",
-        personRuns: `self work accept ${proposal.id}`
-    });
-    if (refused !== null)
-    {
-        throw new CliError(refused);
-    }
-}
-
 // The acceptance itself. A plan that carries no supersession is the append it
-// always was; one that carries a correction goes through the retirement gate,
-// so the confirm and the retirement land as one append under one typed
-// confirmation — the pair `work add --supersedes` writes today.
+// always was; one that carries a correction goes through the retirement path,
+// so the confirm and the retirement land as one disclosed append — the pair
+// `work add --supersedes` writes today.
 function recordAcceptance(ctx: ProjectScope, model: ProjectModel, proposal: Answerable): void
 {
     const carried = carriedSupersession(ctx, proposal);
     if (carried === undefined)
     {
-        recordEvents(ctx, acceptEvents(ctx, model, proposal), `${proposal.id} ${proposal.text}`);
+        recordEvents(ctx, acceptEvents(ctx, model, proposal, writtenBy()), `${proposal.id} ${proposal.text}`);
         return;
     }
     const target = acceptedTarget(ctx, model, proposal, carried);
     const successor = model.entities.find((item) => item.id === proposal.id);
     recordRetirement(ctx, retirementIntent(model, "supersede", [target.id],
         { successor: supersedingRecord({ text: proposal.text, labels: successor?.labels ?? [] }) }), model,
-        (confirmation) => [...acceptEvents(ctx, model, proposal, confirmation),
+        (by) => [...acceptEvents(ctx, model, proposal, by),
             makeEvent(ctx.project, "entity.retired", strip({
-                entity: target.id, why: carried.why, successor: proposal.id, successorProject: ctx.project, confirmation
+                entity: target.id, why: carried.why, successor: proposal.id, successorProject: ctx.project, by
             }), undefined, true)],
         `${proposal.id} ${proposal.text}`);
 }
@@ -1472,19 +1459,18 @@ function driftRefusal(ctx: ProjectScope, proposal: Answerable, target: string, r
 // written is not authorized by it, however a merged log ordered the two. The
 // grouping edge toward the gap rides the same append, and is left alone where
 // a re-acceptance would only state it twice.
-// `confirmation` rides the acceptance wherever one was typed: the person gate
-// this verb passes leaves no artifact of its own, so the only acceptance whose
-// gate is provable from the log afterwards is the one that also displaced a
-// record and read a challenge back for it.
+// `by` rides both halves: the confirm and the grouping edge are one act, and a
+// reader asking who confirmed this plan should not have to know which of the
+// two events to look at (#400).
 function acceptEvents(ctx: ProjectScope, model: ProjectModel, proposal: Answerable,
-    confirmation?: HumanConfirmation): SelfEvent[]
+    by: WrittenBy): SelfEvent[]
 {
     const events = [makeEvent(ctx.project, "entity.confirmed",
-        strip({ entity: proposal.id, confirmation }), { confirms: proposal.confirms }, true)];
+        { entity: proposal.id, by }, { confirms: proposal.confirms }, true)];
     if (proposal.target !== undefined && !alreadyToward(model, proposal))
     {
         events.push(makeEvent(ctx.project, "entity.linked",
-            { entity: proposal.id, link: { type: "member-of", target: proposal.target } }, undefined, true));
+            { entity: proposal.id, link: { type: "member-of", target: proposal.target }, by }, undefined, true));
     }
     return events;
 }
@@ -1515,7 +1501,7 @@ function cmdWorkRevise({ values, positionals }: CommandInput<typeof REVISE_OPTIO
     recordEvent(ctx, makeEvent(owner, "entity.revised", { entity: entity.id, text, why }), `${entity.id} ${text}`);
     return [{
         kind: "receipt",
-        text: `${entity.id} — v${(entity.plan?.current ?? 1) + 1}; a person runs \`self work accept ${entity.id}\``
+        text: `${entity.id} — v${(entity.plan?.current ?? 1) + 1}; confirm it with \`self work confirm ${entity.id}\``
     }];
 }
 
@@ -1853,7 +1839,7 @@ function requireLinkedWork(model: ProjectModel, milestone: MilestoneState, id: s
 
 const PROPOSAL_USAGE = "… <proposal-id> — run `self context` to list open proposals";
 
-// What `work accept` and `work decline` answer to, whichever fold carries it:
+// What `work confirm` and `work decline` answer to, whichever fold carries it:
 // a gap proposal, whose brief the goal fold reads, and a standalone plan
 // (#356), which only the entity view carries. One shape and one list, so a
 // prefix means the same thing on both paths and neither verb grows a second

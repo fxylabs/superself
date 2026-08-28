@@ -1,8 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { readSync } from "node:fs";
+import { sessionToken } from "./machine.js";
 
-// The record of how a human was verified. It travels in the event payload,
-// and the fold refuses to count an approval that does not carry one.
+// The record of how a human was verified. It travels in the event payload of
+// the one act that still asks for one — `artifact prune` — so the log says the
+// bytes left under an answer somebody typed rather than under a flag any
+// process can set.
 export interface HumanConfirmation
 {
     method: "tty";
@@ -47,34 +50,45 @@ export function personAtTerminal(): boolean
     return attemptMarker() === undefined && process.stdin.isTTY === true;
 }
 
-// What a verb refused for having nobody behind it hands back, and null when
-// somebody is there — so a caller asks this one question instead of spelling
-// the condition again. `act` names what was refused, `disclosure` is the
-// record's own words, `agentRuns` is the line this process can run instead,
-// and `personRuns` is the line for a person whose shell redirected stdin.
-interface RefusedAct
+// Who wrote a record (#400). The verbs whose record `self undo` takes back no
+// longer refuse a process with nobody behind it: the consent they asked for was
+// given in the conversation the session is having, and a person retyping the
+// command adds nothing to it except a chance to mistype. What replaces the
+// refusal is this — the record states which kind of caller wrote it, so a
+// reader is told rather than guaranteed.
+//
+// It answers cooperating callers, exactly as the gate it replaces did. A
+// process that unsets the marker and allocates a pty writes `person`; that was
+// as true of the refusal, and #400 does not change the trust model.
+export interface WrittenBy
 {
-    act: string;
-    disclosure: string;
-    agentRuns?: { why: string; command: string };
-    personRuns: string;
+    kind: "person" | "agent";
+    // Which session, on the terms `machine.ts` already sets: it separates one
+    // session from another and names nobody.
+    //
+    // Not the same fact as `origin.session`, which every event carries. That
+    // one answers "which process wrote this line", and a person typing into an
+    // agent harness's shell has one — the case `machine.ts` and the marker list
+    // above both exist to keep apart. This one is that value read through
+    // "was anybody home": a person's call carries no session, however much the
+    // harness around them had one, and an absent field says that better than an
+    // empty string would.
+    session?: string;
+    // The name a verb was given for whoever asked — `runbook approve --by`.
+    // It rides here rather than beside it, because who approved and what kind
+    // of process recorded it are one statement about one event.
+    name?: string;
 }
 
-export function personRefusal(parts: RefusedAct): string | null
+export function writtenBy(name?: string): WrittenBy
 {
-    if (personAtTerminal())
-    {
-        return null;
-    }
-    return [
-        `${parts.act} is a person's call, and this process has no terminal to make it at — nothing was recorded`,
-        "",
-        ...parts.disclosure.split("\n").map((line) => `  ${line}`),
-        ...(parts.agentRuns === undefined ? [] : ["", `  ${parts.agentRuns.why}:`, `    ${parts.agentRuns.command}`]),
-        "",
-        "  a person runs this in their own terminal:",
-        `    ${parts.personRuns}`
-    ].join("\n");
+    const person = personAtTerminal();
+    const session = person ? undefined : sessionToken();
+    return {
+        kind: person ? "person" : "agent",
+        ...(session === undefined ? {} : { session }),
+        ...(name === undefined ? {} : { name })
+    };
 }
 
 // The human gate. What makes this input human is the interactive terminal:

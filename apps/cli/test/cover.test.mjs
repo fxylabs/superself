@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, machine, must, mustPerson, receiptIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -98,7 +98,7 @@ test("C6: coverage binds to the entity id — a revision starts uncovered and re
     const objective = (await must(box, demo, ["objective", "add", "quality bar"])).out.match(/\bo-[0-9a-z]{5}\b/)[0];
     const milestone = (await must(box, demo, ["milestone", "add", "checkpoint", "--objective", objective, "--exit", "the proof"])).out.match(/\bm-[0-9a-z]{5}\b/)[0];
     await must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "first judgment"]);
-    const successor = (await approvedIn(box, demo, ["milestone", "revise", milestone, "--why", "widened", "--outcome", "checkpoint, widened"], milestone)).printed.match(/\bm-[0-9a-z]{5}\b/)[0];
+    const successor = receiptIn((await approvedIn(box, demo, ["milestone", "revise", milestone, "--why", "widened", "--outcome", "checkpoint, widened"], milestone)).printed).match(/\bm-[0-9a-z]{5}\b/)[0];
     const early = await self(["milestone", "reach", successor]);
     assert.notEqual(early.code, 0, "a successor inherited its predecessor's coverage");
     assert.match(early.out, /uncovered exit criteria/);

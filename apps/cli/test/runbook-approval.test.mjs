@@ -116,47 +116,55 @@ test("D3: a held run passes no stage until it is released", async () =>
 
 /* ── the gate ──────────────────────────────────────────────────────── */
 
-test("D4: a piped run cannot approve — the terminal is what makes the approval a person's", async () =>
+// D4-D6 asserted the terminal gate this verb had until #400. The hold is lifted
+// by an `entity.unblocked` that `self undo` takes straight back, so a session
+// records the approval the person gave it, and the event says who wrote it.
+test("D4: a piped run approves, and the record names it a session's write", async () =>
 {
     const ground = await held();
-    const refused = await ground.self(["runbook", "approve", "E001", "--by", "rayim"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /no terminal to make it at/);
-    assert.match(refused.out, /self runbook approve E001/);
-    assert.equal(events(ground.ws).some((event) => event.type === "entity.unblocked"), false);
+    const approved = await ground.self(["runbook", "approve", "E001", "--by", "rayim"]);
+    assert.equal(approved.code, 0, approved.out);
+    const unblocked = events(ground.ws).find((event) => event.type === "entity.unblocked");
+    assert.equal(unblocked.payload.entity, ground.run);
+    assert.deepEqual(unblocked.payload.by, { kind: "agent", name: "rayim" });
 });
 
-test("D5: a process carrying an agent's mark is refused even where a terminal would answer", async () =>
+test("D5: a process carrying an agent's mark approves, and its session rides the record", async () =>
 {
     const ground = await held();
     // The mark is named for this call alone — a command is handed the
     // environment its caller states and nothing else (#371) — and the run is
-    // otherwise exactly the terminal D7 approves at.
-    const refused = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E001",
+    // otherwise exactly the terminal D7 approves at. A terminal does not make
+    // this a person's call: the marker says the runner started this process.
+    const approved = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E001",
         { SUPERSELF_SESSION: "an agent's process" });
-    assert.notEqual(refused.code, 0, refused.out);
-    assert.match(refused.out, /no terminal to make it at/);
-    assert.equal(events(ground.ws).some((event) => event.type === "entity.unblocked"), false);
+    assert.equal(approved.code, 0, approved.out);
+    const unblocked = events(ground.ws).find((event) => event.type === "entity.unblocked");
+    assert.deepEqual(unblocked.payload.by, { kind: "agent", session: "an agent's process" });
 });
 
-test("D6: a wrong answer at the terminal approves nothing and records nothing", async () =>
+// D6 asserted that a wrong key typed back approved nothing. There is no key to
+// type back, and `self undo` is what an approval recorded in error is taken
+// back by — which is the fact that replaced it.
+test("D6: an approval recorded in error is taken back by undo, and the run is held again", async () =>
 {
     const ground = await held();
-    const before = events(ground.ws).length;
-    const refused = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E002");
-    assert.notEqual(refused.code, 0, refused.out);
-    assert.equal(events(ground.ws).length, before);
+    const approved = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001"], "E002");
+    assert.equal(approved.code, 0, approved.out);
+    const unblocked = events(ground.ws).find((event) => event.type === "entity.unblocked");
+    const undone = await ground.self(["undo", unblocked.id, "--why", "the approval was never given"]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.ok(waitingBlock((await must(ground.box, ground.demo, ["context"])).out).includes("waits on your approval"));
 });
 
-test("D7: the key typed back at a terminal releases the run, and what was typed is in the record", async () =>
+test("D7: a person at a terminal releases the run, and the record says a person did", async () =>
 {
     const ground = await held();
     const approved = await approvedIn(ground.box, ground.demo, ["runbook", "approve", "E001", "--by", "rayim"], "E001");
     assert.equal(approved.code, 0, approved.out);
     const unblocked = events(ground.ws).find((event) => event.type === "entity.unblocked");
     assert.equal(unblocked.payload.entity, ground.run);
-    assert.deepEqual(unblocked.payload.confirmation, { method: "tty", challenge: "E001" });
-    assert.equal(unblocked.payload.by, "rayim");
+    assert.deepEqual(unblocked.payload.by, { kind: "person", name: "rayim" });
     assert.equal(waitingBlock((await must(ground.box, ground.demo, ["context"])).out).includes("waits on your approval"), false);
 });
 

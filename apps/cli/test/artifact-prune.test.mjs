@@ -277,7 +277,7 @@ test("cell 38: evidence on a blocked unit is refused", async () =>
 test("cell 39: evidence on a unit whose plan is awaiting review is refused", async () =>
 {
     const work = workIdIn((await must(box, demo, ["work", "propose", "review the flow before it is worked"])).out);
-    await mustPerson(box, demo, ["work", "accept", work]);
+    await mustPerson(box, demo, ["work", "confirm", work]);
     const meta = await attach(work, ["--artifact", fileAt("cell39.md", "cell 39 bytes\n")]);
     await must(box, demo, ["work", "revise", work, "review the flow, then work it", "--why", "the first plan skipped the review"]);
     const refused = await refuse(meta.id);
@@ -404,7 +404,8 @@ test("cell 49: a process with nobody at a terminal is refused, records nothing, 
     const { meta } = await closed("cell49.md");
     const piped = await refuse(meta.id);
     assert.equal(piped.code, 1, piped.out);
-    assert.match(piped.out, /removing stored bytes is a person's call, and this process has no terminal/);
+    assert.match(piped.out, /removing stored bytes cannot be taken back by `self undo`, so a person types the id/);
+    assert.match(piped.out, /this process has no terminal to type it at, and nothing was removed/);
     assert.match(piped.out, new RegExp(`self artifact prune ${meta.id} --why`));
     // The other half of "nobody is answering": a process a runner started
     // carries the marker, and is refused even where a terminal is attached —
@@ -414,7 +415,7 @@ test("cell 49: a process with nobody at a terminal is refused, records nothing, 
     // states and nothing else.
     const marked = await prune(meta.id, meta.id, [], { SUPERSELF_SESSION: "a-runner" });
     assert.equal(marked.code, 1, marked.out);
-    assert.match(marked.out, /has no terminal to make it at/);
+    assert.match(marked.out, /has no terminal to type it at/);
     assert.equal(pruneEvents().some((event) => event.payload.artifact === meta.id), false);
     assert.equal(existsSync(stored(meta)), true);
 });

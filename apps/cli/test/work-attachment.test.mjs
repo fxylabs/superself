@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NO_OBJECTIVE_HINT } from "../dist/goals.js";
-import { approvedIn, demoWorkspace, git, machine, must, mustPerson, workIdIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, git, machine, must, mustPerson, receiptIn, workIdIn } from "./harness.mjs";
 
 // The byte every ANSI sequence opens with, built rather than typed so this
 // file carries no control character of its own.
@@ -182,7 +182,7 @@ test("--supersedes names the replaced unit's links, cross-project ones included"
     const added = await approvedIn(box, demo,
         ["work", "add", "the corrected wording", "--supersedes", first, "--why", "the outcome was restated"], first);
     assert.equal(added.code, 0, `the correction was refused:\n${added.out}`);
-    const second = workIdIn(added.printed);
+    const second = workIdIn(receiptIn(added.printed));
     assert.notEqual(second, first, "the receipt reported the retired unit's id");
     assert.ok(added.printed.includes(`${first} was attached to these`), `no carry-over line:\n${added.printed}`);
     assert.ok(added.printed.includes(`self work link ${second} --objective ${local}`),
@@ -207,12 +207,15 @@ test("a correction of an unattached unit says nothing about carry-over", async (
     assert.equal(added.code, 0, `the correction was refused:\n${added.out}`);
     assert.ok(!added.printed.includes("was attached to these"),
         `a carry-over line was printed for a unit with no links:\n${added.printed}`);
-    assert.ok(!added.printed.includes(first), "the replaced unit's id is named where it has nothing to carry");
+    // The disclosure names the retired unit, as it names every record a call
+    // destroys (#400). What this cell holds is that the *carry-over* half says
+    // nothing, so it reads the receipt rather than everything printed.
+    assert.ok(!receiptIn(added.printed).includes(first), "the replaced unit's id is named where it has nothing to carry");
 });
 
 /* ── cell 9: an accepted proposal prints no offer ─────────────────── */
 
-test("work accept prints no offer — propose already demanded the attachment", async () =>
+test("work confirm prints no offer — propose already demanded the attachment", async () =>
 {
     const { box, demo } = await project();
     const objective = await objectiveIn(box, demo, "reach preview");
@@ -221,7 +224,7 @@ test("work accept prints no offer — propose already demanded the attachment", 
         "--stop", "the approach is wrong", "--risk", "the fix is deeper than it looks",
         "--capacity", "a day", "--evidence-plan", "the suite output",
         "--confidence", "medium", "--expires", "2099-01-01", "--objective", objective])).out);
-    const accepted = await mustPerson(box, demo, ["work", "accept", proposal]);
+    const accepted = await mustPerson(box, demo, ["work", "confirm", proposal]);
     assert.ok(!accepted.out.includes("self work link"), `accept offered an attachment:\n${accepted.out}`);
     assert.ok(!accepted.out.includes("open objective"), `accept printed a size line:\n${accepted.out}`);
 });
@@ -252,8 +255,11 @@ test("the event work add records is unchanged — this is an output-only change"
     const log = readFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "utf8").trimEnd().split("\n");
     const event = JSON.parse(log[log.length - 1]);
     assert.equal(event.type, "entity.confirmed", "the last event is not the unit that was just recorded");
+    // `by` joined the payload in #400: every record these verbs write says
+    // whether a person or a session wrote it.
     assert.deepEqual(Object.keys(event.payload).sort(),
-        ["criteria", "entity", "exposure", "labels", "links", "scope", "text"]);
+        ["by", "criteria", "entity", "exposure", "labels", "links", "scope", "text"]);
+    assert.deepEqual(event.payload.by, { kind: "person" });
     assert.equal(event.payload.text, "the flow works");
     assert.deepEqual(event.payload.labels, ["work"]);
     assert.deepEqual(event.payload.links, []);

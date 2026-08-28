@@ -129,12 +129,12 @@ test("cell 5: undoing a goal that superseded another gives the predecessor back"
     assert.doesNotMatch(seen, /cell 5: the direction typed in error/);
 });
 
-test("cell 6: undoing an acceptance returns the plan to review and names the accept line", async () =>
+test("cell 6: undoing a confirm returns the plan to review and names the confirm line", async () =>
 {
     const id = workIdIn((await must(box, demo, ["work", "propose", "cell 6: pin the clock in the retry test"])).out);
-    const accepted = idIn((await mustPerson(box, demo, ["work", "accept", id])).out);
-    const undone = await must(box, demo, ["undo", accepted]);
-    assert.match(undone.out, new RegExp(`self work accept ${id}`));
+    const confirmed = idIn((await mustPerson(box, demo, ["work", "confirm", id])).out);
+    const undone = await must(box, demo, ["undo", confirmed]);
+    assert.match(undone.out, new RegExp(`self work confirm ${id}`));
     assert.match((await must(box, demo, ["work", "show", id])).out, /- Status: review/);
 });
 
@@ -187,7 +187,7 @@ test("cell 11: undoing a revision makes the version before it current again", as
 test("cell 12: undoing a start unfreezes the plan", async () =>
 {
     const id = workIdIn((await must(box, demo, ["work", "propose", "cell 12: a plan picked up in error"])).out);
-    await mustPerson(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "confirm", id]);
     await must(box, demo, ["work", "start", id]);
     await must(box, demo, ["undo", lastEvent("entity.started", id).id]);
     assert.match((await must(box, demo, ["work", "show", id])).out, /- Status: next/);
@@ -285,10 +285,18 @@ async function refusedUndo(id)
     return refused.out;
 }
 
-test("cell 21: undoing a person's ruling on a design report is refused, naming a new design report", async () =>
+// Cell 21 read "undoing a person's ruling on a design report is refused". #400
+// took that refusal off the list: it rested on the ruling being a person's, and
+// a session records the same ruling now — so a design approved against the
+// wrong unit is taken back like any other mistake. What guards it instead is
+// cell 44 of the #400 table, in agent-consent.test.mjs: an approval a dispatch
+// stood on is refused with the list.
+test("cell 21: a design approval nothing was built on is undone, and the design reads unapproved", async () =>
 {
-    const out = await refusedUndo(fixture("report.confirmed", { digest: "sha256:cell21" }, { work: "w-cell21", confirms: "r-cell21" }));
-    assert.match(out, /--design --implements/);
+    const approval = fixture("report.confirmed", { digest: "sha256:cell21" }, { work: "w-cell21", confirms: "r-cell21" });
+    const undone = await selfIn(box, demo, ["undo", approval]);
+    assert.equal(undone.code, 0, undone.out);
+    assert.equal(events().at(-1).refs.annuls, approval);
 });
 
 test("cell 22: undoing an artifact registration is refused, naming artifact prune", async () =>
@@ -441,7 +449,7 @@ test("cell 40: undoing a proposal its acceptance answered is refused, naming the
 {
     const id = workIdIn((await must(box, demo, ["work", "propose", "cell 40: a plan somebody accepted"])).out);
     const proposal = lastEvent("entity.proposed", id).id;
-    await mustPerson(box, demo, ["work", "accept", id]);
+    await mustPerson(box, demo, ["work", "confirm", id]);
     const refused = await selfIn(box, demo, ["undo", proposal]);
     assert.equal(refused.code, 2, refused.out);
     assert.match(refused.out, /entity\.confirmed/);
@@ -555,7 +563,7 @@ test("cell 50: undoing an acceptance takes its grouping edge with it", async () 
         "--objective", objective, "--value", "closes the gap", "--success", "it ships", "--stop", "if superseded",
         "--risk", "low", "--capacity", "one round", "--evidence-plan", "a recorded run",
         "--confidence", "high", "--expires", "2099-01-01"])).out);
-    const accepted = idIn((await mustPerson(box, demo, ["work", "accept", id])).out);
+    const accepted = idIn((await mustPerson(box, demo, ["work", "confirm", id])).out);
     const linked = lastEvent("entity.linked", id).id;
     assert.equal(events().filter((event) => event.refs?.batch === lastEvent("entity.confirmed", id).refs?.batch).length, 2);
     await must(box, demo, ["undo", accepted]);
@@ -574,7 +582,7 @@ test("cell 50a: undoing the acceptance of a superseding plan opens the unit it r
     const target = await addUnit("cell 50a: the outcome a correction replaced");
     const plan = workIdIn((await must(box, demo, ["work", "propose", "cell 50a: the outcome, stated correctly",
         "--supersedes", target, "--why", "the first wording was wrong"])).out);
-    const accepted = await approvedIn(box, demo, ["work", "accept", plan], target);
+    const accepted = await approvedIn(box, demo, ["work", "confirm", plan], target);
     assert.equal(accepted.code, 0, accepted.out);
     assert.match((await must(box, demo, ["work", "show", target])).out, /- Status: retired/);
     const confirm = lastEvent("entity.confirmed", plan).id;

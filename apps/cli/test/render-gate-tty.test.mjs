@@ -42,7 +42,7 @@ mustSpawn(box, demo, ["project", "init", "--name", "demo", "--desc", "the render
 async function recordedUnit(plan)
 {
     const proposed = mustSpawn(box, demo, ["work", "propose", plan]).out.match(/\bw-[0-9a-z]{5}\b/)[0];
-    const accepted = await approvedIn(box, demo, ["work", "accept", proposed], "");
+    const accepted = await approvedIn(box, demo, ["work", "confirm", proposed], "");
     assert.equal(accepted.code, 0, accepted.out);
     return proposed;
 }

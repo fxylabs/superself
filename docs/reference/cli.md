@@ -169,16 +169,16 @@ exact line that takes it back, so a wrong id is caught before anything is built
 on it. `--meant "<what you meant>"` adds the caller's own restatement beside it
 and records it on the event; it is printed, never judged.
 
-### Approving a reviewed set at once
+### Applying a reviewed set at once
 
-Destroying a record is a person's call, so `decide retract`, `convention drop`,
-`work retire` and the rest refuse to run from a process with no terminal. An
-agent auditing project state produces many of those calls at once, and running
-them one at a time prices the judgment per record instead of per decision.
+`decide retract`, `convention drop`, `work retire` and the rest each state what
+they destroy and then record it. An agent auditing project state produces many
+of those calls at once, and writing them one at a time is many appends any one
+of which can be the one that fails.
 
-`self apply <file>` is the one human action that covers the set. The file holds
-one command per line, exactly as it would be typed, with or without the leading
-`self`; blank lines and lines beginning with `#` are notes:
+`self apply <file>` runs the set as one append. The file holds one command per
+line, exactly as it would be typed, with or without the leading `self`; blank
+lines and lines beginning with `#` are notes:
 
 ```text
 # duplicates the audit found
@@ -375,8 +375,8 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   `self context`, which carries one row for the skill a name actually reaches.
 - `list` and `show` read, so they take `--project <slug>`. `add` and `drop`
   write, so they take no read-scope flag and record into the project they run
-  in. `drop` is a withdrawal like any other: a person at a terminal, typing the
-  id back.
+  in. `drop` is a withdrawal like any other: what it destroys is disclosed
+  first, and `self undo` takes it back.
 
 ### Outcome and work commands
 
@@ -403,20 +403,21 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   claim must carry evidence: a report with a commit or an artifact, or a
   done-time `--report` stating what verifiably happened. A bare claim is
   refused.
-- `work add` and `work accept` write a confirmed work record, which is a
-  person's call: a process with no person at its keyboard — one a runner
-  started, or one whose stdin is not a terminal — is refused, nothing is
-  recorded, and the refusal hands back the exact `work propose` line to run
-  instead. A person at their own terminal loses nothing: both stay one command,
-  with no prompt to answer. Only stdin is read, so piping a command's output
-  changes nothing about who is running it.
-- `work propose "<plan>"` records work for a person to review. The plan text
-  alone is enough; naming `--objective` or `--milestone` makes it a gap
-  proposal, which owes the full brief. `work accept` confirms it under the
-  same id, and the acceptance binds the exact version of the plan it read.
+- `work add` and `work confirm` write a confirmed work record. Neither asks for
+  a person at a keyboard: both write a record `self undo` takes straight back,
+  and each event states whether a person or an agent session wrote it. `work
+  accept` is the spelling `work confirm` had before, kept as an undocumented
+  alias so a script written against it keeps working.
+- `work propose "<plan>"` records work that wants review before it is built.
+  The plan text alone is enough; naming `--objective` or `--milestone` makes it
+  a gap proposal, which owes the full brief. `work confirm` confirms it under
+  the same id, binding the exact version of the plan it read. Proposing is a
+  statement about the plan, not about the caller: `work add` records the same
+  unit confirmed at once, the way `decide "<text>"` does against
+  `decide --proposed`.
 - `work propose "<plan>" --supersedes <work-id> --why w` proposes a correction
   of a unit that has already started. The named unit is untouched while the
-  plan waits: the acceptance records the new unit and retires the one it
+  plan waits: the confirm records the new unit and retires the one it
   replaces, naming it the successor — the same pair `work add --supersedes`
   records in one command. A unit that closed between the proposal and the
   acceptance refuses the acceptance rather than being retired over it, and the

@@ -96,8 +96,8 @@ the commands now share a process.
 |---|---|---|---|
 | 20 | the binary boots, resolves a workspace, records, refuses | `smoke.test.mjs` | the shebang, the `bin` mapping and module resolution of a published install. This file spawns on purpose and never stops |
 | 21 | each exit code is the status a process exits with | `driver.test.mjs` | `process.exitCode` becoming an exit status is watched by nothing else once the cases stop spawning. Runs all four codes both ways and compares |
-| 22 | the human gate refuses a process with no terminal | `retirement-gate.test.mjs` | a driven process has whatever terminal the driver hands it. The one cell whose subject is *not having one* needs a real one |
-| 22b | the person gate refuses a process with no terminal at all | `work-entry-gate.test.mjs` cell 3, `smoke.test.mjs` | the same reason as cell 22, for the presence gate #389 puts on `work add` and `work accept`. Its other half — a terminal on stdout and none on stdin (cell 4) — is driven in-process instead, because a child needs a pty to have a terminal on one end only |
+| 22 | what a process with no terminal records | `retirement-gate.test.mjs` | a driven process has whatever terminal the driver hands it. The one cell whose subject is *not having one* needs a real one. Its subject inverted in #400 — the process records rather than being refused, and the event says an agent wrote it — and it still needs a real terminal-less process to say so |
+| 22b | what a process with no terminal at all records | `work-entry-gate.test.mjs` cell 3, `smoke.test.mjs` | the same reason as cell 22, for `work add` and `work confirm`. Its other half — a terminal on stdout and none on stdin (cell 3b) — is driven in-process instead, because a child needs a pty to have a terminal on one end only |
 | 23 | the three files that decide "styled" at module load | `render-gate-tty`, `confirm-owner-tty`, `search-styled` | `style.ts` answers once, when imported. Normalising the terminal per call is too late, and a painted setup line breaks `idIn`'s `[bracket]` parse |
 | 25 | the pid ledger's liveness judgment | `process.test.mjs` | **no change needed, and this table says why**: the cells record a *spawned child's* pid, never the runner's, so what liveness is judged about is the same under either driver |
 | 26 | credential lock contention | `pr7-concurrency.test.mjs` | real process contention is the subject; `selfAsync` stays |
@@ -113,18 +113,20 @@ counter keyed on the normalized store path, not on the process.
 
 ## 4 — the environment and the terminal
 
-`apps/cli/test/driver.test.mjs`. The retirement gate reads both axes at once —
-it refuses unless there is a terminal *and* no agent-session marker — which
-makes it the one command whose answer states what the driver handed it.
+`apps/cli/test/driver.test.mjs`. The retirement path reads both axes at once —
+`personAtTerminal` answers `person` only where there is a terminal *and* no
+agent-session marker — which makes it the one command whose *record* states
+what the driver handed it. Before #400 it stated it by refusing; since #400 it
+states it in the event's `by` field, and these cells read that instead.
 
 | # | State | Scenario | Expected |
 |---|---|---|---|
 | 28 | `SUPERSELF_SESSION`, inherited | the runner's own environment has it | the command does not see it, and the gate opens |
-| 29 | `SUPERSELF_SESSION`, named | a caller passes it as `extra` | the command sees it, and the gate refuses (#230's two-session case still stands) |
+| 29 | `SUPERSELF_SESSION`, named | a caller passes it as `extra` | the command sees it, and the record names that session (#230's two-session case still stands) |
 | 30 | a key only the last box carried | box A then box B | B's command does not see A's key — the environment is replaced, not merged |
 | 31 | `SUPERSELF_JSON=1` | the variable alone, no flag | machine mode |
-| 32 | the runner has a terminal | default options | the command sees none, its output carries no styling, and the runner's `isTTY` is back afterwards |
-| 33 | the caller asks for a terminal | `approvedIn`'s path | the gate opens, the record is written, and `isTTY` is back afterwards |
+| 32 | the runner has a terminal | default options | the command sees none — its record says `agent`, its output carries no styling, and the runner's `isTTY` is back afterwards |
+| 33 | the caller asks for a terminal | `approvedIn`'s path | the record is written saying `person`, and `isTTY` is back afterwards |
 
 ## 5 — the missing-`await` defence
 

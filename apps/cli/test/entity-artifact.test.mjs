@@ -371,9 +371,9 @@ test("26: a supersession credits the predecessor's pointer as well as its text",
     const { box, demo, artifact } = await withGuide();
     setCaps(box, { fullTokens: text.length + POINTER });
     const first = idIn((await must(box, demo, ["convention", "add", text, "--artifact", artifact])).out);
-    // Displacing a record is a person's call (#173), so the swap runs through
-    // the typed-answer path; the cap gate refuses before the disclosure, so a
-    // refusal here would still come back as a non-zero code.
+    // Driven as a person's call, which is the caller this cell is about. The
+    // cap gate refuses before the disclosure either way, so a refusal here
+    // would still come back as a non-zero code.
     const swap = await approvedIn(box, demo, ["convention", "add", text, "--supersedes", first, "--artifact", artifact], first);
     assert.equal(swap.code, 0,
         "an exact swap fits, which it only does when the seat the predecessor frees includes its pointer");

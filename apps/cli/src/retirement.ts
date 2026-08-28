@@ -1,23 +1,24 @@
-// The one path every verb takes to destroy a record. Retiring a record is a
-// person's call: this gate puts the target in front of whoever is asking and
-// then reads a typed confirmation from a terminal, so a process with no
-// person at it cannot destroy anything (#173).
+// The one path every verb takes to destroy a record. It states what is being
+// lost, and then records it (#173, #400).
 //
-// The disclosure is rendered once and ends two ways — a refusal inside a
-// process with no terminal, a challenge prompt at one — so what an agent
-// reads and what a person reads cannot drift apart.
+// It used to read a typed confirmation from a terminal first, so a process
+// with nobody behind it destroyed nothing. What justified that was "a mistaken
+// retirement cannot be taken back", and since #390 it can: every event this
+// path writes is an `entity.*` transition `self undo` reverses. So the prompt
+// went and the disclosure stayed — a caller reads what it destroyed, and the
+// event says who wrote it.
 //
-// One person's judgment covers one reviewed set, not one record (#312). A
-// batch collects the gated calls a whole plan makes, discloses them together,
-// and reads one typed confirmation — the same disclosure and the same prompt,
-// over more than one call.
+// One disclosure covers one reviewed set, not one record (#312). A batch
+// collects the calls a whole plan makes and states them together, so a set
+// lands as one append rather than as one write per line.
 import { CommandLeaf } from "./contract.js";
 import { EntityState } from "./entities.js";
-import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
+import { WrittenBy, writtenBy } from "./human.js";
 import { ProjectModel } from "./model.js";
+import { notice } from "./output.js";
 import { CliContext } from "./paths.js";
 import { holdAppends, recordCalls, recordEvents } from "./pipeline.js";
-import { bold, dim, plural, red } from "./style.js";
+import { bold, dim, plural } from "./style.js";
 import { CliError, SelfEvent } from "./types.js";
 
 // What the three transitions are called where a person reads them. The verb
@@ -45,7 +46,7 @@ interface RetirementIntent extends RetirementDetail
     kind: RetirementKind;
     // The records this call destroys, already resolved and already checked
     // for being destroyable: resolution and its refusals stay with the verb
-    // that owns them, so the gate never invents a second way to name a record.
+    // that owns them, so this path never invents a second way to name a record.
     targets: EntityState[];
     // `why` is the reason this call gives, where its transition carries one. It
     // is half of what a person is judging — the record says what is being lost
@@ -59,7 +60,7 @@ interface RetirementIntent extends RetirementDetail
     // ones replacing them do not, and one answer writes both (#312 review 1).
 }
 
-// What a verb hands the gate: the ids it already resolved, read back out of
+// What a verb hands this path: the ids it already resolved, read back out of
 // the folded model it already built. A target the model does not carry is
 // dropped rather than guessed at — the verb's own refusals ran first. Only a
 // record that is still standing is a target: a supersedes link naming
@@ -117,17 +118,9 @@ const SUBJECT: Record<RetirementKind, string> = {
     retire: "gives up the outcome of"
 };
 
-// What a person types back where the ids are too many to type. `supersede`
-// answers "retire" because that is what displacing a record does to it.
-const ACTION: Record<RetirementKind, string> = {
-    supersede: "retire",
-    retract: "retract",
-    retire: "retire"
-};
-
 // The same three transitions in the past tense, for the line that states the
-// reason a call gives. A table rather than `${ACTION[kind]}ed`, because that
-// spelled "retireed" on every `work retire`, `objective close --as dropped`,
+// reason a call gives. A table rather than a suffix rule, because that spelled
+// "retireed" on every `work retire`, `objective close --as dropped`,
 // `milestone drop` and `state retire` — the one line a person reads to judge
 // whether the reason justifies the loss.
 const PAST: Record<RetirementKind, string> = {
@@ -136,22 +129,15 @@ const PAST: Record<RetirementKind, string> = {
     retire: "retired"
 };
 
-// How many references and how much text a person will actually read. A
-// disclosure that scrolls past the top of the terminal is not a disclosure.
+// How many references and how much text a reader will actually read. A
+// disclosure that scrolls past the top of a terminal — or past the top of a
+// session's transcript — is not a disclosure.
 const REFERENCE_LIMIT = 8;
 const TEXT_LINE_LIMIT = 20;
 
-// How much a person is asked to type back. Naming the exact ids is the
-// strongest statement of "these ones and no others", and it stays the
-// challenge while it is short enough to read and type; past that a person
-// copies without reading, which confirms nothing. A reviewed set beyond the
-// bound says what is being done and to how many, and the disclosure above it
-// says which.
-const CHALLENGE_LIMIT = 60;
-
-// What one call — or one line of a reviewed set — puts in front of a person:
-// the records it destroys, and the folded model the verb resolved them
-// against, so every target is described by the fold its own verb read.
+// What one call — or one line of a reviewed set — states: the records it
+// destroys, and the folded model the verb resolved them against, so every
+// target is described by the fold its own verb read.
 interface Disclosed
 {
     intent: RetirementIntent;
@@ -163,62 +149,41 @@ function targetsOf(disclosed: Disclosed[]): EntityState[]
     return disclosed.flatMap((one) => one.intent.targets);
 }
 
-// The gate. Returns the record of how the person was verified, which the
-// caller puts in the event payload — `origin.confirmed` alone is a bit any
-// process can set, so the payload carries what was actually typed.
-function requireHumanRetirement(disclosed: Disclosed[]): HumanConfirmation
+// The disclosure, printed before the write it describes. It goes through
+// `notice` — the render gate's own channel for what a lower layer has to say
+// while a command is still running — because it is not the command's answer:
+// the receipt still says what was recorded.
+//
+// Returns who wrote it, which the caller puts in the event payload. A caller
+// that reads this on its own terminal and a session that reads it in a
+// transcript are shown the same lines, so the two cannot drift apart.
+function discloseRetirement(disclosed: Disclosed[]): WrittenBy
 {
-    const asked = challenge(disclosed);
-    if (!personAtTerminal() || !process.stdout.isTTY)
-    {
-        throw new CliError(refusal(disclosed, renderDisclosure(disclosed, PLAIN_EMPHASIS)));
-    }
-    const confirmed = confirmHuman(
-        `${red(bold(headline(disclosed)))}\n\n${renderDisclosure(disclosed, PROMPT_EMPHASIS)}`,
-        asked,
-        `type ${bold(asked)} to confirm exactly what you are approving`);
-    if ("code" in confirmed)
-    {
-        throw new CliError(`${confirmed.detail}\n\n  ${confirmed.next}`);
-    }
-    return confirmed;
+    notice(`${bold(headline(disclosed))}\n\n${renderDisclosure(disclosed)}\n`);
+    return writtenBy();
 }
 
-function challenge(disclosed: Disclosed[]): string
-{
-    const ids = targetsOf(disclosed).map((target) => target.id).join(" ");
-    return ids.length <= CHALLENGE_LIMIT ? ids : `${action(disclosed)} ${targetsOf(disclosed).length}`;
-}
-
-// The word for what the whole set is having done to it. A set that mixes
-// transitions is described by the one they share: every record in it is being
-// retired from what is true now.
-function action(disclosed: Disclosed[]): string
-{
-    const kinds = new Set(disclosed.map((one) => one.intent.kind));
-    return kinds.size === 1 ? ACTION[[...kinds][0]] : ACTION.supersede;
-}
-
-// Destroying a record goes through the gate and then through the same single
+// Destroying a record states itself and then goes through the same single
 // writer every other event does: this is a caller of `recordEvents`, never a
 // second way into the log.
 //
-// A call that destroys nothing passes straight through. Every verb that can
-// destroy routes through here unconditionally, so whether the gate fires is
-// decided by what the call displaces rather than by each verb deciding for
-// itself — which is what keeps `decide --proposed --supersedes` out of the
-// gate and `decide confirm` on a proposal that carries one inside it.
+// A call that destroys nothing passes straight through with nothing disclosed.
+// Every verb that can destroy routes through here unconditionally, so whether
+// the disclosure fires is decided by what the call displaces rather than by
+// each verb deciding for itself — which is what keeps `decide --proposed
+// --supersedes` silent and `decide confirm` on a proposal that carries one
+// loud.
 export function recordRetirement(
     ctx: CliContext,
     intent: RetirementIntent,
     model: ProjectModel,
-    events: (confirmation?: HumanConfirmation) => SelfEvent[],
+    events: (by: WrittenBy) => SelfEvent[],
     summary: string
 ): void
 {
     if (intent.targets.length === 0)
     {
-        recordEvents(ctx, events(), summary);
+        recordEvents(ctx, events(writtenBy()), summary);
         return;
     }
     if (collecting !== null)
@@ -226,12 +191,12 @@ export function recordRetirement(
         collecting.push({ ctx, intent, model, events, summary });
         return;
     }
-    recordEvents(ctx, events(requireHumanRetirement([{ intent, model }])), summary);
+    recordEvents(ctx, events(discloseRetirement([{ intent, model }])), summary);
 }
 
 /* ── which verbs a reviewed set may run ────────────────────────────── */
 
-// The leaves that can reach this gate, declared where they are declared.
+// The leaves a reviewed set may run, declared where they are declared.
 //
 // Holding the log shut is not enough on its own to keep a plan inside what one
 // confirmation covers: the log is not the only thing a verb writes. `remote
@@ -261,23 +226,23 @@ export function retires(node: CommandLeaf): boolean
 
 /* ── one judgment over a reviewed set (#312) ───────────────────────── */
 
-// A gated call collected rather than asked about: everything the write needs,
-// held until the person has seen the whole set it belongs to.
+// A call collected rather than written where it stands: everything the write
+// needs, held until the whole set it belongs to has been stated.
 interface Collected extends Disclosed
 {
     ctx: CliContext;
-    events: (confirmation?: HumanConfirmation) => SelfEvent[];
+    events: (by: WrittenBy) => SelfEvent[];
     summary: string;
 }
 
 let collecting: Collected[] | null = null;
 
-export const NESTED_SET_REFUSAL = "a reviewed set cannot open another one — one confirmation covers one file, "
-    + "and a plan that applies a plan would put records outside it under the same answer";
+export const NESTED_SET_REFUSAL = "a reviewed set cannot open another one — one append covers one file, "
+    + "and a plan that applies a plan would put records outside it into the same write";
 
 // Open the collection, and stop the log accepting anything at all while it is
 // open: a verb that records rather than destroys is refused by the append gate
-// instead of writing before the person was asked.
+// instead of writing beside the set.
 export function collectRetirements(): void
 {
     if (collecting !== null)
@@ -288,9 +253,9 @@ export function collectRetirements(): void
     holdAppends(true);
 }
 
-// How many gated calls the open collection is holding. A caller runs a line
-// and asks whether it added anything: a line that destroys nothing has no
-// place in a set one confirmation covers.
+// How many destroying calls the open collection is holding. A caller runs a
+// line and asks whether it added anything: a line that destroys nothing has no
+// place in a set one append covers.
 export function collectedSoFar(): number
 {
     return collecting === null ? 0 : collecting.length;
@@ -305,15 +270,14 @@ export function dropCollected(): void
     holdAppends(false);
 }
 
-// The whole set, disclosed once and written only after one typed
-// confirmation. Returns how many records were retired, which is what the
-// caller answers with.
-export function approveCollected(): number
+// The whole set, stated once and written once. Returns how many records were
+// retired, which is what the caller answers with.
+export function recordCollected(): number
 {
     const queued = collecting ?? [];
     dropCollected();
     refuseRepeats(queued);
-    const confirmation = requireHumanRetirement(queued);
+    const by = discloseRetirement(queued);
     const retired = targetsOf(queued).length;
     // One write, not one per line. Every line's events are composed first and
     // handed over together, so a line the sanitizer or the archive gate refuses
@@ -321,15 +285,15 @@ export function approveCollected(): number
     // meant a second line carrying an absolute home path, or a first line
     // naming an archived project, destroyed the records above it and then
     // exited 1 saying nothing had been recorded (#312 review 1).
-    recordCalls(queued.map((one) => ({ ctx: one.ctx, events: one.events(confirmation), summary: one.summary })),
-        `${plural(retired, "record")} retired on one confirmation`);
+    recordCalls(queued.map((one) => ({ ctx: one.ctx, events: one.events(by), summary: one.summary })),
+        `${plural(retired, "record")} retired in one append`);
     return retired;
 }
 
-// One confirmation covers a set, and a set holds each record once. A second
-// line naming a record an earlier one already retires records an event that
-// changes nothing, so it is a mistake in the reviewed file rather than a
-// no-op to wave through.
+// One append covers a set, and a set holds each record once. A second line
+// naming a record an earlier one already retires records an event that changes
+// nothing, so it is a mistake in the reviewed file rather than a no-op to wave
+// through.
 function refuseRepeats(queued: Collected[]): void
 {
     const seen = new Set<string>();
@@ -337,31 +301,19 @@ function refuseRepeats(queued: Collected[]): void
     {
         if (seen.has(target.id))
         {
-            throw new CliError(`${target.id} is named twice, and one confirmation covers each record once — `
+            throw new CliError(`${target.id} is named twice, and one append covers each record once — `
                 + "drop the repeated line and run it again");
         }
         seen.add(target.id);
     }
 }
 
-// The refusal an agent reads. It ends with the command as it was typed, so
-// the person it is handed to runs that rather than rebuilding it.
-function refusal(disclosed: Disclosed[], disclosure: string): string
-{
-    return [
-        `this ${subject(disclosed)} ${describe(disclosed)}, and nothing was recorded — ` +
-            "retiring a record is a person's call, and this process has no terminal to make it at",
-        "",
-        disclosure,
-        "",
-        "  a person runs this in their own terminal:",
-        `    ${typedCommand()}`
-    ].join("\n");
-}
-
+// The line above the disclosure: what is being lost, and the one verb that
+// gives it back. `self undo` with no id takes back the newest append, which is
+// the one this is about to write (#390).
 function headline(disclosed: Disclosed[]): string
 {
-    return `this ${subject(disclosed)} ${describe(disclosed)} — nothing is recorded until you confirm`;
+    return `this ${subject(disclosed)} ${describe(disclosed)} — \`self undo\` takes it back`;
 }
 
 // What is happening to the set, in one verb. A set that mixes transitions
@@ -393,57 +345,43 @@ function commonLabel(targets: EntityState[]): string
     return labels.size === 1 ? [...labels][0] : "record";
 }
 
-// How a disclosure is weighted where it is read. The prompt is the only styled
-// one: a refusal is read by a process, and an escape sequence in text something
-// parses is noise it never asked for. Painting is a no-op off a terminal
-// anyway, so `PROMPT_EMPHASIS` is safe wherever the prompt itself is reachable.
-interface Emphasis
+// One target, as it is read: what it says, when it was confirmed, how long
+// ago, and what still points at it. The record's own words are never painted —
+// they are the thing being judged. `bold` and `dim` are no-ops off a terminal,
+// so the same lines reach a session's transcript without an escape sequence in
+// them; the two renders this once kept apart were the same text either way.
+function renderTarget(target: EntityState, model: ProjectModel): string[]
 {
-    // What the record is, which is what a person scanning for the wrong target
-    // reads first.
-    head: (text: string) => string;
-    // What points at it, which matters only once the target is the right one.
-    aside: (text: string) => string;
-}
-
-const PLAIN_EMPHASIS: Emphasis = { head: (text) => text, aside: (text) => text };
-const PROMPT_EMPHASIS: Emphasis = { head: bold, aside: dim };
-
-// One target, as a person reads it: what it says, when it was confirmed, how
-// long ago, and what still points at it. The record's own words are never
-// painted — they are the thing being judged.
-function renderTarget(target: EntityState, model: ProjectModel, emphasis: Emphasis): string[]
-{
-    const lines = [emphasis.head(`  ${target.id}  ${target.labels[0] ?? "record"}  confirmed ${target.ts}  (${age(target.ts)})`)];
+    const lines = [bold(`  ${target.id}  ${target.labels[0] ?? "record"}  confirmed ${target.ts}  (${age(target.ts)})`)];
     lines.push(...quoted(target.text));
     if (target.why !== undefined)
     {
         lines.push(...quoted(target.why, "why: "));
     }
-    lines.push(emphasis.aside(`  referenced by: ${references(target.id, model)}`));
+    lines.push(dim(`  referenced by: ${references(target.id, model)}`));
     return lines;
 }
 
 // One blank line between calls, because a reviewed set of a dozen read as one
 // wall of text is a list nobody checks record by record.
-function renderDisclosure(disclosed: Disclosed[], emphasis: Emphasis): string
+function renderDisclosure(disclosed: Disclosed[]): string
 {
-    return disclosed.map((one) => renderCall(one, emphasis).join("\n")).join("\n\n");
+    return disclosed.map((one) => renderCall(one).join("\n")).join("\n\n");
 }
 
 // One call's targets, and under them the reason it gives for retiring them.
-// Both halves are what a person judges: the record's own words say what is
+// Both halves are what a reader judges: the record's own words say what is
 // being lost, and the reason says why this call thinks it should be.
-function renderCall(one: Disclosed, emphasis: Emphasis): string[]
+function renderCall(one: Disclosed): string[]
 {
-    const lines = one.intent.targets.flatMap((target) => renderTarget(target, one.model, emphasis));
+    const lines = one.intent.targets.flatMap((target) => renderTarget(target, one.model));
     return [...lines, ...reasonGiven(one.intent)];
 }
 
 // Why this call says the records should go. A withdrawal says it in `--why`; a
 // supersession says it by writing a successor, so the successor's own words are
-// the reason and the disclosure states them — the person is approving that text
-// as much as the loss of the text above it.
+// the reason and the disclosure states them — what replaced the text above is
+// as much of the change as the loss of it.
 function reasonGiven(intent: RetirementIntent): string[]
 {
     const lines = intent.successor === undefined
@@ -497,24 +435,4 @@ function age(ts: string): string
     }
     const hours = Math.floor(minutes / 60);
     return hours < 24 ? `${hours} hour${hours === 1 ? "" : "s"} ago` : `${Math.floor(hours / 24)} days ago`;
-}
-
-// The command line this invocation was given. `process.argv` answers for the
-// **process**, which was the same thing only while one process ran one command.
-// It no longer is: `runCli` is called directly, more than once, in a process
-// whose own argv is something else entirely — and a refusal whose remedy line
-// tells a person to re-run the test runner is worse than one that says nothing.
-let typedArgv: string[] = [];
-
-export function recordInvocation(argv: string[]): void
-{
-    typedArgv = argv;
-}
-
-// The command exactly as it was typed. Arguments that carried spaces are
-// re-quoted so the line can be pasted back verbatim.
-function typedCommand(): string
-{
-    const args = typedArgv.map((arg) => /[\s"]/.test(arg) ? `"${arg.replace(/"/g, "\\\"")}"` : arg);
-    return ["self", ...args].join(" ");
 }

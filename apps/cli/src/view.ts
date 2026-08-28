@@ -416,7 +416,7 @@ function rulingRows(model: ProjectModel): WaitingRow[]
             kind: "work",
             text: firstLine(`${proposal.outcome} — ${proposalBrief(proposal)}`, 240),
             ref: proposal.id,
-            action: "accept"
+            action: "confirm"
         })),
         // A standalone plan (#356) carries no brief, so the row weighs it by
         // its own text and the version a person is being asked about.
@@ -424,7 +424,7 @@ function rulingRows(model: ProjectModel): WaitingRow[]
             kind: "work",
             text: firstLine(`${work.outcome} — ${planNote(work)}`, 240),
             ref: work.id,
-            action: "accept"
+            action: "confirm"
         }))
     ];
 }

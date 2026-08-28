@@ -69,7 +69,7 @@ test("a work proposal carries its accept command, which the row text never swall
     assert.ok(shown.includes(`work proposal ${proposal}`), `the proposal row is missing:\n${shown}`);
     // The brief is six lines and the accept command is the last of them, so a
     // render that prints the first line alone loses it entirely.
-    assert.ok(shown.includes(`self work accept ${proposal}`), `the accept command was truncated away:\n${shown}`);
+    assert.ok(shown.includes(`self work confirm ${proposal}`), `the accept command was truncated away:\n${shown}`);
 });
 
 test("a proposed decision carries its confirm command in the attention band", async () =>
@@ -107,7 +107,7 @@ test("status shows the same band with the same commands", async () =>
 {
     const shown = await terminal(["status"]);
     assert.ok(shown.includes(`self state confirm ${rule}`), `status dropped the confirm command:\n${shown}`);
-    assert.ok(shown.includes(`self work accept ${proposal}`), `status dropped the accept command:\n${shown}`);
+    assert.ok(shown.includes(`self work confirm ${proposal}`), `status dropped the accept command:\n${shown}`);
 });
 
 test("the piped render still says everything in one sentence per row", async () =>
@@ -117,6 +117,6 @@ test("the piped render still says everything in one sentence per row", async () 
     // where it has always been, rather than on a line of its own.
     assert.ok(shown.includes(`- proposed placement of ${rule}: exposure index (too broad for full) (confirm with \`self state confirm ${rule}\`)`),
         `the piped sentence changed shape:\n${shown}`);
-    assert.ok(shown.includes(`self work accept ${proposal}`));
+    assert.ok(shown.includes(`self work confirm ${proposal}`));
     assert.ok(!shown.includes("▸"), "a terminal marker reached the piped render");
 });

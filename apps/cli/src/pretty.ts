@@ -294,7 +294,7 @@ export function shellArgument(value: string): string
 // output answers for wherever it is run rather than for what it describes.
 //
 // Only the verbs that have a scope form take one. `self decide confirm`
-// and `self work accept` have none,
+// and `self work confirm` have none,
 // so they are left as they are rather than promising a flag that does not
 // exist. Both context renders read this, which is why it lives here: `views.ts`
 // already imports this module, so one direction stays.

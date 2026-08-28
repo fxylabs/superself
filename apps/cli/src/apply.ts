@@ -1,32 +1,30 @@
-// One person's judgment over a reviewed set (#312). Destroying a record is a
-// person's call, so the verbs that do it refuse to run from a process with no
-// terminal — and an agent auditing a project's state produces a dozen of those
-// calls at once. Running them one at a time prices the judgment per record
-// instead of per decision, and at twenty records the cleanup simply stops
-// happening.
+// One reviewed set, applied as one append (#312). An agent auditing a
+// project's state produces a dozen record-destroying calls at once, and
+// writing them one at a time is a dozen appends any one of which can be the
+// one that fails — so a set of them lands together or not at all, and one
+// disclosure states the whole of what it destroyed.
 //
 // `self apply <file>` reads that set. Every line takes exactly the path a
 // typed command takes — the contract resolves it, the parse gate reads its
 // options, the verb that owns the record resolves the record — and every write
-// is held until the whole set has been disclosed at one prompt. Nothing is
-// queued invisibly and nothing is applied outside the file: a line that
-// records rather than destroys, one the CLI does not dispatch, one its own
-// verb refuses, or one naming a record another line already names refuses the
-// whole file with nothing written.
+// is held until the whole set has been stated. Nothing is queued invisibly and
+// nothing is applied outside the file: a line that records rather than
+// destroys, one the CLI does not dispatch, one its own verb refuses, or one
+// naming a record another line already names refuses the whole file with
+// nothing written.
 //
-// A plan is deliberately not read from stdin. The typed confirmation is read
-// from the terminal on fd 0, so a file piped in would leave nothing there to
-// confirm at.
+// A plan is deliberately not read from stdin: a file piped in would be a set
+// nobody could read back before it was applied.
 import { readFileSync } from "node:fs";
 import { parseCommand, requireText } from "./args.js";
 import { resolveAliasCommand } from "./aliases.js";
 import { Command, leaf, Resolved, resolveCommand } from "./contract.js";
 import {
-    approveCollected,
     collectedSoFar,
     collectRetirements,
     dropCollected,
     NESTED_SET_REFUSAL,
+    recordCollected,
     retires
 } from "./retirement.js";
 import { plural } from "./style.js";
@@ -54,8 +52,8 @@ export function applyCommand(commands: () => Command[]): Command
         usage: [{
             syntax: "apply <file>",
             description: [
-                "run a reviewed file of record-destroying commands on one confirmation",
-                "(nothing is recorded until the whole set is confirmed at a terminal)"
+                "run a reviewed file of record-destroying commands as one append",
+                "(the whole set lands together, or the first refusal stops all of it)"
             ],
             verbs: [""]
         }],
@@ -66,11 +64,11 @@ export function applyCommand(commands: () => Command[]): Command
 }
 
 const APPLY_DETAIL = [
-    "approve a reviewed set of person-gated commands with one deliberate action.",
-    "The verbs that destroy a record refuse to run where nobody is at a terminal,",
-    "and an agent auditing project state prepares many of them at once. This runs",
-    "that set, discloses every record it would destroy — its id, its own text, its",
-    "reason — and records the whole set once you confirm.",
+    "run a reviewed set of record-destroying commands as one append. An agent",
+    "auditing project state prepares many of them at once, and writing them one",
+    "at a time is many appends any one of which can be the one that fails. This",
+    "runs that set, states every record it destroys — its id, its own text, its",
+    "reason — and records the whole of it in one write.",
     "",
     "the file holds one command per line, exactly as it would be typed, with or",
     "without the leading `self`. Blank lines and lines beginning with # are notes:",
@@ -82,8 +80,8 @@ const APPLY_DETAIL = [
     "every line has to destroy a record. A line that records something instead,",
     "one no command dispatches, one its own verb refuses, or one naming a record",
     "an earlier line already names refuses the whole file, and nothing in it is",
-    "written — one confirmation covers a set, and a set with a hole in it is not",
-    "the set that was reviewed. A verb outside that set — one that writes the",
+    "written — one append covers a set, and a set with a hole in it is not the",
+    "set that was reviewed. A verb outside that set — one that writes the",
     "store config, the git remote or an installed app, or one that only",
     "reads — is refused before it runs, so a refused file leaves nothing changed",
     "anywhere.",
@@ -91,8 +89,8 @@ const APPLY_DETAIL = [
     "a supersession states what it would write as well as what it would retire:",
     "its successor's own words are its reason, so they are in the disclosure.",
     "",
-    "a plan is not read from stdin: the confirmation is typed at the terminal on",
-    "the same descriptor, so a piped file would leave nothing there to confirm at."
+    "a plan is not read from stdin: a set is reviewed before it is applied, and a",
+    "file that arrives on a pipe is one nobody read back."
 ];
 
 // The collection is opened before the first line runs and dropped on every
@@ -109,7 +107,7 @@ async function applyPlan(commands: Command[], path: string): Promise<CommandOutp
             await runPlanLine(commands, line);
             refuseIdleLine(line, before);
         }
-        return [{ kind: "receipt", text: `${plural(approveCollected(), "record")} retired on one confirmation` }];
+        return [{ kind: "receipt", text: `${plural(recordCollected(), "record")} retired in one append` }];
     }
     finally
     {
@@ -120,7 +118,7 @@ async function applyPlan(commands: Command[], path: string): Promise<CommandOutp
 // Every line goes through the contract and the parse gate a typed command goes
 // through, so nothing here knows what a decision or a work unit is. The render
 // gate is deliberately not called: a line's own receipt would describe a write
-// that has not happened yet, and what the person reads is the one disclosure.
+// that has not happened yet, and what a reader gets is the one disclosure.
 async function runPlanLine(commands: Command[], line: PlanLine): Promise<void>
 {
     try
@@ -137,9 +135,9 @@ async function runPlanLine(commands: Command[], line: PlanLine): Promise<void>
 
 // The root list first and the alias table second, the order a typed command is
 // resolved in — an alias verb's `add --supersedes <id>` retires a record like
-// any other, so a plan has to reach it. A plugin verb records nothing a person
-// has to approve, and the refusal says which verbs a plan runs rather than
-// claiming the word names nothing.
+// any other, so a plan has to reach it. A plugin verb destroys no record, and
+// the refusal says which verbs a plan runs rather than claiming the word names
+// nothing.
 function resolvePlanLine(commands: Command[], argv: string[]): Resolved
 {
     const alias = resolveAliasCommand(process.cwd(), argv[0]);
@@ -168,27 +166,26 @@ function refuseOutOfSet(resolved: Resolved): void
     }
     if (!retires(resolved.leaf))
     {
-        throw new CliError(`\`self ${resolved.path}\` destroys no record, and one confirmation covers only the `
+        throw new CliError(`\`self ${resolved.path}\` destroys no record, and one append covers only the `
             + "calls that do — a plan runs the verbs that retire, retract or supersede a record, and nothing else");
     }
 }
 
 // A line whose verb can destroy a record but whose arguments did not — an
-// `add` with no `--supersedes`, a `close --as reached` — writes something the
-// person was never asked about rather than destroying anything, so it has no
-// place in a set one confirmation covers. Queuing nothing is what gives it
-// away, which is what the check above cannot see: the verb is in the set, the
-// call is not.
+// `add` with no `--supersedes`, a `close --as reached` — records something the
+// disclosure never states rather than destroying anything, so it has no place
+// in a set one append covers. Queuing nothing is what gives it away, which is
+// what the check above cannot see: the verb is in the set, the call is not.
 function refuseIdleLine(line: PlanLine, before: number): void
 {
     if (collectedSoFar() === before)
     {
-        throw lineRefusal(line, new CliError("this destroys no record, and one confirmation covers only the calls that do"));
+        throw lineRefusal(line, new CliError("this destroys no record, and one append covers only the calls that do"));
     }
 }
 
-// A refused line refuses the file: the person reviewed a set, and a set with
-// one line silently dropped is not what they would have approved.
+// A refused line refuses the file: a set was reviewed, and a set with one line
+// silently dropped is not the set that was reviewed.
 function lineRefusal(line: PlanLine, error: unknown): CliError
 {
     return new CliError([

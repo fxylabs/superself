@@ -172,8 +172,8 @@ test("A2: goal add --workspace records the placement value, not a second kind of
 
 test("A3: a workspace goal is replaced by --supersedes, and the successor stays workspace-scoped", async () =>
 {
-    // Retiring a record is a person's call (#173), so the supersession runs
-    // through the approved path with the id typed back.
+    // Driven as a person's call, which is the caller this cell is about — the
+    // supersession itself reaches the same write from a session since #400.
     const printed = (await approvedIn(a.box, a.alpha,
         ["goal", "add", "the company ships twice weekly", "--workspace", "--supersedes", workspaceGoal],
         workspaceGoal)).printed;
@@ -440,8 +440,8 @@ test("B11: an archived project records no event at all, --workspace included", a
 
 test("B13: once the direction is folded, the same archive goes through", async () =>
 {
-    // Withdrawing a confirmed record is a person's call (#173), so the two
-    // exits the refusal names run through the approved path here.
+    // Driven as a person's call: the two exits the refusal names are the
+    // subject here, not which kind of caller takes them.
     const retracted = await approvedIn(b.box, b.alpha,
         ["goal", "retract", companyGoal, "--why", "the company states it elsewhere now"], companyGoal);
     assert.equal(retracted.code, 0, retracted.out);

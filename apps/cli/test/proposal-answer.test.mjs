@@ -95,7 +95,7 @@ for (const kind of KINDS)
     {
         const outcome = `${kind.name}: an outcome taken up`;
         const id = await kind.make(demo, outcome, objective);
-        await mustPerson(box, demo, ["work", "accept", id]);
+        await mustPerson(box, demo, ["work", "confirm", id]);
         assert.equal(waitingBlock(await context(), outcome), undefined, "the accepted proposal is still waiting");
         const listed = (await must(box, demo, ["work"])).out;
         assert.ok(listed.includes(outcome), `the accepted proposal never became a unit:\n${listed}`);
@@ -115,7 +115,7 @@ for (const kind of KINDS)
     {
         const id = await kind.make(demo, `${kind.name}: an outcome turned down then taken up`, objective);
         await must(box, demo, ["work", "decline", id, "--why", "its premises were removed"]);
-        const accepted = await personIn(box, demo, ["work", "accept", id]);
+        const accepted = await personIn(box, demo, ["work", "confirm", id]);
         assert.equal(accepted.code, 1);
         assert.match(accepted.out, /is already declined/);
     });
@@ -137,7 +137,7 @@ for (const kind of KINDS)
         retractionFixture(id, "answered before this version could ask");
         assert.equal(waitingBlock(await context(), outcome), undefined,
             `the replayed retraction left the proposal open:\n${await context()}`);
-        assert.match((await personIn(box, demo, ["work", "accept", id])).out, /is already declined/);
+        assert.match((await personIn(box, demo, ["work", "confirm", id])).out, /is already declined/);
     });
 }
 
@@ -151,10 +151,10 @@ for (const kind of KINDS)
         const outcome = `${kind.name}: an outcome accepted as advertised`;
         await kind.make(demo, outcome, objective);
         const block = waitingBlock(await context(), outcome);
-        const printed = block?.match(/`self (work accept [^`]+)`/);
+        const printed = block?.match(/`self (work confirm [^`]+)`/);
         assert.notEqual(printed ?? null, null, `context advertised no accept command:\n${await context()}`);
-        // Driven with a keyboard: the advertised line is one a person runs, and
-        // accepting a plan is a person's call (#389).
+        // Driven with a keyboard: the advertised line is one a person reads and
+        // runs, which is the caller this cell is about.
         const ran = await personIn(box, demo, printed[1].split(" "));
         assert.equal(ran.code, 0, `the advertised command failed where the context was read:\n${ran.out}`);
     });

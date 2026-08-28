@@ -12,7 +12,7 @@
 // the in-process driver whichever driver the rest of the suite is running.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { drive, git, machine, workIdIn } from "./harness.mjs";
 import { holdAppends } from "../dist/pipeline.js";
@@ -282,6 +282,14 @@ test("cell 27: two writes run back to back in one process, and neither waits on 
 // The retirement gate reads both axes at once: it refuses unless there is a
 // terminal *and* no agent-session marker in the environment. That makes it the
 // one command whose answer states what the driver handed it.
+// The retirement the attempt wrote, read back off the project's own log.
+function retirementIn(it)
+{
+    const file = join(it.ws, ".superself", "projects", "demo", "log.jsonl");
+    return readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+        .findLast((event) => event.type === "entity.retired");
+}
+
 async function retireAttempt(it, options)
 {
     const work = workIdIn((await ok(it.box, it.demo, ["work", "add", "the gate's subject"], { person: true })).out);
@@ -304,12 +312,15 @@ test("cell 28: a session variable in the runner's own environment does not reach
     }
 });
 
+// The named session used to be read as "refuse this": the marker said nobody
+// was behind the call. Since #400 it is read as "say who wrote this", which is
+// the same fact reaching the same place by a shorter route.
 test("cell 29: a session the caller names is one the command sees", async () =>
 {
     const it = await scratch();
-    const refused = await retireAttempt(it, { tty: true, extra: { SUPERSELF_SESSION: "sess-01" } });
-    assert.equal(refused.code, 1);
-    assert.match(refused.out, /nothing was recorded/);
+    const retired = await retireAttempt(it, { tty: true, extra: { SUPERSELF_SESSION: "sess-01" } });
+    assert.equal(retired.code, 0, retired.out);
+    assert.deepEqual(retirementIn(it).payload.by, { kind: "agent", session: "sess-01" });
 });
 
 test("cell 30: a key only the previous call's box carried is gone by the next call", async () =>
@@ -337,10 +348,10 @@ test("cell 32: a runner that has a terminal does not lend it to the command", as
     process.stdout.isTTY = true;
     try
     {
-        const refused = await retireAttempt(it, {});
-        assert.equal(refused.code, 1);
-        assert.match(refused.out, /this process has no terminal/);
-        assert.ok(!refused.out.includes("["), "the command's output carries terminal styling");
+        const retired = await retireAttempt(it, {});
+        assert.equal(retired.code, 0, retired.out);
+        assert.deepEqual(retirementIn(it).payload.by, { kind: "agent" });
+        assert.ok(!retired.out.includes("["), "the command's output carries terminal styling");
         assert.equal(process.stdin.isTTY, true, "the runner's own stdin was not put back");
         assert.equal(process.stdout.isTTY, true, "the runner's own stdout was not put back");
     }

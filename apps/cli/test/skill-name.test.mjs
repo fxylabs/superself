@@ -306,26 +306,33 @@ test("D1: a drop at a terminal records a retraction and leaves the listing and t
     assert.equal(skillBlock((await must(ground.box, ground.demo, ["context"])).out), "");
 });
 
-test("D2: a drop from a pipe is refused by the retirement gate, and records nothing", async () =>
+// D2 and D3 asserted the terminal gate the retirement path had until #400.
+// A drop is one `self undo` takes straight back, so it records from a pipe —
+// what survives is the disclosure of what it destroys, and the `by` that says
+// who destroyed it.
+test("D2: a drop from a pipe records, disclosed, and the event says a session wrote it", async () =>
 {
     const ground = await floor();
     await addSkill(ground, "deploy", "make deploy");
     const before = events(ground.ws).length;
-    const refused = await ground.self(["skill", "drop", "deploy", "--why", "w"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /no terminal/);
-    assert.match(refused.out, /self skill drop deploy/);
-    assert.equal(events(ground.ws).length, before);
+    const dropped = await ground.self(["skill", "drop", "deploy", "--why", "w"]);
+    assert.equal(dropped.code, 0, dropped.out);
+    assert.match(dropped.out, /`self undo` takes it back/);
+    const written = events(ground.ws).slice(before);
+    assert.deepEqual(written.map((event) => event.type), ["entity.retracted"]);
+    assert.deepEqual(written[0].payload.by, { kind: "agent" });
 });
 
-test("D3: a drop answered with the wrong text is refused, and records nothing", async () =>
+test("D3: a person's drop records the same event, and says a person wrote it", async () =>
 {
     const ground = await floor();
     await addSkill(ground, "deploy", "make deploy");
     const before = events(ground.ws).length;
-    const refused = await approvedIn(ground.box, ground.demo, ["skill", "drop", "deploy", "--why", "w"], "not the id");
-    assert.notEqual(refused.code, 0);
-    assert.equal(events(ground.ws).length, before);
+    const dropped = await approvedIn(ground.box, ground.demo, ["skill", "drop", "deploy", "--why", "w"], "not the id");
+    assert.equal(dropped.code, 0, dropped.out);
+    const written = events(ground.ws).slice(before);
+    assert.deepEqual(written.map((event) => event.type), ["entity.retracted"]);
+    assert.deepEqual(written[0].payload.by, { kind: "person" });
 });
 
 test("D4: a drop with no --why is refused by the gate that names the missing option", async () =>

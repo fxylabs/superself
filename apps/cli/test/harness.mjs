@@ -181,13 +181,13 @@ function enterCwd(cwd)
     return () => process.chdir(was);
 }
 
-// Which ends of the terminal a call has. `tty` is both, which is what a gate
-// that prints a challenge and reads it back needs. `person` is the keyboard
-// alone: the presence gate on `work add` and `work accept` reads stdin and
-// nothing else (#389), so a person whose output is piped is still a person —
-// and `resolveRender` keeps reading stdout, which is why no plain-render
-// assertion moves. `screen` is the other half, and exists to prove the
-// presence gate does not read it.
+// Which ends of the terminal a call has. `tty` is both, which is what the one
+// gate left — `artifact prune` — needs to print a challenge and read it back.
+// `person` is the keyboard alone: `personAtTerminal` reads stdin and nothing
+// else, so a person whose output is piped is still a person — and
+// `resolveRender` keeps reading stdout, which is why no plain-render assertion
+// moves. `screen` is the other half, and exists to prove that a screen with no
+// keyboard behind it is nobody.
 function ttyOf(options)
 {
     return {
@@ -352,13 +352,12 @@ export async function must(box, cwd, args, extra = {})
     return refuseFailure(await selfIn(box, cwd, args, extra), args);
 }
 
-// A person at their own keyboard, running one command. Recording a confirmed
-// work record is a person's call (#389), so `work add` and `work accept` are
-// driven through these rather than through `must` — this is a keyboard stood
-// in for, not a way past the gate: the command line, the resolution, the gate
-// and the write all execute, and only `stdin.isTTY` is supplied. The gate's
-// own behaviour is asserted in work-entry-gate.test.mjs, where the strongest
-// cell is a really terminal-less child in smoke.test.mjs.
+// A person at their own keyboard, running one command. Since #400 no verb but
+// `artifact prune` refuses without one — what a keyboard decides now is what
+// the record *says* about who wrote it — so a cell drives through these when
+// it means "a person did this" and through `must` when it means "a session
+// did". Only `stdin.isTTY` is supplied; the command line, the resolution and
+// the write all execute.
 export async function personIn(box, cwd, args, extra = {})
 {
     return drive(box, cwd, args, { person: true, extra });
@@ -376,6 +375,21 @@ function refuseFailure(result, args)
         throw new Error(`self ${args.join(" ")} failed:\n${result.out}`);
     }
     return result;
+}
+
+// A command's own answer: the last line it printed. Since #400 a call that
+// destroys a record states what it destroys before it writes, so everything the
+// command printed opens with the *predecessor's* id — and a test scraping an id
+// out of the whole of it reads the record being replaced rather than the one
+// that replaced it. The receipt is the last line either way.
+export function receiptIn(printed)
+{
+    const lines = printed.trimEnd().split("\n").filter((line) => line.trim() !== "");
+    if (lines.length === 0)
+    {
+        throw new Error("the command printed no answer");
+    }
+    return lines.at(-1);
 }
 
 // Event ids arrive inside [brackets] on the confirmation line; a work id is

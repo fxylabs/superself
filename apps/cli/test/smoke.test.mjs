@@ -80,23 +80,22 @@ test("a write outside a registered project is refused with the remedy", () =>
     assert.match(out, /not inside a registered project/);
 });
 
-// Cell 3 of #389, and the strongest form of it: a child spawned with
+// Cell 3 of #400, and the strongest form of it: a child spawned with
 // `stdio: ["ignore", …]` has no keyboard at all, which no driver can stand in
-// for. What it records instead is a proposal, which is the line the refusal
-// hands back — so the same process proves both halves of the rule.
-test("inside a project, a process with no terminal cannot record confirmed work, and proposes instead", () =>
+// for. It records anyway — every record here is one `self undo` takes back —
+// and both spellings of the entry work from it, which is what the gate this
+// replaces refused.
+test("inside a project, a process with no terminal records confirmed work, and confirms a plan too", () =>
 {
     const project = join(workspace, "project");
     mkdirSync(project);
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: project, env, stdio: "ignore" });
     assert.equal(self(["project", "init", "--name", "smoke", "--desc", "the smoke project", "--no-connect"], project).code, 0);
-    const refused = self(["work", "add", "an outcome recorded with nobody there"], project);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /recording confirmed work is a person's call/);
-    assert.match(refused.out, /self work propose "an outcome recorded with nobody there"/);
-    const proposed = self(["work", "propose", "an outcome recorded with nobody there"], project);
+    const added = self(["work", "add", "an outcome recorded with nobody there"], project);
+    assert.equal(added.code, 0, added.out);
+    assert.match(added.out, /\bw-[0-9a-z]{5}\b/);
+    const proposed = self(["work", "propose", "a plan recorded with nobody there"], project);
     assert.equal(proposed.code, 0, proposed.out);
-    const accepted = self(["work", "accept", proposed.out.match(/\bw-[0-9a-z]{5}\b/)[0]], project);
-    assert.notEqual(accepted.code, 0);
-    assert.match(accepted.out, /accepting a plan is a person's call/);
+    const confirmed = self(["work", "confirm", proposed.out.match(/\bw-[0-9a-z]{5}\b/)[0]], project);
+    assert.equal(confirmed.code, 0, confirmed.out);
 });

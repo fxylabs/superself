@@ -400,9 +400,10 @@ test("B6: show of a recipe whose bytes were pruned prints the record, the pointe
     const id = entityIn((await must(ground.box, ground.demo,
         ["skill", "add", "release notes", "--file", recipe, "--purpose", "p"])).out);
     const artifact = String(recordOf(ground.ws, id).payload.artifact);
-    // A prune is a person's call and a test has no terminal. What this cell is
-    // about is the state a prune leaves, so the event is written as a fixture;
-    // the gate's own behaviour is D10 and D11's subject.
+    // A prune is the one act that still asks for a person, and a test has no
+    // terminal of its own. What this cell is about is the state a prune leaves,
+    // so the event is written as a fixture; the gate's own behaviour is D10 and
+    // D11's subject.
     retireFixture(ground.box, ground.ws, "demo", "artifact.pruned",
         { artifact, why: "the guide is folded into the rule" });
     const page = await must(ground.box, ground.demo, ["skill", "show", id]);

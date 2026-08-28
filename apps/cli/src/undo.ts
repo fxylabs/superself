@@ -14,9 +14,6 @@ import { CliError, SelfEvent } from "./types.js";
 // all means someone looked for `undo` here, and a generic answer would send
 // them away without the thing they actually wanted.
 const REFUSED: ReadonlyArray<readonly [string, (event: SelfEvent) => string]> = [
-    ["report.confirmed", (event) => `${event.id} is a person's ruling on a design report — an approval bound to an `
-        + "exact artifact digest is not taken back; the way back is a new design report, "
-        + '`self report <work-id> "<summary>" --design --implements <decision-id>`'],
     ["artifact.registered", (event) => `${event.id} registered artifact ${String(event.payload.artifact ?? "")} — bytes `
         + `entered the store, and they leave it by \`self artifact prune ${String(event.payload.artifact ?? "<id>")} --why w\` and nothing else`],
     ["artifact.pruned", (event) => `${event.id} removed bytes from the store — nothing takes back a deletion`],
@@ -47,10 +44,22 @@ function notUndoneTwice(event: SelfEvent): string
 const LEGACY_PREFIXES = ["decision.", "objective.", "milestone.", "run.", "work."];
 const LEGACY_TYPES = ["goal.set", "entity.superseded", "review.received"];
 
-// The one type outside the `entity.*` families an undo takes back. A report
-// filed against the wrong unit is the mistake class #390 names, and its
-// friction feeds the sweep, so a wrong one propagates.
-const UNDOABLE_REPORT = "report.added";
+// A design approval is the one event a unit's history turns on that names its
+// unit nowhere in its payload — the approval lands on a report, and the unit is
+// at `refs.work`. Named once, because both halves of undoing one read it: what
+// may be taken back, and what a later event stood on.
+const APPROVED_DESIGN = "report.confirmed";
+
+// The types outside the `entity.*` families an undo takes back. A report filed
+// against the wrong unit is the mistake class #390 names, and its friction
+// feeds the sweep, so a wrong one propagates.
+//
+// `report.confirmed` joined them in #400. It was refused for being "a person's
+// ruling", which stopped being a distinguishing fact the moment a session could
+// record the same ruling — and a design approved against the wrong unit is the
+// same mistake a wrong report is. What it admits is guarded instead: a unit
+// dispatched on the approval makes taking it back a refusal with the list.
+const UNDOABLE_REPORTS = ["report.added", APPROVED_DESIGN];
 
 // Whether this event is a kind an undo takes back, or the refusal that names
 // what does the job. Undoable-by-default over the `entity.*` grammar: with the
@@ -63,7 +72,7 @@ export function requireUndoable(event: SelfEvent): void
     {
         throw new CliError(refusal[1](event));
     }
-    if (event.type === UNDOABLE_REPORT || (event.type.startsWith("entity.") && !isLegacyType(event.type)))
+    if (UNDOABLE_REPORTS.includes(event.type) || (event.type.startsWith("entity.") && !isLegacyType(event.type)))
     {
         return;
     }
@@ -206,12 +215,23 @@ const ORDERED_TRANSITIONS = ["entity.started", "entity.blocked", "entity.unblock
     "entity.retired", "entity.retracted", "entity.confirmed"];
 
 // The records this append moved without creating them: undoing a start after a
-// done, or a block after an unblock, is refused on this list.
+// done, a block after an unblock, or a design approval a dispatch followed, is
+// refused on this list.
 function movedRecords(unit: SelfEvent[], created: Set<string>): Set<string>
 {
-    return new Set(unit.filter((event) => ORDERED_TRANSITIONS.includes(event.type))
-        .map((event) => String(event.payload.entity ?? ""))
-        .filter((id) => id !== "" && !created.has(id)));
+    return new Set(unit.flatMap(movedBy).filter((id) => id !== "" && !created.has(id)));
+}
+
+// `design.ts`'s dispatch gate reads a design approval, so a `work start`
+// recorded after one stood on it, and taking the approval back alone would
+// leave a dispatched unit whose design nobody approved.
+function movedBy(event: SelfEvent): string[]
+{
+    if (event.type === APPROVED_DESIGN)
+    {
+        return [String(event.refs?.work ?? "")];
+    }
+    return ORDERED_TRANSITIONS.includes(event.type) ? [String(event.payload.entity ?? "")] : [];
 }
 
 // Everything standing on this append, newest first. Empty is the answer that

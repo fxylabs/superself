@@ -534,7 +534,7 @@ export const STATEMENT_TYPES: StatementType[] = [
         command: "work",
         supersede: "--supersedes <id>",
         withdraw: "work retire",
-        decline: "work accept|decline",
+        decline: "work confirm|decline",
         closed: (model) => [
             ...model.works
                 .filter((item) => item.status === "done" || item.status === "retired")
@@ -1537,7 +1537,7 @@ export function reviewRefusal(work: WorkState): string | null
     const stated = plan?.accepted === undefined
         ? `its plan (v${plan?.current ?? 1}) has not been accepted`
         : `v${plan.accepted} was accepted and v${plan.current} is the current plan`;
-    return `${work.id} is waiting on review — ${stated}; a person runs \`self work accept ${work.id}\``;
+    return `${work.id} is waiting on review — ${stated}; it is confirmed with \`self work confirm ${work.id}\``;
 }
 
 // The units a person is being asked to review that no gap proposal already
@@ -1812,16 +1812,21 @@ function applyReport(model: ProjectModel, event: SelfEvent, annulled: Set<string
     }
 }
 
-// A person's ruling on a design report (#316). It lands on the report rather
-// than becoming a record of its own: reports are the append-only exception in
-// the record lifecycle, and an approval bound to an immutable artifact digest
-// is the same kind of fact — never withdrawn, only outlived, which is what
-// happens the moment the decision it stood under is superseded.
-function applyReportConfirmed(model: ProjectModel, event: SelfEvent): void
+// The ruling on a design report (#316). It lands on the report rather than
+// becoming a record of its own: reports are the append-only exception in the
+// record lifecycle, and an approval bound to an immutable artifact digest is
+// the same kind of fact — never withdrawn, only outlived, which is what happens
+// the moment the decision it stood under is superseded.
+//
+// An approval taken back is an approval that was never given (#400): the design
+// reads unapproved again and the dispatch gate refuses the unit as it did
+// before. The guard sits inside the reducer for the reason `applyReport` states
+// — `replayDeferred` calls `applyEvent` directly, past the fold's boundary.
+function applyReportConfirmed(model: ProjectModel, event: SelfEvent, annulled: Set<string>): void
 {
     const work = model.works.find((item) => item.id === event.refs?.work);
     const report = work?.reports.find((item) => item.id === event.refs?.confirms);
-    if (work === undefined || report === undefined)
+    if (work === undefined || report === undefined || annulled.has(event.id))
     {
         return;
     }

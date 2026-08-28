@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, git, machine, must, mustPerson, retireFixture, selfIn, workIdIn } from "./harness.mjs";
+import { approvedIn, git, machine, must, mustPerson, receiptIn, retireFixture, selfIn, workIdIn } from "./harness.mjs";
 
 // Three projects, because a move needs a source, a destination, and a third
 // project that must never see the record. Named rather than reusing the
@@ -351,12 +351,17 @@ test("T2.10: a retired unit moves, and its successor pointer is unchanged", asyn
     assert.ok((await must(t2.box, t2.beta, ["work", "show", work])).out.includes(successor));
 });
 
-test("T2.11: a proposed record is refused — placement moves confirmed records", async () =>
+// T2.11 read "a proposed record is refused". Widening a proposal's scope hides
+// nothing from anybody — it renders nowhere until it is confirmed — so #400
+// lets the move state where the record will land, and the confirm is where the
+// tier judges it.
+test("T2.11: a proposed record's scope moves, and the confirm lands it there", async () =>
 {
     const id = entityIn((await must(t2.box, t2.alpha, ["state", "add", "t2-11 a proposal", "--proposed"])).out);
-    const refused = await selfIn(t2.box, t2.alpha, ["state", "place", id, "--scope", "beta"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /is still proposed — placement moves confirmed records/);
+    const moved = await selfIn(t2.box, t2.alpha, ["state", "place", id, "--scope", "beta"]);
+    assert.equal(moved.code, 0, moved.out);
+    assert.equal((await selfIn(t2.box, t2.alpha, ["state", "confirm", id])).code, 0);
+    assert.match((await must(t2.box, t2.alpha, ["state", "show", id])).out, /placement: beta/);
 });
 
 test("T2.12: a retracted record is refused — a withdrawn record has no placement", async () =>
@@ -854,7 +859,7 @@ test("D4: revising a raised objective carries the workspace placement to the suc
     const printed = (await approvedIn(t7.box, t7.alpha,
         ["objective", "revise", objective, "--why", "restated", "--outcome", "d4 the company's clearer aim"],
         objective)).printed;
-    const successor = printed.match(/\bo-[0-9a-z]{5}\b/)[0];
+    const successor = receiptIn(printed).match(/\bo-[0-9a-z]{5}\b/)[0];
     assert.notEqual(successor, objective);
     assert.match((await must(t7.box, t7.alpha, ["state", "show", successor])).out, /placement: workspace · full/);
     assert.ok((await must(t7.box, t7.beta, ["context"])).out.includes("d4 the company's clearer aim"));

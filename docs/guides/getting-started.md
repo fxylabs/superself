@@ -158,10 +158,11 @@ self decide "Keep customer data local" --why "This project handles private data"
 self work add "The payment flow passes its end-to-end proof"
 ```
 
-Run these in your own terminal. `self work add` records a confirmed work unit,
-which is a person's call: an agent session running it is refused and told to
-record the plan with `self work propose "<plan>"` instead, which you accept
-with `self work accept <id>`.
+`self work add` records a confirmed work unit at once. An agent session can
+record the same unit, and the event says a session wrote it — `self undo` takes
+any of these back in one line. Where a plan wants your review before it is
+built, a session records it with `self work propose "<plan>"` and you answer
+with `self work confirm <id>`.
 
 Each command answers with the event it recorded — a line such as
 `entity.confirmed recorded [<event-id>]` — and `self work add` additionally

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { approvedIn, demoWorkspace, idIn, machine, must, selfIn } from "./harness.mjs";
+import { approvedIn, demoWorkspace, idIn, machine, must, receiptIn, selfIn } from "./harness.mjs";
 
 const box = machine();
 const { demo } = await demoWorkspace(box);
@@ -113,17 +113,24 @@ test("place refuses a missing change, a no-op, and the records that cannot move"
     const unknown = await self(["state", "place", "e-zzzzz", "--priority", "1"]);
     assert.notEqual(unknown.code, 0);
     assert.match(unknown.out, /unknown entity "e-zzzzz"/);
+    // A proposal moves since #400: it renders nowhere, so raising its priority
+    // or widening its scope hides nothing and settles where it lands at the
+    // confirm. The one move it cannot make is a demotion of its own exposure,
+    // which is what the second half asserts.
     const proposed = entityIn((await must(box, demo, ["state", "add", "not yet held", "--proposed"])).out);
     const early = await self(["state", "place", proposed, "--priority", "1"]);
-    assert.notEqual(early.code, 0);
-    assert.match(early.out, /still proposed — placement moves confirmed records/);
+    assert.equal(early.code, 0, early.out);
+    const demoted = await self(["state", "place", proposed, "--exposure", "search", "--why", "quieter"]);
+    assert.notEqual(demoted.code, 0);
+    assert.match(demoted.out, /renders nowhere to be demoted from/);
+    assert.match(demoted.out, new RegExp(`self state confirm ${proposed}`));
     const retracted = entityIn((await must(box, demo, ["state", "add", "short lived"])).out);
     await approved(["state", "retract", retracted, "--why", "done with it"], retracted);
     const gone = await self(["state", "place", retracted, "--priority", "1"]);
     assert.notEqual(gone.code, 0);
     assert.match(gone.out, /was retracted/);
     const old = entityIn((await must(box, demo, ["state", "add", "old rule"])).out);
-    const successor = entityIn((await approved(["state", "add", "new rule", "--link", `supersedes:${old}`], old)).printed);
+    const successor = entityIn(receiptIn((await approved(["state", "add", "new rule", "--link", `supersedes:${old}`], old)).printed));
     const replaced = await self(["state", "place", old, "--priority", "1"]);
     assert.notEqual(replaced.code, 0);
     assert.match(replaced.out, new RegExp(`superseded by ${successor} — place the successor`));
