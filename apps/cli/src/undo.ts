@@ -59,7 +59,13 @@ const APPROVED_DESIGN = "report.confirmed";
 // record the same ruling — and a design approved against the wrong unit is the
 // same mistake a wrong report is. What it admits is guarded instead: a unit
 // dispatched on the approval makes taking it back a refusal with the list.
-const UNDOABLE_REPORTS = ["report.added", APPROVED_DESIGN];
+//
+// `artifact.linked` joined them in #407, and it is the one artifact event an
+// undo takes back: a link put no bytes in the store, so the record is the whole
+// of it and annulling the event leaves nothing behind. `artifact.registered`
+// stays on the refusal list above for the reason it has always been there —
+// bytes entered the store, and they leave it by `artifact prune` alone.
+const UNDOABLE_TYPES = ["report.added", APPROVED_DESIGN, "artifact.linked"];
 
 // Whether this event is a kind an undo takes back, or the refusal that names
 // what does the job. Undoable-by-default over the `entity.*` grammar: with the
@@ -72,7 +78,7 @@ export function requireUndoable(event: SelfEvent): void
     {
         throw new CliError(refusal[1](event));
     }
-    if (UNDOABLE_REPORTS.includes(event.type) || (event.type.startsWith("entity.") && !isLegacyType(event.type)))
+    if (UNDOABLE_TYPES.includes(event.type) || (event.type.startsWith("entity.") && !isLegacyType(event.type)))
     {
         return;
     }

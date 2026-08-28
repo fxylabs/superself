@@ -1,5 +1,6 @@
 import { presetRow } from "./aliases.js";
 import { required, Requirement, requireOptions } from "./args.js";
+import { attachedArtifactLines } from "./artifact.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import {
@@ -707,15 +708,19 @@ function milestoneList({ values }: CommandInput<typeof SCOPE_OPTIONS>): CommandO
     return [milestoneListing(scopeModel(readScopes(process.cwd(), values)[0]))];
 }
 
+// The milestone's page — its own body, where its linked work stands (#406),
+// and then what `--for` attached to it (#407). Both additions are composed
+// here rather than folded onto the milestone: they are read at command time,
+// so the canonical page the fold writes carries neither.
 function milestoneShow({ values, positionals }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {
-    const model = scopeModel(readScopes(process.cwd(), values)[0]);
+    const scope = readScopes(process.cwd(), values)[0];
+    const model = scopeModel(scope);
     const found = requireMilestone(model, positionals[0]);
     const progress = milestoneProgressLines(model, found.milestone);
-    return [{
-        kind: "document",
-        plain: () => markdownHeadings(renderMilestoneBody(found.milestone, found.objective, progress).trimEnd()).split("\n")
-    }];
+    const body = renderMilestoneBody(found.milestone, found.objective, progress).trimEnd();
+    const attached = attachedArtifactLines(scope.storeDir, scope.project, found.milestone.id);
+    return [{ kind: "document", plain: () => markdownHeadings([body, ...attached].join("\n")).split("\n") }];
 }
 
 /* ── where the linked work stands (#406) ───────────────────────────── */

@@ -5,7 +5,7 @@ import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, 
 import { applyCommand } from "./apply.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
-import { ARTIFACT_COMMAND, artifactDigest, commitStaged, resolveArtifactRef, stageArtifacts } from "./artifact.js";
+import { ARTIFACT_COMMAND, artifactDigest, attachedArtifactLines, commitStaged, resolveArtifactRef, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
@@ -2756,14 +2756,19 @@ function workPage(ctx: CliContext, found: FoundWork): CommandOutput
 // rather than inside `renderWorkBody`, which also writes the synced
 // `work/<id>.md`: liveness is this machine's answer, and a synced file
 // carrying it would tell another clone what only this one can judge.
+// The two lines that lead the page, then the page, then what `--for` attached
+// to the unit (#407). The attachments are composed here for the reason
+// liveness is: they are read from the derived registry rather than folded onto
+// the unit, so the synced `work/<id>.md` carries exactly what it always did.
 function workPageLines(ctx: CliContext, found: FoundWork): string[]
 {
     const body = renderWorkBody(found.work, found.model, readVerdicts(ctx.storeDir, found.slug),
         supersededSources(ctx, found));
+    const attached = attachedArtifactLines(ctx.storeDir, found.slug, found.work.id);
     return [
         ...optionalLine(holderNote(found.work)),
         ...optionalLine(scopeNote(found)),
-        ...markdownHeadings(body.trimEnd()).split("\n")
+        ...markdownHeadings([body.trimEnd(), ...attached].join("\n")).split("\n")
     ];
 }
 
@@ -3664,7 +3669,10 @@ const UNDONE_NOTE: ReadonlyArray<readonly [string, (record: string) => string]> 
     ["entity.retired", (record) => `${record} is standing again — its retirement was taken back`],
     ["entity.covered", (record) => `${record} has that criterion open again — the coverage claim was taken back`],
     ["entity.placed", (record) => `${record} is placed where it was — the placement was taken back`],
-    ["report.added", (record) => `the report on ${record} was taken back`]
+    ["report.added", (record) => `the report on ${record} was taken back`],
+    // Named by neither end: the link's own id is what went, and whichever
+    // record it was attached to is standing exactly as it was (#407).
+    ["artifact.linked", () => "the link is no longer recorded — `self artifact list` no longer shows it, and nothing was removed from the store"]
 ];
 
 function undoneNote(unit: SelfEvent[], event: SelfEvent, named: string, narrow: boolean): string
@@ -3702,7 +3710,15 @@ function namedNote(event: SelfEvent, named: string): string
 function annulledRecord(event: SelfEvent): string
 {
     const named = String(event.payload.entity ?? event.refs?.work ?? "");
-    return named !== "" ? named : supersedeTargets(event.payload)[0] ?? "";
+    return named !== "" ? named : supersedeTargets(event.payload)[0] ?? linkedArtifact(event) ?? "";
+}
+
+// A link attached to nothing names no other record, so the record an undo of
+// it is about is the artifact itself (#407).
+function linkedArtifact(event: SelfEvent): string | undefined
+{
+    const artifact = event.payload.artifact as { id?: unknown } | undefined;
+    return typeof artifact?.id === "string" ? artifact.id : undefined;
 }
 
 // An undo is not undone (#390): a second one against the same event is

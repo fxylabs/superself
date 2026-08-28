@@ -6,14 +6,15 @@ import { isLive } from "./entities.js";
 import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
 import { artifactId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
+import { findMilestone } from "./objectives.js";
 import { notice } from "./output.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
-import { artifactMetas, ArtifactRecord, listArtifacts } from "./registry.js";
+import { artifactMetas, ArtifactRecord, holdsBytes, listArtifacts, StoredArtifact } from "./registry.js";
 import { digestFile } from "./repo.js";
 import { activeProjects, CliContext, ProjectContext, readRegistry, refuseArchived, requireProject, requireWorkspace } from "./paths.js";
 import { bold, plural, red } from "./style.js";
 import { launchFile } from "./view.js";
-import { ArtifactMember, ArtifactMeta, artifactName, artifactSearchText, CliError, CommandOutput, encodedPath } from "./types.js";
+import { ArtifactKind, ARTIFACT_KINDS, ArtifactMember, ArtifactMeta, artifactName, artifactSearchText, CliError, CommandOutput, encodedPath, EventRefs } from "./types.js";
 
 // Bytes already in the store, waiting for the event that names them. Nothing
 // outside this module may keep them without writing that event.
@@ -36,6 +37,10 @@ interface PlannedMember extends ArtifactMember
 
 interface PlannedArtifact extends ArtifactMeta
 {
+    // Narrowed from the optional field an artifact record carries: planning is
+    // the act that puts bytes under `artifacts/`, so everything planned here
+    // has somewhere to put them. A link (#407) is never planned at all.
+    path: string;
     source: string;
     members?: PlannedMember[];
     // Set when this artifact's bytes are already in the store — under another
@@ -218,6 +223,15 @@ function planArtifacts(slug: string, paths: string[]): PlannedArtifact[]
 // means.
 function resolveDeclared(path: string): string
 {
+    // A URL never reaches here from `artifact add`, which forked one call up.
+    // It reaches here from `report --artifact`, and "does not exist" would be
+    // a poor answer about an address that exists perfectly well — it is just
+    // not bytes this store can copy (#407).
+    if (SCHEMED.test(path))
+    {
+        throw new CliError(`artifact "${path}" is a URL, and this attaches bytes — record an address with `
+            + `\`self artifact add ${path} --for <work-id>\`, which stores nothing and fetches nothing`);
+    }
     const source = resolve(path);
     if (!existsSync(source))
     {
@@ -656,10 +670,16 @@ function adoptStored(storeDir: string, slug: string, planned: PlannedArtifact[])
 // purpose, and where another live record shares the path they are still there —
 // so the live record is the one a new artifact hangs off, and a fresh copy is
 // made when no live record is left.
-function storedIndex(storeDir: string, slug: string): Map<string, ArtifactRecord>
+//
+// A link is out of it too (#407), and for a reason that needs no digest to
+// state: reuse is the question "are these bytes already here", and a link has
+// none. Written as the filter below rather than left to the digest lookup, so
+// what the index holds is a property of the type rather than an accident of
+// what a link happens not to carry.
+function storedIndex(storeDir: string, slug: string): Map<string, StoredArtifact>
 {
-    const index = new Map<string, ArtifactRecord>();
-    for (const record of listArtifacts(storeDir, [slug]).filter((item) => item.pruned === undefined))
+    const index = new Map<string, StoredArtifact>();
+    for (const record of listArtifacts(storeDir, [slug]).filter((item) => item.pruned === undefined).filter(holdsBytes))
     {
         const digest = artifactDigest(record);
         if (digest !== undefined && digest !== "" && !index.has(digest))
@@ -744,7 +764,7 @@ function digestOf(file: string): string | null
 // holds. `entry` is not copied: two artifacts may share every byte and still
 // open onto different members, because the manifest hash covers the members
 // alone.
-function adoptHeld(item: PlannedArtifact, record: ArtifactRecord): void
+function adoptHeld(item: PlannedArtifact, record: StoredArtifact): void
 {
     item.path = record.path;
     item.reused = true;
@@ -938,32 +958,242 @@ function capture(action: () => void): Error | null
 // bytes the project already stores — is the same two functions, so a
 // registration cannot drift into a second way of putting a file in the store.
 //
-// It records `artifact.registered`, which carries no `refs.work`: nothing here
-// is evidence of anything, and the completion gate reads a work unit's reports
-// alone, so registering a file never opens `work done`.
-function registerArtifact(ctx: ProjectContext, path: string, entries: string[] | undefined,
-    why: string | undefined): ArtifactMeta
+// It records `artifact.registered`, whose `refs.work` names the unit `--for`
+// attached it to and nothing otherwise. An attachment is not evidence either
+// way: the completion gate reads a work unit's *reports*, and nothing here
+// writes one, so neither registering a file nor attaching it opens `work done`.
+function registerArtifact(ctx: ProjectContext, path: string, options: AddOptions): ArtifactMeta
 {
-    const staged = stageArtifacts(ctx.storeDir, ctx.project, [path], entries);
+    const staged = stageArtifacts(ctx.storeDir, ctx.project, [path], options.entry);
     const meta = staged.artifacts[0];
-    const payload: Record<string, unknown> = { artifacts: staged.artifacts };
-    if (why !== undefined)
-    {
-        payload.why = why;
-    }
-    const event = makeEvent(ctx.project, "artifact.registered", payload, { artifacts: [meta.id] });
+    const event = makeEvent(ctx.project, "artifact.registered",
+        { artifacts: staged.artifacts, ...statedOptions(options) }, artifactRefs(meta.id, options.attached));
     commitStaged(staged, (recorded) => recordEvent(ctx, event, `${meta.id} ${meta.name}`, recorded));
     return meta;
 }
 
-function addArtifact(values: { entry?: string[]; why?: string }, path: string | undefined): CommandOutput
+// What `artifact add` records beside the artifact itself. One object because
+// both halves of the verb take all of it, and a fifth positional parameter is
+// how the path half and the link half start disagreeing about what a flag does.
+interface AddOptions
+{
+    entry?: string[];
+    why?: string;
+    kind?: ArtifactKind;
+    attached: Attachment;
+}
+
+// The payload keys the options add, and nothing at all where none was passed:
+// an absent key is what a reader written before this issue folds correctly.
+function statedOptions(options: AddOptions): Record<string, unknown>
+{
+    return {
+        ...(options.why === undefined ? {} : { why: options.why }),
+        ...(options.kind === undefined ? {} : { kind: options.kind }),
+        ...(options.attached.milestone === undefined ? {} : { entity: options.attached.milestone })
+    };
+}
+
+// A work attachment is `refs.work` — the ref every reader already derives an
+// artifact's unit from, so `artifact list --work` needs nothing new and a CLI
+// that predates `--for` gets the column right.
+function artifactRefs(id: string, attached: Attachment): EventRefs
+{
+    return attached.work === undefined ? { artifacts: [id] } : { artifacts: [id], work: attached.work };
+}
+
+/* ── an artifact that is an address, not bytes (#407) ──────────────── */
+
+// A link's whole record. Nothing is staged, nothing is copied and nothing is
+// fetched: the event *is* the artifact, so there is no rollback to arrange and
+// no window between bytes and the line that names them.
+function linkArtifact(ctx: ProjectContext, url: string, options: AddOptions): ArtifactMeta
+{
+    if (options.entry !== undefined)
+    {
+        throw new CliError(`--entry names the member of a bundle a person opens, and ${url} is a link — `
+            + "a link has no members, so drop --entry");
+    }
+    const meta: ArtifactMeta = { id: artifactId(), name: url, url };
+    const event = makeEvent(ctx.project, "artifact.linked",
+        { artifact: meta, ...statedOptions(options) }, artifactRefs(meta.id, options.attached));
+    recordEvent(ctx, event, `${meta.id} ${url}`);
+    return meta;
+}
+
+// A value naming a scheme is a link and everything else is a path, decided
+// before anything touches the filesystem. `file:///tmp/x` is therefore refused
+// by name rather than read as a path: it says exactly where it points, and
+// answering "does not exist" about it would say nothing back.
+const SCHEMED = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
+
+const LINK_SCHEMES = ["http:", "https:"];
+
+// The URL this value records as, or null where it is a path. Recorded as it
+// was typed — trimmed, never normalized — because what a person pastes back
+// out should be what they pasted in.
+function linkTarget(value: string): string | null
+{
+    if (!SCHEMED.test(value))
+    {
+        return null;
+    }
+    // The scheme is judged first, and on the value's own text: `file:///x`
+    // parses with no host at all, and answering that it is not a readable URL
+    // would hide the thing worth saying about it — that it names bytes, and
+    // bytes are what a path puts in the store.
+    requireLinkScheme(value);
+    const parsed = parsedUrl(value);
+    if (parsed === null || parsed.host === "")
+    {
+        throw new CliError(`artifact "${value}" is not a URL this CLI can read — a link is a scheme, a host and a path, `
+            + "like https://github.com/owner/repo/pull/12");
+    }
+    requireNoUserinfo(parsed);
+    return value;
+}
+
+function requireLinkScheme(value: string): void
+{
+    if (!LINK_SCHEMES.includes(value.slice(0, value.indexOf(":") + 1).toLowerCase()))
+    {
+        throw new CliError(`artifact "${value}" is not http or https, and a link is one of those — every other scheme `
+            + "names bytes somewhere, so pass the path they are at and the store keeps a copy of them");
+    }
+}
+
+// Userinfo is a credential on its way into a log that is committed and pulled
+// by every clone of the store — which the sanitizer catches only where the
+// value happens to look generated.
+function requireNoUserinfo(parsed: URL): void
+{
+    if (parsed.username !== "" || parsed.password !== "")
+    {
+        throw new CliError("a link carrying a username or password is refused — the log is committed and pulled by every "
+            + "clone of this store, so record the address without them");
+    }
+}
+
+// Never throws: a value the parser rejects is a value the caller refuses in
+// its own words, one line up.
+function parsedUrl(value: string): URL | null
+{
+    try
+    {
+        return new URL(value);
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+/* ── what a kind and an attachment are ─────────────────────────────── */
+
+// Taken as repeatable for the reason `--entry` is: left as a single option the
+// parser keeps the last value and drops the first without a word.
+function requireOneValue(named: string[] | undefined, flag: string, holds: string): string | undefined
+{
+    if (named !== undefined && named.length > 1)
+    {
+        throw new CliError(`${flag} names ${holds} and was passed ${named.length} times — an artifact has one, so pass it once`);
+    }
+    return named?.[0]?.trim();
+}
+
+function requireKind(named: string[] | undefined): ArtifactKind | undefined
+{
+    const value = requireOneValue(named, "--kind", "what an artifact is");
+    if (value === undefined)
+    {
+        return undefined;
+    }
+    const kind = ARTIFACT_KINDS.find((known) => known === value);
+    if (kind === undefined)
+    {
+        throw new CliError(`--kind takes one of ${ARTIFACT_KINDS.join(", ")} and was passed "${value}" — `
+            + "the list is closed so a reader can group by it, and `--why <text>` says anything else about the file");
+    }
+    return kind;
+}
+
+// Where an artifact hangs: the work unit or the milestone `--for` names. Both
+// are resolved against this project's own fold, and before a byte is written —
+// a refused attachment must leave the store exactly as it found it.
+interface Attachment
+{
+    work?: string;
+    milestone?: string;
+}
+
+function requireAttachment(ctx: ProjectContext, named: string[] | undefined): Attachment
+{
+    const id = requireOneValue(named, "--for", "the record an artifact is attached to");
+    if (id === undefined)
+    {
+        return {};
+    }
+    const model = buildModel(ctx.storeDir, ctx.project, new Date());
+    if (id.startsWith("w-") && model.works.some((work) => work.id === id))
+    {
+        return { work: id };
+    }
+    if (id.startsWith("m-") && findMilestone(model.goals, id) !== null)
+    {
+        return { milestone: id };
+    }
+    throw new CliError(attachmentRefusal(ctx, id));
+}
+
+// Three answers, and the one that matters is the third: an id another project
+// holds is named as that project's, because an attachment is recorded in the
+// log that holds the record and no flag here moves it.
+function attachmentRefusal(ctx: ProjectContext, id: string): string
+{
+    if (!id.startsWith("w-") && !id.startsWith("m-"))
+    {
+        return `--for attaches an artifact to a work unit or a milestone, and "${id}" is neither — `
+            + "pass a w- or m- id, or drop --for to register the artifact on its own";
+    }
+    const owner = otherProjectHolding(ctx, id);
+    const kind = id.startsWith("w-") ? "work unit" : "milestone";
+    return owner === null
+        ? `unknown ${kind} "${id}" in project "${ctx.project}" — run \`self ${id.startsWith("w-") ? "work" : "milestone"}\` to see ids`
+        : `"${id}" is a ${kind} in project "${owner}", not in "${ctx.project}" — an attachment is recorded in the `
+            + `project whose log holds the record, so run this from ${owner}'s checkout`;
+}
+
+// Asked on the refusal path alone, where a fold per project is worth the
+// sentence it buys.
+function otherProjectHolding(ctx: ProjectContext, id: string): string | null
+{
+    const slugs = activeProjects(ctx.storeDir).map((entry) => entry.slug).filter((slug) => slug !== ctx.project);
+    const found = slugs.find((slug) =>
+    {
+        const model = buildModel(ctx.storeDir, slug, new Date());
+        return model.works.some((work) => work.id === id) || findMilestone(model.goals, id) !== null;
+    });
+    return found ?? null;
+}
+
+function addArtifact(values: { entry?: string[]; why?: string; kind?: string[]; for?: string[] },
+    path: string | undefined): CommandOutput
 {
     const named = path?.trim();
     if (named === undefined || named === "")
     {
-        throw new CliError("usage: self artifact add <path> [--entry <file>] [--why <text>]");
+        throw new CliError("usage: self artifact add <path|url> [--kind brief|pr|resource|doc] [--for <work-id|milestone-id>] "
+            + "[--entry <file>] [--why <text>]");
     }
-    const meta = registerArtifact(requireProject(process.cwd()), named, values.entry, values.why);
+    const ctx = requireProject(process.cwd());
+    // Every argument is settled before the first byte moves: the kind, the
+    // record it attaches to, and which of the two things this value is.
+    const options: AddOptions = {
+        entry: values.entry, why: values.why,
+        kind: requireKind(values.kind), attached: requireAttachment(ctx, values.for)
+    };
+    const url = linkTarget(named);
+    const meta = url === null ? registerArtifact(ctx, named, options) : linkArtifact(ctx, url, options);
     return [{ kind: "receipt", text: meta.id }];
 }
 
@@ -1008,9 +1238,18 @@ export function resolveArtifactRef(ctx: ProjectContext, named: string[] | undefi
     {
         throw new CliError("--artifact names an artifact id or a path to register, and was passed an empty value");
     }
+    // A URL is refused here rather than registered as a link (#407): this flag
+    // registers what it is given, and a link is a record with a kind and an
+    // attachment to state, which `artifact add` is the verb for. The id it
+    // prints is accepted here like any other.
+    if (SCHEMED.test(value))
+    {
+        throw new CliError(`--artifact names an artifact id or a path to register, and ${value} is a link — `
+            + `record it with \`self artifact add ${value} --kind resource\` and pass the id that prints`);
+    }
     return ARTIFACT_ID.test(value)
         ? requireOwnArtifact(ctx, value)
-        : registerArtifact(ctx, value, undefined, undefined).id;
+        : registerArtifact(ctx, value, { attached: {} }).id;
 }
 
 // An id is checked against this project's own log and no other's. Artifact
@@ -1033,8 +1272,8 @@ export const ARTIFACT_COMMAND: Command = {
     name: "artifact",
     usage: [
         {
-            syntax: "artifact add <path> [--entry <file>] [--why <text>]",
-            description: ["store a file or directory with no report behind it"],
+            syntax: "artifact add <path|url> [--kind k] [--for id] [--entry <file>] [--why <text>]",
+            description: ["store a file or directory, or record a URL, with no report behind it"],
             verbs: ["add"]
         },
         {
@@ -1062,6 +1301,16 @@ export const ARTIFACT_COMMAND: Command = {
         "Without an interactive terminal, `open` prints the resolved path and",
         "launches nothing.",
         "",
+        "`artifact add <url>` records an http or https address as a link: no bytes",
+        "are stored and nothing is ever fetched, at add time or after. A link is",
+        "listed, searched and attached like any other artifact; `open` prints the",
+        "address instead of launching it, `prune` is refused because there is",
+        "nothing to remove, and `self undo` takes the record back.",
+        "",
+        "`--for` attaches either shape to a work unit or a milestone, and",
+        "`self work show` / `self milestone show` list what is attached, by kind.",
+        "An attachment is not evidence: it never satisfies `work done`.",
+        "",
         "a directory is one artifact and lists as one row, `dist/ (12 files)`;",
         "`open` on it opens that bundle's entry. The same size bounds and the same",
         "reuse of bytes the project already stores apply to both verbs.",
@@ -1076,6 +1325,8 @@ export const ARTIFACT_COMMAND: Command = {
         "last one reclaims the bytes. Only the working tree shrinks: history is",
         "never rewritten.",
         "",
+        "  --kind <k>          what it is: brief, pr, resource or doc",
+        "  --for <id>          the work unit or milestone it is attached to",
         "  --entry <file>      which member of a directory a person opens",
         "  --why <text>        what this file is for, kept beside the record;",
         "                      on `prune`, why the bytes are being removed",
@@ -1085,11 +1336,16 @@ export const ARTIFACT_COMMAND: Command = {
     node: branch({
         name: "artifact",
         unnamed: "refuse",
-        refusal: "usage: self artifact add <path> [--entry <file>] [--why <text>] | list [--work id] [--project slug]"
+        refusal: "usage: self artifact add <path|url> [--kind k] [--for id] [--entry <file>] [--why <text>]"
+            + " | list [--work id] [--project slug]"
             + " | search <query> | open <id> [--project slug] | prune <id> --why \"<reason>\" [--project slug]",
         children: [
-            leaf("add", { entry: { type: "string", multiple: true }, why: { type: "string" } }, 1,
-                ({ values, positionals }) => addArtifact(values, positionals[0])),
+            leaf("add", {
+                entry: { type: "string", multiple: true }, why: { type: "string" },
+                // Repeatable so a second one is refused by name rather than
+                // silently dropped, the pitfall `--entry` already documents.
+                kind: { type: "string", multiple: true }, for: { type: "string", multiple: true }
+            }, 1, ({ values, positionals }) => addArtifact(values, positionals[0])),
             leaf("list", { work: { type: "string" }, project: { type: "string" } }, 0, ({ values }) =>
                 artifactListing(scopedRecords(workspace(), values.work, values.project))),
             leaf("search", {}, 1, ({ positionals }) => searchArtifacts(workspace(), positionals[0])),
@@ -1161,12 +1417,56 @@ function artifactListing(records: ArtifactRecord[]): CommandOutput
             // holds, and a record whose bytes were removed is still a record —
             // dropping it would make the store look as though the evidence had
             // never been attached.
-            : records.map((record) =>
-                `${record.id}  ${record.ts.slice(0, 10)}  ${record.project}  ${record.work ?? "-"}  `
-                + `${artifactName(record)}${record.pruned === undefined ? "" : " (pruned)"}`),
+            : records.map(listingRow),
         total: records.length,
         noun: "artifact"
     }];
+}
+
+// A link's name is its URL, so the name column answers for both shapes and no
+// column is added for one of them. The kind is marked after the name rather
+// than given a column of its own: every artifact recorded before #407 has
+// none, and a column of dashes says less than the mark says.
+function listingRow(record: ArtifactRecord): string
+{
+    return `${record.id}  ${record.ts.slice(0, 10)}  ${record.project}  ${record.work ?? "-"}  `
+        + `${artifactName(record)}${record.kind === undefined ? "" : ` [${record.kind}]`}`
+        + `${record.pruned === undefined ? "" : " (pruned)"}`;
+}
+
+/* ── what `--for` renders as (#407) ────────────────────────────────── */
+
+// The two doors an attachment comes through. A report's evidence names its
+// work unit too — that is what `refs.work` has always meant — and it is not an
+// attachment: it renders on the unit's own evidence line, and listing it twice
+// would say the unit has an artifact it does not have.
+const ATTACHING = ["registered", "link"];
+
+// The section `self work show` and `self milestone show` carry: what is
+// attached to that record, by kind. Read from the derived registry rather than
+// from the fold, deliberately — an attachment is no field of a work unit, so
+// the canonical `work/<id>.md` the fold writes and syncs is exactly what it
+// was, and one function answers for both pages.
+export function attachedArtifactLines(storeDir: string, slug: string, target: string): string[]
+{
+    const rows = listArtifacts(storeDir, [slug])
+        .filter((record) => ATTACHING.includes(record.source) && (record.work === target || record.milestone === target))
+        .sort((left, right) => kindRank(left) - kindRank(right) || left.ts.localeCompare(right.ts))
+        .map((record) => `- ${record.id}  ${record.kind ?? "-"}  ${artifactName(record)}`
+            + `${record.pruned === undefined ? "" : " (pruned)"}`);
+    // A section ready to append to a page that has one: the blank line that
+    // separates it from the body is part of the section, so a page with no
+    // attachment adds nothing at all and ends exactly where it used to.
+    return rows.length === 0 ? [] : ["", "## Attached artifacts", "", ...rows];
+}
+
+// Ordered by the declared list rather than alphabetically: brief, pr, resource,
+// doc is the order the things themselves arrive in. An artifact with no kind
+// sorts last, because a row that says nothing about itself is the one a reader
+// scans past.
+function kindRank(record: ArtifactRecord): number
+{
+    return record.kind === undefined ? ARTIFACT_KINDS.length : ARTIFACT_KINDS.indexOf(record.kind);
 }
 
 // An id is minted per artifact, not per workspace, so two projects can hold the
@@ -1179,7 +1479,7 @@ function requireArtifact(storeDir: string, slugs: string[], wanted: string): Art
     {
         throw new CliError(`unknown artifact "${wanted}" — run \`self artifact list\` to see ids`);
     }
-    const stored = [...new Map(matches.map((item): [string, ArtifactRecord] => [item.path, item])).values()];
+    const stored = [...new Map(matches.map((item): [string, ArtifactRecord] => [item.path ?? item.name, item])).values()];
     if (stored.length > 1)
     {
         const where = stored.map((item) => `${item.project}/${item.name}`).join(", ");
@@ -1230,6 +1530,10 @@ export function storedDocument(storeDir: string, slug: string, id: string): Stor
     {
         return { absent: `${id}, whose bytes were removed` };
     }
+    if (record.url !== undefined)
+    {
+        return { absent: `${id}, which is a link to ${record.url} — this store holds no bytes for it` };
+    }
     const file = storedFile(storeDir, record);
     return existsSync(file) && statSync(file).isFile()
         ? { text: readFileSync(file, "utf8") }
@@ -1240,8 +1544,15 @@ export function storedDocument(storeDir: string, slug: string, id: string): Stor
 // else. Both readers of a stored path go through here — the one that opens it
 // and the one that hashes it to decide whether a second artifact may share it
 // — so the reuse path is held to the same distrust of a foreign log line.
-function storedRoot(storeDir: string, path: string): string | null
+// Undefined is a path outside the store's artifacts by the same reasoning any
+// other unresolvable one is: a link belongs to no file here, and a record with
+// neither a path nor a URL came from a log this CLI did not write.
+function storedRoot(storeDir: string, path: string | undefined): string | null
 {
+    if (path === undefined)
+    {
+        return null;
+    }
     const root = resolve(storeDir, path);
     return within(join(storeDir, "artifacts"), root) ? root : null;
 }
@@ -1292,18 +1603,26 @@ function openArtifact(ctx: CliContext, id: string | undefined, project: string |
         : [requireRegistered(ctx, project)];
     const record = requireArtifact(ctx.storeDir, slugs, wanted);
     refuseOpeningPruned(record);
+    return record.url === undefined
+        ? [{ kind: "receipt", text: openStored(ctx, record) }]
+        // Printed, never launched, terminal or not (#407). This store never
+        // fetched the address and never will, and a log travels between
+        // machines — so handing an address out of one to the OS launcher is
+        // exactly the trust `storedFile` refuses to extend to a recorded path.
+        : [{ kind: "receipt", text: `${record.url} — ${record.id} is a link, so nothing was fetched and nothing was launched` }];
+}
+
+function openStored(ctx: CliContext, record: ArtifactRecord): string
+{
     const file = storedFile(ctx.storeDir, record);
     if (!existsSync(file))
     {
         throw new CliError(`artifact file ${record.path} is missing from this store — run \`self sync\` to fetch it`);
     }
     const label = `${record.entry === undefined ? record.name : `${record.name}/${record.entry}`} (${record.id})`;
-    return [{
-        kind: "receipt",
-        text: launchFile(ctx, file)
-            ? `opened ${label}`
-            : `${file} — ${label} resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed`
-    }];
+    return launchFile(ctx, file)
+        ? `opened ${label}`
+        : `${file} — ${label} resolves to that path; nobody is at a terminal in this run, so the GUI launch was suppressed`;
 }
 
 /* ── removing bytes a person named (#239) ──────────────────────────── */
@@ -1333,6 +1652,14 @@ const REMOVABLE_WORK = ["done", "retired"];
 // nothing on the disk, so what refuses is auditable line by line.
 function pruneRefusal(target: ArtifactRecord, model: ProjectModel): string | null
 {
+    // Refused by name before anything else is asked (#407): prune removes
+    // bytes, a link has none, and the way to take one back is the way every
+    // other mistaken record is taken back.
+    if (target.url !== undefined)
+    {
+        return `${target.id} is a link to ${target.url} — this store holds no bytes for it, so there is nothing to `
+            + `prune; take the record back with \`self undo ${target.event}\``;
+    }
     if (target.pruned !== undefined)
     {
         return `${target.id} was already pruned on ${target.pruned.ts.slice(0, 10)} — the record stays as it is, and a `
@@ -1504,6 +1831,12 @@ function removeBytesOf(target: string, failures: Error[]): void
 // a line this command must refuse rather than follow.
 function ownedRoot(storeDir: string, record: ArtifactRecord): string | null
 {
+    // A record naming no path at all reaches here from a hand-edited log
+    // alone: a link is refused by `pruneRefusal` two calls up.
+    if (record.path === undefined)
+    {
+        return null;
+    }
     const root = resolve(storeDir, record.path);
     return within(artifactDir(storeDir, record.project), root) ? root : null;
 }
