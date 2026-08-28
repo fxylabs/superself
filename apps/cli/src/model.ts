@@ -1,6 +1,6 @@
 import { completionRefusal } from "./completion.js";
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, awaitsReview, collectAnnulled, CriterionState, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn } from "./entities.js";
+import { applyEntity, awaitsReview, collectAnnulled, CriterionState, deriveEntities, emptyEntityFold, EntityFold, EntityLink, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, personOwned, PlanState, reconcileEntity, rendersIn } from "./entities.js";
 import { looksLikeLegacyRevision } from "./gitutil.js";
 import { readEvents } from "./logfile.js";
 import {
@@ -1941,6 +1941,51 @@ function deriveWorkSignals(model: ProjectModel, work: WorkState, now: Date): voi
         const days = Math.floor(ageDays(work.lastEventTs, now));
         model.health.push(`${work.id} looks stalled — no events for ${days} days`);
     }
+    notePersonOwned(model, work);
+}
+
+// A criterion whose task is a person's own waits on the reader, whatever the
+// unit around it is doing (#413). One row each, in cN order: two of them are
+// two things to do, and a merged row would carry two `--criterion` values in
+// one command.
+//
+// Not on a plan awaiting review: nothing is actionable before the confirm, the
+// review already has a row of its own, and asking a person to cover a criterion
+// of a plan they have not accepted asks for the wrong act. Not on a closed
+// unit, by `isOpenWork` — the same filter every other work signal uses.
+//
+// The unit's own status is untouched: it is not blocked, and it is not counted
+// among blocked units. #408's ruling for the block axis holds for this one.
+function notePersonOwned(model: ProjectModel, work: WorkState): void
+{
+    if (!isOpenWork(work) || work.status === "review")
+    {
+        return;
+    }
+    for (const criterion of work.criteria.filter(personOwned))
+    {
+        noteWaiting(model, personCriterionWait(work, criterion));
+    }
+}
+
+// The row, and the command that ends it. A blocked one still lists, naming its
+// block: the block says why it has not moved and the ownership says whose it
+// is, and the person holding it is the one most likely to release it.
+function personCriterionWait(work: WorkState, criterion: CriterionState): WaitingItem
+{
+    const blocked = criterion.blocked;
+    const lead = `${work.id} ${criterion.id} ${criterion.text} — yours`
+        + (blocked === undefined
+            ? ""
+            : ` · blocked on ${blocked.on}${blocked.why === undefined ? "" : ` — ${blocked.why}`}`);
+    const action = `self work cover ${work.id} --criterion ${criterion.id} --why "<how>"`;
+    return {
+        full: `${lead} (cover with \`${action}\`)`,
+        lead,
+        identity: `criterion ${work.id} ${criterion.id}`,
+        recovery: { verb: "work-show", id: work.id },
+        action
+    };
 }
 
 // The pair of the ruling that friction stays optional (#380 R3). Nothing is

@@ -152,6 +152,11 @@ export interface CriterionState
     text: string;
     // How this criterion is checked. Recorded prose, never executed.
     verify?: string;
+    // Whose task this criterion is (#413). `person` is the only value, and
+    // absent means the session that records it — so an owner this CLI cannot
+    // name is read as absent rather than carried, and no render ever calls a
+    // criterion the reader's when the store said something else.
+    owner?: "person";
     // The claim that covered it. Absent while open or blocked.
     covered?: CoverageClaim;
     // What it waits on, when the newest fact about it is a block.
@@ -263,11 +268,16 @@ export interface PlanState
 }
 
 // The declared list in both shapes it is read in, minted together so no caller
-// can state one without the other (#408 cell 74). `verify` is the sparse map a
-// creation payload carries, keyed by the position it was declared at; a key
-// nothing is declared at simply never matches.
-function declaredCriteria(texts: string[], verify: Record<string, string> = {}): Pick<EntityState, "criteria" | "criterionStates">
+// can state one without the other (#408 cell 74). `verify` and `owner` are the
+// sparse maps a creation payload carries, keyed by the position they were
+// declared at, and they are read off the creation payload here rather than by
+// each caller; a key nothing is declared at simply never matches. The legacy
+// projections pass their texts alone and get neither, which is correct — no
+// pre-cutover record ever stated one.
+function declaredCriteria(texts: string[], payload: Record<string, unknown> = {}): Pick<EntityState, "criteria" | "criterionStates">
 {
+    const verify = readKeyed(payload.verify, () => true);
+    const owner = readKeyed(payload.owner, (value) => value === PERSON_OWNER);
     // Two criteria with one text are one criterion: the text is a criterion's
     // identity in the log — `entity.covered` and the whole criterion axis name
     // it that way — so a claim on the second could never be told from a claim
@@ -277,7 +287,7 @@ function declaredCriteria(texts: string[], verify: Record<string, string> = {}):
     // forever on a `cN` that resolves to the other. `verify` is read at the
     // position the payload declared, because that is what its author counted.
     const states = texts.flatMap((text, at) =>
-        texts.indexOf(text) === at ? [criterionState(text, at, verify[`c${at + 1}`])] : []);
+        texts.indexOf(text) === at ? [criterionState(text, at, verify[`c${at + 1}`], owner[`c${at + 1}`])] : []);
     return { criteria: states.map((item) => item.text), criterionStates: renumbered(states) };
 }
 
@@ -288,9 +298,17 @@ function renumbered(states: CriterionState[]): CriterionState[]
     return states.map((state, at) => ({ ...state, id: `c${at + 1}` }));
 }
 
-function criterionState(text: string, at: number, verify: string | undefined): CriterionState
+function criterionState(text: string, at: number, verify: string | undefined,
+    owner: string | undefined): CriterionState
 {
-    return { id: `c${at + 1}`, text, ...(verify === undefined ? {} : { verify }) };
+    return {
+        id: `c${at + 1}`,
+        text,
+        ...(verify === undefined ? {} : { verify }),
+        // Narrowed to the one value every reader of this field is written
+        // against: the maps above already dropped anything else.
+        ...(owner === PERSON_OWNER ? { owner: PERSON_OWNER } : {})
+    };
 }
 
 export function isLive(entity: EntityState): boolean
@@ -493,6 +511,14 @@ const EXECUTION_EVENTS = ["entity.started", "entity.blocked", "entity.unblocked"
 // costs nothing by comparison: `reconcileEntity` matches no collector and
 // applies nothing, so the older CLI reads the criterion as open and its done
 // gate is looser, never tighter.
+// The only owner a criterion states (#413). Absent means the session that
+// records it, and there is deliberately no second spelling of that default:
+// two stores could then describe one criterion with different bytes. A name
+// would be an identity this CLI does not hold — `by` records `person` or
+// `agent` and never who — so a row saying it waits on somebody named would
+// claim knowledge the store has none of.
+export const PERSON_OWNER = "person";
+
 export const CRITERION_DECLARED = "entity.criterion-declared";
 export const CRITERION_BLOCKED = "entity.criterion-blocked";
 export const CRITERION_UNBLOCKED = "entity.criterion-unblocked";
@@ -511,6 +537,7 @@ interface CriterionEvent
     type: string;
     criterion: string;
     verify?: string;
+    owner?: string;
     on?: string;
     why?: string;
 }
@@ -691,7 +718,7 @@ function newEntity(fold: EntityFold, event: SelfEvent, id: string): EntityState
         labels,
         links: createdLinks(fold, event),
         target: str(event.payload.target),
-        ...declaredCriteria(stringList(event.payload.criteria), readVerify(event.payload.verify)),
+        ...declaredCriteria(stringList(event.payload.criteria), event.payload),
         from: str(event.payload.from),
         artifact: str(event.payload.artifact),
         visibility: readVisibility(event.payload.visibility),
@@ -859,6 +886,10 @@ function collectCriterion(fold: EntityFold, event: SelfEvent): void
         type: event.type,
         criterion,
         verify: str(event.payload.verify),
+        // Bare here, because this event declares exactly one criterion and has
+        // nothing to key by — and read to the one value for the same reason
+        // the keyed map is (#413).
+        owner: event.payload.owner === PERSON_OWNER ? PERSON_OWNER : undefined,
         on: str(event.payload.on),
         why: str(event.payload.why)
     });
@@ -1169,7 +1200,8 @@ function applyDeclarations(entities: EntityState[], fold: EntityFold): void
         const target = fold.annulled.has(item.event) ? undefined : byId.get(item.entity);
         if (target !== undefined && !target.criterionStates.some((state) => state.text === item.criterion))
         {
-            target.criterionStates.push(criterionState(item.criterion, target.criterionStates.length, item.verify));
+            target.criterionStates.push(criterionState(item.criterion, target.criterionStates.length,
+                item.verify, item.owner));
         }
     }
     for (const entity of entities)
@@ -1280,11 +1312,57 @@ export function criteriaProgress(states: CriterionState[]): CriteriaProgress | u
 }
 
 // The sentence a listing row carries: how far the unit is, and what is
-// standing still. One spelling for `self work` and `self context`, so the two
-// surfaces cannot describe the same unit differently.
-export function criteriaNote(progress: CriteriaProgress): string
+// standing still. One spelling for `self work`, `self context` and #406's
+// milestone row, so no two of them describe the same unit differently.
+// Undefined where nothing was declared, for `criteriaProgress`'s reason.
+//
+// It takes the states rather than the progress it counts from them (#413):
+// what stands still is now two facts about one criterion — what it waits on,
+// and whose task it is — and composing them here is what keeps them one entry.
+export function criteriaNote(states: CriterionState[]): string | undefined
 {
-    return [`${progress.covered} of ${progress.total} criteria covered`, ...progress.waiting].join(" · ");
+    const progress = criteriaProgress(states);
+    return progress === undefined
+        ? undefined
+        : [`${progress.covered} of ${progress.total} criteria covered`, ...stalledMarks(states)].join(" · ");
+}
+
+// One entry per criterion that is not moving on its own, in cN order: what a
+// blocked one waits on, and `(person)` where the task is the reader's rather
+// than the session's. One entry rather than two lists, because a criterion
+// standing still is one thing to say — a reader shown `c3 blocked on decision`
+// and `c3 (person)` would look for two criteria.
+function stalledMarks(states: CriterionState[]): string[]
+{
+    return states.flatMap((item) =>
+    {
+        if (item.blocked !== undefined)
+        {
+            return [`${item.id} blocked on ${item.blocked.on}${ownerMark(item)}`];
+        }
+        return personOwned(item) ? [`${item.id}${ownerMark(item)}`] : [];
+    });
+}
+
+// The mark every criteria render carries where the task is a person's own
+// rather than the session's (#413). Spelled once, so the unit's page, the
+// listing note and the done refusal cannot come to name it three ways.
+//
+// Carried on a covered criterion too: it says what the unit *declared*, so a
+// render that dropped it on the claim would disagree with the log about what
+// was declared — and there it is what tells a reader the claim records
+// somebody else's word.
+export function ownerMark(criterion: CriterionState): string
+{
+    return criterion.owner === undefined ? "" : ` (${criterion.owner})`;
+}
+
+// A criterion a person owes and has not covered yet (#413) — what `self
+// context` puts under Waiting on you and what the listings mark. Covered ends
+// it, exactly as it ends a block: a judged criterion waits on nobody.
+export function personOwned(criterion: CriterionState): boolean
+{
+    return criterion.owner === PERSON_OWNER && criterion.covered === undefined;
 }
 
 // The criteria no claim covers yet — what still gates a done or a reach.
@@ -1942,20 +2020,24 @@ function stringList(value: unknown): string[]
     return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
-// The verification texts a creation payload declared, keyed by the position
-// they were declared at (#408). Sparse and keyed rather than a parallel array,
-// because most criteria carry no verification text and an array of holes is a
-// shape every reader has to defend against. Read defensively like everything
-// else from the log: a string, an array, or a key naming a position nothing
-// was declared at reads as absent for whatever it cannot key — the criteria
-// stand, their verification texts do not.
-function readVerify(value: unknown): Record<string, string>
+// One of the sparse maps a creation payload carries beside its criteria —
+// `verify` (#408) and `owner` (#413) — keyed by the position it was declared
+// at. Sparse and keyed rather than a parallel array, because most criteria
+// carry neither and an array of holes is a shape every reader has to defend
+// against. One reader for both, so a payload shape that defeats one cannot
+// slip past the other, with `admits` for the flag whose values are an enum
+// rather than prose.
+//
+// Read defensively like everything else from the log: a string, an array, a
+// key naming a position nothing was declared at, or a value the flag does not
+// admit reads as absent for whatever it cannot key — the criteria stand.
+function readKeyed(value: unknown, admits: (text: string) => boolean): Record<string, string>
 {
     if (typeof value !== "object" || value === null || Array.isArray(value))
     {
         return {};
     }
     return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-        .flatMap(([key, text]) => /^c[1-9]\d*$/.test(key) && typeof text === "string" && text !== ""
+        .flatMap(([key, text]) => /^c[1-9]\d*$/.test(key) && typeof text === "string" && text !== "" && admits(text)
             ? [[key, text] as [string, string]] : []));
 }

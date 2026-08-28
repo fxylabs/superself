@@ -31,6 +31,7 @@ import {
     occupiesTier,
     orderEntities,
     pendingSummary,
+    PERSON_OWNER,
     rendersIn,
     requireSupersedeKind,
     scopeTarget,
@@ -108,13 +109,14 @@ const PLACE_OPTIONS = {
 } as const;
 
 // The completion conditions an add verb declares (#408), repeatable and
-// ordered c1..cN. `--verify` names the criterion it verifies, because one call
-// declares several and nothing else in the flag says which. Declared here
-// rather than beside either add verb, so `work add` and `work propose` cannot
-// come to accept different halves of one grammar.
+// ordered c1..cN. `--verify` and `--owner` (#413) each name the criterion they
+// speak for, because one call declares several and nothing else in either flag
+// says which. Declared here rather than beside either add verb, so `work add`
+// and `work propose` cannot come to accept different halves of one grammar.
 export const DECLARE_OPTIONS = {
     criteria: { type: "string", multiple: true },
-    verify: { type: "string", multiple: true }
+    verify: { type: "string", multiple: true },
+    owner: { type: "string", multiple: true }
 } as const;
 
 // Exported so `work cover` parses with exactly the raw verb's option set: the
@@ -1265,13 +1267,15 @@ export function resolveCriterion(entity: EntityState, wanted: string): string
 export interface Declaration
 {
     criteria: string[];
-    // Sparse and keyed by position rather than a parallel array: most criteria
-    // carry no verification text, and an array of holes is a shape every
-    // reader has to defend against.
+    // Sparse and keyed by position rather than parallel arrays: most criteria
+    // carry neither a verification text nor an owner, and an array of holes is
+    // a shape every reader has to defend against.
     verify?: Record<string, string>;
+    owner?: Record<string, string>;
 }
 
-export function declarationOf(values: { criteria?: string[]; verify?: string[] }, verb: string): Declaration
+export function declarationOf(values: { criteria?: string[]; verify?: string[]; owner?: string[] },
+    verb: string): Declaration
 {
     const criteria = (values.criteria ?? []).map((criterion) => validText(criterion, "--criteria", "one criterion's text"));
     const duplicate = criteria.find((text, at) => criteria.indexOf(text) !== at);
@@ -1280,44 +1284,100 @@ export function declarationOf(values: { criteria?: string[]; verify?: string[] }
         throw new CliError(`${verb} --criteria declares "${duplicate}" twice — a criterion is judged once, and two `
             + "with one text could never be told apart");
     }
-    return { criteria, ...verifyMap(values.verify ?? [], criteria.length, verb) };
+    return {
+        criteria,
+        ...keyedFlag(values.verify ?? [], criteria.length, verb, VERIFY_FLAG),
+        ...keyedFlag(values.owner ?? [], criteria.length, verb, OWNER_FLAG)
+    };
 }
 
-// `--verify "cN <how it is checked>"`, read into the sparse map the creation
-// event carries. Every refusal names the range this call actually declares, so
-// a caller who miscounted is told the number rather than left to guess it.
-function verifyMap(stated: string[], declared: number, verb: string): { verify?: Record<string, string> }
+// The two flags an add verb states about one of the criteria it declares, each
+// naming that criterion by its `cN` prefix because one call declares several
+// and nothing else in the flag says which. Read through one parser
+// parameterised by what the flag says, so the refusals stay parallel and a
+// third such flag cannot drift from either (#413).
+interface KeyedFlag
 {
-    const verify: Record<string, string> = {};
+    key: "verify" | "owner";
+    // what the flag states, in the refusal a call with no `--criteria` gets
+    states: string;
+    // what its value has to begin with, named as the reader would name it
+    begins: string;
+    // the shape a caller is shown when theirs did not parse
+    shape: string;
+    // why one criterion takes one of them
+    once: string;
+    // What the value itself may be, where the flag admits an enum rather than
+    // prose. A property of the flag rather than a branch inside the parser,
+    // which is what keeps `--verify`'s free text free.
+    value: (raw: string, verb: string) => string;
+}
+
+const VERIFY_FLAG: KeyedFlag = {
+    key: "verify",
+    states: "states how one declared criterion is checked",
+    begins: "the criterion it verifies",
+    shape: "c1 <how it is checked>",
+    once: "one criterion states one verification method",
+    value: (raw) => raw
+};
+
+const OWNER_FLAG: KeyedFlag = {
+    key: "owner",
+    states: "states whose task one declared criterion is",
+    begins: "the criterion it names",
+    shape: `c1 ${PERSON_OWNER}`,
+    once: "one criterion has one owner",
+    value: (raw, verb) => requirePersonOwner(raw, verb)
+};
+
+// The one value an owner takes. Stated here so `work criteria add`, whose
+// `--owner` is bare, refuses in the same words as the `cN`-prefixed form.
+export function requirePersonOwner(value: string, verb: string): string
+{
+    if (value !== PERSON_OWNER)
+    {
+        throw new CliError(`${verb} --owner takes "${PERSON_OWNER}" — it is the only owner a criterion states, and one `
+            + "with no owner is the session's own task");
+    }
+    return value;
+}
+
+// One `cN`-prefixed flag, read into the sparse map the creation event carries.
+// Every refusal names the range this call actually declares, so a caller who
+// miscounted is told the number rather than left to guess it.
+function keyedFlag(stated: string[], declared: number, verb: string, flag: KeyedFlag): Partial<Declaration>
+{
+    const map: Record<string, string> = {};
     for (const text of stated)
     {
-        const [at, how] = verifiedCriterion(text, declared, verb);
-        if (verify[at] !== undefined)
+        const [at, value] = keyedValue(text, declared, verb, flag);
+        if (map[at] !== undefined)
         {
-            throw new CliError(`${verb} --verify names ${at} twice — one criterion states one verification method`);
+            throw new CliError(`${verb} --${flag.key} names ${at} twice — ${flag.once}`);
         }
-        verify[at] = how;
+        map[at] = value;
     }
-    return Object.keys(verify).length === 0 ? {} : { verify };
+    return Object.keys(map).length === 0 ? {} : { [flag.key]: map };
 }
 
-function verifiedCriterion(stated: string, declared: number, verb: string): [string, string]
+function keyedValue(stated: string, declared: number, verb: string, flag: KeyedFlag): [string, string]
 {
     if (declared === 0)
     {
-        throw new CliError(`${verb} --verify states how one declared criterion is checked — pass --criteria "<text>" too`);
+        throw new CliError(`${verb} --${flag.key} ${flag.states} — pass --criteria "<text>" too`);
     }
     const named = /^(c[1-9]\d*)\s+(\S.*)$/.exec(stated.trim());
     if (named === null)
     {
-        throw new CliError(`${verb} --verify must begin with the criterion it verifies — "c1 <how it is checked>"; `
+        throw new CliError(`${verb} --${flag.key} must begin with ${flag.begins} — "${flag.shape}"; `
             + `this call declares ${declaredRange(declared)}`);
     }
     if (Number(named[1].slice(1)) > declared)
     {
-        throw new CliError(`${verb} --verify names ${named[1]}, and this call declares ${declaredRange(declared)}`);
+        throw new CliError(`${verb} --${flag.key} names ${named[1]}, and this call declares ${declaredRange(declared)}`);
     }
-    return [named[1], named[2]];
+    return [named[1], flag.value(named[2], verb)];
 }
 
 function declaredRange(declared: number): string
@@ -1338,13 +1398,16 @@ const NO_DECLARING: Record<string, (id: string) => string> = {
 };
 
 // The one writer of `entity.criterion-declared`. Appends a completion
-// condition to a record that already holds: nothing removes a criterion, so
-// declaring one is the only way the list ever changes and `self undo` is the
-// only way back.
-export function recordDeclaration(ctx: ProjectContext, owner: string, entity: EntityState, text: string,
-    verify: string | undefined): void
+// condition to a record that already holds: nothing removes a criterion, and
+// nothing re-states one, so declaring is the only way the list or its
+// ownership ever changes and `self undo` is the only way back.
+//
+// `project` is the store this is written to; `stated.owner` is whose task the
+// criterion is. The two are different questions and the parameter names say so.
+export function recordDeclaration(ctx: ProjectContext, project: string, entity: EntityState, text: string,
+    stated: { verify?: string; owner?: string }): void
 {
-    const refused = entity.labels.map((label) => NO_DECLARING[label]).find((stated) => stated !== undefined);
+    const refused = entity.labels.map((label) => NO_DECLARING[label]).find((rule) => rule !== undefined);
     if (refused !== undefined)
     {
         throw new CliError(refused(entity.id));
@@ -1355,8 +1418,14 @@ export function recordDeclaration(ctx: ProjectContext, owner: string, entity: En
         throw new CliError(`${entity.id} already declares ${declared.id} "${text}" — a criterion is judged once, `
             + "and two with one text could never be told apart");
     }
-    const payload = { entity: entity.id, criterion: text, ...(verify === undefined ? {} : { verify }), by: writtenBy() };
-    recordEvent(ctx, makeEvent(owner, CRITERION_DECLARED, payload, undefined, true), `${entity.id} ${text}`);
+    const payload = {
+        entity: entity.id,
+        criterion: text,
+        ...(stated.verify === undefined ? {} : { verify: stated.verify }),
+        ...(stated.owner === undefined ? {} : { owner: stated.owner }),
+        by: writtenBy()
+    };
+    recordEvent(ctx, makeEvent(project, CRITERION_DECLARED, payload, undefined, true), `${entity.id} ${text}`);
 }
 
 // The one writer of the criterion block and its release. The verb is shared
@@ -1680,15 +1749,17 @@ function stateLine(entity: EntityState): string
 }
 
 // One declared criterion and what is known about it: its `cN` address and
-// text, how it is verified, and what it waits on. The shipped `covered:` line
-// below states the claims and is unchanged — every judgment stays on record,
-// in landing order, while this says where the criterion stands now.
+// text, how it is verified, whose task it is, and what it waits on. The
+// shipped `covered:` line below states the claims and is unchanged — every
+// judgment stays on record, in landing order, while this says where the
+// criterion stands now.
 function criterionLines(criterion: CriterionState): string[]
 {
     const blocked = criterion.blocked;
     return [
         `criterion: ${criterion.id} ${criterion.text}`,
         ...(criterion.verify === undefined ? [] : [`  verify: ${criterion.verify}`]),
+        ...(criterion.owner === undefined ? [] : [`  owner: ${criterion.owner}`]),
         ...(blocked === undefined ? []
             : [`  blocked: on ${blocked.on}${blocked.why === undefined ? "" : ` — ${blocked.why}`}`])
     ];

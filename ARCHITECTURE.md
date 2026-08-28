@@ -136,7 +136,7 @@ fold's answer is different rather than because the act is:
 
 | Type | What it records | An older fold |
 | --- | --- | --- |
-| `entity.criterion-declared` | one completion condition a record is judged on, declared after its creation | ignored by an older fold — `reconcileEntity` matches no collector, so the record reads with its birth criteria alone |
+| `entity.criterion-declared` | one completion condition a record is judged on, declared after its creation, with the `owner` that says whose task it is (#413) | ignored by an older fold — `reconcileEntity` matches no collector, so the record reads with its birth criteria alone |
 | `entity.criterion-blocked` | what one declared criterion waits on, with its `--on` and reason | ignored by an older fold — the criterion reads open, and the record's own working state is untouched |
 | `entity.criterion-unblocked` | the release of that wait | ignored by an older fold — the criterion was already reading open |
 
@@ -147,6 +147,13 @@ the *record's* block, and a criterion's unblock as clearing a record-level
 block a person had put there. An unknown `entity.*` type costs nothing by
 comparison, and the loss it does cost is one-directional: the older CLI's done
 gate is looser, never tighter.
+
+A criterion's `owner` (#413) rides the events that declare it — the sparse
+`{cN: "person"}` map on a creation payload, beside `verify`, and a bare string
+on `entity.criterion-declared`. An older fold ignores both: a creation payload's
+unknown key is never read, and the declaration event is already ignored whole.
+Nothing is lost that gates anything, because ownership gates nothing — it moves
+one render, and that is why it needed no type of its own.
 
 `artifact.registered` is a namespace about stored bytes rather than about a
 record, which is why it is its own and not an extension of `report.*`: a

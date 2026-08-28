@@ -30,7 +30,7 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
-import { artifactPointer, criteriaNote, criteriaProgress, isCurrent, rendersIn } from "./entities.js";
+import { artifactPointer, criteriaNote, isCurrent, personOwned, rendersIn } from "./entities.js";
 import { readInstance, runbookInstances, runbookRow } from "./runbooks.js";
 import { effectiveSkills, skillRow } from "./skills.js";
 import { claimNote } from "./ledger.js";
@@ -539,12 +539,15 @@ function towardNote(model: ProjectModel, work: WorkState): Cell[]
 // ends exactly where it always did.
 function criteriaNoteCell(work: WorkState): Cell[]
 {
-    const progress = criteriaProgress(work.criteria);
-    if (progress === undefined)
+    const note = criteriaNote(work.criteria);
+    if (note === undefined)
     {
         return [];
     }
-    return [{ text: criteriaNote(progress), paint: progress.waiting.length === 0 ? dim : yellow }];
+    // Painted for what is standing still, which since #413 is a criterion
+    // waiting on a person as much as one waiting on a block.
+    const stalled = work.criteria.some((item) => item.blocked !== undefined || personOwned(item));
+    return [{ text: note, paint: stalled ? yellow : dim }];
 }
 
 export function renderWorkList(model: ProjectModel): string[]

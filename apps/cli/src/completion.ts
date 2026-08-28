@@ -18,7 +18,7 @@
 // work unit is never handed a `self state cover` line and a raw entity is
 // never handed a `self work` one.
 
-import { CriterionState } from "./entities.js";
+import { CriterionState, ownerMark, personOwned } from "./entities.js";
 
 // What the completion check reads about a work unit. Kept structural rather
 // than importing WorkState, so the check stays a function of the fold instead
@@ -58,21 +58,26 @@ export function criteriaRefusal(id: string, criteria: CriterionState[], family: 
 }
 
 // A blocked criterion states what it waits on and why, because that is the
-// next action; an open one states its own text, because that is.
+// next action; an open one states its own text, because that is. Either
+// carries the `(person)` mark (#413): a session reading this refusal is owed
+// the fact that one of the rows is not its own to cover.
 function openRow(criterion: CriterionState): string
 {
     const blocked = criterion.blocked;
     return blocked === undefined
-        ? `    ${criterion.id}  open — ${criterion.text}`
-        : `    ${criterion.id}  blocked on ${blocked.on}${blocked.why === undefined ? "" : ` — ${blocked.why}`}`;
+        ? `    ${criterion.id}  open — ${criterion.text}${ownerMark(criterion)}`
+        : `    ${criterion.id}  blocked on ${blocked.on}`
+            + `${blocked.why === undefined ? "" : ` — ${blocked.why}`}${ownerMark(criterion)}`;
 }
 
 // Which criterion the recovery line names: the first one nothing is standing
-// in front of. Covering a blocked criterion is allowed and ends its block, but
-// the line a reader pastes should be the one they can act on now.
+// in front of. Covering a blocked criterion is allowed and ends its block, and
+// a person's own criterion is somebody else's to close, but the line a reader
+// pastes should be the one they can act on now.
 function nextToCover(open: CriterionState[]): CriterionState
 {
-    return open.find((item) => item.blocked === undefined) ?? open[0];
+    return open.find((item) => item.blocked === undefined && !personOwned(item))
+        ?? open.find((item) => item.blocked === undefined) ?? open[0];
 }
 
 function plural(count: number, one: string, many: string): string

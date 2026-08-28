@@ -138,7 +138,7 @@ test("cell 79a: the note names each blocked criterion with its --on, in cN order
     // The one sentence, composed once: the note under the row is this string,
     // fitted to the flex column by `noteLine` like every other note.
     const work = model.works.find((item) => item.id === id);
-    assert.equal(criteriaNote(criteriaProgress(work.criteria)),
+    assert.equal(criteriaNote(work.criteria),
         "2 of 5 criteria covered · c3 blocked on decision · c5 blocked on dependency");
     const lines = renderWorkList(model);
     const note = lines.find((line) => line.includes("2 of 5 criteria covered · c3 blocked on decision"));
@@ -227,13 +227,17 @@ test("cell 86: the golden fixture's unit declares criteria, so the four renders 
     const answer = (head) => sections.find((section) => section.startsWith(`${head}\n`));
     // `work show`, both renders of `self work` — the piped row here, the note
     // under it in cell 79 — and the work-in-progress row of `self context`.
+    // The fixture's c2 is a person's own task since #413, so the bullet and the
+    // context row carry its `(person)` mark. What this cell pins is unchanged:
+    // the block, the count, and the same sentence on every surface.
     assert.match(answer("$ self work show <w-id>   (in project, exit 0)"),
-        /- Criteria: 1 of 2 covered\n {2}- c1 covered — the fixture regenerated clean \(agent <date>\)\n {2}- c2 open — the release note names the flag · verify: the note carries the line/);
+        /- Criteria: 1 of 2 covered\n {2}- c1 covered — the fixture regenerated clean \(agent <date>\)\n {2}- c2 open — the release note names the flag · verify: the note carries the line \(person\)/);
     assert.match(answer("$ self work   (in project, exit 0)"), /\[1 of 2 criteria covered\]/);
-    assert.match(answer("$ self context   (in project, exit 0)"), /^- <w-id> stage 1 lands the render gate and its pilot — 1 of 2 criteria covered — latest report/m);
+    assert.match(answer("$ self context   (in project, exit 0)"),
+        /^- <w-id> stage 1 lands the render gate and its pilot — 1 of 2 criteria covered · c2 \(person\) — latest report/m);
     // The refusal the criteria clause gives, and the covering line it names.
     assert.match(answer("$ self work show <w-id>   (in project, exit 0)"),
-        /- Not done yet: <w-id> declares 2 criteria and 1 is not covered:\n {4}c2 {2}open — the release note names the flag\n {2}cover each with `self work cover <w-id> --criterion c2 --why "<how>"`/);
+        /- Not done yet: <w-id> declares 2 criteria and 1 is not covered:\n {4}c2 {2}open — the release note names the flag \(person\)\n {2}cover each with `self work cover <w-id> --criterion c2 --why "<how>"`/);
     // And every documented line still runs: `docs.test.mjs` proof 1 drives
     // them, and proof 3 reads the three new event types back off a log the
     // verbs wrote rather than off a list.

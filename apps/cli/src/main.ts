@@ -89,6 +89,7 @@ import {
     recordCriterionUnblock,
     recordDeclaration,
     recordOwner,
+    requirePersonOwner,
     resolveCriterion,
     STATE_COMMAND,
     tierOf
@@ -592,9 +593,10 @@ const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --
 
 const WORK_COVER_USAGE = 'work cover <work-id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]';
 
-// One criterion declared after the unit was created. `--verify` is bare here,
-// because this call declares exactly one and there is nothing to disambiguate.
-const CRITERIA_ADD_OPTIONS = { verify: { type: "string" } } as const;
+// One criterion declared after the unit was created. `--verify` and `--owner`
+// are bare here, because this call declares exactly one and there is nothing to
+// disambiguate.
+const CRITERIA_ADD_OPTIONS = { verify: { type: "string" }, owner: { type: "string" } } as const;
 
 // The unit's own block takes no criterion; naming one moves the criterion axis
 // instead, which is the same act one level down and never touches the unit's
@@ -698,7 +700,7 @@ const WORK_CHILDREN: CommandNode[] = [
     branch({
         name: "criteria",
         unnamed: "refuse",
-        refusal: 'usage: self work criteria add <work-id> "<text>" [--verify "<how it is checked>"]',
+        refusal: 'usage: self work criteria add <work-id> "<text>" [--verify "<how it is checked>"] [--owner person]',
         children: [leaf("add", CRITERIA_ADD_OPTIONS, 2, cmdWorkCriteriaAdd)]
     }),
     leaf("cover", COVER_OPTIONS, 1, (input) => coverRecord(input, "work cover", WORK_COVER_USAGE),
@@ -1044,11 +1046,12 @@ export const COMMANDS: Command[] = [
                 verbs: [""]
             },
             {
-                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"]',
+                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …]'
+                    + ' [--verify "cN <how>"] [--owner "cN person"]',
                 description: [
                     "create a work unit; --supersedes retires the unit it replaces, naming this one its successor",
                     "(the confirmed-at-once form; `work propose` is the one that asks for review first)",
-                    "--criteria declares what the unit is judged on, ordered c1..cN"
+                    "--criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task"
                 ],
                 verbs: ["add"]
             },
@@ -1075,10 +1078,11 @@ export const COMMANDS: Command[] = [
                 verbs: ["block", "unblock"]
             },
             {
-                syntax: 'work criteria add <id> "<text>" [--verify "<how it is checked>"]',
+                syntax: 'work criteria add <id> "<text>" [--verify "<how it is checked>"] [--owner person]',
                 description: [
                     "declare one more completion condition on a unit that already exists",
-                    "(appended as the next cN, never inserted; nothing removes one but `self undo`)"
+                    "(appended as the next cN, never inserted; nothing removes one but `self undo`)",
+                    "--owner person makes it that person's task rather than this session's"
                 ],
                 verbs: ["criteria add"]
             },
@@ -1108,12 +1112,13 @@ export const COMMANDS: Command[] = [
                 verbs: ["link", "unlink"]
             },
             {
-                syntax: 'work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"]',
+                syntax: 'work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]'
+                    + ' [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]',
                 description: [
                     "propose work for a person to review; the plan text alone is enough",
                     "(--objective or --milestone makes it a gap proposal, which owes the full brief)",
                     "--supersedes proposes a correction: the unit it names is retired when the plan is confirmed",
-                    "--criteria declares what the unit is judged on, ordered c1..cN"
+                    "--criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task"
                 ],
                 verbs: ["propose"]
             },
@@ -1185,6 +1190,14 @@ export const COMMANDS: Command[] = [
             "blocked criterion is allowed and ends its block — the claim is the newer",
             "fact — and a blocked criterion never changes the unit's own status.",
             "",
+            'a criterion can be somebody else\'s task: --owner "cN person" on the add, or',
+            "--owner person on `work criteria add`, and `self context` lists it under",
+            "Waiting on you with the command that covers it. `by` is who wrote the record;",
+            "--owner is whose task the criterion is — a session records a criterion a",
+            "person will do, and neither field implies the other. Ownership is stated when",
+            "the criterion is declared and nothing re-states it: a wrong one is undone and",
+            "declared again.",
+            "",
             "a runbook is a procedure this project repeats — registered once, run per",
             "piece of work, with the same stages every run. A work unit's criteria are",
             "that one unit's completion conditions: declared on it, judged on it, never",
@@ -1239,6 +1252,10 @@ export const COMMANDS: Command[] = [
             "                        and ordered c1..cN",
             '  --verify "cN <how>"   how one declared criterion is checked — recorded, never',
             "                        executed (bare on `work criteria add`, which declares one)",
+            '  --owner "cN person"   the criterion is a person\'s own task rather than this',
+            "                        session's — it waits on them in `self context`; stated",
+            "                        at declaration and never re-stated (bare on `work",
+            "                        criteria add`, which declares one)",
             "  --criterion <cN>      which declared criterion a claim or a block answers",
             "  --evidence <commit>   a commit recorded with the coverage claim",
             "  --work <id>           the unit a coverage claim cites as its evidence"
@@ -3223,22 +3240,28 @@ function criterionNamed(entity: EntityState, wanted: string): CriterionState
 // already judged.
 function cmdWorkCriteriaAdd({ values, positionals }: CommandInput<typeof CRITERIA_ADD_OPTIONS>): CommandOutput
 {
-    const usage = 'work criteria add <work-id> "<text>" [--verify "<how it is checked>"]';
+    const usage = 'work criteria add <work-id> "<text>" [--verify "<how it is checked>"] [--owner person]';
     const ctx = requireProject(process.cwd());
-    const { work, owner } = requireDeclarable(ctx, requireText(positionals[0], usage));
+    const { work, owner: project } = requireDeclarable(ctx, requireText(positionals[0], usage));
     const text = requireText(positionals[1], usage);
-    const verify = values.verify === undefined ? undefined : requireText(values.verify, usage);
-    recordDeclaration(ctx, owner, criterionRecord(ctx, work.id, owner), text, verify);
-    return [{ kind: "receipt", text: declarationReceipt(work, text) }];
+    const stated = {
+        verify: values.verify === undefined ? undefined : requireText(values.verify, usage),
+        owner: values.owner === undefined
+            ? undefined
+            : requirePersonOwner(requireText(values.owner, usage), "work criteria add")
+    };
+    recordDeclaration(ctx, project, criterionRecord(ctx, work.id, project), text, stated);
+    return [{ kind: "receipt", text: declarationReceipt(work, text, stated.owner) }];
 }
 
-// The receipt states both facts a caller needs: which `cN` the criterion
-// became, and — where the unit declared none until now — that done waits on it
-// from this moment.
-function declarationReceipt(work: WorkState, text: string): string
+// The receipt states the facts a caller needs: which `cN` the criterion became,
+// whose task it is where that was stated, and — where the unit declared none
+// until now — that done waits on it from this moment.
+function declarationReceipt(work: WorkState, text: string, owner: string | undefined): string
 {
     const at = `c${work.criteria.length + 1}`;
-    return `${work.id} ${at} "${text}"${work.criteria.length === 0 ? " — done now waits on it" : ""}`;
+    return `${work.id} ${at} "${text}"${owner === undefined ? "" : ` (${owner})`}`
+        + `${work.criteria.length === 0 ? " — done now waits on it" : ""}`;
 }
 
 // Which units may still be handed a completion condition: a plan under review,

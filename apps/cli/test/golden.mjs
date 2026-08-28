@@ -92,10 +92,13 @@ export function sweep()
     // The unit declares criteria (#408 cell 86), so the four surfaces that
     // render `k of n` — the unit's page, both renders of `self work`, and the
     // work-in-progress row of `self context` — are pinned here rather than in
-    // an assertion that describes them.
+    // an assertion that describes them. c2 is a person's own task (#413 cell
+    // 62), so the Waiting-on-you row and the `(person)` mark are pinned with
+    // them — and because the sweep covers c2 near the end, the row leaving
+    // that section is pinned too.
     const work = workIdIn(run(demo, "project", ["work", "propose", "stage 1 lands the render gate and its pilot",
         "--criteria", "the fixture regenerates clean", "--criteria", "the release note names the flag",
-        "--verify", "c2 the note carries the line"]).out);
+        "--verify", "c2 the note carries the line", "--owner", "c2 person"]).out);
     run(demo, "project", ["work", "confirm", work]);
     run(demo, "project", ["work", "cover", work, "--criterion", "c1", "--why", "the fixture regenerated clean"]);
     for (const [cwd, where, args] of steps(box, ws, demo, work))
