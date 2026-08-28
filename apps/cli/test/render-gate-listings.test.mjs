@@ -98,7 +98,9 @@ const FIXTURE_SIZES = [
     ["$ self artifact list   (in project, exit 0)", "1 artifact"],
     // Sixteen since #389: the scenario's unit is proposed and then accepted,
     // which is one event more than the single `work add` it used to record.
-    ["$ self log -n 5   (in project, exit 0)", "last 5 of 16 events · self log -n 16 --project 'demo'"]
+    // Eighteen since #408: the scenario's unit declares two criteria, and each
+    // is covered by a claim of its own.
+    ["$ self log -n 5   (in project, exit 0)", "last 5 of 18 events · self log -n 18 --project 'demo'"]
 ];
 
 /* ── scratch machines ──────────────────────────────────────────────── */

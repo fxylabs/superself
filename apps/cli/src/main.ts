@@ -7,11 +7,11 @@ import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./a
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, artifactDigest, attachedArtifactLines, commitStaged, resolveArtifactRef, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
-import { branch, Command, CommandInput, CommandLeaf, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
+import { branch, Command, CommandInput, CommandNode, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { DEFAULT_ZONE, validZone } from "./dates.js";
 import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
 import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitations } from "./design.js";
-import { entityCharacters, EntityState, Exposure, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
+import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED, CriterionState, entityCharacters, EntityState, Exposure, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, requireRetirable, requireSupersedableWork, WORK_GOAL_LEAVES } from "./goals.js";
@@ -77,9 +77,19 @@ import {
     admittingDemotions,
     CapGateValues,
     confirmEntityUnit,
+    COVER_OPTIONS,
+    COVERAGE_REQUIRED,
+    coverRecord,
+    Declaration,
+    declarationOf,
+    DECLARE_OPTIONS,
     demotionEvents,
     Placed,
+    recordCriterionBlock,
+    recordCriterionUnblock,
+    recordDeclaration,
     recordOwner,
+    resolveCriterion,
     STATE_COMMAND,
     tierOf
 } from "./state.js";
@@ -576,9 +586,20 @@ const RETIRE_OPTIONS = {
 
 // `--supersedes` is the correction path every add verb takes; on a work unit it
 // retires the unit it replaces, which is why the reason comes with it.
-const WORK_ADD_OPTIONS = { supersedes: { type: "string" }, why: { type: "string" } } as const;
+const WORK_ADD_OPTIONS = { supersedes: { type: "string" }, why: { type: "string" }, ...DECLARE_OPTIONS } as const;
 
-const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --why w]';
+const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …]';
+
+const WORK_COVER_USAGE = 'work cover <work-id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]';
+
+// One criterion declared after the unit was created. `--verify` is bare here,
+// because this call declares exactly one and there is nothing to disambiguate.
+const CRITERIA_ADD_OPTIONS = { verify: { type: "string" } } as const;
+
+// The unit's own block takes no criterion; naming one moves the criterion axis
+// instead, which is the same act one level down and never touches the unit's
+// status.
+const WORK_BLOCK_OPTIONS = { ...TRANSITION_OPTIONS, criterion: { type: "string" } } as const;
 
 const REPORT_OPTIONS = {
     evidence: { type: "string", multiple: true },
@@ -663,13 +684,25 @@ const DONE_OPTIONS = { why: { type: "string" }, report: { type: "string" } } as 
 // every verb that writes still requires the linked checkout. The unnamed form
 // takes over only for a leading long flag, so a bare `--` is still explained
 // as a separator standing where a subcommand belongs.
-const WORK_CHILDREN: CommandLeaf[] = [
+const WORK_CHILDREN: CommandNode[] = [
     leaf("", SCOPED_RENDER_OPTIONS, 0, cmdWorkList),
     retiring(leaf("add", WORK_ADD_OPTIONS, 1, cmdWorkAdd)),
     leaf("show", HISTORY_OPTIONS, 1, cmdWorkShow),
     leaf("start", TRANSITION_OPTIONS, 1, cmdWorkStart),
     ...WORK_TRANSITIONS.map(([verb, type, requires]) =>
-        leaf(verb, TRANSITION_OPTIONS, 1, (input) => transitionWork(type, input), { requires })),
+        leaf(verb, WORK_BLOCK_OPTIONS, 1, (input) => transitionWork(type, input), { requires })),
+    // A branch with one leaf today. Block and unblock are deliberately not
+    // under it: blocking is one act with one `--on` enum, and a second
+    // spelling of it under a second noun is how two gates that must agree stop
+    // agreeing.
+    branch({
+        name: "criteria",
+        unnamed: "refuse",
+        refusal: 'usage: self work criteria add <work-id> "<text>" [--verify "<how it is checked>"]',
+        children: [leaf("add", CRITERIA_ADD_OPTIONS, 2, cmdWorkCriteriaAdd)]
+    }),
+    leaf("cover", COVER_OPTIONS, 1, (input) => coverRecord(input, "work cover", WORK_COVER_USAGE),
+        { requires: COVERAGE_REQUIRED }),
     leaf("done", DONE_OPTIONS, 1, cmdWorkDone),
     leaf("started", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, true)),
     leaf("exited", PROCESS_OPTIONS, 1, (input) => cmdWorkProcess(input, false)),
@@ -1011,10 +1044,11 @@ export const COMMANDS: Command[] = [
                 verbs: [""]
             },
             {
-                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w]',
+                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"]',
                 description: [
                     "create a work unit; --supersedes retires the unit it replaces, naming this one its successor",
-                    "(the confirmed-at-once form; `work propose` is the one that asks for review first)"
+                    "(the confirmed-at-once form; `work propose` is the one that asks for review first)",
+                    "--criteria declares what the unit is judged on, ordered c1..cN"
                 ],
                 verbs: ["add"]
             },
@@ -1033,15 +1067,35 @@ export const COMMANDS: Command[] = [
                 verbs: ["start"]
             },
             {
-                syntax: "work block|unblock <id>",
-                description: ["move a work unit (block: --on decision|dependency|external [--why w])"],
+                syntax: "work block|unblock <id> [--criterion cN]",
+                description: [
+                    "move a work unit (block: --on decision|dependency|external [--why w])",
+                    "--criterion moves one declared criterion instead; the unit's own status never changes"
+                ],
                 verbs: ["block", "unblock"]
+            },
+            {
+                syntax: 'work criteria add <id> "<text>" [--verify "<how it is checked>"]',
+                description: [
+                    "declare one more completion condition on a unit that already exists",
+                    "(appended as the next cN, never inserted; nothing removes one but `self undo`)"
+                ],
+                verbs: ["criteria add"]
+            },
+            {
+                syntax: 'work cover <id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]',
+                description: [
+                    "judge one declared criterion covered; the same claim `state cover` records",
+                    "(a criterion no longer needed is covered with a reason and no evidence)"
+                ],
+                verbs: ["cover"]
             },
             {
                 syntax: 'work done <id> [--report "<what verifiably happened>"] [--why w]',
                 description: [
                     "close a unit whose outcome was reached; the claim must carry evidence",
-                    "(a report with a commit or artifact, or the done-time --report text)"
+                    "(a report with a commit or artifact, or the done-time --report text)",
+                    "a unit that declares criteria is refused until every one of them is covered"
                 ],
                 verbs: ["done"]
             },
@@ -1054,11 +1108,12 @@ export const COMMANDS: Command[] = [
                 verbs: ["link", "unlink"]
             },
             {
-                syntax: 'work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]',
+                syntax: 'work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"]',
                 description: [
                     "propose work for a person to review; the plan text alone is enough",
                     "(--objective or --milestone makes it a gap proposal, which owes the full brief)",
-                    "--supersedes proposes a correction: the unit it names is retired when the plan is confirmed"
+                    "--supersedes proposes a correction: the unit it names is retired when the plan is confirmed",
+                    "--criteria declares what the unit is judged on, ordered c1..cN"
                 ],
                 verbs: ["propose"]
             },
@@ -1117,6 +1172,25 @@ export const COMMANDS: Command[] = [
             "satisfies. Done is allowed while blocked: completion is a judgment",
             "on the outcome, not the block.",
             "",
+            "a unit that declares criteria is not done until every one of them is",
+            "covered. They are declared at birth with --criteria, appended later with",
+            '`work criteria add <id> "<text>"`, addressed c1..cN in the order they were',
+            "declared, and judged one at a time:",
+            "",
+            '  self work cover <id> --criterion c2 --why "<how it is covered>"',
+            '  self work block <id> --criterion c3 --on external --why "<what it waits on>"',
+            "",
+            "nothing deletes a criterion: a mistaken one is undone with `self undo`, and",
+            "one no longer needed is covered with a reason and no evidence. Covering a",
+            "blocked criterion is allowed and ends its block — the claim is the newer",
+            "fact — and a blocked criterion never changes the unit's own status.",
+            "",
+            "a runbook is a procedure this project repeats — registered once, run per",
+            "piece of work, with the same stages every run. A work unit's criteria are",
+            "that one unit's completion conditions: declared on it, judged on it, never",
+            "run again. If you would declare the same list on the next unit too, it is a",
+            "runbook.",
+            "",
             "a plan is proposed when it wants review before it is worked: `work propose",
             '"<plan>"` records it as work waiting on an answer, and `work confirm` confirms',
             "it under the same id. `work add` is the confirmed-at-once form, exactly as",
@@ -1160,12 +1234,19 @@ export const COMMANDS: Command[] = [
             "  --capacity <text>     the effort the proposal asks for",
             "  --evidence-plan <e>   how the outcome will be evidenced",
             "  --confidence <level>  low, medium, or high",
-            "  --expires <date>      when an unanswered proposal lapses"
+            "  --expires <date>      when an unanswered proposal lapses",
+            "  --criteria <text>     a completion condition this unit is judged on, repeatable",
+            "                        and ordered c1..cN",
+            '  --verify "cN <how>"   how one declared criterion is checked — recorded, never',
+            "                        executed (bare on `work criteria add`, which declares one)",
+            "  --criterion <cN>      which declared criterion a claim or a block answers",
+            "  --evidence <commit>   a commit recorded with the coverage claim",
+            "  --work <id>           the unit a coverage claim cites as its evidence"
         ],
         node: branch({
             name: "work",
             unnamed: "options",
-            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|done|retire|link|unlink|propose|revise|confirm|decline`,
+            refusal: (verb) => `unknown work subcommand "${verb}" — use add|show|start|started|exited|block|unblock|criteria|cover|done|retire|link|unlink|propose|revise|confirm|decline`,
             children: WORK_CHILDREN
         })
     },
@@ -2550,7 +2631,7 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
     const superseded = retirement === undefined
         ? undefined
         : model.works.find((work) => work.id === retirement.payload.entity);
-    const payload = workPayload(ctx, id, outcome);
+    const payload = workPayload(ctx, id, outcome, declarationOf(values, "work add"));
     recordRetirement(ctx, retirementIntent(model, "supersede",
         retirement === undefined ? [] : [String(retirement.payload.entity)],
         { successor: supersedingRecord(payload) }), model,
@@ -2573,7 +2654,7 @@ function addedEvents(ctx: ProjectContext, payload: Record<string, unknown>,
     return events;
 }
 
-function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<string, unknown>
+function workPayload(ctx: ProjectContext, id: string, outcome: string, declared: Declaration): Record<string, unknown>
 {
     const row = presetRow(ctx.storeDir, "work");
     const payload: Record<string, unknown> = {
@@ -2581,7 +2662,10 @@ function workPayload(ctx: ProjectContext, id: string, outcome: string): Record<s
         text: outcome,
         labels: [row.label],
         links: [],
-        criteria: [],
+        // Byte-identical to what this wrote before #408 for a unit that
+        // declares nothing, which is every unit in every store written before
+        // it: an empty list and no `verify` key at all.
+        ...declared,
         exposure: row.exposure,
         scope: "project"
     };
@@ -3058,7 +3142,7 @@ function cmdWorkProcess({ values, positionals }: CommandInput<typeof PROCESS_OPT
     recordEvent(ctx, makeEvent(owner, "work.run-exited", payload), `${work.id} ${work.outcome}`);
 }
 
-function transitionWork(type: string, { values, positionals }: CommandInput<typeof TRANSITION_OPTIONS>): void
+function transitionWork(type: string, { values, positionals }: CommandInput<typeof WORK_BLOCK_OPTIONS>): void
 {
     const ctx = requireProject(process.cwd());
     const { work, owner } = requireOpenWork(ctx, positionals[0]);
@@ -3066,7 +3150,9 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
     if (type === "entity.blocked")
     {
         // The gate demanded --on; what is left is whether the reason it names
-        // is one the work graph knows.
+        // is one the work graph knows. Judged before the criterion is
+        // resolved, so a caller who typed both mistakes is told about the enum
+        // rather than about an id.
         if (values.on !== "decision" && values.on !== "dependency" && values.on !== "external")
         {
             throw new CliError(`work block --on must be decision, dependency or external — "${values.on}" is none of them`);
@@ -3077,8 +3163,103 @@ function transitionWork(type: string, { values, positionals }: CommandInput<type
             payload.why = values.why;
         }
     }
+    if (values.criterion !== undefined)
+    {
+        blockCriterion(ctx, work, owner, values, type === "entity.blocked");
+        return;
+    }
     recordEvent(ctx, makeEvent(owner, type, payload), `${work.id} ${work.outcome}`);
 }
+
+// The criterion axis of the same verb (#408). The unit's own status never
+// moves: one unit reading active and blocked at once is what a criterion-scoped
+// block exists to avoid, and `views.ts` already states the rule the other way
+// round for runbook approvals.
+function blockCriterion(ctx: ProjectContext, work: WorkState, owner: string,
+    values: CommandInput<typeof WORK_BLOCK_OPTIONS>["values"], blocking: boolean): void
+{
+    // A plan nobody confirmed has no working state to move — the shipped
+    // `executionTarget` rule, one level down.
+    if (work.status === "review")
+    {
+        throw new CliError(`${work.id} is a plan still awaiting review — a criterion's block records a fact about `
+            + `work that holds; confirm it first with \`self work confirm ${work.id}\``);
+    }
+    const entity = criterionRecord(ctx, work.id, owner);
+    const state = criterionNamed(entity, String(values.criterion));
+    if (blocking)
+    {
+        recordCriterionBlock(ctx, owner, entity, state, String(values.on), values.why);
+        return;
+    }
+    recordCriterionUnblock(ctx, owner, entity, state);
+}
+
+// The record a criterion-axis write lands on, read out of the log that owns it
+// (#181 D3): a unit scoped in from another project resolves here and its
+// criteria are declared and judged where its own events live.
+function criterionRecord(ctx: ProjectContext, id: string, owner: string): EntityState
+{
+    const entity = buildModel(ctx.storeDir, owner, new Date()).entities.find((item) => item.id === id);
+    if (entity === undefined)
+    {
+        throw new CliError(`${id} is folded from history no criterion can attach to — declare criteria on a unit `
+            + "this CLI recorded");
+    }
+    return entity;
+}
+
+// Which criterion a `cN` or a text names, as the state the writers judge. The
+// resolver answers with the text, which is the criterion's identity in the log.
+function criterionNamed(entity: EntityState, wanted: string): CriterionState
+{
+    const criterion = resolveCriterion(entity, wanted);
+    return entity.criterionStates.find((item) => item.text === criterion) as CriterionState;
+}
+
+// A criterion declared after the record was created (#408). Allowed on a plan
+// still under review — a plan being shaped is exactly when its conditions get
+// stated, and declaring is not a claim about doing — and refused on an outcome
+// already judged.
+function cmdWorkCriteriaAdd({ values, positionals }: CommandInput<typeof CRITERIA_ADD_OPTIONS>): CommandOutput
+{
+    const usage = 'work criteria add <work-id> "<text>" [--verify "<how it is checked>"]';
+    const ctx = requireProject(process.cwd());
+    const { work, owner } = requireDeclarable(ctx, requireText(positionals[0], usage));
+    const text = requireText(positionals[1], usage);
+    const verify = values.verify === undefined ? undefined : requireText(values.verify, usage);
+    recordDeclaration(ctx, owner, criterionRecord(ctx, work.id, owner), text, verify);
+    return [{ kind: "receipt", text: declarationReceipt(work, text) }];
+}
+
+// The receipt states both facts a caller needs: which `cN` the criterion
+// became, and — where the unit declared none until now — that done waits on it
+// from this moment.
+function declarationReceipt(work: WorkState, text: string): string
+{
+    const at = `c${work.criteria.length + 1}`;
+    return `${work.id} ${at} "${text}"${work.criteria.length === 0 ? " — done now waits on it" : ""}`;
+}
+
+// Which units may still be handed a completion condition: a plan under review,
+// and a unit that is open. A done outcome is already judged, a retired one was
+// given up, and an undone one never held.
+function requireDeclarable(ctx: ProjectContext, wanted: string): OpenWork
+{
+    const found = requireRenderedWork(ctx, wanted);
+    const refusal = DECLARE_REFUSAL[found.work.status]?.(found.work);
+    if (refusal !== undefined)
+    {
+        throw new CliError(refusal);
+    }
+    return found;
+}
+
+const DECLARE_REFUSAL: Record<string, ((work: WorkState) => string) | undefined> = {
+    done: (work) => `${work.id} is done — a criterion states what completion required, and this outcome is already judged`,
+    retired: (work) => `${work.id} was retired — declare it on the successor, whose criteria start uncovered`,
+    undone: (work) => `${work.id} was recorded by mistake and is undone — there is nothing to declare a criterion on`
+};
 
 // The claim that the outcome was reached, admitted by the completion gate
 // (#205 table B): a report carrying a commit or an artifact satisfies it, and
@@ -3636,10 +3817,51 @@ function recordAnnulment(ctx: ProjectContext, unit: SelfEvent[], event: SelfEven
 {
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const named = annulledRecord(event);
-    const text = model.entities.find((item) => item.id === named)?.text ?? named;
+    const record = model.entities.find((item) => item.id === named);
+    const text = record?.text ?? named;
     recordEvents(ctx, unit.map((member) => makeEvent(ctx.project, "entity.annulled",
         annulmentPayload(member, values), { annuls: member.id }, false)), `${named} ${text}`.trim());
-    return [{ kind: "receipt", text: undoneNote(unit, event, named, values.supersession === true) }];
+    return [{ kind: "receipt", text: undoneNote(ctx, unit, event, named, values.supersession === true, record) }];
+}
+
+// The three criterion-axis undos, which name the criterion by the `cN` the
+// fold computes and therefore need the record, not the event alone. Read off
+// the fold as it stood before the annulment: a block and its release both
+// leave the declared list where it was, so `c3` is still `c3`, and a
+// declaration taken back is named by its text because its position leaves
+// with it.
+function criterionNote(ctx: ProjectContext, event: SelfEvent, named: string, record: EntityState | undefined): string | null
+{
+    const text = String(event.payload.criterion ?? "");
+    const at = record?.criterionStates.find((item) => item.text === text);
+    if (event.type === CRITERION_DECLARED)
+    {
+        return `${named} no longer declares "${text}" — the declaration was taken back; the criteria after it renumber`;
+    }
+    if (at === undefined)
+    {
+        return null;
+    }
+    if (event.type === CRITERION_BLOCKED)
+    {
+        return `${named} ${at.id} is open again — the block was taken back`;
+    }
+    return event.type === CRITERION_UNBLOCKED
+        ? `${named} ${at.id} waits on ${blockedAgain(ctx, event)} again — the release was taken back`
+        : null;
+}
+
+// What the restored block says it waits on. The release carries neither the
+// `--on` nor the `--why`, so they are read back off the block this undo puts
+// back — the newest one recorded against this criterion before the release.
+function blockedAgain(ctx: ProjectContext, release: SelfEvent): string
+{
+    const block = readEvents(ctx.storeDir, ctx.project)
+        .filter((item) => item.type === CRITERION_BLOCKED && item.payload.entity === release.payload.entity
+            && item.payload.criterion === release.payload.criterion && item.ts <= release.ts)
+        .sort((left, right) => left.ts.localeCompare(right.ts) || left.id.localeCompare(right.id)).at(-1);
+    const why = block?.payload.why === undefined ? "" : `: ${String(block.payload.why)}`;
+    return `${String(block?.payload.on ?? "external")}${why}`;
 }
 
 // `undid` lets `self log` render the annulment's row without resolving the
@@ -3675,14 +3897,15 @@ const UNDONE_NOTE: ReadonlyArray<readonly [string, (record: string) => string]> 
     ["artifact.linked", () => "the link is no longer recorded — `self artifact list` no longer shows it, and nothing was removed from the store"]
 ];
 
-function undoneNote(unit: SelfEvent[], event: SelfEvent, named: string, narrow: boolean): string
+function undoneNote(ctx: ProjectContext, unit: SelfEvent[], event: SelfEvent, named: string, narrow: boolean,
+    record: EntityState | undefined): string
 {
     if (narrow)
     {
         return `${named} stands and no longer claims to replace anything — its supersession was taken back`;
     }
     const rest = unit.length === 1 ? "" : ` (${unit.length} events of one append, taken back together)`;
-    return `${namedNote(event, named)}${rest}`;
+    return `${criterionNote(ctx, event, named, record) ?? namedNote(event, named)}${rest}`;
 }
 
 function namedNote(event: SelfEvent, named: string): string

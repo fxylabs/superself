@@ -194,6 +194,13 @@ async function writeCurrentVocabulary(box, demo)
     await must(box, demo, ["work", "start", unit]);
     await must(box, demo, ["work", "block", unit, "--on", "dependency", "--why", "waiting"]);
     await must(box, demo, ["work", "unblock", unit]);
+    // The criterion axis (#408): declared, blocked, released and covered, so
+    // the three types the documents name are read back off the log rather than
+    // taken on trust from a list here.
+    await must(box, demo, ["work", "criteria", "add", unit, "the flow is proved end to end"]);
+    await must(box, demo, ["work", "block", unit, "--criterion", "c1", "--on", "external", "--why", "the vendor is silent"]);
+    await must(box, demo, ["work", "unblock", unit, "--criterion", "c1"]);
+    await must(box, demo, ["work", "cover", unit, "--criterion", "c1", "--why", "the proof ran end to end"]);
     await must(box, demo, ["milestone", "met", milestone, "--criterion", "c1", "--why", "the proof passed"]);
     await must(box, demo, ["report", unit, "progress so far"]);
     await must(box, demo, ["work", "done", unit, "--report", "the flow verifiably works"]);

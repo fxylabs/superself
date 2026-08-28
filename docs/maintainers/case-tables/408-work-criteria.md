@@ -398,18 +398,20 @@ None of the three new types joins `undo.ts`'s `REFUSED` list: they are
 
 | # | State | Operation | Expected |
 |---|---|---|---|
-| 75 | U, c1 covered with evidence, c2 blocked, c3 open with a verify text | `work show <U>` | a Criteria block, absent entirely on a unit declaring none: `- Criteria: 1 of 3 covered (1 blocked)`, then one bullet per criterion in cN order — `c1 covered — <why> (<actor> <date>, <commit>)`, `c2 blocked on external — <why>`, `c3 open · verify: <text>` |
+| 75 | U, c1 covered with evidence, c2 blocked, c3 open with a verify text | `work show <U>` | a Criteria block, absent entirely on a unit declaring none: `- Criteria: 1 of 3 covered (1 blocked)`, then one bullet per criterion in cN order — `c1 covered — <why> (<actor> <date>, <commit>)`, `c2 blocked on external — <why>`, `c3 open — <text> · verify: <text>`. **Changed in implementation:** the open bullet names the criterion's own text before its verification method. As written it named neither, and an open criterion is the one a reader is being asked to act on |
 | 76 | U declaring none | `work show <U>` | byte-identical to today |
 | 77 | cell 75's unit | the synced `work/<id>.md` | carries the same block — every value in it is folded, so nothing machine-local reaches a synced file |
 | 78 | cell 75's unit | `self work` piped | the row gains one bracketed segment: `… [2 of 5 criteria covered]`, beside the shipped `[toward …]` and `[gated by …]` |
 | 79 | cell 75's unit | `self work` at a terminal | a **note** under the unit's row, not a new column: a fifth column would re-lay-out the table for every store, and most units declare nothing |
+| 79a | U, 5 criteria, 2 covered, c3 blocked on decision | `self work` at a terminal | the note names each blocked criterion with its `--on`: `2 of 5 criteria covered · c3 blocked on decision`. Several blocked ones are listed in cN order. The note goes through `noteLine`'s own fit, so it never widens the table (issue #408, amendment) |
 | 80 | U declaring none | `self work`, both renders | unchanged, both |
 | 81 | U active with criteria | `self context` | the Work-in-progress row carries ` — 2 of 5 criteria covered`, placed after `[toward …]` and before the held note, so the progress reads with the unit and ahead of the disclosures |
+| 81a | cell 79a's unit | `self context` | the same sentence, with the same blocked criteria named the same way: ` — 2 of 5 criteria covered · c3 blocked on decision`. One spelling for both listings (issue #408, amendment) |
 | 82 | U with a blocked criterion | `self context` | **no** Waiting-on-you row, and the unit is not counted among blocked ones — a criterion's block is not the unit's |
 | 83 | a raw entity declaring criteria | `state show <id>` | criteria render as `criterion: c1 <text>` with their `verify:` and `blocked:` lines beneath; the shipped `covered:` line is unchanged |
 | 84 | any | `self log` | each new type prints a row naming the unit and the criterion; nothing prints a raw event object |
-| 85 | cell 75's unit, linked to a milestone | `milestone show` | **out of scope here.** #408 delivers `WorkState.criteria` and `criteriaProgress()`; #406 prints `criteriaProgress(work.criteria)` verbatim per linked unit and owns the row and the layout. A milestone's own exit criteria are unchanged: they stay on the milestone entity, `milestone met` writes the same `entity.covered`, and no verb here blocks one |
-| 86 | the golden fixture | `golden.test.mjs`, `docs.test.mjs` | regenerated: the fixture's unit declares criteria, one covered with evidence and one open, so the four renders above are pinned and every documented line runs |
+| 85 | cell 75's unit, linked to a milestone | `milestone show` | **out of scope here.** #408 delivers `WorkState.criteria` and `criteriaProgress()`; #406 prints `criteriaProgress(work.criteria)` verbatim per linked unit and owns the row and the layout. A milestone's own exit criteria are unchanged: they stay on the milestone entity, `milestone met` writes the same `entity.covered`, and no verb here blocks one. **Changed on the rebase onto #410:** #406 shipped first, with a `k of n` line of its own read off `uncoveredCriteria`; the merge replaced it with `criteriaNote(criteriaProgress(work.criteria))`, so the milestone row names blocked criteria the way amendments 79a/81a do and the four surfaces carry one sentence |
+| 86 | the golden fixture | `golden.test.mjs`, `docs.test.mjs` | regenerated: the fixture's unit declares criteria, one covered and one open, so the four renders above are pinned and every documented line runs. **Changed in implementation:** the covered one carries a reason and no commit. The scenario's repository has no commits at that point, and creating one would attach HEAD to the fixture's report as evidence — churning the evidence renders this fixture also pins, for a value the render does not depend on |
 
 ### J. Who wrote it
 
@@ -450,7 +452,7 @@ recorded. That is the trade the section exists to state.
 | 103 | any | `contract.test.mjs` | `checkContract` passes: the new branch and leaves are dispatchable, documented, and their declared requirements name flags their leaves accept |
 | 104 | any | `ARCHITECTURE.md` | the event-type list carries the three, each marked as ignored by an older fold |
 
-**104 cells.**
+**104 cells, plus 79a and 81a from the amendment on the issue — 106.**
 
 ## Out of scope
 

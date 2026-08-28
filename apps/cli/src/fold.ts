@@ -8,7 +8,7 @@ import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectiv
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
 import { artifactSignals, askedRepositories, entityArtifactSignals, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
-import { chainVersion, EntityState, isCurrent } from "./entities.js";
+import { chainVersion, criteriaProgress, CriterionState, EntityState, isCurrent } from "./entities.js";
 import { readInstance, runbookChain, runbookDefinitions, runbookInstances, stageDigest } from "./runbooks.js";
 import { errYellow } from "./style.js";
 import { ArtifactMeta, artifactName } from "./types.js";
@@ -550,6 +550,45 @@ function coverageLine(coverage: Coverage): string
         `revision ${coverage.objectiveRevision}/${coverage.milestoneRevision})_`;
 }
 
+// What the unit declared it had to satisfy, and where each condition stands
+// (#408). Absent entirely on a unit that declares none, which is every unit
+// written before this issue. Every value in it is folded, so the synced
+// `work/<id>.md` carries the identical block — nothing machine-local reaches a
+// canonical file.
+function criteriaLines(work: WorkState): string[]
+{
+    const progress = criteriaProgress(work.criteria);
+    if (progress === undefined)
+    {
+        return [];
+    }
+    const blocked = progress.waiting.length === 0 ? "" : ` (${progress.waiting.length} blocked)`;
+    return [
+        `- Criteria: ${progress.covered} of ${progress.total} covered${blocked}`,
+        ...work.criteria.map((criterion) => `  - ${criterionLine(criterion)}`)
+    ];
+}
+
+// One criterion in cN order: what covered it and on whose word, what it waits
+// on, or the text it still states — with the verification method beside an
+// open one, because that is the reader's next action.
+function criterionLine(criterion: CriterionState): string
+{
+    const claim = criterion.covered;
+    if (claim !== undefined)
+    {
+        const commits = claim.commits.length === 0 ? "" : `, ${claim.commits.join(", ")}`;
+        return `${criterion.id} covered — ${claim.why} (${claim.actor} ${day(claim.ts)}${commits})`;
+    }
+    if (criterion.blocked !== undefined)
+    {
+        return `${criterion.id} blocked on ${criterion.blocked.on}`
+            + `${criterion.blocked.why === undefined ? "" : ` — ${criterion.blocked.why}`}`;
+    }
+    return `${criterion.id} open — ${criterion.text}`
+        + `${criterion.verify === undefined ? "" : ` · verify: ${criterion.verify}`}`;
+}
+
 // The semantic half of done, on the page a person reads before closing a unit:
 // what it still owes. Derived by the completion gate — never asserted by a
 // transition.
@@ -764,6 +803,7 @@ export function renderWorkDetails(work: WorkState, model: ProjectModel, verdicts
         "",
         ...workStandingLines(work, model, supersedes, portable),
         ...workEvidenceLines(work, verdicts),
+        ...criteriaLines(work),
         ...owesLines(work),
         ""
     ];

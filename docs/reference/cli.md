@@ -410,6 +410,32 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   claim must carry evidence: a report with a commit or an artifact, or a
   done-time `--report` stating what verifiably happened. A bare claim is
   refused.
+- `work add "<outcome>" --criteria "<text>"` declares what the unit is judged
+  on. The flag is repeatable and ordered: the criteria are addressed `c1..cN`
+  in the order they were declared, and a unit that declares any is not done
+  until every one of them carries a coverage claim. `work propose` takes the
+  same flag. `--verify "cN <how it is checked>"` states how one of them is
+  checked; it is recorded prose and is **never executed**.
+- `work criteria add <id> "<text>" [--verify "<how it is checked>"]` declares
+  one more condition on a unit that already exists. It is appended as the next
+  `cN`, never inserted. Nothing removes a criterion: a mistaken one is taken
+  back with `self undo`, and one no longer needed is covered with a reason and
+  no evidence.
+- `work cover <id> --criterion cN --why "<how it is covered>"` judges one
+  declared criterion covered. It is an alias in the strict sense: the same
+  handler and a byte-identical `entity.covered` as `state cover <id>`, which
+  keeps working and is not deprecated.
+- `work block <id> --criterion cN --on decision|dependency|external [--why w]`
+  says what one criterion waits on, and `work unblock <id> --criterion cN`
+  releases it. A criterion's block never changes the unit's own status: the
+  unit stays active, `self context` grows no waiting row for it, and covering a
+  blocked criterion is allowed and ends the block. Without `--criterion` both
+  verbs move the unit itself, exactly as before.
+- a runbook is a procedure this project repeats — registered once, run per
+  piece of work, with the same stages every run. A work unit's criteria are
+  that one unit's completion conditions: declared on it, judged on it, never
+  run again. If you would declare the same list on the next unit too, it is a
+  runbook.
 - `work add` and `work confirm` write a confirmed work record. Neither asks for
   a person at a keyboard: both write a record `self undo` takes straight back,
   and each event states whether a person or an agent session wrote it. `work
@@ -659,9 +685,12 @@ supersession, work, branch, blocked work, and decision sequencing.
 The CLI writes one shared event grammar. Every asserted record uses the
 `entity.*` namespace — `entity.proposed`, `entity.confirmed`,
 `entity.revised`, `entity.superseded`, `entity.retracted`, `entity.placed`,
-`entity.linked`, `entity.unlinked`, `entity.covered` — and the execution facts
-`entity.started`, `entity.blocked`, `entity.unblocked`, `entity.done`,
-`entity.retired`. Beside them, `report.added` records progress,
+`entity.linked`, `entity.unlinked`, `entity.covered` — the criterion axis
+`entity.criterion-declared`, `entity.criterion-blocked`,
+`entity.criterion-unblocked`, whose `verify` text is recorded, never executed —
+and the execution facts `entity.started`, `entity.blocked`,
+`entity.unblocked`, `entity.done`, `entity.retired`. Beside them,
+`report.added` records progress,
 `report.confirmed` records a person's approval of a design report,
 `artifact.registered` records bytes stored with no report behind them,
 `artifact.linked` records a URL recorded as an artifact with no bytes at all,

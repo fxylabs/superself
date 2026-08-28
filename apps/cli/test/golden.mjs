@@ -89,8 +89,15 @@ export function sweep()
     // this file is: since #400 neither verb asks for a keyboard, so the confirm
     // this scenario needs is a run rather than a hand-written fixture, and the
     // bytes it prints are part of what the fixture answers for.
-    const work = workIdIn(run(demo, "project", ["work", "propose", "stage 1 lands the render gate and its pilot"]).out);
+    // The unit declares criteria (#408 cell 86), so the four surfaces that
+    // render `k of n` — the unit's page, both renders of `self work`, and the
+    // work-in-progress row of `self context` — are pinned here rather than in
+    // an assertion that describes them.
+    const work = workIdIn(run(demo, "project", ["work", "propose", "stage 1 lands the render gate and its pilot",
+        "--criteria", "the fixture regenerates clean", "--criteria", "the release note names the flag",
+        "--verify", "c2 the note carries the line"]).out);
     run(demo, "project", ["work", "confirm", work]);
+    run(demo, "project", ["work", "cover", work, "--criterion", "c1", "--why", "the fixture regenerated clean"]);
     for (const [cwd, where, args] of steps(box, ws, demo, work))
     {
         run(cwd, where, args);
@@ -257,6 +264,10 @@ function fileReceipts(run, demo, work)
     run(demo, "project", ["artifact", "open", artifact]);
     run(demo, "project", ["view"]);
     run(demo, "project", ["view", "demo"]);
+    // The open criterion is covered with a reason and no evidence — the
+    // issue's "one no longer needed" — so the done below still records, and
+    // the refusal an open one gives is pinned in the reads above.
+    run(demo, "project", ["work", "cover", work, "--criterion", "c2", "--why", "no longer needed: the release note is generated"]);
     run(demo, "project", ["work", "done", work, "--report", "the sweep covers every receipt this stage moves"]);
 }
 

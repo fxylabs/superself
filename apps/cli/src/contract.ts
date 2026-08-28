@@ -94,7 +94,7 @@ interface CommandBranch
     refusal: Refusal;
 }
 
-type CommandNode = CommandLeaf | CommandBranch;
+export type CommandNode = CommandLeaf | CommandBranch;
 
 // One line of a command's syntax, and the verbs it documents. A line that
 // documents several verbs at once — `work start|block|unblock|done <id>` —

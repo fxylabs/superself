@@ -30,7 +30,7 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
-import { artifactPointer, isCurrent, rendersIn } from "./entities.js";
+import { artifactPointer, criteriaNote, criteriaProgress, isCurrent, rendersIn } from "./entities.js";
 import { readInstance, runbookInstances, runbookRow } from "./runbooks.js";
 import { effectiveSkills, skillRow } from "./skills.js";
 import { claimNote } from "./ledger.js";
@@ -523,12 +523,28 @@ function workNotes(model: ProjectModel, work: WorkState): Cell[]
     {
         notes.push({ text: held, paint: yellow });
     }
-    const toward = [...contributionsOf(model.goals, work).map((item) => item.id), ...foreignToward(work)].join(", ");
-    if (toward !== "")
-    {
-        notes.push({ text: `toward ${toward}`, paint: dim });
-    }
+    notes.push(...towardNote(model, work), ...criteriaNoteCell(work));
     return notes;
+}
+
+function towardNote(model: ProjectModel, work: WorkState): Cell[]
+{
+    const toward = [...contributionsOf(model.goals, work).map((item) => item.id), ...foreignToward(work)].join(", ");
+    return toward === "" ? [] : [{ text: `toward ${toward}`, paint: dim }];
+}
+
+// A note under the row rather than a fifth column (#408): a column would
+// re-lay-out the table for every store, and most units declare nothing. Notes
+// never widen a column and a long one is truncated by `noteLine`, so the table
+// ends exactly where it always did.
+function criteriaNoteCell(work: WorkState): Cell[]
+{
+    const progress = criteriaProgress(work.criteria);
+    if (progress === undefined)
+    {
+        return [];
+    }
+    return [{ text: criteriaNote(progress), paint: progress.waiting.length === 0 ? dim : yellow }];
 }
 
 export function renderWorkList(model: ProjectModel): string[]
