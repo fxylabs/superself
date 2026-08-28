@@ -26,7 +26,7 @@ import { artifactDigest } from "./artifact.js";
 import { branch, Command, leaf } from "./contract.js";
 import { git, gitPatient } from "./gitutil.js";
 import { readRegistry, requireWorkspace } from "./paths.js";
-import { listArtifacts } from "./registry.js";
+import { holdsBytes, listArtifacts } from "./registry.js";
 import { plural } from "./style.js";
 import { ArtifactMeta, CliError, CommandOutput, JsonValue } from "./types.js";
 
@@ -79,7 +79,11 @@ interface StoreSize
 
 function storeSize(storeDir: string): StoreSize
 {
-    const records = listArtifacts(storeDir, readRegistry(storeDir).map((entry) => entry.slug));
+    // Links are out of every number here (#407). This verb answers how large
+    // the store is and what is driving it; a link stores nothing, so counting
+    // one would raise the distinct-contents count with every URL recorded and
+    // report an artifact total that no byte on this disk backs.
+    const records = listArtifacts(storeDir, readRegistry(storeDir).map((entry) => entry.slug)).filter(holdsBytes);
     // Live records only. A pruned record still names the path it was stored at,
     // and counting that as "named" would hide the exact state the removal order
     // exists to survive: the event is durable and the bytes were not removed

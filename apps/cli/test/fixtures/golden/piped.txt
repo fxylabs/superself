@@ -99,7 +99,7 @@ demo — the render gate scenario  (this directory)
 1 project
 
 $ self artifact   (in project, exit 1)
-error: usage: self artifact add <path> [--entry <file>] [--why <text>] | list [--work id] [--project slug] | search <query> | open <id> [--project slug] | prune <id> --why "<reason>" [--project slug]
+error: usage: self artifact add <path|url> [--kind k] [--for id] [--entry <file>] [--why <text>] | list [--work id] [--project slug] | search <query> | open <id> [--project slug] | prune <id> --why "<reason>" [--project slug]
 
 $ self objective   (in project, exit 0)
 no objectives — the long-term goal is separate; add one with `self objective add "<outcome>"`
@@ -245,8 +245,8 @@ usage: self <command>
                                              add --design --implements <decision-id> to submit a design or scope proposal,
                                              which is refused unless every decision it cites still holds
   report confirm <report-id>                 approve a design, binding the approval to the artifact's hash
-  artifact add <path> [--entry <file>] [--why <text>]
-                                             store a file or directory with no report behind it
+  artifact add <path|url> [--kind k] [--for id] [--entry <file>] [--why <text>]
+                                             store a file or directory, or record a URL, with no report behind it
   artifact list [--work id] [--project slug]
                                              list artifacts from the derived registry
   artifact search <query> | open <id> [--project slug]

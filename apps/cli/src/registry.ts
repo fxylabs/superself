@@ -10,13 +10,14 @@
 // cycle this tree has ever had; reading it out of here closes none, because
 // this module imports the log reader and the shared types and nothing else.
 import { readEvents } from "./logfile.js";
-import { ArtifactMeta, PrunedMark, SelfEvent } from "./types.js";
+import { ArtifactKind, ARTIFACT_KINDS, ArtifactMeta, PrunedMark, SelfEvent } from "./types.js";
 
 // Which event put a record in the registry. What may remove its bytes turns on
 // it (#239): a report's evidence answers to the work unit it was reported on, a
 // review's to the unit the review named, and bytes registered on their own
-// answer to whichever records point at them.
-type ArtifactSource = "report" | "review" | "registered";
+// answer to whichever records point at them. A link (#407) answers to nothing,
+// because it put no bytes here at all.
+type ArtifactSource = "report" | "review" | "registered" | "link";
 
 export interface ArtifactRecord extends ArtifactMeta
 {
@@ -25,6 +26,24 @@ export interface ArtifactRecord extends ArtifactMeta
     ts: string;
     summary: string;
     source: ArtifactSource;
+    // The event that declared it. What `self undo` takes back, so the refusal
+    // that sends a person there can name the line to type (#407).
+    event: string;
+    // What the artifact is, where its author said (#407).
+    kind?: ArtifactKind;
+    // The milestone `--for` attached it to. A work unit is named by `work`
+    // above, which is `refs.work` and was already the true link.
+    milestone?: string;
+}
+
+// A record whose bytes this store holds, as against a link. Every reader that
+// resolves a path, counts bytes or reuses them asks this first — and asks it
+// of the type, so the compiler carries the distinction rather than a comment.
+export type StoredArtifact = ArtifactRecord & { path: string };
+
+export function holdsBytes(record: ArtifactRecord): record is StoredArtifact
+{
+    return record.path !== undefined;
 }
 
 // What the log says this store holds. The store's own size is answered from it
@@ -41,13 +60,30 @@ export function listArtifacts(storeDir: string, slugs: string[]): ArtifactRecord
     {
         const events = readEvents(storeDir, slug);
         const pruned = prunedMarks(events);
-        for (const event of events)
+        const withdrawn = withdrawnLinks(events);
+        for (const event of events.filter((item) => !withdrawn.has(item.id)))
         {
             records.push(...declaredArtifacts(event)
                 .map((meta) => declaredRecord(meta, slug, event, pruned.get(meta.id))));
         }
     }
     return records;
+}
+
+// The link events `self undo` took back (#407). A link is the one artifact an
+// undo can erase outright: its record is the whole of it, so annulling the
+// event leaves nothing behind and the registry answers as though it was never
+// written.
+//
+// Links only, and never a registration or a report's evidence. Those put bytes
+// under `artifacts/`, the bytes stay after an undo — nothing here deletes — and
+// dropping their rows would make `self store size` report them as orphaned and
+// `artifact open` unable to reach them.
+function withdrawnLinks(events: SelfEvent[]): Set<string>
+{
+    const linked = new Set(events.filter((event) => event.type === "artifact.linked").map((event) => event.id));
+    return new Set(events.map((event) => event.refs?.annuls)
+        .filter((id): id is string => id !== undefined && linked.has(id)));
 }
 
 function declaredRecord(meta: ArtifactMeta, slug: string, event: SelfEvent, pruned: PrunedMark | undefined): ArtifactRecord
@@ -58,13 +94,33 @@ function declaredRecord(meta: ArtifactMeta, slug: string, event: SelfEvent, prun
         work: event.refs?.work,
         ts: event.ts,
         summary: summaryOf(event),
-        source: sourceOf(event)
+        source: sourceOf(event),
+        event: event.id,
+        kind: declaredKind(event),
+        milestone: declaredMilestone(event)
     };
     if (pruned !== undefined)
     {
         record.pruned = pruned;
     }
     return record;
+}
+
+// Read back against the list this CLI writes, so a value another version — or
+// a hand edit — put there does not reach a render as a kind this one honours.
+function declaredKind(event: SelfEvent): ArtifactKind | undefined
+{
+    const kind = event.payload.kind;
+    return ARTIFACT_KINDS.find((known) => known === kind);
+}
+
+// A milestone attachment, which rides on the payload because `EventRefs` has
+// no field for an entity that is not a work unit. Prefixed rather than typed:
+// the id shape is what says which record `--for` named.
+function declaredMilestone(event: SelfEvent): string | undefined
+{
+    const entity = event.payload.entity;
+    return typeof entity === "string" && entity.startsWith("m-") ? entity : undefined;
 }
 
 // The first removal of an id is the one that happened: a second `artifact
@@ -122,7 +178,11 @@ function declaredArtifacts(event: { type: string; payload: Record<string, unknow
     {
         return event.payload.artifacts as ArtifactMeta[];
     }
-    if (event.type === "review.received" && event.payload.artifact !== undefined)
+    // A link is one artifact and says so in the singular, the way a review
+    // receipt does. A CLI that predates links names neither type here and
+    // returns nothing for one, which is how an older reader stays correct
+    // about a store this one wrote: it shows no row rather than a wrong one.
+    if ((event.type === "review.received" || event.type === "artifact.linked") && event.payload.artifact !== undefined)
     {
         return [event.payload.artifact as ArtifactMeta];
     }
@@ -134,11 +194,12 @@ function declaredArtifacts(event: { type: string; payload: Record<string, unknow
 // what leans on an artifact's bytes is a different thing for each (#239).
 function sourceOf(event: { type: string }): ArtifactSource
 {
-    if (event.type === "review.received")
-    {
-        return "review";
-    }
-    return event.type === "artifact.registered" ? "registered" : "report";
+    const named: Record<string, ArtifactSource> = {
+        "review.received": "review",
+        "artifact.registered": "registered",
+        "artifact.linked": "link"
+    };
+    return named[event.type] ?? "report";
 }
 
 function summaryOf(event: { type: string; payload: Record<string, unknown> }): string
@@ -149,10 +210,14 @@ function summaryOf(event: { type: string; payload: Record<string, unknown> }): s
     }
     // A registration has no report text to summarize; `--why` is what its
     // author said about it, and "registered" is the honest answer when they
-    // said nothing.
+    // said nothing. A link is the same statement about an address.
     if (event.type === "artifact.registered")
     {
         return String(event.payload.why ?? "registered");
+    }
+    if (event.type === "artifact.linked")
+    {
+        return String(event.payload.why ?? "linked");
     }
     return String(event.payload.text ?? "");
 }

@@ -540,6 +540,14 @@ export function artifactSignals(storeDir: string, works: WorkState[]): string[]
 // answers exactly as it did.
 function artifactFailure(storeDir: string, meta: ArtifactMeta): string | null
 {
+    // A link (#407) is an address, and this CLI never fetched it: there is
+    // nothing on this machine to verify, so there is nothing to report. A
+    // health check that reached the network would be a health check that
+    // failed on a train.
+    if (meta.url !== undefined)
+    {
+        return null;
+    }
     const file = storedPath(storeDir, meta.path);
     if (file === null)
     {
@@ -618,7 +626,7 @@ function unreadable(error: unknown): string
 // through a shared remote. A path resolving outside the artifacts root is
 // refused instead of read: whether some file elsewhere on this machine exists,
 // or matches a digest a peer chose, is not a question status may answer.
-function storedPath(storeDir: string, path: string): string | null
+function storedPath(storeDir: string, path: string | undefined): string | null
 {
     const file = resolve(storeDir, typeof path === "string" ? path : "");
     return within(join(storeDir, "artifacts"), file) ? file : null;

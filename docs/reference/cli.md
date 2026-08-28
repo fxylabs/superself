@@ -449,11 +449,33 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
 - `report --artifact <dir>` attaches a whole directory as one artifact — a
   bundle — instead of one `--artifact` per file. It lists as one row,
   `dist/ (12 files)`, and `artifact open` opens its entry.
-- `self artifact add <path> [--entry <file>] [--why <text>]` stores a file or
-  directory with no report behind it, recording `artifact.registered`. It
-  lists with `-` in the work column, obeys the same bounds and the same reuse
-  of bytes already stored, and is **not evidence**: registering a file never
-  satisfies `work done`.
+- `self artifact add <path|url> [--kind k] [--for id] [--entry <file>] [--why
+  <text>]` stores a file or directory with no report behind it, recording
+  `artifact.registered`. It lists with `-` in the work column, obeys the same
+  bounds and the same reuse of bytes already stored, and is **not evidence**:
+  registering a file never satisfies `work done`.
+- **A URL is recorded as a link**, not as bytes: `self artifact add
+  https://github.com/owner/repo/pull/12 --kind pr` writes `artifact.linked`,
+  copies nothing and fetches nothing — not when it is recorded, and not
+  afterwards. Only `http` and `https` are links; every other scheme names bytes
+  somewhere, so it is refused and the path is what to pass instead. The address
+  is recorded exactly as typed, and one carrying a username or password is
+  refused, because the log is committed and pulled by every clone of the store.
+- A link is listed, searched and attached like any other artifact. `artifact
+  open` prints the address and launches nothing; `artifact prune` is refused by
+  name, because there are no bytes to remove; `self undo <event-id>` takes the
+  record back, and afterwards nothing lists it. `self store size` ignores links
+  entirely — it answers what is on this disk — and so does the reuse of stored
+  bytes, which is a question about bytes a link does not have.
+- `--kind brief|pr|resource|doc` labels either shape. The list is closed so a
+  reader can group by it; `--why <text>` says anything else about the artifact.
+  The kind is marked after the name in every listing, `brief.md [brief]`.
+- `--for <work-id|milestone-id>` attaches either shape to a record in the
+  project the command runs in, and `self work show` / `self milestone show`
+  then list what is attached, ordered by kind. An id another project holds is
+  refused by name. An attachment is **not evidence** either: it never satisfies
+  `work done`, which reads a unit's reports. It is a read-surface line, so the
+  canonical `work/<id>.md` the fold writes is unchanged by it.
 - The entry is `--entry <file>` if given, else `index.html`, `index.md` or
   `README.md` at the directory's own root, else an index the CLI generates
   there. Nothing but a `.git` directory is left out of the copy.
@@ -642,6 +664,7 @@ The CLI writes one shared event grammar. Every asserted record uses the
 `entity.retired`. Beside them, `report.added` records progress,
 `report.confirmed` records a person's approval of a design report,
 `artifact.registered` records bytes stored with no report behind them,
+`artifact.linked` records a URL recorded as an artifact with no bytes at all,
 `artifact.pruned` records bytes removed under a person's confirmation, and
 `work.run-started` / `work.run-exited` record process transitions. Event
 namespaces are owned; the current owners are listed in
@@ -671,7 +694,9 @@ A report may carry:
 
 Artifact metadata in the folded project state is `{id, name, path, digest?}`,
 with `pruned: {ts, why?}` added by the fold — never by the event — once
-`artifact.pruned` has named it.
+`artifact.pruned` has named it. A link carries `{id, name, url}` and no `path`:
+`path` is present exactly when this store holds bytes, which is what tells the
+two apart wherever one is read.
 The declared artifact shape everywhere else is `{name, sha256, bytes}` —
 `name`, never `path`.
 

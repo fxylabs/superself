@@ -92,11 +92,27 @@ export interface ArtifactMember
     generated?: true;
 }
 
+// What an artifact may be labelled as (#407): the four things a work unit's
+// plan points at. Declared here because the verb that writes one and the
+// registry that reads one back must not disagree about the list.
+export const ARTIFACT_KINDS = ["brief", "pr", "resource", "doc"] as const;
+
+export type ArtifactKind = typeof ARTIFACT_KINDS[number];
+
 export interface ArtifactMeta
 {
     id: string;
+    // For a link, its URL: a name is the display string every surface already
+    // prints, and the address is what a reader identifies a link by.
     name: string;
-    path: string;
+    // Where the bytes are, relative to the store. Present exactly when this
+    // store holds bytes for the artifact, which is what makes it the
+    // discriminator every byte-counting reader already asks for: a link (#407)
+    // carries `url` instead and the two are never both set.
+    path?: string;
+    // The address a link points at, http or https, recorded as it was typed
+    // and never fetched. Present exactly when `path` is not.
+    url?: string;
     // sha256 of the bytes as they were ingested. Optional: artifacts attached
     // before digests were recorded verify by existence alone, and folding an
     // existing store must not invent a digest for them. A bundle carries none

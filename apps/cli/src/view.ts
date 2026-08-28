@@ -1216,11 +1216,19 @@ function artifactRows(model: ProjectModel): ArtifactRow[]
 function workArtifactRows(work: WorkState): ArtifactRow[]
 {
     return work.reports.flatMap((report) => report.artifacts
-        .filter((meta) => meta.pruned === undefined)
+        .filter(hasBytes)
         .map((meta) => ({ ...rowOf(meta), workId: work.id, ts: report.ts })));
 }
 
-function rowOf(meta: ArtifactMeta): Pick<ArtifactRow, "id" | "name" | "path" | "entry" | "files">
+// The same sentence, as a type: a row is a link to bytes under `artifacts/`,
+// and a record with none has no row. A pruned artifact for the reason above,
+// and a URL artifact (#407) because this store holds nothing to point at.
+function hasBytes(meta: ArtifactMeta): meta is ArtifactMeta & { path: string }
+{
+    return meta.pruned === undefined && meta.path !== undefined;
+}
+
+function rowOf(meta: ArtifactMeta & { path: string }): Pick<ArtifactRow, "id" | "name" | "path" | "entry" | "files">
 {
     return { id: meta.id, name: meta.name, path: meta.path, entry: meta.entry, files: meta.members?.length };
 }

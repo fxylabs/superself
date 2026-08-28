@@ -210,6 +210,9 @@ async function writeCurrentVocabulary(box, demo)
     await approvedIn(box, demo, ["skill", "drop", skill, "--why", "the deploy moved to the pipeline"], skill);
     writeFileSync(join(demo, "registered-guide.md"), "a guide no report is about\n");
     const guide = (await must(box, demo, ["artifact", "add", "registered-guide.md"])).out.match(/\ba-[0-9a-z]{5}\b/)[0];
+    // The other shape an artifact takes (#407): a URL, recorded with no bytes
+    // and never fetched, under an event type of its own.
+    await must(box, demo, ["artifact", "add", "https://example.com/briefs/one", "--kind", "brief"]);
     // Removing stored bytes is the one act that still asks for a person: it is
     // what `self undo` cannot take back, so the last verb in the vocabulary is
     // driven with a keyboard rather than through a plain call.
