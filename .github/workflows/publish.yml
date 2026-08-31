@@ -33,11 +33,14 @@ jobs:
       # The CLI depends on `@superself/fold` through the workspace protocol, and
       # `npm publish` uploads that spec verbatim — a published CLI carrying
       # `workspace:*` cannot be installed by anyone. Publishing the package and
-      # pinning the CLI to a real version is stage 5 of the API-mode plan; until
-      # it lands, a release stops here rather than shipping a broken tarball.
+      # pinning the CLI to a real version is a follow-up change; until it lands,
+      # a release stops here rather than shipping a broken tarball. The value is
+      # captured before grep so a node failure fails the step instead of
+      # slipping through as "nothing matched".
       - name: No unresolved workspace dependency may be published
         run: |
-          if node -p "JSON.stringify(require('./apps/cli/package.json').dependencies ?? {})" | grep -q 'workspace:'; then
+          DEPS="$(node -p "const p = require('./apps/cli/package.json'); JSON.stringify({ ...p.dependencies, ...p.optionalDependencies, ...p.peerDependencies })")"
+          if echo "$DEPS" | grep -q 'workspace:'; then
             echo "apps/cli still depends on a workspace package — publish @superself/fold first and pin the CLI to its version" >&2
             exit 1
           fi

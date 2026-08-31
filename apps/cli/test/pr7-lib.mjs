@@ -13,7 +13,7 @@
 import { createServer } from "node:http";
 import { createPrivateKey, createPublicKey, createHash, sign } from "node:crypto";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,8 +85,11 @@ function testBuild()
 // `@superself/fold`, so a scratch tree holding `dist/` alone resolves nothing
 // and the child dies before it has an exit code worth asserting. Dereferenced,
 // because the workspace link points at a path outside this root; and the
-// dependency's own `node_modules` is left behind, because a devDependency of
-// the package is not something a published install carries.
+// dependency's own `node_modules` is left behind — that drops its
+// devDependencies (right: a published install never carries them) and would
+// also drop its runtime dependencies, which is fine only while the copied
+// packages declare none; a future runtime dependency means following
+// `dependencies` recursively here.
 function copyDependencies(root)
 {
     const declared = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).dependencies ?? {};
@@ -98,6 +101,11 @@ function copyDependencies(root)
             dereference: true,
             filter: (path) => !relative(from, path).split(sep).includes("node_modules")
         });
+        const copied = JSON.parse(readFileSync(join(root, "node_modules", name, "package.json"), "utf8"));
+        if (!existsSync(join(root, "node_modules", name, copied.main ?? "index.js")))
+        {
+            throw new Error(`${name} was copied without its built entry — run pnpm build before the suite`);
+        }
     }
 }
 
