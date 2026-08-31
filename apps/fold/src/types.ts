@@ -87,6 +87,17 @@ export interface SelfEvent
     project: string;
     payload: Record<string, unknown>;
     refs?: EventRefs;
+    // Which account wrote the event, stamped by the machine that made the
+    // append. `origin` above says what kind of writer it was — an agent or a
+    // person — and this says whose it was, which is a different question and
+    // the one a workspace holding several people's records has to answer.
+    //
+    // Recorded at the moment of the append rather than at the moment it is
+    // sent, so authorship survives an account being switched on the machine
+    // between the two. Absent on a git-backed store's events, whose author is
+    // the git history's to state, and absent on everything written before this
+    // field existed — so no log is migrated and none can be.
+    actor?: { account: string };
 }
 
 // One regular file copied out of a bundle's tree, named by its path relative

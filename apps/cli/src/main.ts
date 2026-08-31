@@ -49,6 +49,7 @@ import {
     isStore,
     linkedPaths,
     LINKS_FILE,
+    machineStoreServerBacked,
     MARKER_FILE,
     ProjectContext,
     projectStateDir,
@@ -71,10 +72,12 @@ import {
     siblingSlug,
     slugsLinkedAt,
     tokenScale,
+    useAccount,
     STORE_DIR,
     StoreConfig,
     WORKSPACE_SCOPE_OPTIONS
 } from "./paths.js";
+import { serverBacked } from "./mode.js";
 import { notice, renderOutput } from "./output.js";
 import { makeEvent, recordEvent, recordEvents, resetPipeline, stateIntent } from "./pipeline.js";
 import { annulledIds, coupledUnit, dependentRefusal, dependentsOf, requireUndoable } from "./undo.js";
@@ -116,7 +119,7 @@ import { RENDER_OPTIONS } from "./pretty.js";
 import { contextOutput, handoffContextLines, handoffOutput, HandoffSnapshot, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
 import { APP_COMMAND, registerHostVerbs } from "./app.js";
 import { LOGIN_COMMAND, LOGOUT_COMMAND, WHOAMI_COMMAND, clientTag } from "./login.js";
-import { resetCredentialWarnings, resolveProfileName } from "./credentials.js";
+import { currentAccount, resetCredentialWarnings, resolveProfileName } from "./credentials.js";
 import {
     InstalledPlugin, LoadContext, assertDevPluginMode, devPluginDir, installedPlugins,
     loadDevPlugin, loadPlugin, pluginVerbs, resolveRailMajor
@@ -1621,11 +1624,7 @@ async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<C
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
     {
-        if (!isStore(storeDir))
-        {
-            throw new CliError(`${storeDir} already exists and is not a workspace store — another tool owns that directory`);
-        }
-        return [{ kind: "receipt", text: `workspace already initialized at ${storeDir}` }];
+        return alreadyThere(storeDir);
     }
     const lang = validLang(values.lang ?? await askLang());
     ensureDir(storeDir);
@@ -1639,6 +1638,28 @@ async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<C
     const opened: CommandOutput = [{ kind: "receipt", text: `workspace initialized at ${storeDir} (views in "${lang}")` }];
     const agents = values.agents === true || await askAgents();
     return agents ? [...opened, ...connectMachineAgents()] : opened;
+}
+
+// What is already at `.superself`, in the three ways it can be there. Only the
+// last of them is this command succeeding at nothing.
+//
+// A store is git-backed or server-backed for its whole life, and this verb sets
+// up the git-backed one: it makes the git repository, and that happens outside
+// every path a store's mode could quietly turn into no work. Answering "already
+// initialized" for a server-backed store would be reporting about a store this
+// command could not have made and cannot change.
+function alreadyThere(storeDir: string): CommandOutput
+{
+    if (!isStore(storeDir))
+    {
+        throw new CliError(`${storeDir} already exists and is not a workspace store — another tool owns that directory`);
+    }
+    if (serverBacked(storeDir))
+    {
+        throw new CliError(`${storeDir} is a server-backed workspace store, and \`self init\` sets up a `
+            + "git-backed one — one store is one or the other");
+    }
+    return [{ kind: "receipt", text: `workspace already initialized at ${storeDir}` }];
 }
 
 // Asked once, at the only moment a person is certain to be present.
@@ -4056,6 +4077,24 @@ function resetInvocation(): void
     resetCredentialWarnings();
     selectJsonMode(false);
     suppressJournal(false);
+    useAccount(undefined);
+}
+
+// Who the log will say wrote this invocation's records, read once, here, and
+// carried from here on as a value. This is the whole of the reason the append
+// path can stamp an author without holding an import path to a credential, which
+// is the structure check's credential-isolation rule.
+//
+// Read at all only where this machine's store keeps its records on a server. A
+// git-backed run must touch no credential file: its log states no account, so
+// reading one would be a file opened, a permission checked and a warning
+// possibly printed for a value nothing was ever going to use.
+function noteAccount(): void
+{
+    if (machineStoreServerBacked())
+    {
+        useAccount(currentAccount());
+    }
 }
 
 export async function runCli(argv: string[]): Promise<void>
@@ -4064,26 +4103,38 @@ export async function runCli(argv: string[]): Promise<void>
     process.exitCode = 0;
     try
     {
+        // Inside the catch, not in front of it: this reads a file off the
+        // machine, and a machine whose config will not parse owes its caller
+        // the sentence every other unreadable file gets rather than a stack.
+        noteAccount();
         await main(argv);
     }
     catch (error)
     {
-        // The fold refuses in its own error type: `@superself/fold` is folded by
-        // a server as well as by this CLI, so it cannot construct a refusal that
-        // carries an exit code. Its message becomes one here, at the one
-        // boundary, rather than reaching the reporter as an unrecognised throw.
-        const raised = error instanceof FoldError ? new CliError(error.message) : error;
-        const message = userMessage(raised, argv);
-        if (message === null)
-        {
-            throw raised;
-        }
-        // The exit vocabulary lives on the error, so a command that constructs
-        // none of 2 or 3 keeps exactly the behaviour it had. Under `--json` the
-        // envelope goes to stdout, so an agent capturing stdout gets parseable
-        // JSON on every path rather than on the successful ones only.
-        const refusal = raised instanceof CliError ? raised : null;
-        renderFailure(refusal?.code ?? "parse_error", message, refusal?.fields ?? {});
-        process.exitCode = refusal?.exit ?? 1;
+        reportFailure(error, argv);
     }
+}
+
+// What the caller is told, and what this process exits with. An error with no
+// sentence for it is re-thrown rather than swallowed: node prints the stack and
+// exits 1, which is the honest answer for a failure the CLI has no words for.
+function reportFailure(error: unknown, argv: string[]): void
+{
+    // The fold refuses in its own error type: `@superself/fold` is folded by
+    // a server as well as by this CLI, so it cannot construct a refusal that
+    // carries an exit code. Its message becomes one here, at the one
+    // boundary, rather than reaching the reporter as an unrecognised throw.
+    const raised = error instanceof FoldError ? new CliError(error.message) : error;
+    const message = userMessage(raised, argv);
+    if (message === null)
+    {
+        throw raised;
+    }
+    // The exit vocabulary lives on the error, so a command that constructs
+    // none of 2 or 3 keeps exactly the behaviour it had. Under `--json` the
+    // envelope goes to stdout, so an agent capturing stdout gets parseable
+    // JSON on every path rather than on the successful ones only.
+    const refusal = raised instanceof CliError ? raised : null;
+    renderFailure(refusal?.code ?? "parse_error", message, refusal?.fields ?? {});
+    process.exitCode = refusal?.exit ?? 1;
 }

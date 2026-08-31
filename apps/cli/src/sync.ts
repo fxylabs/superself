@@ -2,7 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { foldEveryProject } from "./fold.js";
 import { commitAll, configureStoreIdentity, excludeLocally, git, gitPatient } from "./gitutil.js";
-import { setMachineWorkspace } from "./machine.js";
+import { machineWorkspace, setMachineWorkspace } from "./machine.js";
+import { refuseGitOnly } from "./mode.js";
 import { notice } from "./output.js";
 import { CliContext, ensureDir, EVIDENCE_HEAD_EXCLUDE, LINKS_FILE, readRegistry, STORE_DIR } from "./paths.js";
 import { compactionSignal } from "./store.js";
@@ -35,6 +36,7 @@ export function ensureSyncConfig(storeDir: string): void
 
 export function remoteAdd(ctx: CliContext, url: string): CommandOutput
 {
+    refuseGitOnly(ctx.storeDir, "remote add", "points a git-backed store at a git remote");
     ensureSyncConfig(ctx.storeDir);
     const existing = git(ctx.storeDir, "remote", "get-url", "origin");
     const result = existing.ok
@@ -50,6 +52,7 @@ export function remoteAdd(ctx: CliContext, url: string): CommandOutput
 
 export function syncStore(ctx: CliContext): CommandOutput
 {
+    refuseGitOnly(ctx.storeDir, "sync", "pushes a git-backed store to its git remote");
     ensureSyncConfig(ctx.storeDir);
     const remote = git(ctx.storeDir, "remote", "get-url", "origin");
     if (!remote.ok)
@@ -109,6 +112,7 @@ function storeName(url: string): string
 
 export function cloneStore(url: string, dir: string | undefined): CommandOutput
 {
+    refuseGitOnlyClone();
     const target = resolve(dir ?? storeName(url));
     const storeDir = join(target, STORE_DIR);
     if (existsSync(storeDir))
@@ -126,9 +130,28 @@ export function cloneStore(url: string, dir: string | undefined): CommandOutput
     const slugs = readRegistry(storeDir).map((entry) => entry.slug);
     foldEveryProject(storeDir);
     setMachineWorkspace(target);
-    // Three receipts rather than one with newlines in it: each line is a fact
-    // the clone recorded, and the reconnection line only exists where there is
-    // something to reconnect.
+    return clonedReceipts(target, slugs);
+}
+
+// The store this refusal is about is the one the machine already points at, not
+// the one about to be made: a clone makes a second git-backed store, and a
+// machine whose workspace is server-backed reaches its records by being logged
+// in rather than by copying a git history that does not exist. A machine
+// pointing at nothing is the ordinary first clone and is not refused.
+function refuseGitOnlyClone(): void
+{
+    const workspaceDir = machineWorkspace();
+    if (workspaceDir !== null)
+    {
+        refuseGitOnly(join(workspaceDir, STORE_DIR), "clone", "copies a git-backed store from a git remote");
+    }
+}
+
+// Three receipts rather than one with newlines in it: each line is a fact the
+// clone recorded, and the reconnection line only exists where there is
+// something to reconnect.
+function clonedReceipts(target: string, slugs: string[]): CommandOutput
+{
     const cloned: CommandOutput = [{ kind: "receipt", text: `workspace cloned into ${target}` }];
     if (slugs.length > 0)
     {

@@ -1,12 +1,28 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED } from "@superself/fold";
+import { serverBacked } from "./mode.js";
 import { projectStateDir } from "./paths.js";
+import { pendingEvents } from "./pending.js";
 import { CliError, SelfEvent } from "./types.js";
 
 const CRITERION_EVENTS = [CRITERION_DECLARED, CRITERION_BLOCKED, CRITERION_UNBLOCKED];
 
+// Every event this machine holds for a project, in the order a fold applies
+// them. A git-backed store keeps them all in one file and this is a read of it.
+//
+// A server-backed store keeps them in two, and the join is here rather than in
+// each reader: the stored log is the server's copy, and beside it is this
+// machine's queue of appends the server has not taken. One place asks for both,
+// so a surface added later cannot answer from half the log by forgetting the
+// other half existed.
 export function readEvents(storeDir: string, slug: string): SelfEvent[]
+{
+    const stored = readLog(storeDir, slug);
+    return serverBacked(storeDir) ? withUnsent(stored, pendingEvents(storeDir, slug)) : stored;
+}
+
+function readLog(storeDir: string, slug: string): SelfEvent[]
 {
     const file = join(projectStateDir(storeDir, slug), "log.jsonl");
     if (!existsSync(file))
@@ -17,6 +33,23 @@ export function readEvents(storeDir: string, slug: string): SelfEvent[]
         .split("\n")
         .filter((line) => line.trim() !== "")
         .map((line) => JSON.parse(line));
+}
+
+// The server's copy first, in the order the server put it in, and this
+// machine's unsent tail after it. That order is the fold's own semantics rather
+// than a compromise: a record the workspace has already agreed on stands ahead
+// of one only this machine has made, and an append made offline lands after
+// everything that arrived while it was offline — which is what a person reading
+// two machines' work in one log expects to see.
+//
+// An event in both files is counted once, off the stored copy: between a push
+// that succeeded and the mark that says so, the same record is in the queue and
+// in the server's answer, and a fold that applied it twice would read a single
+// act as two.
+function withUnsent(stored: SelfEvent[], unsent: SelfEvent[]): SelfEvent[]
+{
+    const known = new Set(stored.map((event) => event.id));
+    return [...stored, ...unsent.filter((event) => !known.has(event.id))];
 }
 
 export function findEventByPrefix(storeDir: string, slug: string, prefix: string): SelfEvent

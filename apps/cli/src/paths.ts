@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { Verdict } from "@superself/fold";
 import { checkoutTops, commonDir, excludeLocally, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
+import { serverBacked } from "./mode.js";
 import { CliError, RegistryEntry } from "./types.js";
 
 export const STORE_DIR = ".superself";
@@ -19,8 +20,24 @@ export interface CliContext
 {
     workspaceDir: string;
     storeDir: string;
+    // Which account this machine is logged in as, where the store is
+    // server-backed and the log has to say whose work a record is. Set once per
+    // invocation by the entry point and carried on every context this module
+    // builds, so the append path records it without holding a way to read it.
+    account?: string;
     project?: string;
     projectDir?: string;
+}
+
+// The value behind `CliContext.account`. A state writer must have no import
+// path to a credential, so the reading happens at the entry point and the
+// answer is left here — the resolution layer, which is where a context is made
+// and therefore the only place that could put it on one.
+let account: string | undefined = undefined;
+
+export function useAccount(name: string | undefined): void
+{
+    account = name;
 }
 
 export type ProjectContext = CliContext & { project: string; projectDir: string };
@@ -64,8 +81,22 @@ function resolveContext(cwd: string): CliContext | null
     }
     const at = projectAt(storeDir, cwd, marker);
     return at === null
-        ? { workspaceDir, storeDir }
-        : { workspaceDir, storeDir, project: at.slug, projectDir: at.dir };
+        ? { workspaceDir, storeDir, account }
+        : { workspaceDir, storeDir, account, project: at.slug, projectDir: at.dir };
+}
+
+// Whether the store this machine points at keeps its records on a server. Asked
+// by the entry point before any command has run, so it refuses nothing and
+// resolves nothing else: a machine pointing at no workspace is an ordinary
+// answer here, and the command that needs one says so itself.
+//
+// The machine's own pointer is read rather than the directory's marker, because
+// a marker is only consulted to migrate a store written before the pointer
+// existed — and a store written then is a git-backed one.
+export function machineStoreServerBacked(): boolean
+{
+    const workspaceDir = machineWorkspace();
+    return workspaceDir !== null && serverBacked(join(workspaceDir, STORE_DIR));
 }
 
 // The project this directory belongs to. The marker that governs the place is
@@ -269,7 +300,18 @@ export function readScope(cwd: string, choice: ScopeChoice): CliContext
     requireProjects(ctx.storeDir);
     // The directory's own project is dropped deliberately: the caller asked
     // for the workspace, and carrying it would answer for one project.
-    return { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir };
+    return workspaceOnly(ctx);
+}
+
+// The same context with the directory's own project taken off it: which store
+// this is and who this machine is logged in as are facts about the machine and
+// travel, and the project is a fact about a directory and does not. Written
+// once because all three callers drop the same two fields, and one of them
+// dropping the account by hand would silently take the author off every record
+// a `--project` write makes.
+function workspaceOnly(ctx: CliContext): CliContext
+{
+    return { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, account: ctx.account };
 }
 
 // The scopes for a read that speaks per project — one, or every registered one.
@@ -282,7 +324,7 @@ export function readScopes(cwd: string, choice: ScopeChoice): ProjectScope[]
     }
     const ctx = requireWorkspace(cwd);
     return requireProjects(ctx.storeDir)
-        .map((entry) => ({ workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project: entry.slug }));
+        .map((entry) => ({ ...workspaceOnly(ctx), project: entry.slug }));
 }
 
 function namedScope(cwd: string, slug: string): ProjectScope
@@ -313,7 +355,7 @@ export function projectScope(ctx: CliContext, project: string): ProjectScope
 {
     return ctx.project === project
         ? ctx as ProjectScope
-        : { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, project };
+        : { ...workspaceOnly(ctx), project };
 }
 
 export function requireRegistered(storeDir: string, slug: string): string

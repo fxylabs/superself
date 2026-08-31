@@ -1,6 +1,7 @@
 import { spawnSync, SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns, StdioOptions } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { serverBacked } from "./mode.js";
 import { CliError, fail } from "./types.js";
 
 // ── the one place git is spawned ─────────────────────────────────────────
@@ -192,8 +193,18 @@ function mustGit(cwd: string, doing: string, ...args: string[]): string
     return result.out;
 }
 
+// Nothing to do where the store keeps no git history. The nine callers are
+// unchanged and say what they always said — "the store has changed, record
+// that" — and a server-backed store records it by queueing the append rather
+// than by committing, which has already happened by the time this is reached.
+// Deciding here rather than at each call is what stops a caller added later
+// from being the one that forgot.
 export function commitAll(storeDir: string, message: string): void
 {
+    if (serverBacked(storeDir))
+    {
+        return;
+    }
     mustGit(storeDir, "staging the workspace store", "add", "-A");
     if (mustGit(storeDir, "reading the workspace store status", "status", "--porcelain") === "")
     {

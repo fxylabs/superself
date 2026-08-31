@@ -303,6 +303,27 @@ export function readProfile(name: string): Profile
     return profile;
 }
 
+// Which account this machine is logged in as, for the one caller that needs the
+// name rather than the credential: the entry point, which reads it once and
+// hands it to the append path as a value. No token leaves here, and nothing
+// downstream of it can ask for one.
+//
+// Best effort by construction. A machine with no credential, an unreadable
+// file, or a default profile that is not there is a machine whose records say
+// who wrote them nowhere — a gap in an audit trail, and never a reason to
+// refuse the work the caller actually asked for.
+export function currentAccount(): string | undefined
+{
+    try
+    {
+        return readProfile(resolveProfileName()).account_id;
+    }
+    catch
+    {
+        return undefined;
+    }
+}
+
 // Replace one profile, leaving every other one exactly as it was. The caller
 // holds the lock; this is the write itself.
 //

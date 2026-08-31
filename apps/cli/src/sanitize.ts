@@ -57,8 +57,10 @@ export function assertSanitized(event: SelfEvent): void
     // and pulled: `refs.commits` is whatever `--evidence` was handed, and
     // `origin.session` is an environment variable, so a home path or a
     // credential reaches the synced log through either without passing another
-    // check. `refs.branch` is the one field this cannot cover, and does not
-    // need to — the pipeline stamps it from the checkout after this runs.
+    // check. `refs.branch` and `actor` are the two fields this cannot cover,
+    // and neither needs it — the pipeline stamps both after this runs, from
+    // what git says the checkout is and from the account name the entry point
+    // read, so neither is ever text a caller typed.
     walk(event.payload, "payload", declared);
     walk(event.refs, "refs", declared);
     walk(event.origin, "origin", declared);

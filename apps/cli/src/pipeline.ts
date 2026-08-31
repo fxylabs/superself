@@ -4,8 +4,10 @@ import { foldProject } from "./fold.js";
 import { commitAll, currentBranch, topOf } from "./gitutil.js";
 import { ulid } from "./ids.js";
 import { sessionToken } from "./machine.js";
+import { serverBacked } from "./mode.js";
 import { jsonMode, notice } from "./output.js";
 import { CliContext, ensureDir, invalidateResolution, projectStateDir, refuseArchived } from "./paths.js";
+import { appendPending, refuseOversizedAppend } from "./pending.js";
 import { assertSanitized } from "./sanitize.js";
 import { bold, dim, green, styled } from "./style.js";
 import { CliError, EventRefs, SelfEvent } from "./types.js";
@@ -101,6 +103,7 @@ export function recordEvents(ctx: CliContext, events: SelfEvent[], summary: stri
     events.forEach((event) => assertSanitized(event));
     requireWritable(ctx, events);
     stampBranch(ctx, events);
+    stampActor(ctx, events);
     writeThrough(ctx.storeDir, events, events.map((event) => event.type).join(" "), summary, onRecorded);
     announce(events, summary);
 }
@@ -134,6 +137,7 @@ export function recordCalls(calls: RecordedCall[], summary: string): void
     events.forEach((event) => assertSanitized(event));
     calls.forEach((call) => requireWritable(call.ctx, call.events));
     calls.forEach((call) => stampBranch(call.ctx, call.events));
+    calls.forEach((call) => stampActor(call.ctx, call.events));
     // The type list is deduplicated here and not in `recordEvents`: a set of
     // twenty withdrawals would otherwise name its one event type twenty times
     // in the commit subject.
@@ -227,6 +231,27 @@ function stampBranch(ctx: CliContext, events: SelfEvent[]): void
     }
 }
 
+// Which account these events are the work of, from the value the entry point
+// read once and put on the context. A value and never a reader: a state writer
+// must have no import path to a credential, so `runCli` asks who this machine
+// is logged in as and this module is handed the answer.
+//
+// Stamped only where the store is server-backed, which is where authorship has
+// to travel with the record: a git-backed store's log is committed by a machine
+// git already names, and stamping there would change bytes that every existing
+// clone of that log agrees on. Silent where the machine is logged in to
+// nothing — an append is always allowed to succeed, and a record whose author
+// is unstated is a gap in an audit trail rather than a reason to refuse work.
+function stampActor(ctx: CliContext, events: SelfEvent[]): void
+{
+    const account = ctx.account;
+    if (account === undefined || !serverBacked(ctx.storeDir))
+    {
+        return;
+    }
+    events.forEach((event) => { event.actor = { account }; });
+}
+
 // Recording into an archived project is what "it is being worked on again"
 // means, so it is refused and `restore` is named (#283). The refusal sits on
 // the append rather than on each verb: every write the CLI has goes through
@@ -249,16 +274,45 @@ function requireWritable(ctx: CliContext, events: SelfEvent[]): void
 
 // One append per log, in the order the events were composed, and the projects
 // written back so the caller refolds exactly those.
+//
+// Which file an append lands in is the whole of what the store's mode changes
+// here. A git-backed store writes the log itself and the commit that follows
+// covers it; a server-backed store writes the queue, and the log beside it is
+// the server's to write. Both are one append per project either way, so a
+// reader of any one project still never finds half a state change.
 function appendGrouped(storeDir: string, events: SelfEvent[]): string[]
 {
-    const projects = [...new Set(events.map((event) => event.project))];
-    for (const project of projects)
+    const groups = groupByProject(events);
+    if (serverBacked(storeDir))
     {
-        const dir = ensureDir(projectStateDir(storeDir, project));
-        appendFileSync(join(dir, "log.jsonl"), events.filter((event) => event.project === project)
-            .map((event) => JSON.stringify(event) + "\n").join(""));
+        // Every group is checked before any of them is written. A placement
+        // that writes into two projects makes two appends, and refusing the
+        // second for its size after the first is already queued would leave
+        // exactly the half-written state one append per log exists to prevent.
+        groups.forEach((group) => refuseOversizedAppend(group.events));
+        groups.forEach((group) => appendPending(storeDir, group.project, group.events));
+        return groups.map((group) => group.project);
     }
-    return projects;
+    groups.forEach((group) => appendLog(storeDir, group.project, group.events));
+    return groups.map((group) => group.project);
+}
+
+interface ProjectAppend
+{
+    project: string;
+    events: SelfEvent[];
+}
+
+function groupByProject(events: SelfEvent[]): ProjectAppend[]
+{
+    return [...new Set(events.map((event) => event.project))]
+        .map((project) => ({ project, events: events.filter((event) => event.project === project) }));
+}
+
+function appendLog(storeDir: string, project: string, events: SelfEvent[]): void
+{
+    const dir = ensureDir(projectStateDir(storeDir, project));
+    appendFileSync(join(dir, "log.jsonl"), events.map((event) => JSON.stringify(event) + "\n").join(""));
 }
 
 // Whether an append says anything is decided here, where what the run is for

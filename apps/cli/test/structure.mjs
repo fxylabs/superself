@@ -97,8 +97,12 @@ function violation(rule, detail)
     return { file: rootKeysModule, line: 1, rule, detail };
 }
 
+// `pending.ts` is on this list for the same reason `logfile.ts` is: it is where
+// a server-backed store's records are written and read, so an author it stamped
+// from a credential it read itself would be exactly the import this rule exists
+// to make impossible. The account travels to the append path as a value.
 export const stateWritingModules = [
-    "src/ledger.ts", "src/pipeline.ts", "src/sanitize.ts", "src/logfile.ts",
+    "src/ledger.ts", "src/pipeline.ts", "src/sanitize.ts", "src/logfile.ts", "src/pending.ts",
     "src/fold.ts", "src/model.ts", "src/connect.ts", "src/sync.ts", "src/artifact.ts"
 ];
 
