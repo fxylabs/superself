@@ -196,21 +196,14 @@ async function sendBatch(run: Run, appends: WireAppend[], retried = false): Prom
     await applyStatus(run, appends, answer, retried);
 }
 
+// The rows that are about this machine or this moment rather than about the
+// records. Split from the refusals below only for length; the statuses are
+// disjoint, so the order across the two reads exactly as the table states it.
 async function applyStatus(run: Run, appends: WireAppend[], answer: ApiAnswer & { reached: true }, retried: boolean): Promise<void>
 {
     if (answer.status === 200 || answer.status === 426)
     {
         return;                                                     // P1, P7
-    }
-    if (answer.status === 400)
-    {
-        blockAll(run, appends, errorCodeOf(answer.body) ?? "rejected", refusalOf(answer));
-        return;                                                     // P2, P3
-    }
-    if (answer.status === 409 || answer.status === 413)
-    {
-        await splitOrBlock(run, appends, answer.status === 413 ? "too_large" : "conflict", refusalOf(answer));
-        return;                                                     // P4, P5
     }
     if (answer.status === 404)
     {
@@ -222,12 +215,30 @@ async function applyStatus(run: Run, appends: WireAppend[], answer: ApiAnswer & 
         await waitAndRetry(run, appends, retryAfterMs(answer.headers));
         return;                                                     // P9
     }
+    await afterRefusal(run, appends, answer);
+    // What neither answered is a 5xx, and a 503 already waited out once. The
+    // queue keeps them.                                             // P10
+}
+
+// The rows where the workspace refused the records themselves. Every one of
+// them either stops an append or splits the batch and lets the answer be read
+// again; none of them leaves it quietly queued.
+async function afterRefusal(run: Run, appends: WireAppend[], answer: ApiAnswer & { reached: true }): Promise<void>
+{
+    if (answer.status === 400)
+    {
+        blockAll(run, appends, errorCodeOf(answer.body) ?? "rejected", refusalOf(answer));
+        return;                                                     // P2, P3
+    }
+    if (answer.status === 409 || answer.status === 413)
+    {
+        await splitOrBlock(run, appends, answer.status === 413 ? "too_large" : "conflict", refusalOf(answer));
+        return;                                                     // P4, P5
+    }
     if (answer.status >= 400 && answer.status < 500)
     {
         blockAll(run, appends, `http_${answer.status}`, refusalOf(answer));  // P8
     }
-    // Everything left is a 5xx, and a 503 that has already been waited out
-    // once. The queue keeps them.                                   // P10
 }
 
 // P4 and P5 both: a batch the server refused as a whole is re-sent one append
