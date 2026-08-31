@@ -92,7 +92,11 @@ function parseMarker(file: string): Partial<WorkspaceMarker>
 //                 its own — the shipped behaviour
 //   "inline"      catch up before the command, send after it before the command
 //                 returns. What a case asserting a row of the table above needs
-//                 in order to have anything to assert
+//                 in order to have anything to assert — and nothing else. It is
+//                 not a mode to work in: the command holds until the workspace
+//                 has answered, so every delay the server has is a delay the
+//                 person waits out, which is exactly what `on` exists to spare
+//                 them
 //   "off"         neither. A machine deliberately working from what it holds
 //
 // Read on each call rather than at load, so a test that sets it for one

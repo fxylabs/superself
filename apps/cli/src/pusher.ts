@@ -97,6 +97,13 @@ function spawnPusher(storeDir: string): void
 {
     const entry = fileURLToPath(new URL("./pushermain.js", import.meta.url));
     const child = spawn(process.execPath, [entry, storeDir], { detached: true, stdio: "ignore" });
+    // A spawn that never starts — no descriptors left, no process slots left —
+    // raises an `error` event, and an unhandled one is an uncaught exception in
+    // a process that has already run the person's command and printed its
+    // answer. Taking it and doing nothing is the whole of the handling: the
+    // queue still holds every append, so the records are where they were and
+    // the next command sends them.
+    child.on("error", () => undefined);
     // Unreferenced and in its own process group: the command that started it is
     // finished, and neither its exit nor its terminal is this process's concern.
     child.unref();
