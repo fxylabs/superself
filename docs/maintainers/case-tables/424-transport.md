@@ -102,11 +102,19 @@ a person can be walked out of, and the append blocks rather than looping.
 
 | # | Answer | What this machine does | Cell |
 |---|---|---|---|
-| L1 | 200 | append to the copy, settle what arrived, compact, refold | `pull L1 delta`, `pull L1 cursor`, `pull L1 tombstone`, `pull L1 partial`, `pull L1 refold`, `pull L1 after-a-crash` |
+| L1 | 200 | append to the copy, settle what arrived, refold, compact | `pull L1 delta`, `pull L1 cursor`, `pull L1 tombstone`, `pull L1 partial`, `pull L1 refold`, `pull L1 after-a-crash` |
 | L2 | 404 | local answer, one line naming the remedy | `pull L2 unknown-project` |
 | L3 | 426 | local answer, one line saying to update | `pull L3 version-mismatch` |
 | L4 | 503 | local answer, **no wait** | `pull L4 not-ready` |
 | L5 | anything else, offline | local answer, one line | `pull L5 other`, `pull L5 offline`, `pull L5 unparseable`, `pull L5 hung` |
+
+The compaction is last, and after the fold rather than before it. It drops the
+appends the server has taken and the marks about them — rows every read already
+filters out — so the fold sees the same queue either way, and what the order buys
+is that a compaction that fails cannot cancel the fold. The events and the marks
+are written by then, so the next pull finds nothing new, returns early, and would
+never fold that delta at all: a tidying failure would have silently cost a
+person's `state.md` the records that had already arrived.
 
 L4 is the row worth reading twice. A read cannot be deferred: somebody is holding
 the command, and what this machine holds is a complete answer to what this
@@ -160,8 +168,25 @@ which is the half of the lock's own argument that used to be false. Past its
 lease the catch-up leaves the projects it has not reached where they are and
 returns as though it had finished, because for the command in front of it, it
 has: every row of the pull table ends in the command running against what this
-machine holds, and a project this pass skipped is one the next command reaches
-first.
+machine holds.
+
+**"The next command reaches them" is a fact the walk has to earn.** A pass that
+always started at the front of the registry would reach the same projects every
+time and never the ones behind them — and a project never pulled is a project
+whose appends are never settled, whose queue is never compacted and whose queue
+file grows without end, while the pusher re-sends that backlog on every run. So
+the pass records the last project it reached, machine-locally in `sync.place`,
+and the next one starts after it. That file is a hint and never a record: it
+holds nothing the store could not work out again, losing it costs one unfair
+pass, and it is the reason it is written whole rather than appended to.
+
+**A workspace that did not answer ends the pass.** `reached: false` is a fact
+about the network in front of every project, not about the one that asked, so
+asking the next project spends another request timeout to be told the same thing
+— on a machine with a dozen projects, a person holding a command waited out one
+timeout per project and was told the same sentence that many times. One
+unreachable project now ends the walk, which is also what makes the notice
+appear once.
 
 | Property | Cell |
 |---|---|
@@ -172,17 +197,52 @@ first.
 | a lock naming no holder is judged by its age | `lock unreadable` |
 | both holders' bounds are under the threshold | `lock lease-bound`, `lock bounded-by-its-parts` |
 | a catch-up past its lease skips the rest and returns | `pull lease-bound` |
+| a pass cut short starts the next one where it stopped, so no project starves | `pull in turn` |
+| a workspace nothing answers on ends the pass rather than being asked per project | `pull unreachable` |
 | a temp file or a stolen lock inode a dead holder left is swept at the next acquire | `lock sweeps` |
+| a live holder's temp survives the holder that took its lock | `lock sweeps` |
+| a file of a person's own that resembles a nonce is left alone | `lock sweeps` |
+
+### What the sweep may remove, and what it may not
+
+The sweep runs the moment a process becomes the holder and it deletes files, in a
+directory a person opens. Two things bound it, and both are checks rather than
+arguments.
+
+**The name, exactly.** `<file>.tmp-<nonce>` and `sync.lock.dead-<nonce>`, where a
+nonce is 32 hexadecimal characters and never fewer, more or other. Anything
+looser reaches a person's own `notes.tmp-backup-<32 hex>`.
+
+**The age, the same age a lock is judged by.** The shorter argument — one holder
+at a time, so a file carrying either name belongs to a process that is no longer
+a holder — is false in the one case this module already documents: a wall clock
+stepped forward ages a live holder's lock, so the process that steals it is
+sweeping a directory somebody is still writing in. Requiring of the file the age
+that made the lock stealable leaves a running publish's temp where it is.
+
+What is left is the case where the same clock jump aged the file too, and the
+publish answers that one itself rather than being protected from it: **no step of
+a publish may raise.** The write, the cleanup and the rename are each best-effort
+and a failure is the same `false` a stolen lock gets. That is not error-hiding,
+because the answer to every one of those failures is the same and it is not an
+exception: nothing was renamed, the original is whole and authoritative, no tail
+is carried onto a file that was not published, and the next sync works the
+replacement out again from what is on disk. A catch-up stands in front of
+somebody's command, and every row of the pull table ends in that command running
+rather than in a stack trace.
 
 ### What the lock rests on
 
 A **local POSIX filesystem**, and this is a precondition rather than a
 preference: `O_EXCL` exclusive across processes, `rename` replacing a name in one
-step, an unlinked inode still readable through an open descriptor, and an mtime
-this machine's clock would recognise. A store on a network share or inside a
-folder a cloud client syncs breaks at least one of the four, and this is not a
-lock there. Stated in the module header; no cell can check it, because the
-filesystem under the suite is the one that satisfies it.
+step, an unlinked inode still readable through an open descriptor, an mtime this
+machine's clock would recognise, and an append being one write. A store on a
+network share or inside a folder a cloud client syncs breaks at least one of the
+five, and this is not a lock there. Stated in the module header; no cell can
+check it, because the filesystem under the suite is the one that satisfies it.
+
+The fifth has a measured edge and is the one the code checks rather than
+assumes — see "a read that does not end at a line ending" below.
 
 The stale judgement is a wall clock and a holder's own bound is not. A clock
 stepped forward ages a lock its holder believes is young; one stepped back holds
@@ -225,13 +285,45 @@ the carried length just before the rename and abandon the publish where they
 disagree. It narrows the window to `stat`-then-`rename` rather than closing it,
 and under the load that makes the window wide — a machine appending steadily —
 it abandons the compaction every time, so a queue that is growing is a queue that
-is never tidied. The descriptor loses nothing under any interleaving.
+is never tidied.
+
+**There is a third window and it stays open.** `appendFileSync` opens by name,
+writes, and closes. An appender that opened the old inode before the rename but
+had not written yet when the tail was read writes into an inode this publish has
+already read to the end of and no reader will open again, and those bytes are
+lost. It is the gap inside one appender between its own `open` and its own
+`write` — tens of microseconds, longer only if it is preempted there — against a
+second window measured in the milliseconds or seconds a replacement takes to
+write out, so it is narrower by orders of magnitude. It cannot be closed from
+this side: closing it means holding off the append, and the append being held
+off by nothing is the decision the whole module is built on. It is written down
+here because every other cost in that file is.
+
+**A read that does not end at a line ending is not published on.** The store
+assumes an append is one write, and that assumption has a measured edge: a
+buffered append publishes its new size a page at a time, so a reader landing
+inside an append of hundreds of kilobytes — the payload a single event may carry
+— sees a torn last line at a few percent of reads. Published, that would put a
+file with a cut-off last line in place, and the next command to read it would
+tell a person to repair by hand a file nothing had damaged; another append into
+the gap would fuse the cut line onto the next and make that true. So the publish
+refuses, the original stands, and the next sync reads a file that has settled.
+The recovered tail is carried the same way — whole lines and no part of one.
+
+**An empty read is not permission to write over whatever turned up.** With
+nothing to open, both reads are empty and the comparison between them proves
+nothing about a file that exists by the end of the rewrite; that file was made
+inside the window, and publishing over it is the loss this whole publish exists
+to prevent.
 
 | Property | Cell |
 |---|---|
 | a line appended mid-rewrite is carried | `rewrite carries` |
 | a line appended after the last read and before the rename is carried | `rewrite carries late tail` |
+| the tail is carried as whole lines, never half of one | `rewrite carries late tail` |
 | a file rewritten under the rewrite is left alone | `rewrite refuses` |
+| a read that stops inside a line is not published on, and the refusal is a pass and not a state | `rewrite refuses a torn read` |
+| a file created while the rewrite ran is not written over | `rewrite refuses` |
 | a holder whose lock was taken publishes nothing, and cleans up its temp | `rewrite stolen` |
 | a publish that refused carries no tail, and does not double one | `rewrite carries late tail` |
 | a crash before the rename costs nothing | `rewrite crash-safe` |
@@ -254,11 +346,22 @@ complete. With records still queued for it, dropping it would strand them in a
 file no command ever opens again — so the slug is kept and the push tells the
 person instead.
 
+A slug appears once. Registering a project is a foreground append, deliberately
+outside the sync lock, so a registration made in the moment a reconciliation was
+publishing a list that already held that project is carried onto the end of it
+and the file has two rows for one slug. Neither writer was wrong and nothing is
+lost — every lookup is by slug or id, and the first row is the one they read —
+but every walk over the registry then visits the project twice, saying its
+notices twice and folding it twice, and nothing else would ever take the second
+row out. The next reconciliation folds the list to one row per slug, first
+winning, which is the row the lookups were already answering with.
+
 | Property | Cell |
 |---|---|
 | another machine's project shows up, with its id cached | `registry reconciled` |
 | a project with records still queued is never unregistered | `registry kept` |
 | a project deleted elsewhere with nothing queued leaves the list | `registry dropped` |
+| two rows for one project are folded back to one | `registry deduped` |
 
 ## Two machines
 
