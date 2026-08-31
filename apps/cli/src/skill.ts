@@ -19,10 +19,10 @@
 // pinned roots — and this is not it.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { chainHead, EntityState, isCurrent, isLive, rendersIn, scopeTarget } from "@superself/fold";
 import { Requirement, required, requireText } from "./args.js";
 import { storedDocument } from "./artifact.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
-import { chainHead, EntityState, isCurrent, isLive, rendersIn, scopeTarget } from "./entities.js";
 import { ProjectModel, workspaceModels } from "./model.js";
 import { notice } from "./output.js";
 import { readScopes, requireProject, SCOPE_OPTIONS } from "./paths.js";

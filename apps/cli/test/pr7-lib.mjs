@@ -13,9 +13,9 @@
 import { createServer } from "node:http";
 import { createPrivateKey, createPublicKey, createHash, sign } from "node:crypto";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { jcs } from "../dist/rail.js";
 import { TRUST_PATH } from "../dist/trust.js";
@@ -75,9 +75,38 @@ function testBuild()
     {
         cpSync(join(packageRoot, entry), join(root, entry), { recursive: true });
     }
+    copyDependencies(root);
     writeFileSync(join(root, "dist", "rootkeys.js"), fixtureRootModule());
     process.on("exit", () => rmSync(root, { recursive: true, force: true }));
     return join(root, "bin", "self.mjs");
+}
+
+// What an install would have put beside the build. `dist/main.js` imports
+// `@superself/fold`, so a scratch tree holding `dist/` alone resolves nothing
+// and the child dies before it has an exit code worth asserting. Dereferenced,
+// because the workspace link points at a path outside this root; and the
+// dependency's own `node_modules` is left behind — that drops its
+// devDependencies (right: a published install never carries them) and would
+// also drop its runtime dependencies, which is fine only while the copied
+// packages declare none; a future runtime dependency means following
+// `dependencies` recursively here.
+function copyDependencies(root)
+{
+    const declared = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).dependencies ?? {};
+    for (const name of Object.keys(declared))
+    {
+        const from = join(packageRoot, "node_modules", name);
+        cpSync(from, join(root, "node_modules", name), {
+            recursive: true,
+            dereference: true,
+            filter: (path) => !relative(from, path).split(sep).includes("node_modules")
+        });
+        const copied = JSON.parse(readFileSync(join(root, "node_modules", name, "package.json"), "utf8"));
+        if (!existsSync(join(root, "node_modules", name, copied.main ?? "index.js")))
+        {
+            throw new Error(`${name} was copied without its built entry — run pnpm build before the suite`);
+        }
+    }
 }
 
 // The built root module with its record list swapped for the fixture's. A

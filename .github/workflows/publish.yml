@@ -30,6 +30,20 @@ jobs:
             echo "tag v$TAG does not match package version $PKG" >&2
             exit 1
           fi
+      # The CLI depends on `@superself/fold` through the workspace protocol, and
+      # `npm publish` uploads that spec verbatim — a published CLI carrying
+      # `workspace:*` cannot be installed by anyone. Publishing the package and
+      # pinning the CLI to a real version is a follow-up change; until it lands,
+      # a release stops here rather than shipping a broken tarball. The value is
+      # captured before grep so a node failure fails the step instead of
+      # slipping through as "nothing matched".
+      - name: No unresolved workspace dependency may be published
+        run: |
+          DEPS="$(node -p "const p = require('./apps/cli/package.json'); JSON.stringify({ ...p.dependencies, ...p.optionalDependencies, ...p.peerDependencies })")"
+          if echo "$DEPS" | grep -q 'workspace:'; then
+            echo "apps/cli still depends on a workspace package — publish @superself/fold first and pin the CLI to its version" >&2
+            exit 1
+          fi
       # prepublishOnly rebuilds before anything uploads; the test tier ran in PR CI
       - run: npm publish
         working-directory: apps/cli

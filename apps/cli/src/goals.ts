@@ -1,22 +1,30 @@
+import {
+    allMilestones,
+    awaitsReview,
+    contributionsOf,
+    criteriaNote,
+    entityCharacters,
+    EntityState,
+    Exposure,
+    findMilestone,
+    isCurrent,
+    isTerminalObjective,
+    isWorkProposal,
+    MilestoneState,
+    ObjectiveState,
+    openObjectives,
+    payloadArtifact,
+    rendersIn,
+    requireSupersedeKind,
+    scopeTarget,
+    supersedeSpelling,
+    WorkProposal
+} from "@superself/fold";
 import { presetRow } from "./aliases.js";
 import { required, Requirement, requireOptions } from "./args.js";
 import { attachedArtifactLines } from "./artifact.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
-import {
-    awaitsReview,
-    criteriaNote,
-    EntityState,
-    entityCharacters,
-    Exposure,
-    isCurrent,
-    isWorkProposal,
-    payloadArtifact,
-    requireSupersedeKind,
-    rendersIn,
-    scopeTarget,
-    supersedeSpelling
-} from "./entities.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
 import { WrittenBy, writtenBy } from "./human.js";
 import { milestoneId, objectiveId, workId, wrongKindHint } from "./ids.js";
@@ -24,16 +32,6 @@ import { claimNote } from "./ledger.js";
 import { readEvents } from "./logfile.js";
 import { sessionToken } from "./machine.js";
 import { buildModel, ProjectModel, reportProjection, workspaceModels, WorkState } from "./model.js";
-import {
-    allMilestones,
-    contributionsOf,
-    findMilestone,
-    isTerminalObjective,
-    MilestoneState,
-    ObjectiveState,
-    openObjectives,
-    WorkProposal
-} from "./objectives.js";
 import {
     ProjectContext,
     ProjectScope,

@@ -167,9 +167,10 @@ whole lifecycle set: supersede with a linked successor, withdraw with `--why`
 and no successor, and decline where the type has proposals. See
 [the record lifecycle](ARCHITECTURE.md#the-record-lifecycle) for what each
 transition has to fold to, and add the type to `STATEMENT_TYPES` in
-`model.ts` — the one declaration of the statement types, which the per-record
-history reads and `test/lifecycle.test.mjs` enumerates, so a statement type
-cannot land without its lifecycle verbs in its own help.
+`@superself/fold` `model.ts` — the one declaration of the statement types,
+which the per-record history reads and `apps/cli/test/lifecycle.test.mjs`
+enumerates, so a statement type cannot land without its lifecycle verbs in its
+own help.
 
 ## Tests
 
@@ -275,9 +276,9 @@ Keep one concern and one closing issue per branch and pull request.
 Run the same checks as CI:
 
 ```bash
+pnpm build
 pnpm typecheck
 pnpm test
-pnpm build
 pnpm structure
 ```
 
@@ -316,7 +317,7 @@ much as to hand-written work:
   the commit author.
 - The pull request title names the issue's outcome, and the body contains
   `Closes #N` for the single accepted issue.
-- Run `pnpm typecheck`, `pnpm test`, `pnpm build` and `pnpm structure` locally
+- Run `pnpm build`, `pnpm typecheck`, `pnpm test` and `pnpm structure` locally
   — CI runs the same four on every pull request. The full `pnpm test` runs
   once and alone per machine; a session that is not alone runs the other
   three plus the suites it touched and says in the body that the full suite is

@@ -2,14 +2,10 @@
 // read entities without a preset. The preset record kinds — goal, decision,
 // convention, objective, milestone — keep their own verbs and vocabulary;
 // this surface is the extensibility promise: user-defined labels over the
-// same record kind, folded by `entities.ts` into one view.
+// same record kind, folded by `@superself/fold` `entities.ts` into one view.
 
-import { required, requireText, Requirement } from "./args.js";
-import { resolveArtifactRef } from "./artifact.js";
-import { criteriaRefusal } from "./completion.js";
-import { branch, Command, CommandInput, leaf } from "./contract.js";
-import { validDate } from "./dates.js";
 import {
+    criteriaRefusal,
     CRITERION_BLOCKED,
     CRITERION_DECLARED,
     CRITERION_UNBLOCKED,
@@ -36,7 +32,11 @@ import {
     requireSupersedeKind,
     scopeTarget,
     tierCharacters
-} from "./entities.js";
+} from "@superself/fold";
+import { required, requireText, Requirement } from "./args.js";
+import { resolveArtifactRef } from "./artifact.js";
+import { branch, Command, CommandInput, leaf } from "./contract.js";
+import { validDate } from "./dates.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { writtenBy } from "./human.js";
 import { entityId, wrongKindHint } from "./ids.js";
@@ -1633,7 +1633,7 @@ function stateDone({ values, positionals }: CommandInput<typeof DONE_OPTIONS>): 
     recordEvent(ctx, makeEvent(ctx.project, "entity.done", { entity: entity.id, report: required(values.report).trim() }), entity.text);
 }
 
-// The criteria gate, spelled once in `completion.ts` and reached from both
+// The criteria gate, spelled once in `@superself/fold` `completion.ts` and reached from both
 // families: the raw path names `self state cover`, the work path names `self
 // work cover`, and neither has a second copy of the sentence to keep correct.
 function requireCriteriaCovered(entity: EntityState): void

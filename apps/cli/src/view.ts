@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "@superself/fold";
 import { excludeLocally } from "./gitutil.js";
 import { eventSummary, readEvents } from "./logfile.js";
 import { currentConventions, DecisionState, foreignToward, otherGoals, planNote, ProjectModel, reviewWork, WorkState } from "./model.js";
-import { contributionsOf, MilestoneState, ObjectiveState, openObjectives, openProposals, WorkProposal } from "./objectives.js";
 import { CliContext, ensureDir, StoreConfig, Verdict } from "./paths.js";
 import { ArtifactMeta, CliError, CommandOutput, countedName, encodedPath, SelfEvent } from "./types.js";
 

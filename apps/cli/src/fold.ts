@@ -1,14 +1,27 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+    chainVersion,
+    contributionsOf,
+    Coverage,
+    criteriaProgress,
+    CriterionState,
+    EntityState,
+    isCurrent,
+    MilestoneState,
+    ObjectiveState,
+    openObjectives,
+    openProposals,
+    ownerMark,
+    Reached
+} from "@superself/fold";
 import { refreshBlocks } from "./connect.js";
 import { designNote } from "./design.js";
 import { branchLabel, branchTotals, buildModel, currentConventions, DecisionState, foreignToward, liveGoals, planNote, ProjectModel, ReportEntry, reportProjection, unshippedBranches, WorkState } from "./model.js";
-import { contributionsOf, Coverage, MilestoneState, ObjectiveState, openObjectives, openProposals, Reached } from "./objectives.js";
 import { notice } from "./output.js";
 import { ensureDir, projectStateDir, PrunedLink, pruneDeadLinks, readRegistry, readStoreConfig, resolveProjectPath, resolveProjectPaths, Verdict } from "./paths.js";
 import { artifactSignals, askedRepositories, entityArtifactSignals, evidenceOf, frozenVerdictSignals, updateVerdicts, verdictSignals } from "./reachability.js";
-import { chainVersion, criteriaProgress, CriterionState, EntityState, isCurrent, ownerMark } from "./entities.js";
 import { readInstance, runbookChain, runbookDefinitions, runbookInstances, stageDigest } from "./runbooks.js";
 import { errYellow } from "./style.js";
 import { ArtifactMeta, artifactName } from "./types.js";

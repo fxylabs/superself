@@ -1,0 +1,46 @@
+{
+  "name": "@superself/fold",
+  "version": "0.1.0",
+  "description": "The fold: an event log read as project state. The core the `self` CLI and the Workspace API server share, so both answer from one calculation.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fxylabs/superself.git",
+    "directory": "apps/fold"
+  },
+  "homepage": "https://github.com/fxylabs/superself/tree/main/apps/fold#readme",
+  "bugs": "https://github.com/fxylabs/superself/issues",
+  "keywords": [
+    "superself",
+    "event-log",
+    "fold",
+    "project-state",
+    "agents"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "typescript": "5.9.3"
+  }
+}

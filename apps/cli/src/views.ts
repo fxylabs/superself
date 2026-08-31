@@ -1,4 +1,17 @@
-import { artifactPointer, criteriaNote, criteriaProgress, EntityState, isCurrent, orderEntities, pendingSummary, rendersIn } from "./entities.js";
+import {
+    artifactPointer,
+    contributionsOf,
+    criteriaNote,
+    criteriaProgress,
+    EntityState,
+    isCurrent,
+    ObjectiveState,
+    openObjectives,
+    openProposals,
+    orderEntities,
+    pendingSummary,
+    rendersIn
+} from "@superself/fold";
 import { commonProtocolLines } from "./connect.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
@@ -26,7 +39,6 @@ import {
     workScope,
     WorkState
 } from "./model.js";
-import { contributionsOf, ObjectiveState, openObjectives, openProposals } from "./objectives.js";
 import { notice } from "./output.js";
 import { activeProjects, archivedNote, CliContext, ProjectScope, readRegistry, readStoreConfig, readVerdicts, tokenScale, TokenScale, Verdict } from "./paths.js";
 import {

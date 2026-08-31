@@ -3,7 +3,7 @@
 // record leaves the current render, and the work spine closes on a judgment.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { STATEMENT_TYPES } from "../dist/model.js";
+import { STATEMENT_TYPES } from "@superself/fold";
 import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();

@@ -9,6 +9,10 @@ importers:
   .: {}
 
   apps/cli:
+    dependencies:
+      '@superself/fold':
+        specifier: workspace:*
+        version: link:../fold
     devDependencies:
       '@types/node':
         specifier: 22.10.5
@@ -32,6 +36,15 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: ^0.1.1-rc.2
         version: 0.1.1-rc.2(119bc70f73f8eddebfaa6b47561adeb3)
+      '@types/node':
+        specifier: 22.10.5
+        version: 22.10.5
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  apps/fold:
+    devDependencies:
       '@types/node':
         specifier: 22.10.5
         version: 22.10.5

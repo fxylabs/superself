@@ -10,7 +10,7 @@
 // place in the supersedes chain, derived on every read the way a runbook's
 // edition is, so no stored field can contradict the log.
 
-import { chainVersion, EntityState, isCurrent, orderEntities, supersedesChain } from "./entities.js";
+import { chainVersion, EntityState, isCurrent, orderEntities, supersedesChain } from "@superself/fold";
 import { oneLine } from "./style.js";
 
 // The one label this surface records under. Never a row in `BUILTIN_ROWS` —
@@ -23,7 +23,8 @@ export function isSkill(entity: EntityState): boolean
 }
 
 // The whole chain a skill id belongs to, oldest version first. The walk is
-// `entities.ts` `supersedesChain`, shared with the runbook editions; what is a
+// `@superself/fold` `entities.ts` `supersedesChain`, shared with the runbook
+// editions; what is a
 // skill is this module's to say, and that is all this wrapper adds.
 export function skillChain(entities: EntityState[], id: string): EntityState[]
 {

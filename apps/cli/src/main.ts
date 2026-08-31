@@ -1,6 +1,23 @@
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
+import {
+    completionRefusal,
+    CRITERION_BLOCKED,
+    CRITERION_DECLARED,
+    CRITERION_UNBLOCKED,
+    CriterionState,
+    DEFAULT_ZONE,
+    entityCharacters,
+    EntityState,
+    Exposure,
+    FoldError,
+    isLive,
+    payloadArtifact,
+    rendersIn,
+    requireSupersedeKind,
+    scopeTarget
+} from "@superself/fold";
 import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
 import { applyCommand } from "./apply.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
@@ -8,10 +25,9 @@ import { helpHint, parseCommand, required, Requirement, unknownOption } from "./
 import { ARTIFACT_COMMAND, artifactDigest, attachedArtifactLines, commitStaged, resolveArtifactRef, stageArtifacts } from "./artifact.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandNode, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
-import { DEFAULT_ZONE, validZone } from "./dates.js";
+import { validZone } from "./dates.js";
 import { derivationLines, PROJECT_FROM_LEAF } from "./derivation.js";
 import { citationLines, CitedDecision, citedIds, dispatchRefusal, requireCitations } from "./design.js";
-import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED, CriterionState, entityCharacters, EntityState, Exposure, isLive, payloadArtifact, rendersIn, requireSupersedeKind, scopeTarget } from "./entities.js";
 import { foldEveryProject, foldProject, foldWorkspace, renderWorkBody } from "./fold.js";
 import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, requireRetirable, requireSupersedableWork, WORK_GOAL_LEAVES } from "./goals.js";
@@ -67,7 +83,6 @@ import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
 import { SKILL_COMMAND } from "./skill.js";
 import { dropCollected, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
-import { completionRefusal } from "./completion.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
 import { runSearch } from "./search.js";
 import { setupOutput } from "./setup.js";
@@ -4053,16 +4068,21 @@ export async function runCli(argv: string[]): Promise<void>
     }
     catch (error)
     {
-        const message = userMessage(error, argv);
+        // The fold refuses in its own error type: `@superself/fold` is folded by
+        // a server as well as by this CLI, so it cannot construct a refusal that
+        // carries an exit code. Its message becomes one here, at the one
+        // boundary, rather than reaching the reporter as an unrecognised throw.
+        const raised = error instanceof FoldError ? new CliError(error.message) : error;
+        const message = userMessage(raised, argv);
         if (message === null)
         {
-            throw error;
+            throw raised;
         }
         // The exit vocabulary lives on the error, so a command that constructs
         // none of 2 or 3 keeps exactly the behaviour it had. Under `--json` the
         // envelope goes to stdout, so an agent capturing stdout gets parseable
         // JSON on every path rather than on the successful ones only.
-        const refusal = error instanceof CliError ? error : null;
+        const refusal = raised instanceof CliError ? raised : null;
         renderFailure(refusal?.code ?? "parse_error", message, refusal?.fields ?? {});
         process.exitCode = refusal?.exit ?? 1;
     }

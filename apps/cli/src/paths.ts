@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { Verdict } from "@superself/fold";
 import { checkoutTops, commonDir, excludeLocally, realPath, repositoryIdentity, topOf } from "./gitutil.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { CliError, RegistryEntry } from "./types.js";
@@ -688,6 +689,12 @@ export function tokenScale(config: StoreConfig): TokenScale
         : { perCharacter: DEFAULT_TOKENS_PER_CHARACTER, measured: false };
 }
 
+// What each recorded commit turned out to be. The five values are declared in
+// `@superself/fold`, because the fold takes them as an argument and must not
+// disagree with the machine that decides them; they are re-exported here
+// because this is where the file holding them is read, `reachability.ts`
+// decides them against git, and both already ask this module.
+//
 // settled: reachable from the default branch — counts as progress, final.
 // provisional: exists on a live branch that has not merged yet.
 // abandoned: the branch that carried it still exists and no longer reaches it —
@@ -698,11 +705,7 @@ export function tokenScale(config: StoreConfig): TokenScale
 // that was deleted leaves exactly this trace, so it is never called abandoned.
 // unverifiable: the hash resolves to nothing — history was rewritten or the
 // evidence predates this clone.
-//
-// The verdicts are read here, beside the store's other state files, and decided
-// against git in `reachability.ts`. The fold folds them into the model, so the
-// reader has to sit below it.
-export type Verdict = "settled" | "provisional" | "abandoned" | "unknown" | "unverifiable";
+export { Verdict } from "@superself/fold";
 
 // Every fold, context and status read runs through this, so a store whose
 // evidence file was truncated by an interrupted write degrades to "nothing is

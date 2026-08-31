@@ -7,7 +7,7 @@
 // Flat in `src/` because the CLI surface reads it and a core module may not
 // import a subsystem. It reads events and composes events; it appends nothing.
 
-import { isEntityCreation } from "./entities.js";
+import { isEntityCreation } from "@superself/fold";
 import { CliError, SelfEvent } from "./types.js";
 
 // Refused by name, with the verb that does the job. Reaching one of these at

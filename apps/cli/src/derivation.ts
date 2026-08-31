@@ -16,9 +16,9 @@
 // Commands layer: the `project from` leaf `main.ts` splices into the project
 // verb, and the lines `self project` prints under a project's row.
 
+import { DERIVATION_LABEL, derivationOf, EntityState } from "@superself/fold";
 import { Requirement, requireText } from "./args.js";
 import { CommandInput, CommandLeaf, leaf } from "./contract.js";
-import { DERIVATION_LABEL, derivationOf, EntityState } from "./entities.js";
 import { ProjectModel, workspaceModels } from "./model.js";
 import { ProjectContext, requireProject, requireRegistered } from "./paths.js";
 import { retiring } from "./retirement.js";

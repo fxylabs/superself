@@ -18,7 +18,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { STATEMENT_TYPES } from "../dist/model.js";
+import { STATEMENT_TYPES } from "@superself/fold";
 import { approvedIn, demoWorkspace, idIn, machine, must, mustPerson, receiptIn, selfIn, workIdIn } from "./harness.mjs";
 
 const box = machine();

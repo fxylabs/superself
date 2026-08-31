@@ -21,7 +21,11 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
+      # Build first, not second. The CLI typechecks against `@superself/fold`'s
+      # declarations, and a `--noEmit` typecheck does not produce them — so on a
+      # clean checkout there is nothing for it to read until the package has
+      # been built once.
       - run: pnpm build
+      - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm structure

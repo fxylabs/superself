@@ -1,4 +1,4 @@
-import { EntityState, rendersIn, scopeTarget } from "./entities.js";
+import { EntityState, rendersIn, scopeTarget } from "@superself/fold";
 import { ProjectModel, ReportEntry, WorkState } from "./model.js";
 import { CliError } from "./types.js";
 
