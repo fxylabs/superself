@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { compactedPending } from "../dist/pending.js";
 import { SYNC_LEASE_MS, SYNC_LOCK_FILE, acquireSyncLock, publishRewrite, releaseSyncLock, withSyncLock } from "../dist/synclock.js";
 import { PULLER_LEASE_MS, pullEverySlug } from "../dist/puller.js";
+import { invalidateResolution } from "../dist/paths.js";
 import { PUSHER_LEASE_MS } from "../dist/pusher.js";
 import { REQUEST_TIMEOUT_MS, RETRY_AFTER_CAP_MS } from "../dist/transport.js";
 import { must, mustPerson, workIdIn } from "./harness.mjs";
@@ -411,6 +412,75 @@ test("pull lease-bound: a pass cut short converges on the next one, record for r
     await must(box, demo, ["project", "list"], syncEnv());          // the next command, whole
     assert.deepEqual(logRows(ws).map((row) => row.id), ["evt_elsewhere"], "the delta it skipped lands");
     assert.equal(server.eventsIn("demo").length, 2, "and the append it was holding goes");
+});
+
+// Several registered projects, listed here and known to the workspace, so that a
+// pass has somewhere to get to and somewhere to be stopped short of.
+function registerLocally(ws, slugs)
+{
+    writeFileSync(join(storeDir(ws), "registry.jsonl"),
+        slugs.map((slug) => JSON.stringify({ slug, added: "2026-08-31T00:00:00.000Z" }) + "\n").join(""));
+    invalidateResolution();
+}
+
+function deltasFor(server)
+{
+    return server.calls.filter((call) => call.method === "GET" && call.path.endsWith("/events"))
+        .map((call) => call.path.split("/").at(-2));
+}
+
+test("pull unreachable: a workspace this pass could not reach ends the pass rather than being asked once per project",
+    async (t) =>
+{
+    // Three projects and a workspace that drops the connection. Before this, a
+    // pass asked every registered project in turn and waited out a request
+    // timeout on each — one lease spent, and the same sentence said once per
+    // project, in front of somebody holding a command.
+    const { ws, server } = await connectedMachine({
+        projects: [{ slug: "one" }, { slug: "two" }, { slug: "three" }],
+        answer: (call) => call.path.endsWith("/events") ? { destroy: true } : undefined
+    });
+    t.after(() => server.close());
+    registerLocally(ws, ["one", "two", "three"]);
+    const store = storeDir(ws);
+    const session = { base: server.url, wsId: server.wsId, account: ACCOUNT, token: "a token the mock does not read" };
+
+    const held = acquireSyncLock(store);
+    await pullEverySlug(store, session, held, Date.now() + PULLER_LEASE_MS);
+    releaseSyncLock(store, held);
+    assert.deepEqual(deltasFor(server), ["one"],
+        "that the workspace did not answer is a fact about the workspace and not about one project");
+});
+
+test("pull in turn: a pass cut short by its lease starts the next one where it stopped", async (t) =>
+{
+    // The starvation this is about: with a fixed starting point, the projects a
+    // short lease never reaches are never reached at all — their appends are
+    // never settled, their queues never compacted, and the queue files grow
+    // without end while the projects in front of them are pulled on every
+    // command.
+    let deadline = 0;
+    const { ws, server } = await connectedMachine({
+        projects: [{ slug: "one" }, { slug: "two" }, { slug: "three" }],
+        // A lease spent inside the first project, decided rather than raced: the
+        // delta is held until the deadline the pass was given has gone by, so
+        // the check before the second project is past it every time.
+        answer: (call) => { while (call.path.endsWith("/events") && Date.now() <= deadline) { /* held */ } }
+    });
+    t.after(() => server.close());
+    registerLocally(ws, ["one", "two", "three"]);
+    const store = storeDir(ws);
+    const session = { base: server.url, wsId: server.wsId, account: ACCOUNT, token: "a token the mock does not read" };
+
+    for (let pass = 0; pass < 3; pass += 1)
+    {
+        const held = acquireSyncLock(store);
+        deadline = Date.now() + 200;
+        await pullEverySlug(store, session, held, deadline);
+        releaseSyncLock(store, held);
+    }
+    assert.deepEqual(deltasFor(server), ["one", "two", "three"],
+        "every project is reached eventually, which is the whole of what a lease may cost");
 });
 
 /* ── the background push cannot reach the caller ───────────────────── */

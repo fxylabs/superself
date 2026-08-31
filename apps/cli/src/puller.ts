@@ -23,7 +23,7 @@
 //
 // Nothing in the table can refuse a command. Every row ends in the command
 // running against what this machine holds.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { foldProject } from "./fold.js";
 import { StoredEvent, appendStoredEvents, lastServerSeq, storedEventIds } from "./logfile.js";
@@ -145,35 +145,88 @@ async function sync(storeDir: string, nonce: string): Promise<void>
     await pullEverySlug(storeDir, session, nonce, until);
 }
 
-// Every registered project's delta, for as long as this catch-up's lease has
-// left.
+// Every registered project's delta, in turn, for as long as this catch-up's
+// lease has left and for as long as the workspace is answering.
 //
-// Past it the remaining projects are left where they are and this returns as
-// though it had finished — because for the command in front of it, it has:
-// every row of the pull table ends in the command running against what this
-// machine holds, and a project this pass did not reach is one the next command
-// reaches first. A partial pass is a state the design already answers, for the
-// same reason a machine that died mid-pull is: nothing here is written unless
-// the whole of it is, and the next pull asks from where each file ends.
+// Past the lease the remaining projects are left where they are and this
+// returns as though it had finished — because for the command in front of it,
+// it has: every row of the pull table ends in the command running against what
+// this machine holds. A partial pass is a state the design already answers, for
+// the same reason a machine that died mid-pull is: nothing here is written
+// unless the whole of it is, and the next pull asks from where each file ends.
+//
+// "The next command reaches them" is only true if the next command starts
+// somewhere else, which is what `inTurn` is for. It is also only worth
+// attempting while there is something to attempt: a workspace this pass could
+// not reach is a fact about the workspace and not about one project, so the
+// project after it would spend another request's timeout discovering the same
+// thing, and a person holding the command would wait out one of those per
+// registered project to be told the same sentence that many times.
 //
 // `until` is a parameter rather than a deadline this function sets itself, so
 // that a case can state one.
 export async function pullEverySlug(storeDir: string, session: WorkspaceSession, nonce: string,
     until: number): Promise<void>
 {
-    for (const entry of readRegistry(storeDir))
+    for (const slug of inTurn(storeDir))
     {
-        if (Date.now() < until)
+        if (Date.now() >= until)
         {
-            // One project's unreadable files stop that project's catch-up and
-            // nothing else. The command that reads *that* project still
-            // refuses, in the sentence naming the file and the line, because
-            // that read is the command's own — what must not happen is a
-            // damaged queue in one project refusing a command about a
-            // different one.
-            await pullProject(storeDir, session, entry.slug, nonce).catch(() => undefined);
+            break;
         }
+        // One project's unreadable files stop that project's catch-up and
+        // nothing else, and say nothing about whether the workspace answered.
+        // The command that reads *that* project still refuses, in the sentence
+        // naming the file and the line, because that read is the command's own
+        // — what must not happen is a damaged queue in one project refusing a
+        // command about a different one.
+        if (!await pullProject(storeDir, session, slug, nonce).catch(() => true))
+        {
+            return;
+        }
+        rememberPlace(storeDir, slug);
     }
+}
+
+/* ── whose turn it is ──────────────────────────────────────────────── */
+
+// Where the last pass got to, so the next one starts after it rather than at
+// the front of the list again.
+//
+// A hint and never a record. It holds nothing the store could not work out
+// again, and losing it costs one unfair pass — which is why it is written whole
+// rather than appended to, and why nothing reads it as part of a project's
+// history. The append-only rule next door is about the two files that are the
+// only copy of something; this is neither of them.
+const PLACE_FILE = "sync.place";
+
+// The registry, rotated to start after the project the last pass reached.
+//
+// Without this a pass cut short by its lease leaves the same projects unreached
+// every time, and "the next command reaches them" is a hope rather than a fact:
+// the projects at the front would be the only ones this machine ever pulled,
+// and the ones behind them would never have an append settled, never be
+// compacted, and never stop growing. A place naming a slug the registry no
+// longer lists reads as no place at all, which starts the pass at the front.
+function inTurn(storeDir: string): string[]
+{
+    const slugs = ignoringUnreadable(() => readRegistry(storeDir), []).map((entry) => entry.slug);
+    const last = slugs.indexOf(placeIn(storeDir));
+    return [...slugs.slice(last + 1), ...slugs.slice(0, last + 1)];
+}
+
+function placeIn(storeDir: string): string
+{
+    return ignoringUnreadable(() =>
+        (JSON.parse(readFileSync(join(storeDir, PLACE_FILE), "utf8")) as { slug?: string }).slug ?? "", "");
+}
+
+// Best-effort, like everything else a catch-up does: a store this process may
+// not write is one that pulls in the order it always did, and that is a worse
+// rotation rather than a failure a person needs to hear about.
+function rememberPlace(storeDir: string, slug: string): void
+{
+    ignoringUnreadable(() => writeFileSync(join(storeDir, PLACE_FILE), JSON.stringify({ slug }) + "\n"), undefined);
 }
 
 // A machine with no credential and a machine whose marker will not parse are
@@ -194,20 +247,26 @@ function openable(storeDir: string): WorkspaceSession | null
 
 /* ── the delta ─────────────────────────────────────────────────────── */
 
-async function pullProject(storeDir: string, session: WorkspaceSession, slug: string, nonce: string): Promise<void>
+// Whether the workspace answered at all, which is the caller's business and not
+// this project's: every other row of the table is about what the workspace said
+// about *this* project, and `reached` is about the network in front of all of
+// them.
+async function pullProject(storeDir: string, session: WorkspaceSession, slug: string,
+    nonce: string): Promise<boolean>
 {
     const answer = await pullAfter(session, slug, lastServerSeq(storeDir, slug));
     if (!answer.reached)
     {
         machineNotice("notice: this machine could not reach its workspace — reading what it already holds");
-        return;                                                     // L5
+        return false;                                               // L5
     }
     if (answer.status === 200)
     {
         applyDelta(storeDir, slug, storedOf(answer.body), nonce);
-        return;                                                     // L1
+        return true;                                                // L1
     }
     sayWhyNot(answer, slug);
+    return true;
 }
 
 // L2 to L5, in the order the table states them. Every one of them has already
@@ -256,9 +315,15 @@ function applyDelta(storeDir: string, slug: string, events: StoredEvent[], nonce
         // exactly where they left it.
         return;
     }
-    compactQueue(storeDir, slug, nonce);
     invalidateResolution();
     foldProject(storeDir, slug);
+    // Last, and after the fold rather than before it. Compaction is tidying —
+    // it drops the appends the server has taken and the marks about them, which
+    // every read already filters out — so the fold sees the same queue either
+    // way. What the order buys is that a compaction that fails cannot cancel
+    // the fold: the events and the marks are written by then, so the next pull
+    // finds nothing new, returns above, and would never fold this delta at all.
+    compactQueue(storeDir, slug, nonce);
 }
 
 // The appends the server's copy now holds in full, marked and counted. Every
