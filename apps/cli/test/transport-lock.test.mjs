@@ -18,7 +18,7 @@ import { PUSHER_LEASE_MS } from "../dist/pusher.js";
 import { REQUEST_TIMEOUT_MS, RETRY_AFTER_CAP_MS } from "../dist/transport.js";
 import { must, mustPerson, workIdIn } from "./harness.mjs";
 import {
-    ACCOUNT, connectedMachine, detachedEnv, eventually, queueAppend, storeDir, syncEnv, unsent
+    ACCOUNT, connectedMachine, detachedEnv, event, eventually, logRows, queueAppend, storeDir, syncEnv, unsent
 } from "./transport-lib.mjs";
 
 function scratch()
@@ -379,12 +379,38 @@ test("pull lease-bound: a catch-up past its lease leaves the rest of the project
     const deltas = () => server.calls.filter((call) => call.method === "GET" && call.path.endsWith("/events")).length;
 
     const held = acquireSyncLock(store);
-    await pullEverySlug(store, session, held, Date.now() + PULLER_LEASE_MS);
-    assert.equal(deltas(), 1, "inside its lease a catch-up pulls the projects the registry lists");
-
     await pullEverySlug(store, session, held, Date.now() - 1);
-    assert.equal(deltas(), 1, "and past it the projects it has not reached are left where they are");
+    assert.equal(deltas(), 0, "past its lease a catch-up leaves the projects it has not reached where they are");
+
+    await pullEverySlug(store, session, held, Date.now() + PULLER_LEASE_MS);
+    assert.equal(deltas(), 1, "and the next pass, which is the next command's, reaches them");
     releaseSyncLock(store, held);
+});
+
+test("pull lease-bound: a pass cut short converges on the next one, record for record", async (t) =>
+{
+    const { box, ws, demo, server } = await connectedMachine({ projects: [{ slug: "demo" }] });
+    t.after(() => server.close());
+    // A record another machine made, and a record this one has queued: the two
+    // halves a catch-up settles between them.
+    await fetch(`${server.url}/api/workspaces/${server.wsId}/projects/demo/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Superself-Api": "1" },
+        body: JSON.stringify({ events: [{ ...event({ id: "evt_elsewhere" }), event_id: "evt_elsewhere",
+            append_id: "apx_elsewhere", actor_account: ACCOUNT, actor_agent: null }] })
+    });
+    queueAppend(ws, { appendId: "apx_mine" });
+    const store = storeDir(ws);
+    const session = { base: server.url, wsId: server.wsId, account: ACCOUNT, token: "a token the mock does not read" };
+
+    const held = acquireSyncLock(store);
+    await pullEverySlug(store, session, held, Date.now() - 1);      // the pass that was cut short
+    releaseSyncLock(store, held);
+    assert.deepEqual(logRows(ws).map((row) => row.id), [], "it wrote nothing, which is what makes it resumable");
+
+    await must(box, demo, ["project", "list"], syncEnv());          // the next command, whole
+    assert.deepEqual(logRows(ws).map((row) => row.id), ["evt_elsewhere"], "the delta it skipped lands");
+    assert.equal(server.eventsIn("demo").length, 2, "and the append it was holding goes");
 });
 
 /* ── the background push cannot reach the caller ───────────────────── */
