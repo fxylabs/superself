@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { artifactDigest } from "./artifact.js";
 import { branch, Command, leaf } from "./contract.js";
 import { git, gitPatient } from "./gitutil.js";
+import { refuseGitOnly } from "./mode.js";
 import { readRegistry, requireWorkspace } from "./paths.js";
 import { holdsBytes, listArtifacts } from "./registry.js";
 import { plural } from "./style.js";
@@ -310,6 +311,7 @@ export function compactionSignal(storeDir: string): string | null
 // than letting a reader believe a deletion could reclaim them.
 function compactStore(storeDir: string): CommandOutput
 {
+    refuseGitOnly(storeDir, "store compact", "packs the git history a git-backed store keeps");
     const before = { bytes: treeBytes(join(storeDir, ".git")), objects: countObjects(storeDir) };
     // Repacking a long history is minutes of work on a large store, and a
     // person ran this verb on purpose to wait for it — the tight local bound
@@ -363,6 +365,11 @@ export const STORE_COMMAND: Command = {
 
 function sizeAnswer(storeDir: string): CommandOutput
 {
+    // Every number this verb reports is a number about git — the working tree
+    // git tracks, the pack it holds them in, the loose objects it has not
+    // packed yet. A server-backed store has none of that, so there is nothing
+    // to answer with rather than a smaller answer to give.
+    refuseGitOnly(storeDir, "store size", "measures the git history a git-backed store keeps");
     const size = storeSize(storeDir);
     return [{ kind: "payload", data: size as unknown as JsonValue, plain: () => sizeLines(size) }];
 }

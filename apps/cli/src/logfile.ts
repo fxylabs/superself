@@ -1,22 +1,90 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED } from "@superself/fold";
+import { serverBacked } from "./mode.js";
 import { projectStateDir } from "./paths.js";
+import { pendingEvents } from "./pending.js";
 import { CliError, SelfEvent } from "./types.js";
 
 const CRITERION_EVENTS = [CRITERION_DECLARED, CRITERION_BLOCKED, CRITERION_UNBLOCKED];
 
+// Every event this machine holds for a project, in the order a fold applies
+// them. A git-backed store keeps them all in one file and this is a read of it.
+//
+// A server-backed store keeps them in two, and the join is here rather than in
+// each reader: the stored log is the server's copy, and beside it is this
+// machine's queue of appends the server has not taken. One place asks for both,
+// so a surface added later cannot answer from half the log by forgetting the
+// other half existed.
 export function readEvents(storeDir: string, slug: string): SelfEvent[]
+{
+    const stored = readLog(storeDir, slug);
+    return serverBacked(storeDir) ? withUnsent(stored, pendingEvents(storeDir, slug)) : stored;
+}
+
+// A damaged line stops the read and says which line, exactly as the queue file's
+// reader does. The two files are one log between them, so a reader that stepped
+// over half a line here would answer as though records the workspace has agreed
+// on were never written — and a truncated line is likelier here than anywhere
+// else, because this file is appended to by a network read that can be cut off
+// mid-record.
+function readLog(storeDir: string, slug: string): SelfEvent[]
 {
     const file = join(projectStateDir(storeDir, slug), "log.jsonl");
     if (!existsSync(file))
     {
         return [];
     }
-    return readFileSync(file, "utf8")
-        .split("\n")
-        .filter((line) => line.trim() !== "")
-        .map((line) => JSON.parse(line));
+    return readFileSync(file, "utf8").split("\n")
+        .map((line, index) => ({ line, number: index + 1 }))
+        .filter((row) => row.line.trim() !== "")
+        .map((row) => parseLogLine(row.line, file, row.number));
+}
+
+function parseLogLine(line: string, file: string, number: number): SelfEvent
+{
+    try
+    {
+        return JSON.parse(line) as SelfEvent;
+    }
+    catch
+    {
+        throw new CliError(`${file} line ${number} is not readable as JSON — it is this workspace's own log, so it `
+            + "is repaired by hand rather than discarded: open the file, read that one line, and put back the "
+            + "record it was meant to be or take the line out");
+    }
+}
+
+// The server's copy first, in the order the server put it in, and this
+// machine's unsent tail after it. That order is the fold's own semantics rather
+// than a compromise: a record the workspace has already agreed on stands ahead
+// of one only this machine has made, and an append made offline lands after
+// everything that arrived while it was offline — which is what a person reading
+// two machines' work in one log expects to see.
+//
+// An event is counted once wherever it turns up twice, and the first copy is the
+// one kept — which makes the stored copy win, because it comes first. Between a
+// push that succeeded and the pull that marks it sent, the same record is in the
+// queue and in the server's answer; and a record resent after a crash between
+// the append and the mark is in the queue twice over. Both are one act, and a
+// fold applying either of them twice would read it as two.
+//
+// So the set accumulates across the whole joined sequence rather than being
+// taken off the stored copy alone: a duplicate that never reached the server has
+// no stored copy to be recognised by.
+function withUnsent(stored: SelfEvent[], unsent: SelfEvent[]): SelfEvent[]
+{
+    const seen = new Set<string>();
+    const joined: SelfEvent[] = [];
+    for (const event of [...stored, ...unsent])
+    {
+        if (!seen.has(event.id))
+        {
+            seen.add(event.id);
+            joined.push(event);
+        }
+    }
+    return joined;
 }
 
 export function findEventByPrefix(storeDir: string, slug: string, prefix: string): SelfEvent

@@ -897,7 +897,7 @@ $ self setup   (in project, exit 0)
 project    demo
            <root>/ws/demo (via .self)
 workspace  <root>/ws
-store      <root>/ws/.superself (29 commits, <root>/remote.git)
+store      <root>/ws/.superself (git-backed, 29 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo
@@ -906,7 +906,7 @@ projects   demo → <root>/ws/demo
 $ self setup   (in workspace, exit 0)
 project    (none) — this directory is not registered; run `self project init`
 workspace  <root>/ws
-store      <root>/ws/.superself (29 commits, <root>/remote.git)
+store      <root>/ws/.superself (git-backed, 29 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo
@@ -915,7 +915,7 @@ projects   demo → <root>/ws/demo
 $ self setup   (in outside, exit 0)
 project    (none) — this directory is not registered; run `self project init`
 workspace  <root>/ws
-store      <root>/ws/.superself (29 commits, <root>/remote.git)
+store      <root>/ws/.superself (git-backed, 29 commits, <root>/remote.git)
 pointer    <root>/config/superself/machine.json
 views      ko
 projects   demo → <root>/ws/demo

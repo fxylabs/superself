@@ -27,7 +27,7 @@ import { isCurrent } from "@superself/fold";
 import { required, Requirement, requireText } from "./args.js";
 import { CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { archivedProjects, CliContext, projectArchive, requireRegistered, requireWorkspace } from "./paths.js";
+import { archivedProjects, CliContext, projectArchive, requireRegistered, requireWorkspace, workspaceOnly } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { CliError, CommandOutput, ListingBlock } from "./types.js";
 
@@ -197,7 +197,12 @@ function openLine(count: number): string
 // the checkout the command was composed in — which is this directory only when
 // it is that project's. Archiving one project from inside another's checkout
 // would otherwise record that other project's branch on this record.
+//
+// The branch is the only thing dropped. Who this machine is logged in as is a
+// fact about the machine and not about the directory, so it travels — which is
+// why the narrowing is `workspaceOnly` rather than a fresh object built here:
+// an archive recorded from the wrong checkout must still say who archived it.
 function scopedTo(ctx: CliContext, slug: string): CliContext
 {
-    return ctx.project === slug ? ctx : { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir };
+    return ctx.project === slug ? ctx : workspaceOnly(ctx);
 }

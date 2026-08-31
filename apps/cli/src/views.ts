@@ -24,6 +24,7 @@ import {
     branchTotals,
     buildModel,
     closedRecords,
+    foldedOthers,
     ForeignObjectiveLink,
     foreignToward,
     otherGoals,
@@ -121,9 +122,13 @@ function renderedModel(storeDir: string, slug: string): ProjectModel
 // would cost one fold for every pair — well past #128's half-second budget. An
 // archived project is not one of them (#283): it is out of the workspace answer
 // until it is restored, here and in the scope resolver alike.
+//
+// Every one of them goes through `foldedOthers`, including this directory's own
+// if it has one: both callers answer for the workspace and about no single
+// project, so there is none whose failure would be the loud one.
 function renderedModels(storeDir: string): ProjectModel[]
 {
-    const folded = activeProjects(storeDir).map((entry) => buildModel(storeDir, entry.slug, new Date()));
+    const folded = foldedOthers(storeDir, activeProjects(storeDir).map((entry) => entry.slug), new Date());
     // Collected before anything is assigned: a model's own works are still the
     // fold's while the next model is reading them.
     const scoped = folded.map((model) => folded.flatMap((other) => scopedWorks(other, model.slug)));
@@ -133,8 +138,8 @@ function renderedModels(storeDir: string): ProjectModel[]
 
 function foreignModels(storeDir: string, slug: string | undefined): ProjectModel[]
 {
-    return activeProjects(storeDir).filter((entry) => entry.slug !== slug)
-        .map((entry) => buildModel(storeDir, entry.slug, new Date()));
+    return foldedOthers(storeDir, activeProjects(storeDir).map((entry) => entry.slug)
+        .filter((entry) => entry !== slug), new Date());
 }
 
 function scopedWorks(model: ProjectModel, viewer: string): WorkState[]

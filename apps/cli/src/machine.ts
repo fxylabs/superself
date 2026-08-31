@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { CliError } from "./types.js";
 
 interface MachineConfig
 {
@@ -13,10 +14,27 @@ export function machineConfigPath(): string
     return join(base, "superself", "machine.json");
 }
 
+// A file this CLI wrote itself, and still read defensively: it is edited by
+// hand often enough — that is how a machine is pointed at a second workspace —
+// and it is read on the way into every command that needs a store. A raw parse
+// failure here reaches the caller as a stack, which is the one answer this CLI
+// does not give for a file it can name.
 function readMachineConfig(): MachineConfig
 {
     const file = machineConfigPath();
-    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+    if (!existsSync(file))
+    {
+        return {};
+    }
+    try
+    {
+        return JSON.parse(readFileSync(file, "utf8")) as MachineConfig;
+    }
+    catch
+    {
+        throw new CliError(`${file} is not readable as JSON — it holds nothing but which workspace this machine `
+            + "points at, so it is safe to delete and set again with `self workspace <path>`");
+    }
 }
 
 export function machineWorkspace(): string | null

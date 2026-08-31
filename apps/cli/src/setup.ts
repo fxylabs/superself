@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git, realPath } from "./gitutil.js";
 import { machineConfigPath } from "./machine.js";
+import { serverBacked } from "./mode.js";
 import { dim, styled } from "./style.js";
 import {
     checkoutMatches,
@@ -90,7 +91,18 @@ function projectLine(storeDir: string, slug: string): string
     return `${slug} → ${active}${others > 0 ? ` (+${others} more checkout${others > 1 ? "s" : ""})` : ""}`;
 }
 
+// What this store is and where its records go. A git-backed store is described
+// by its history and its remote, because that is what a person would go and
+// look at. A server-backed store has neither, and describing it in git's words
+// said "0 commits, no remote" about a store that is perfectly healthy and whose
+// records are somewhere else entirely — the one sentence a diagnostic verb must
+// not print.
 function storeState(storeDir: string): string
+{
+    return serverBacked(storeDir) ? "server-backed" : `git-backed, ${gitState(storeDir)}`;
+}
+
+function gitState(storeDir: string): string
 {
     const commits = git(storeDir, "rev-list", "--count", "HEAD");
     const remote = git(storeDir, "remote", "get-url", "origin");

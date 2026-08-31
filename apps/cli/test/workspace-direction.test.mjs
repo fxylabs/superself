@@ -453,13 +453,33 @@ test("B13: once the direction is folded, the same archive goes through", async (
     await must(b.box, b.ws, ["project", "restore", "alpha"]);
 });
 
-test("B14: a broken home store fails the read, exactly as it does today", async () =>
+// The workspace direction lives in the log of the project it was stated in, so
+// reading it from another project is a read of somebody else's store — and that
+// store can be damaged. It used to take this read down with it. It no longer
+// does: the project that cannot be read is left out and named, which is the only
+// answer that is both true and useful, since the alternative is that one damaged
+// log makes every project in the workspace unreadable.
+//
+// Named, and on stderr, because the answer is now a partial one. A reader who is
+// not told which project is missing would take an incomplete direction for the
+// whole of it.
+test("B14: a broken home store is left out of another project's read, and named", async () =>
 {
     const broken = await workspaceOf();
     await must(broken.box, broken.alpha, ["goal", "add", "the company ships weekly", "--workspace"]);
     appendFileSync(join(broken.ws, ".superself", "projects", "alpha", "log.jsonl"), "not an event\n");
-    const failed = await selfIn(broken.box, broken.beta, ["context"]);
-    assert.notEqual(failed.code, 0);
+    const answered = await selfIn(broken.box, broken.beta, ["context"]);
+    assert.equal(answered.code, 0, answered.out);
+    assert.match(answered.out, /project "alpha" is left out of this answer/);
+});
+
+test("B15: the broken store's own read is still the refusal it always was", async () =>
+{
+    const broken = await workspaceOf();
+    await must(broken.box, broken.alpha, ["goal", "add", "the company ships weekly", "--workspace"]);
+    appendFileSync(join(broken.ws, ".superself", "projects", "alpha", "log.jsonl"), "not an event\n");
+    const failed = await selfIn(broken.box, broken.alpha, ["context"]);
+    assert.notEqual(failed.code, 0, "a command about a project must not answer out of a log it could not read");
 });
 
 /* ── C. the caps, and the render budget ─────────────────────────────── */

@@ -303,6 +303,40 @@ export function readProfile(name: string): Profile
     return profile;
 }
 
+// Which account this machine is logged in as, for the one caller that needs the
+// name rather than the credential: the entry point, which reads it once and
+// hands it to the append path as a value. No token leaves here, and nothing
+// downstream of it can ask for one.
+//
+// Best effort by construction. A machine with no credential, an unreadable
+// file, or a default profile that is not there is a machine whose records say
+// who wrote them nowhere — a gap in an audit trail, and never a reason to
+// refuse the work the caller actually asked for.
+//
+// Silent about it, with one exception. A caller who named a profile stated an
+// intention — this run's records are that account's — and silently recording
+// them under nobody is the failure they would find out about last. So a named
+// profile that does not resolve gets one line, and every other way of ending up
+// with no account gets none: not being logged in is the ordinary state of a
+// git-backed machine, and a line about it on every command would be noise about
+// a value the run was never going to use.
+export function currentAccount(): string | undefined
+{
+    try
+    {
+        return readProfile(resolveProfileName()).account_id;
+    }
+    catch (error)
+    {
+        const named = process.env.SUPERSELF_PROFILE?.trim();
+        if (named !== undefined && named !== "")
+        {
+            console.error(`this run records no account: profile "${named}" — ${(error as Error).message}`);
+        }
+        return undefined;
+    }
+}
+
 // Replace one profile, leaving every other one exactly as it was. The caller
 // holds the lock; this is the write itself.
 //
