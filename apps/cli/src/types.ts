@@ -49,6 +49,13 @@ export interface RegistryEntry
     path?: string;
     description?: string;
     added: string;
+    // The workspace server's own id for this project, where the store keeps its
+    // records on one. Cached the moment the project is created there, and read
+    // for one question: whether a slug the server does not know is one this
+    // machine has never registered, or one that was deleted from another
+    // machine (`registrycache.ts`). Absent in a git-backed store, which has no
+    // server to have an id on.
+    id?: string;
 }
 
 /* ── the machine-readable half of a refusal ────────────────────────── */

@@ -17,7 +17,7 @@
 // the log reader and the path resolver alike. A module that asked the path
 // resolver instead would be a cycle, since the path resolver asks the git
 // wrapper.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./types.js";
 
@@ -41,4 +41,63 @@ export function refuseGitOnly(storeDir: string, verb: string, does: string): voi
     {
         throw new CliError(`\`self ${verb}\` ${does}; this workspace store is server-backed and has none`);
     }
+}
+
+// What that file says beyond its own presence: which server holds the records,
+// and which workspace on it they belong to. Read here because the readers of
+// the mode and the readers of the address are the same layer's callers, and a
+// second module for three fields would only mean two places to look.
+//
+// A marker this CLI cannot read is a refusal rather than a fallback. Every
+// address it could fall back to would be a guess about whose workspace this
+// machine's records belong to, and sending one account's log to another
+// workspace is not a mistake a default can be allowed to make.
+interface WorkspaceMarker
+{
+    base: string;
+    wsId: string;
+    mode: string;
+}
+
+export function readWorkspaceMarker(storeDir: string): WorkspaceMarker
+{
+    const file = join(storeDir, WORKSPACE_FILE);
+    const marker = parseMarker(file);
+    if (typeof marker.base !== "string" || marker.base === "" || typeof marker.wsId !== "string" || marker.wsId === "")
+    {
+        throw new CliError(`${file} names no server and workspace for this store — it holds \`base\` and \`wsId\`, `
+            + "and without both there is nowhere for this machine's records to go");
+    }
+    return { base: marker.base, wsId: marker.wsId, mode: String(marker.mode ?? "api") };
+}
+
+function parseMarker(file: string): Partial<WorkspaceMarker>
+{
+    try
+    {
+        return JSON.parse(readFileSync(file, "utf8")) as Partial<WorkspaceMarker>;
+    }
+    catch
+    {
+        throw new CliError(`${file} is not readable as JSON — it says which server holds this store's records, `
+            + "so repair that one file rather than deleting it: a store with no marker reads as git-backed, "
+            + "and its queued records would then be committed into a repository that does not exist");
+    }
+}
+
+// Whether this machine talks to its workspace at all, and how it sends when it
+// does. One name for both directions, because they are one decision:
+//
+//   unset, "on"   catch up before the command, send after it in a process of
+//                 its own — the shipped behaviour
+//   "inline"      catch up before the command, send after it before the command
+//                 returns. What a case asserting a row of the table above needs
+//                 in order to have anything to assert
+//   "off"         neither. A machine deliberately working from what it holds
+//
+// Read on each call rather than at load, so a test that sets it for one
+// invocation gets it for that invocation.
+export function syncMode(): string
+{
+    return process.env.SUPERSELF_SYNC ?? "on";
 }

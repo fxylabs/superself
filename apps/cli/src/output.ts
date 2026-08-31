@@ -212,3 +212,19 @@ export function notice(line: string): void
 {
     console.log(line);
 }
+
+// A notice about the machine rather than about the command: that its workspace
+// could not be reached, that records it made are not going anywhere, that this
+// CLI is too old to talk to the server it is pointed at.
+//
+// On stderr, and that is the whole difference. These arrive before a command
+// has even parsed its flags — the catch-up runs in front of every verb — so the
+// run may yet turn out to be a `--json` one, and a line of prose on stdout
+// ahead of the envelope would be an agent's parse error instead of a person's
+// notice. They are also not any command's answer: nothing returns them, no
+// block holds them, and the command they precede would have said exactly the
+// same thing without them.
+export function machineNotice(line: string): void
+{
+    console.error(line);
+}

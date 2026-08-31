@@ -120,6 +120,8 @@ import { contextOutput, handoffContextLines, handoffOutput, HandoffSnapshot, his
 import { APP_COMMAND, registerHostVerbs } from "./app.js";
 import { LOGIN_COMMAND, LOGOUT_COMMAND, WHOAMI_COMMAND, clientTag } from "./login.js";
 import { currentAccount, resetCredentialWarnings, resolveProfileName } from "./credentials.js";
+import { catchUp, serverBackedStore } from "./puller.js";
+import { sendQueued } from "./pusher.js";
 import {
     InstalledPlugin, LoadContext, assertDevPluginMode, devPluginDir, installedPlugins,
     loadDevPlugin, loadPlugin, pluginVerbs, resolveRailMajor
@@ -145,6 +147,12 @@ async function main(argv: string[]): Promise<void>
     // so it is inside the catch — an unreadable pointer owes its caller the
     // sentence every other unreadable file gets rather than a stack.
     noteAccount();
+    // Before the command and not after it: a read answers from the log, and the
+    // log a server-backed store reads is the workspace's, so the workspace's
+    // own copy has to be here before anything reads it. Inside `main`, so a
+    // catch-up that raises owes its caller the same sentence every other
+    // failure gets rather than a stack.
+    await catchUp();
     // Host flags are consumed once, here, for every command. `self app install
     // email --no-journal` is as reasonable a request as the same flag on a
     // mini-app verb, and neither leaf should have to declare an option about
@@ -4121,6 +4129,27 @@ export async function runCli(argv: string[]): Promise<void>
     catch (error)
     {
         reportFailure(error, argv);
+    }
+    await sendWhatIsQueued();
+}
+
+// The last thing a command does, and the first thing that is not the command:
+// a server-backed store's queue goes to the workspace.
+//
+// After the failure report and outside the `try`, because it is owed whatever
+// the command did. A verb that recorded three events and then failed rendering
+// them has three events to send, and a verb that refused before it wrote
+// anything has an older queue that still has not gone.
+//
+// Nothing it does can change what the caller was told. The sending is a
+// separate process by default and this is the call that starts it; the queue is
+// the only thing it can leave behind, and the next command reads that.
+async function sendWhatIsQueued(): Promise<void>
+{
+    const storeDir = serverBackedStore();
+    if (storeDir !== null)
+    {
+        await sendQueued(storeDir);
     }
 }
 
