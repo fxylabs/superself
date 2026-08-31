@@ -23,7 +23,7 @@
 // directory the user chose the permissions of.
 //
 // What all of it rests on, stated because it is a precondition and not a
-// preference: a **local POSIX filesystem**. Four properties, and every one of
+// preference: a **local POSIX filesystem**. Five properties, and every one of
 // them is load-bearing —
 //
 //   `O_EXCL` on a create is exclusive against every other process on the
@@ -34,7 +34,19 @@
 //   on it, which is how the publish recovers an append that landed in the
 //   moment before it;
 //   a file's mtime is a time this machine's clock would recognise, which is
-//   what an unreadable lock file is judged by.
+//   what an unreadable lock file and a leftover temp file are judged by;
+//   an append is one write, so a reader arriving in the middle of one sees the
+//   file as it stood rather than half a line.
+//
+// The fifth is the one with a measured edge to it, and it is stated as an edge
+// rather than as a property because a queue file can reach it. A buffered
+// append publishes its new size a page at a time, so a reader landing inside an
+// append of hundreds of kilobytes does see a torn line — a few percent of reads
+// at 256KB, which is exactly the payload `pending.ts` allows one event to carry.
+// Line-sized appends, which is every append this store makes in ordinary use,
+// are never observed torn. So the rewrite below checks rather than assumes: a
+// read that does not end at a line boundary is a read it refuses to build a
+// replacement on, and the next sync tries again against a file that has settled.
 //
 // A store kept on a network share or inside a folder a cloud client syncs
 // breaks at least one: most emulate `O_EXCL` rather than implement it, several
@@ -42,8 +54,8 @@
 // is not a lock there, and no amount of care in this file makes it one.
 import { randomBytes } from "node:crypto";
 import {
-    Dirent, appendFileSync, closeSync, fstatSync, openSync, readSync, readdirSync, readFileSync, renameSync,
-    statSync, unlinkSync, writeFileSync, writeSync
+    Dirent, appendFileSync, closeSync, existsSync, fstatSync, openSync, readSync, readdirSync, readFileSync,
+    renameSync, statSync, unlinkSync, writeFileSync, writeSync
 } from "node:fs";
 import { join } from "node:path";
 
@@ -84,30 +96,14 @@ export function acquireSyncLock(storeDir: string): string | null
     return nonce;
 }
 
+// Both holders acquire and release around their own `try`/`finally` rather than
+// through a helper here, and there is no helper here on purpose: the work each
+// of them does has an `await` in it, and a `finally` wrapped around a
+// promise-returning body releases the moment the promise is made rather than
+// when it settles — which is a lock that guards nothing.
 export function releaseSyncLock(storeDir: string, nonce: string): void
 {
     release(join(storeDir, SYNC_LOCK_FILE), nonce);
-}
-
-// The synchronous shape of the pair, for work that has no `await` in it. A push
-// does, and holds the lock across it by acquiring and releasing itself: a
-// `finally` around a promise-returning body releases the moment the promise is
-// made rather than when it settles, which is a lock that guards nothing.
-export function withSyncLock<T>(storeDir: string, work: (nonce: string) => T): T | null
-{
-    const nonce = acquireSyncLock(storeDir);
-    if (nonce === null)
-    {
-        return null;
-    }
-    try
-    {
-        return work(nonce);
-    }
-    finally
-    {
-        releaseSyncLock(storeDir, nonce);
-    }
 }
 
 function acquire(path: string, nonce: string): boolean
@@ -251,20 +247,24 @@ function release(path: string, nonce: string): void
 
 /* ── what a holder that died left behind ───────────────────────────── */
 
-// The temp file a publish writes and the inode a steal renames aside, both
-// swept the moment this process becomes the holder.
+// The temp file a publish writes and the inode a steal renames aside, swept
+// when this process becomes the holder — and only where the file is as old as
+// the lock it would have taken.
 //
-// Inside the lock, which is what makes this a sweep rather than a race with a
-// live writer: each of those names is written by a holder between its own
-// acquire and its own release, and there is one holder at a time. A file
-// carrying either name while this process holds the lock was left by a process
-// that is no longer a holder, and nothing will ever read it — a publish names
-// its temp after the nonce writing it, so the next publish writes a name of its
-// own rather than finding this one.
+// The age is doing the work here, and it is doing it because the shorter
+// argument does not stand. "There is one holder at a time, so a file carrying
+// either name was left by a process that is no longer a holder" is false in the
+// case documented above `stale`: a wall clock stepped forward ages a live
+// holder's lock, so the process that steals it is sweeping a directory
+// somebody is still writing in. Requiring of the file the same age that made
+// the lock stealable leaves a running publish's temp — written a moment ago —
+// where it is. What remains is the case where the clock jump aged the file too,
+// and the publish answers that one itself: it refuses rather than raising, for
+// the reason `publish` states.
 //
-// That last point is why the sweep exists at all. "The next holder overwrites
-// it" was never true of a file named after a nonce nobody will draw again:
-// without this, a store collects one leftover per interrupted sync, in a
+// That a leftover is swept at all is the point of this. "The next holder
+// overwrites it" was never true of a file named after a nonce nobody will draw
+// again: without this, a store collects one leftover per interrupted sync, in a
 // directory a person opens.
 function sweepAbandoned(storeDir: string): void
 {
@@ -276,16 +276,41 @@ function sweepAbandoned(storeDir: string): void
 
 function sweep(dir: string): void
 {
-    contentsOf(dir).filter((entry) => entry.isFile() && abandoned(entry.name))
-        .forEach((entry) => discard(join(dir, entry.name)));
+    contentsOf(dir).filter((entry) => entry.isFile() && leftBehind(entry.name))
+        .map((entry) => join(dir, entry.name))
+        .filter(pastTheStealingThreshold)
+        .forEach(discard);
 }
 
-// Named by a nonce, and the nonce is what is checked: a file a person put in
-// the store is not swept for having "tmp" somewhere in its name.
-function abandoned(name: string): boolean
+// Exactly the two names this module can write, and nothing that merely
+// resembles one of them: `<file>.tmp-<nonce>` from a publish and
+// `sync.lock.dead-<nonce>` from a steal, where a nonce is the 32 hexadecimal
+// characters `randomBytes(16)` draws and never fewer, more or other. A person's
+// own `notes.tmp-backup-<32 hex>` sitting in the store reads as one of these to
+// anything looser, and this sweep removes files.
+const LEFT_BY_A_PUBLISH = /\.tmp-[0-9a-f]{32}$/;
+
+const LEFT_BY_A_STEAL = new RegExp(`^${SYNC_LOCK_FILE.replaceAll(".", "\\.")}\\.dead-[0-9a-f]{32}$`);
+
+function leftBehind(name: string): boolean
 {
-    return /-[0-9a-f]{32}$/.test(name)
-        && (name.includes(".tmp-") || name.startsWith(`${SYNC_LOCK_FILE}.dead-`));
+    return LEFT_BY_A_PUBLISH.test(name) || LEFT_BY_A_STEAL.test(name);
+}
+
+// Judged the way a lock is judged, by the same threshold and against the same
+// clock, because it is the same question: a file younger than the age at which
+// a holder's lock may be taken from it may still be one a live holder is
+// part-way through writing. A file this process cannot stat is left alone.
+function pastTheStealingThreshold(path: string): boolean
+{
+    try
+    {
+        return Date.now() - statSync(path).mtimeMs > SYNC_LEASE_MS;
+    }
+    catch
+    {
+        return false;
+    }
 }
 
 function contentsOf(dir: string): Dirent[]
@@ -332,11 +357,26 @@ function discard(path: string): void
 //                              a descriptor this function has held open on that
 //                              inode since before the first read, and appended
 //                              to the published file
+//   opened before the tail     nothing recovers them, and they are lost.
+//   was read, written after    `appendFileSync` opens by name, writes, and
+//                              closes; an appender that opened the old inode and
+//                              had not written yet when the tail was read writes
+//                              into an inode this publish has already read to
+//                              the end of and no reader will open again
 //
 // The second window is as wide as the time it takes to write the replacement
 // out, so on a queue of any size it is not theoretical: without the recovery, a
 // rewrite drops a run of appends off the end of the file, silently, and the
 // records in them exist nowhere else on this machine.
+//
+// The third is a residual and is stated as one. It is the gap inside a single
+// appender between its own `open` and its own `write` — tens of microseconds,
+// longer only if it is preempted there — against a second window measured in
+// the milliseconds or seconds a replacement takes to write out, so it is
+// narrower by orders of magnitude, but it is not nothing. Closing it means
+// holding off the append, and the append being held off by nothing is the
+// decision this whole module is built on. Recorded here because every other
+// cost in this file is.
 //
 // The original is authoritative until the rename lands, so a crash anywhere
 // before it leaves the original whole and an abandoned temp file behind, which
@@ -367,10 +407,8 @@ function publishCarrying(storeDir: string, file: string, nonce: string,
     const replacement = rewrite(before);
     const carried = bytesFrom(original, 0);
     const after = carried.toString("utf8");
-    if (!after.startsWith(before))
+    if (unpublishable(before, after, original, file))
     {
-        // Something rewrote it under us — nothing here is safe to publish over
-        // that, and the next sync will find the file whole and try again.
         return false;
     }
     if (!publish(storeDir, file, nonce, replacement + after.slice(before.length)))
@@ -379,6 +417,28 @@ function publishCarrying(storeDir: string, file: string, nonce: string,
     }
     carryLateTail(file, original, carried.length);
     return true;
+}
+
+// The three states in which nothing worked out above is safe to put in place.
+// Each of them leaves the original where it is and costs a pass: the next sync
+// reads a file that has settled and works the replacement out again.
+//
+//   rewritten under us    the file is no longer the one that was read, so the
+//                         replacement is an answer to a question somebody has
+//                         already answered differently
+//   ends mid-line         the second read landed inside an append — possible on
+//                         a large one, see the header — so the bytes past that
+//                         point are real records the rename would drop, and the
+//                         line they are part of would be published cut in half
+//   made under us         there was nothing to open, so both reads were empty
+//                         and the comparison above proved nothing about a file
+//                         that exists now. It was created inside this window
+//                         and the replacement would be written over it
+function unpublishable(before: string, after: string, original: number | null, file: string): boolean
+{
+    return !after.startsWith(before)
+        || (after !== "" && !after.endsWith("\n"))
+        || (original === null && existsSync(file));
 }
 
 // The appends that landed after the second read and before the rename.
@@ -394,14 +454,25 @@ function publishCarrying(storeDir: string, file: string, nonce: string,
 // this publishes is read in order — every row in both is found by the append id
 // or the slug it names — and the alternative is a rewrite that waits for a file
 // the foreground is deliberately free to keep growing.
+//
+// Whole lines and no part of one. The tail is read out of an inode somebody may
+// still be appending to, so its last line can be an append in progress (see the
+// fifth property in the header); carrying half of it would fuse that half onto
+// whatever the file's next line turns out to be, and one damaged line in a queue
+// is a file the reader tells a person to repair by hand. The half-line is lost
+// either way — it is on the inode nothing will read again — so this carries
+// everything up to the last line ending and stops.
 function carryLateTail(file: string, original: number | null, carried: number): void
 {
     const tail = bytesFrom(original, carried);
-    if (tail.length > 0)
+    const whole = tail.subarray(0, tail.lastIndexOf(NEWLINE) + 1);
+    if (whole.length > 0)
     {
-        appendFileSync(file, tail);
+        appendFileSync(file, whole);
     }
 }
+
+const NEWLINE = 0x0a;
 
 // Opened before the first read, so that the inode the reads below are about is
 // the inode the tail is recovered from. A file that is not there is not an
@@ -444,15 +515,44 @@ function bytesFrom(fd: number | null, position: number): Buffer
     return buffer.subarray(0, readSync(fd, buffer, 0, wanted, position));
 }
 
+// Written, still ours, renamed — and not one of the three may raise.
+//
+// The caller is a catch-up standing in front of somebody's command, and every
+// row of the pull table ends in that command running: a publish that threw
+// would be the tidying refusing what the work itself cannot. The cases are
+// real. A temp file swept out from under this holder by a process that took the
+// lock while the wall clock said this one was stale makes both the cleanup and
+// the rename `ENOENT`; a full disk makes the write `ENOSPC`; a store directory
+// that is no longer writable makes any of them fail.
+//
+// `false` is the same answer as a refusal and safe for the same reason: nothing
+// was renamed, so the original is whole and authoritative, the caller carries no
+// tail onto a file it did not publish, and the next sync works the replacement
+// out again from what is on disk. Nothing here is the only copy of a record —
+// the queue is appended to outside this lock and by other code — so a pass that
+// publishes nothing costs a pass and never a record.
 function publish(storeDir: string, file: string, nonce: string, text: string): boolean
 {
     const temp = `${file}.tmp-${nonce}`;
-    writeFileSync(temp, text);
-    if (!heldBy(join(storeDir, SYNC_LOCK_FILE), nonce))
+    if (!done(() => writeFileSync(temp, text))
+        || !heldBy(join(storeDir, SYNC_LOCK_FILE), nonce)
+        || !done(() => renameSync(temp, file)))
     {
-        unlinkSync(temp);
+        discard(temp);
         return false;
     }
-    renameSync(temp, file);
     return true;
+}
+
+function done(step: () => void): boolean
+{
+    try
+    {
+        step();
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
 }

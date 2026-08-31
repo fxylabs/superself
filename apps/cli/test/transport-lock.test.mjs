@@ -8,11 +8,13 @@
 // while somebody else is appending to the file it is replacing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+    appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { compactedPending } from "../dist/pending.js";
-import { SYNC_LEASE_MS, SYNC_LOCK_FILE, acquireSyncLock, publishRewrite, releaseSyncLock, withSyncLock } from "../dist/synclock.js";
+import { SYNC_LEASE_MS, SYNC_LOCK_FILE, acquireSyncLock, publishRewrite, releaseSyncLock } from "../dist/synclock.js";
 import { PULLER_LEASE_MS, pullEverySlug } from "../dist/puller.js";
 import { invalidateResolution } from "../dist/paths.js";
 import { PUSHER_LEASE_MS } from "../dist/pusher.js";
@@ -41,6 +43,45 @@ function heldSince(store, ageMs)
     }));
 }
 
+// The holder's own record, aged where it lies. Not a second holder and not a
+// forged nonce: this is the wall clock stepping forward under a process that is
+// still working, which `synclock.ts` documents above `stale` and which is the
+// one way a live holder's lock reads as stale.
+function theClockStepsPast(store)
+{
+    const record = JSON.parse(readFileSync(lockFile(store), "utf8"));
+    writeFileSync(lockFile(store), JSON.stringify({
+        ...record,
+        at: new Date(Date.now() - SYNC_LEASE_MS - 60_000).toISOString()
+    }));
+}
+
+// A file dated back the same way, for the cases about what a sweep may remove.
+function agedTo(path, ageMs)
+{
+    utimesSync(path, new Date(Date.now() - ageMs), new Date(Date.now() - ageMs));
+}
+
+// The lock a piece of work takes for itself, released whatever the work did.
+// Both real holders do this inline because the work they do has an `await` in
+// it and a `finally` around a promise releases before the promise settles.
+function underTheLock(store, work)
+{
+    const nonce = acquireSyncLock(store);
+    if (nonce === null)
+    {
+        return null;
+    }
+    try
+    {
+        return work(nonce);
+    }
+    finally
+    {
+        releaseSyncLock(store, nonce);
+    }
+}
+
 /* ── one at a time ─────────────────────────────────────────────────── */
 
 test("lock single-flight: a second taker gets nothing rather than waiting", () =>
@@ -57,7 +98,7 @@ test("lock single-flight: a second taker gets nothing rather than waiting", () =
 test("lock released: the file is gone after the work, whatever the work did", () =>
 {
     const store = scratch();
-    assert.throws(() => withSyncLock(store, () => { throw new Error("the work failed"); }), /the work failed/);
+    assert.throws(() => underTheLock(store, () => { throw new Error("the work failed"); }), /the work failed/);
     assert.ok(!existsSync(lockFile(store)), "a failure inside the lock is not a lock nobody can take");
     rmSync(store, { recursive: true, force: true });
 });
@@ -149,9 +190,22 @@ test("rewrite carries: a line appended while the rewrite was deciding is kept", 
 // the file it is about to write out, and is on the inode the rename is about to
 // unlink. That is the whole of the window, entered on purpose and at a fixed
 // point rather than by luck.
-function appendsWhileItIsRead(file, line, text)
+//
+// `noted` is how the cell says which side of the publish it was on rather than
+// trusting the paragraph above. At the moment the append lands, no temp file
+// exists yet — the publish has not written one — so a refactor that wrote the
+// replacement out first and joined the tail afterwards would stop entering this
+// window and would say so here instead of passing quietly. It is a minimum: it
+// pins "before the temp was written" and not "after the second read", which
+// nothing observable from inside the callback can distinguish.
+function appendsWhileItIsRead(file, line, text, noted = {})
 {
-    return { toString: () => { appendFileSync(file, line); return text; } };
+    return { toString: () =>
+    {
+        noted.tempWasThere = readdirSync(dirname(file)).some((name) => name.includes(".tmp-"));
+        appendFileSync(file, line);
+        return text;
+    } };
 }
 
 test("rewrite carries late tail: an append that lands after the last read and before the rename is kept", () =>
@@ -160,10 +214,64 @@ test("rewrite carries late tail: an append that lands after the last read and be
     const file = join(store, "queue.jsonl");
     writeFileSync(file, "one\ntwo\n");
     const nonce = acquireSyncLock(store);
-    assert.ok(publishRewrite(store, file, nonce, () => appendsWhileItIsRead(file, "late\n", "kept\n")));
+    const noted = {};
+    assert.ok(publishRewrite(store, file, nonce, () => appendsWhileItIsRead(file, "late\n", "kept\n", noted)));
+    assert.equal(noted.tempWasThere, false, "the append has to land before the replacement is written out or this "
+        + "cell is asserting the window it already has a case for");
     assert.deepEqual(readFileSync(file, "utf8").split("\n").filter((line) => line !== "").sort(),
         ["kept", "late"],
         "the record was written to a file the rename was about to unlink, and it is still a record");
+    rmSync(store, { recursive: true, force: true });
+});
+
+test("rewrite carries late tail: half a line left on the old inode is not fused onto the next one", () =>
+{
+    const store = scratch();
+    const file = join(store, "queue.jsonl");
+    writeFileSync(file, "one\n");
+    const nonce = acquireSyncLock(store);
+    // A large append is the one an appender can be observed part-way through
+    // (`synclock.ts`, the fifth property): what the tail read finds is whole
+    // lines and then the beginning of one more.
+    assert.ok(publishRewrite(store, file, nonce, () => appendsWhileItIsRead(file, "late\nhalf-a-l", "kept\n")));
+    assert.equal(readFileSync(file, "utf8"), "kept\nlate\n",
+        "a queue with one damaged line in it is a file its reader tells a person to repair by hand");
+    rmSync(store, { recursive: true, force: true });
+});
+
+test("rewrite refuses a torn read: a file that does not end at a line ending is left alone", () =>
+{
+    const store = scratch();
+    const file = join(store, "queue.jsonl");
+    writeFileSync(file, "one\ntwo");
+    const nonce = acquireSyncLock(store);
+    assert.equal(publishRewrite(store, file, nonce, () => "kept\n"), false,
+        "a read that stops inside a line is a read with records past its end, and the rename would drop them");
+    assert.equal(readFileSync(file, "utf8"), "one\ntwo", "the original stands, which is what makes this a pass lost "
+        + "and not a record");
+    // And the refusal is a pass rather than a state: the next read of a file
+    // that ends where a line ends publishes.
+    appendFileSync(file, "\n");
+    assert.ok(publishRewrite(store, file, nonce, () => "kept\n"));
+    assert.equal(readFileSync(file, "utf8"), "kept\n");
+    rmSync(store, { recursive: true, force: true });
+});
+
+test("rewrite refuses: a file created while the rewrite ran is not written over", () =>
+{
+    const store = scratch();
+    const file = join(store, "queue.jsonl");
+    const nonce = acquireSyncLock(store);
+    // Nothing was there to open, so both reads are empty and the comparison the
+    // publish makes proves nothing about the file that exists by the end.
+    const published = publishRewrite(store, file, nonce, () =>
+    {
+        writeFileSync(file, "a record made while the rewrite ran\n");
+        return "rewritten\n";
+    });
+    assert.equal(published, false);
+    assert.equal(readFileSync(file, "utf8"), "a record made while the rewrite ran\n",
+        "an empty read is not permission to write over whatever turned up");
     rmSync(store, { recursive: true, force: true });
 });
 
@@ -266,6 +374,9 @@ test("lock sweeps: what a holder that died mid-publish left behind is gone at th
     ];
     const kept = join(store, "projects", "demo", "pending.jsonl");
     orphans.forEach((path) => writeFileSync(path, "half a replacement"));
+    // As old as the lock of a holder nobody would wait for any longer, which is
+    // the whole of what says these belong to nobody.
+    orphans.forEach((path) => agedTo(path, SYNC_LEASE_MS + 60_000));
     writeFileSync(kept, "a record\n");
     const nonce = acquireSyncLock(store);
     assert.ok(nonce !== null);
@@ -276,19 +387,70 @@ test("lock sweeps: what a holder that died mid-publish left behind is gone at th
     rmSync(store, { recursive: true, force: true });
 });
 
-test("lock sweeps: a holder still working is not swept up by the holder that follows it", () =>
+test("lock sweeps: a file a person put in the store is not swept for looking like a nonce", () =>
+{
+    const store = scratch();
+    // Every one of these is aged past the threshold, so age is not what saves
+    // them: the name is. The first two carry a 32-hex tail after a `.tmp-`
+    // that is not the whole of what follows it; the third is a nonce of the
+    // wrong length; the fourth is a stolen lock's name with something in front
+    // of it.
+    const mine = [
+        join(store, `notes.tmp-backup-${"a".repeat(32)}`),
+        join(store, `queue.tmp-2026-08-${"b".repeat(32)}`),
+        join(store, `draft.tmp-${"c".repeat(16)}`),
+        join(store, `old-${SYNC_LOCK_FILE}.dead-${"d".repeat(32)}`)
+    ];
+    mine.forEach((path) => writeFileSync(path, "a person's own file, in a directory they opened"));
+    mine.forEach((path) => agedTo(path, SYNC_LEASE_MS + 60_000));
+    const nonce = acquireSyncLock(store);
+    assert.ok(nonce !== null);
+    assert.deepEqual(mine.filter((path) => !existsSync(path)), [],
+        "the store is a directory a person keeps files in, and this sweep deletes files");
+    releaseSyncLock(store, nonce);
+    rmSync(store, { recursive: true, force: true });
+});
+
+test("lock sweeps: a live holder's temp survives the holder that took its lock, and that holder's publish refuses", () =>
+{
+    const store = scratch();
+    const file = join(store, "queue.jsonl");
+    writeFileSync(file, "the original\n");
+    const first = acquireSyncLock(store);
+    // The state a publish is in between writing its temp and renaming it.
+    const mine = join(store, `queue.jsonl.tmp-${first}`);
+    writeFileSync(mine, "a replacement being written right now");
+    // The wall clock steps forward. The first holder is still working and its
+    // own lock now reads as stale, which `synclock.ts` documents and which is
+    // the case that makes "one holder at a time" false for a sweep.
+    theClockStepsPast(store);
+    const second = acquireSyncLock(store);
+    assert.ok(second !== null, "a lock older than the threshold is taken, whether or not its holder has stopped");
+    assert.ok(existsSync(mine),
+        "a temp file younger than that same threshold may be one somebody is part-way through writing");
+
+    // And the first holder, resuming, is told no rather than raising: a
+    // catch-up stands in front of somebody's command and every row of the pull
+    // table ends in that command running.
+    assert.equal(publishRewrite(store, file, first, () => "rewritten\n"), false);
+    assert.equal(readFileSync(file, "utf8"), "the original\n", "nothing was published over the holder that follows");
+    releaseSyncLock(store, second);
+    rmSync(store, { recursive: true, force: true });
+});
+
+test("lock sweeps: a holder that finished leaves nothing for the next one to work around", () =>
 {
     const store = scratch();
     const first = acquireSyncLock(store);
     const mine = join(store, `registry.jsonl.tmp-${first}`);
     writeFileSync(mine, "a replacement being written right now");
-    // The sweep runs inside the lock, at the moment a process becomes the
-    // holder, and there is one holder at a time — so a second acquire while the
-    // first is still working does not happen, and the file it is part-way
-    // through writing cannot be swept out from under it.
-    assert.equal(acquireSyncLock(store), null);
+    assert.equal(acquireSyncLock(store), null, "and no second holder arrives while the first is working");
     assert.ok(existsSync(mine));
     releaseSyncLock(store, first);
+    // Aged, because that is what the sweep asks of a file and not a detail of
+    // this cell: the holder that wrote it has been gone at least as long as the
+    // lease by the time anything here is safe to remove.
+    agedTo(mine, SYNC_LEASE_MS + 60_000);
     assert.ok(acquireSyncLock(store) !== null, "and the holder that follows a finished one does sweep it");
     assert.equal(existsSync(mine), false);
     rmSync(store, { recursive: true, force: true });
@@ -345,7 +507,7 @@ test("concurrent: records made while a sync is rewriting the queue are all still
     {
         made.push(workIdIn((await mustPerson(box, demo, ["work", "add", `unit ${round}`],
             { SUPERSELF_DEV: "1", SUPERSELF_SYNC: "off" })).out));
-        withSyncLock(store, (nonce) => publishRewrite(store,
+        underTheLock(store, (nonce) => publishRewrite(store,
             join(store, "projects", "demo", "pending.jsonl"), nonce, compactedPending));
     }
     const queued = unsent(ws).flatMap((row) => row.events).map((one) => one.payload.text ?? one.payload.outcome);

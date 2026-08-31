@@ -7,6 +7,17 @@
 // can lose a record, and a reader that arrives mid-write finds a shorter file
 // rather than a damaged one.
 //
+// That last clause has a measured limit and it is worth stating where the
+// limits below are. A buffered append publishes its new size a page at a time,
+// so a reader landing inside a *large* one — the 256KB a single event payload
+// may carry, or the megabyte a whole append may — does see a torn last line, at
+// a few percent of reads. Line-sized appends are never observed torn. The one
+// reader that acts on what it saw rather than only reporting it is the sync's
+// rewrite, and it checks: `synclock.ts` refuses to publish a replacement built
+// on a read that does not end at a line ending, and carries only whole lines.
+// Every other reader here refuses the file and names the line, which is the
+// same answer a genuinely damaged file gets and the right one either way.
+//
 // An append lands here and nowhere else. `log.jsonl` beside it is the server's
 // own copy, written only by what comes back from the server, which is what
 // makes every event the property of exactly one of the two files: the queue
