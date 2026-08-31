@@ -45,6 +45,23 @@ queue as a row and said by the next command that has somewhere to print.
 detached, `inline` sends before the command returns, and `off` talks to nothing.
 The suite's scratch machine is `off`, so no case reaches a network by accident.
 
+`inline` exists so that a case asserting a row of the push table has something to
+assert by the time its `await` comes back. It is not a mode to work in: the
+command holds until the workspace has answered, so every delay the server has is
+a delay the person waits out — which is the whole of what `on` spares them.
+
+The detached send cannot reach the caller **including when it fails to start**.
+A `spawn` that never execs — no descriptors left, no process slots left — raises
+an `error` event, and an unhandled one is an uncaught exception in a process that
+has already run the person's command and printed its answer: exit 1 on a command
+that worked. The event is taken and nothing is done with it. The queue still
+holds every append, so the records are where they were and the next command sends
+them.
+
+| Property | Cell |
+|---|---|
+| a sender that cannot be started leaves the command's answer and its status alone | `spawn refused` |
+
 ## Push — `pusher.ts`, first match wins
 
 | # | Answer | What this machine does | Cell |
@@ -128,12 +145,23 @@ older CLI would read as neither an append nor a mark and fold twice.
 ## The lock
 
 One sync at a time, and the foreground append outside it. `SYNC_LEASE_MS` is five
-minutes and `PUSHER_LEASE_MS` is three: the sender enforces its own bound and
-stops, so a lock older than the threshold belongs to a process that has already
-stopped. That is what makes "stale" a fact rather than an opinion, and it is why
-nothing here has a heartbeat. Every wait a sender can be made to do — a capped
-`Retry-After`, a bounded request — fits inside its own lease, which
-`lock bounded-by-its-parts` is the check on.
+minutes; both holders are bounded under it at three — `PUSHER_LEASE_MS` for the
+sender and `PULLER_LEASE_MS` for the catch-up. Each enforces its own bound and
+stops where it runs out, so a lock older than the threshold belongs to a process
+that has already stopped. That is what makes "stale" a fact rather than an
+opinion, and it is why nothing here has a heartbeat. Every wait a sender can be
+made to do — a capped `Retry-After`, a bounded request — fits inside its own
+lease, which `lock bounded-by-its-parts` is the check on.
+
+The claim is about *every* holder or it is about none of them. A catch-up is one
+request per registered project, so a store with enough projects would otherwise
+be a live holder walking past the age at which another process takes its lock —
+which is the half of the lock's own argument that used to be false. Past its
+lease the catch-up leaves the projects it has not reached where they are and
+returns as though it had finished, because for the command in front of it, it
+has: every row of the pull table ends in the command running against what this
+machine holds, and a project this pass skipped is one the next command reaches
+first.
 
 | Property | Cell |
 |---|---|
@@ -142,7 +170,28 @@ nothing here has a heartbeat. Every wait a sender can be made to do — a capped
 | a holder younger than the lease keeps it | `lock not-stolen` |
 | a holder past the lease is taken over | `lock stale` |
 | a lock naming no holder is judged by its age | `lock unreadable` |
-| the sender's bound is under the threshold | `lock lease-bound`, `lock bounded-by-its-parts` |
+| both holders' bounds are under the threshold | `lock lease-bound`, `lock bounded-by-its-parts` |
+| a catch-up past its lease skips the rest and returns | `pull lease-bound` |
+| a temp file or a stolen lock inode a dead holder left is swept at the next acquire | `lock sweeps` |
+
+### What the lock rests on
+
+A **local POSIX filesystem**, and this is a precondition rather than a
+preference: `O_EXCL` exclusive across processes, `rename` replacing a name in one
+step, an unlinked inode still readable through an open descriptor, and an mtime
+this machine's clock would recognise. A store on a network share or inside a
+folder a cloud client syncs breaks at least one of the four, and this is not a
+lock there. Stated in the module header; no cell can check it, because the
+filesystem under the suite is the one that satisfies it.
+
+The stale judgement is a wall clock and a holder's own bound is not. A clock
+stepped forward ages a lock its holder believes is young; one stepped back holds
+a dead lock un-stealable for the length of the jump. Documented in `synclock.ts`
+rather than repaired — putting the holder's bound on a monotonic clock leaves it
+compared against a wall-clock stamp, which moves the disagreement rather than
+ending it. What the window costs is bounded either way: a sync skipped, or a
+second holder the nonce re-check before every rename stops from publishing.
+Neither costs a record.
 
 ## The one rewrite
 
@@ -151,11 +200,40 @@ go through the same publish: read, work out the replacement, read again, carry
 whatever was appended in between onto the end, check the lock is still ours, and
 rename. The original is authoritative until the rename lands.
 
+**There are two windows, and the second read only closes the first.** An append
+that lands *after* the second read and before the rename is on the inode the
+rename unlinks — no read has seen it, nothing carries it, and the records in it
+exist nowhere else on this machine. The window is as wide as the time it takes to
+write the replacement out, so on a queue of any size it is not theoretical: a
+single identity rewrite over a megabyte-sized queue with an ordinary appender
+running loses hundreds of rows, always as a run off the end of the file. In
+`registry.jsonl` the row that disappears is a project this machine just
+registered, and nothing iterates a slug the registry does not list, so that
+project's whole queue stops being opened by any command. In `pending.jsonl` it is
+the only copy of an unsent record.
+
+The publish therefore holds a descriptor open on the original from before the
+first read until after the rename. A `rename` unlinks the inode; a descriptor
+still open on it keeps reading it, which is where those bytes are recovered from
+and appended to the published file. What that does not preserve is the order
+within that moment — an append made after the rename reaches the new file first
+and the recovered tail follows it. Nothing reads either file in order: every row
+in both is found by the append id or the slug it names.
+
+The alternative considered and rejected was to compare the file's size against
+the carried length just before the rename and abandon the publish where they
+disagree. It narrows the window to `stat`-then-`rename` rather than closing it,
+and under the load that makes the window wide — a machine appending steadily —
+it abandons the compaction every time, so a queue that is growing is a queue that
+is never tidied. The descriptor loses nothing under any interleaving.
+
 | Property | Cell |
 |---|---|
 | a line appended mid-rewrite is carried | `rewrite carries` |
+| a line appended after the last read and before the rename is carried | `rewrite carries late tail` |
 | a file rewritten under the rewrite is left alone | `rewrite refuses` |
 | a holder whose lock was taken publishes nothing, and cleans up its temp | `rewrite stolen` |
+| a publish that refused carries no tail, and does not double one | `rewrite carries late tail` |
 | a crash before the rename costs nothing | `rewrite crash-safe` |
 | settled history goes, unsent and untold rows stay | `compaction drops`, `compaction keeps` |
 | compacting twice is compacting once | `compaction settles` |
