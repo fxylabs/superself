@@ -37,6 +37,18 @@ import { acquireSyncLock, publishRewrite, releaseSyncLock } from "./synclock.js"
 import { ApiAnswer, WorkspaceSession, listProjects, openSession, pullAfter } from "./transport.js";
 import { JsonValue, SelfEvent } from "./types.js";
 
+// The longest one catch-up may live, for the reason `PUSHER_LEASE_MS` exists
+// and strictly under `SYNC_LEASE_MS` for the same one: a lock older than the
+// stealing threshold is a lock whose holder has stopped only if every holder
+// stops.
+//
+// A catch-up is one request per registered project, and a request is bounded
+// but a walk over the projects is not. Without this, a store with enough of
+// them reaches the age at which another process takes its lock while it is
+// still working — and the lock's claim that a live holder cannot be that old
+// would be true of the sender and false of this.
+export const PULLER_LEASE_MS = 180_000;
+
 // The store this machine points at, where that store keeps its records on a
 // server. The machine's own pointer rather than the directory's marker, for the
 // same reason the entry point reads the account off it: this runs before a
@@ -121,20 +133,46 @@ async function syncUnderLock(storeDir: string): Promise<void>
 
 async function sync(storeDir: string, nonce: string): Promise<void>
 {
+    // Set before the session is opened, so that the project list request is
+    // inside the bound as well as the deltas that follow it.
+    const until = Date.now() + PULLER_LEASE_MS;
     const session = openable(storeDir);
     if (session === null)
     {
         return;
     }
     await reconcile(storeDir, session, nonce);
+    await pullEverySlug(storeDir, session, nonce, until);
+}
+
+// Every registered project's delta, for as long as this catch-up's lease has
+// left.
+//
+// Past it the remaining projects are left where they are and this returns as
+// though it had finished — because for the command in front of it, it has:
+// every row of the pull table ends in the command running against what this
+// machine holds, and a project this pass did not reach is one the next command
+// reaches first. A partial pass is a state the design already answers, for the
+// same reason a machine that died mid-pull is: nothing here is written unless
+// the whole of it is, and the next pull asks from where each file ends.
+//
+// `until` is a parameter rather than a deadline this function sets itself, so
+// that a case can state one.
+export async function pullEverySlug(storeDir: string, session: WorkspaceSession, nonce: string,
+    until: number): Promise<void>
+{
     for (const entry of readRegistry(storeDir))
     {
-        // One project's unreadable files stop that project's catch-up and
-        // nothing else. The command that reads *that* project still refuses,
-        // in the sentence naming the file and the line, because that read is
-        // the command's own — what must not happen is a damaged queue in one
-        // project refusing a command about a different one.
-        await pullProject(storeDir, session, entry.slug, nonce).catch(() => undefined);
+        if (Date.now() < until)
+        {
+            // One project's unreadable files stop that project's catch-up and
+            // nothing else. The command that reads *that* project still
+            // refuses, in the sentence naming the file and the line, because
+            // that read is the command's own — what must not happen is a
+            // damaged queue in one project refusing a command about a
+            // different one.
+            await pullProject(storeDir, session, entry.slug, nonce).catch(() => undefined);
+        }
     }
 }
 
