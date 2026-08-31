@@ -15,9 +15,9 @@
 // calls another, no verb advances a stage on its own, and there is no timer.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { chainHead, chainVersion, EntityState, isCurrent, isLive, uncoveredCriteria } from "@superself/fold";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
-import { chainHead, chainVersion, EntityState, isCurrent, isLive, uncoveredCriteria } from "./entities.js";
 import { writtenBy } from "./human.js";
 import { wrongKindHint } from "./ids.js";
 import { buildModel, ProjectModel, workspaceModels } from "./model.js";

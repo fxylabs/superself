@@ -167,9 +167,10 @@ whole lifecycle set: supersede with a linked successor, withdraw with `--why`
 and no successor, and decline where the type has proposals. See
 [the record lifecycle](ARCHITECTURE.md#the-record-lifecycle) for what each
 transition has to fold to, and add the type to `STATEMENT_TYPES` in
-`model.ts` — the one declaration of the statement types, which the per-record
-history reads and `test/lifecycle.test.mjs` enumerates, so a statement type
-cannot land without its lifecycle verbs in its own help.
+`@superself/fold` `model.ts` — the one declaration of the statement types,
+which the per-record history reads and `apps/cli/test/lifecycle.test.mjs`
+enumerates, so a statement type cannot land without its lifecycle verbs in its
+own help.
 
 ## Tests
 

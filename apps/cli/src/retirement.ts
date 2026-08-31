@@ -11,8 +11,8 @@
 // One disclosure covers one reviewed set, not one record (#312). A batch
 // collects the calls a whole plan makes and states them together, so a set
 // lands as one append rather than as one write per line.
+import { EntityState } from "@superself/fold";
 import { CommandLeaf } from "./contract.js";
-import { EntityState } from "./entities.js";
 import { WrittenBy, writtenBy } from "./human.js";
 import { ProjectModel } from "./model.js";
 import { notice } from "./output.js";

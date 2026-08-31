@@ -12,6 +12,13 @@ export const styled = enabled;
 // align — so the two answers are kept apart.
 export const dumbTerminal = dumb;
 
+// The two counters every render shares are the fold's own: it counts the same
+// nouns and the same characters, and a second copy of either drifts into
+// "1 branchs" on one surface or a store that passes a character cap on one
+// machine and not another. Re-exported from here so a renderer still reads
+// them beside the styling it already imports.
+export { countCharacters, plural } from "@superself/fold";
+
 function paint(code: string): (text: string) => string
 {
     return (text) => enabled ? `\x1b[${code}m${text}\x1b[0m` : text;
@@ -33,14 +40,6 @@ function errPaint(code: string): (text: string) => string
 
 export const errRed = errPaint("31");
 export const errYellow = errPaint("33");
-
-// A counted noun, in the one place both list renders read it from: the plain
-// render and the ruled render count the same things, and two copies of this
-// drift into "1 branchs" on one surface and not the other.
-export function plural(count: number, noun: string, many = `${noun}s`): string
-{
-    return `${count} ${count === 1 ? noun : many}`;
-}
 
 // The opening line of prose that may run to paragraphs. A report, a health
 // sentence and a plan all read this way where the surface has one line to
@@ -75,16 +74,6 @@ export function fit(text: string, width: number): string
 }
 
 /* ── character counting ────────────────────────────────────────────── */
-
-// The one rule for counting stored text in characters: Unicode code points,
-// so a surrogate pair is one character on every machine. The context budget
-// and the full-exposure retention cap both measure through here — a second
-// counter would let a store pass the cap and still blow the budget, or the
-// other way round.
-export function countCharacters(text: string): number
-{
-    return Array.from(text).length;
-}
 
 // What that character count costs in context tokens. Rounded up, so a cap is
 // never passed by a fraction the render then spends. The scale is a store

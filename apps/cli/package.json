@@ -39,6 +39,9 @@
     "structure": "node test/structure.mjs",
     "release-keys": "node test/release-keys.mjs"
   },
+  "dependencies": {
+    "@superself/fold": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "22.10.5",
     "typescript": "5.9.3"

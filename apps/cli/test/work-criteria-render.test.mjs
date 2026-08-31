@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { criteriaNote, criteriaProgress } from "../dist/entities.js";
+import { criteriaNote, criteriaProgress } from "@superself/fold";
 import { buildModel } from "../dist/model.js";
 import { renderWorkList } from "../dist/pretty.js";
 import { fixturePath } from "./golden.mjs";

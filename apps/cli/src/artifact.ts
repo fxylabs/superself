@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { findMilestone, isLive } from "@superself/fold";
 import { branch, Command, leaf } from "./contract.js";
-import { isLive } from "./entities.js";
 import { confirmHuman, HumanConfirmation, personAtTerminal } from "./human.js";
 import { artifactId } from "./ids.js";
 import { buildModel, ProjectModel } from "./model.js";
-import { findMilestone } from "./objectives.js";
 import { notice } from "./output.js";
 import { makeEvent, recordEvent } from "./pipeline.js";
 import { artifactMetas, ArtifactRecord, holdsBytes, listArtifacts, StoredArtifact } from "./registry.js";
@@ -1631,7 +1630,7 @@ function openStored(ctx: CliContext, record: ArtifactRecord): string
 // makes it survivable.
 //
 // The record is never removed, only the bytes. `completionRefusal`
-// (`completion.ts`) reads a work unit's reports rather than the files they
+// (`@superself/fold` `completion.ts`) reads a work unit's reports rather than the files they
 // name, so dropping the bytes takes nothing from a `done` claim already
 // closed — while dropping the record would take away the audit of it. Every
 // read answers `pruned` from the log from then on.

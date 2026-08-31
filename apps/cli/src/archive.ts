@@ -23,9 +23,9 @@
 // splices into the project verb, and the listing `self project --archived`
 // prints.
 
+import { isCurrent } from "@superself/fold";
 import { required, Requirement, requireText } from "./args.js";
 import { CommandInput, CommandLeaf, leaf } from "./contract.js";
-import { isCurrent } from "./entities.js";
 import { buildModel, ProjectModel } from "./model.js";
 import { archivedProjects, CliContext, projectArchive, requireRegistered, requireWorkspace } from "./paths.js";
 import { makeEvent, recordEvent } from "./pipeline.js";

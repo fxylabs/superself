@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dayIn, daysBetween, validDate, validZone } from "../dist/dates.js";
+import { dayIn, daysBetween } from "@superself/fold";
+import { validDate, validZone } from "../dist/dates.js";
 import { CliError } from "../dist/types.js";
 
 test("validDate accepts YYYY-MM-DD and rejects everything else", () =>

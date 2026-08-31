@@ -9,8 +9,8 @@
 // command a table-resolved verb runs as; the entity write itself is
 // `state.ts`'s, reached through one shared add path.
 
+import { Exposure, EXPOSURES } from "@superself/fold";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
-import { Exposure, EXPOSURES } from "./entities.js";
 import { AliasRow, readStoreConfig, requireWorkspace, StoreConfig } from "./paths.js";
 import { retiring } from "./retirement.js";
 import { aliasEntityAdd, ALIAS_ADD_OPTIONS, validExposure, validPriority } from "./state.js";

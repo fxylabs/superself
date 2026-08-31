@@ -5,12 +5,14 @@
 // without a stored event changing.
 //
 // This module owns the `entity.*` namespace: the event vocabulary, the fold
-// that reads it, and the legacy interpretation. Domain layer — it imports
-// `types.ts` and its peer `objectives.ts` only, never the fold that calls it.
+// that reads it, and the legacy interpretation. Domain layer — it imports the
+// package's type and text leaves and its peer `objectives.ts` only, never the
+// fold that calls it.
 
+import { FoldError } from "./errors.js";
 import { MilestoneState, ObjectiveState } from "./objectives.js";
-import { countCharacters } from "./style.js";
-import { CliError, SelfEvent } from "./types.js";
+import { countCharacters } from "./text.js";
+import { SelfEvent } from "./types.js";
 
 // Spelled once, for the verbs' refusals and the fold's own reading guards.
 export const EXPOSURES = ["full", "index", "search"] as const;
@@ -394,7 +396,7 @@ export function requireSupersedeKind(entities: EntityState[], wanted: string, ki
     if (found !== kind)
     {
         const article = /^[aeiou]/.test(found) ? "an" : "a";
-        throw new CliError(`${entity.id} is ${article} ${found} record — replace it with ${SUPERSEDE_SPELLING[found]}`);
+        throw new FoldError(`${entity.id} is ${article} ${found} record — replace it with ${SUPERSEDE_SPELLING[found]}`);
     }
 }
 

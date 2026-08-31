@@ -308,19 +308,6 @@ export function requireRevision(value: string, refusal: RevisionRefusal = typedE
     return value.toLowerCase();
 }
 
-// Reports written before evidence carried its type put whatever the caller
-// passed into refs.commits, and those stores must fold from the log alone —
-// status and context answer without the project checkout. So this is shape and
-// nothing else, erring toward silence: a digit-only value is a date, a build
-// number or a ticket at least as often as it is a hash, and reporting one as a
-// vanished commit is the failure the split exists to stop.
-const LEGACY_REVISION = /^(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{7,40}$/;
-
-export function looksLikeLegacyRevision(value: string): boolean
-{
-    return LEGACY_REVISION.test(value);
-}
-
 // 12 hex chars: short hashes recorded as evidence must stay unambiguous as
 // the project repo grows.
 export function headCommit(dir: string): string | null

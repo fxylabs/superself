@@ -6,7 +6,7 @@
 // branch here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unshippedBranches } from "../dist/model.js";
+import { unshippedBranches } from "@superself/fold";
 
 const work = (id, commits, branch = "feat/x") => ({
     id,

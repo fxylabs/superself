@@ -13,7 +13,7 @@
 // stored field can contradict the log.
 
 import { createHash } from "node:crypto";
-import { chainHead, chainVersion, EntityState, isCurrent, isLive, supersedesChain, uncoveredCriteria } from "./entities.js";
+import { chainHead, chainVersion, EntityState, isCurrent, isLive, supersedesChain, uncoveredCriteria } from "@superself/fold";
 
 // The two labels the surface records under. `runbook-run` rather than `run`:
 // `run.*` is the attempt namespace and `self work run` is a process, so a
@@ -44,7 +44,8 @@ export function stageDigest(stages: string[]): string
 /* ── the edition chain ─────────────────────────────────────────────── */
 
 // The whole chain a runbook id belongs to, oldest edition first. The walk
-// itself is `entities.ts` `supersedesChain`, shared with every other kind that
+// itself is `@superself/fold` `entities.ts` `supersedesChain`, shared with
+// every other kind that
 // versions itself by supersession (#391); what is a runbook is this module's
 // to say, and that is all this wrapper adds.
 export function runbookChain(entities: EntityState[], id: string): EntityState[]

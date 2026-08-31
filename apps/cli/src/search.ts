@@ -12,7 +12,7 @@
 // History is per-entity and explicit: `state show <id> --history` and
 // `work show <id> --history` (R3). No flag here reaches a dead record.
 
-import { EntityState, Exposure, EXPOSURES, isCurrent, scopeTarget } from "./entities.js";
+import { EntityState, Exposure, EXPOSURES, isCurrent, scopeTarget } from "@superself/fold";
 import { buildModel, isOpenWork, ProjectModel, WorkState } from "./model.js";
 import { notice } from "./output.js";
 import { activeProjects, CliContext, requireRegistered } from "./paths.js";

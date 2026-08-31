@@ -1,7 +1,11 @@
 # Architecture
 
 The standing structure rules for this repository, with `apps/cli/src` as the
-worked example. Read this before adding a module, a directory, an event type,
+worked example. The fold itself is no longer in it: the calculation that reads
+an event log into project state is the `@superself/fold` package
+(`apps/fold/src`), which the CLI imports and a Workspace API server imports
+too, so both answer from one calculation. Its own layering is stated in
+[The fold package](#the-fold-package) below. Read this before adding a module, a directory, an event type,
 or a second way to do something that already has one.
 
 Every rule below states its enforcement point: the place a violation is caught,
@@ -21,7 +25,7 @@ it. The layers, lowest first:
 
 | Layer | Modules | Owns |
 | --- | --- | --- |
-| Types | `types.ts` | the event and context shapes, and the blocks a command answers with — `CommandOutput` and the `Pointer` brand a receipt's next command carries; imports nothing local |
+| Types | `types.ts` | the blocks a command answers with — `CommandOutput` and the `Pointer` brand a receipt's next command carries — and the CLI's own refusal, `CliError`. The record shapes themselves (`SelfEvent`, `EventRefs`, `ArtifactMeta`) are declared in `@superself/fold` and re-exported here, so every CLI module still asks one place what a record looks like; imports nothing local |
 | CLI surface | `args.ts`, `contract.ts`, `help.ts`, `guide.ts`, `human.ts` | how a command declares itself, reads its arguments, describes itself, explains itself, and confirms a human; `human.ts` and `guide.ts` import nothing local, `contract.ts` imports only `args.ts` and `types.ts` — a leaf declares what its handler answers with by naming a shape from the bottom layer, so nothing here reaches up into the render gate — and `help.ts` renders the contract rather than keeping a list of its own. `guide.ts` holds the concept pages `self help <topic>` prints — prose the contract cannot state, which is why it is data rather than a render |
 | Machine | `machine.ts`, `repo.ts`, `gitutil.ts`, `ids.ts`, `style.ts`, `redact.ts`, `ledger.ts` | the host: filesystem pointers, git, hashing, ids, terminal styling, credential redaction, the process ledger |
 | Foundation | `rootkeys.ts` | the pinned **root** public keys — the whole trust anchor, data only, imports nothing. It holds no plugin signing key: which keys may sign a release is a document the rail serves, so a leaked signing key is withdrawn by publishing a new document rather than by shipping a new CLI |
@@ -29,8 +33,8 @@ it. The layers, lowest first:
 | Rail | `rail.ts` | HTTP: TLS policy, the bearer header, refresh under the lock, retry classification, timeouts, error normalization, the response cap, the call key and the call journal. Imports `credentials.ts` and `types.ts` |
 | Trust | `trust.ts` | the plugin trust document: one unauthenticated fetch, root-signature verification, expiry and monotonicity, and the `0600` cache beside the credential file. Imports `rail.ts`, `credentials.ts`, `rootkeys.ts` and `types.ts` |
 | Storage | `paths.ts`, `logfile.ts`, `registry.ts` | where the store lives, how the log is read, and how the store's other state files are read (`readRegistry`, `readStoreConfig`, `readVerdicts`, `projectArchive`); `registry.ts` is the derived artifact registry — what the log says the store holds — and it sits here rather than in `artifact.ts` because the fold's reachability check has to look an artifact id up while `artifact.ts` reaches the pipeline to record `artifact add`, and the two meeting would be this tree's first import cycle |
-| Domain | `completion.ts`, `objectives.ts`, `dates.ts`, `entities.ts` | per-domain state shapes and their reducers |
-| Model | `model.ts` | the fold: log lines in, `ProjectModel` out |
+| Domain | `dates.ts` | what is left of the CLI's own domain layer: the two refusals a typed date argument is judged by. The per-domain state shapes and their reducers — `completion.ts`, `objectives.ts`, `entities.ts`, and the calendar arithmetic — are `@superself/fold` |
+| Model | `model.ts` | the CLI's end of the fold: the one place a store directory becomes the arguments `@superself/fold` takes — the log, the registry's description, the workspace zone, the session, the verdicts — and the store walks (`workspaceModels`, `projectsHolding`, `readableModels`) that fold a project at a time. The calculation is the package's; this module is what a machine hands it |
 | Render | `view.ts`, `views.ts`, `pretty.ts`, `output.ts`, `reachability.ts` | HTML and terminal rendering of a folded model; `output.ts` is the render gate — the one function that puts a command's blocks on stdout, and the `notice` a lower layer's message is printed through; the block shapes themselves are declared in `types.ts` |
 | Fold | `fold.ts`, `connect.ts` | writing canonical markdown, views, and the managed agent block |
 | Pipeline | `pipeline.ts`, `sanitize.ts` | appending events, then refolding and committing |
@@ -43,10 +47,13 @@ ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
 `pipeline.ts` would make rendering able to write state.
 
 - A new module joins an existing layer or declares a new one here first.
-- A domain module (`completion.ts`, `objectives.ts`, `dates.ts`,
-  `entities.ts`) imports `types.ts`, lower layers, and its own peers only —
+- A domain module imports `types.ts`, lower layers, and its own peers only —
   never `model.ts`, so a reducer can never depend on the fold that calls it.
-- `model.ts` imports domain modules, never commands.
+  The rule is now enforced by the package boundary for every reducer that moved
+  into `@superself/fold`: a reducer there cannot reach the CLI at all.
+- `model.ts` imports `@superself/fold` and the storage layer, never commands.
+- Nothing in `@superself/fold` imports the CLI, and nothing in it reads a
+  machine. See [The fold package](#the-fold-package).
 - **Nothing in the ledger, pipeline or fold layers may import `credentials.ts`,
   `rail.ts` or `trust.ts`.** This is the structural reason a token cannot reach
   the event log: there is no import path from a credential to anything that
@@ -57,6 +64,50 @@ ones: a command calls `pipeline.ts`, which imports `fold.ts`, which imports
   leaving it to review.
 - Enforcement: review. `tsc` catches a cycle only when it becomes a type error,
   so the import direction is a reading check on every pull request.
+
+## The fold package
+
+`@superself/fold` (`apps/fold`) is the calculation that reads an event log into
+project state. It exists because two programs have to answer the same question
+about the same log — this CLI on a person's machine, and the Workspace API
+server on the other side of a network — and a second copy of the fold is a
+second answer.
+
+Two layers, and the seam between them is the point of the package:
+
+| Layer | Modules | Owns |
+| --- | --- | --- |
+| Types | `types.ts`, `errors.ts`, `version.ts`, `text.ts`, `revisions.ts`, `dates.ts` | the record vocabulary every consumer reads a log through, the refusal the package raises, `FOLD_VERSION`, and the counting and shape tests the fold and its readers must not disagree about; each imports nothing but its peers |
+| Domain | `objectives.ts`, `entities.ts`, `completion.ts` | per-domain state shapes and their reducers |
+| Log-determined | `model.ts` | `foldEvents(events, project)` — the project state an event log alone decides, and nothing else |
+| Machine-local overlay | `overlay.ts` | `applyLocalOverlay(model, events, local)` — what one machine adds: the instant it is read at, the session holding the workspace, the verdicts it reached about the evidence by asking its own git, and the workspace time zone |
+
+The rules the package holds itself to, and why each one matters to a reader
+that is not this CLI:
+
+- **Every machine-local input is an argument.** The clock, the session and the
+  verdicts do not travel with the log, so a server folding the same events has
+  none of them. They enter through `LocalOverlay` and nowhere else.
+- **Nothing runs at module load, and no module reads a machine.** The CLI's
+  `style.ts` decides how a terminal renders when it is imported — it reads
+  `process.stdout.isTTY` at the top level — and a fold that imported it would
+  have carried a terminal's opinion into a server. So the package touches no
+  filesystem, no `process`, and no clock of its own.
+- **The package raises `FoldError`, never `CliError`.** An exit code and a JSON
+  envelope are facts about a command line. `runCli` turns a `FoldError` into a
+  `CliError` at the one error boundary.
+- **Nothing in the package imports the CLI.** There is no cycle to break
+  because there is no edge back.
+- Enforcement: `apps/fold/test/purity.test.mjs` asserts all four from the
+  syntax tree, and `apps/fold/test/determinism.test.mjs` asserts that one event
+  array folds to one state whatever the clock, the session and the verdicts say
+  (design O1 §5, V6).
+
+The CLI reads the package through `model.ts`, which is the one place a store
+directory becomes the arguments the package takes. `style.ts` and `paths.ts`
+re-export the pieces of the package their own callers already ask them for —
+`plural`, `countCharacters` and `Verdict` — so there is one declaration of each
+and one import line to change if the package moves.
 
 ## Subsystems
 
@@ -94,7 +145,7 @@ of them is a review finding, not a refactor note.
 | --- | --- | --- |
 | Event append | `pipeline.ts` `recordEvent` / `recordEvents` / `recordCalls` | the only writer of `log.jsonl`; every event verb goes through it. Each event names the project whose log it belongs to, and the append is grouped by that name — one write per log — so a placement that moves a record between projects still cannot leave half a state change in either (#181). It is also the one answer to "may this project be written into": an archived project is refused here rather than on each verb, so a verb added later cannot miss the rule (#283). While a reviewed set is being collected for one confirmation it accepts nothing at all (#312) — the person has not been asked yet — so a line of a plan that records rather than destroys is refused here instead of writing state beside the calls the confirmation is about. `recordCalls` is the same writer over several verbs' calls at once: everything the whole set owes — sanitization, the archive refusal, the branch stamp — is checked before any of it is appended, because a reviewed set approved by one answer has to land as one write or not at all |
 | Event sanitization | `sanitize.ts` `assertSanitized` | called once, from the event append above, before any byte reaches the log |
-| Completion refusal | `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
+| Completion refusal | `@superself/fold` `completion.ts` `completionRefusal` | the one answer to "may this unit be done"; `work done` and the model both read it |
 | Design citation | `design.ts` `judge`, reached through `requireCitations` and `dispatchRefusal` | the one answer to "does this design still stand on a decision that holds" (#316). `self report --design` reads it at submission, so a design citing a superseded, retracted or unreachable decision is never recorded; `self work start` reads it again at dispatch, because a decision can be superseded between the two and the approval said nothing about that. The override is the record, not a flag: supersede the decision, then cite the successor |
 | Process ledger | `ledger.ts` `recordProcess` / `judgeProcess`, `recordSession` / `judgeSession` | the one writer and the one reader of the machine-local pid ledger, for a work unit's process and for the agent session that claimed it; a pid never reaches a synced event, and the sentence a reader is given about liveness is minted here too (`claimNote`) rather than re-derived per surface |
 | Argument parse | `args.ts` `parseCommand` / `subcommand` | the guard a command declares its options and its positional count to, so an unknown flag *and* a stray argument are named instead of dropped (#28). The declaration lives once, in the command's `contract.ts` leaf, and the dispatcher hands it over. Every command surface goes through it — `node:util` `parseArgs` is called from `parseCommand` and nowhere else |
@@ -124,7 +175,7 @@ concern.
 
 | Namespace | Owner | Emitted from |
 | --- | --- | --- |
-| `entity.*` | the shared entity record (#197); `entities.ts` owns the fold | `state.ts`, `main.ts`, `goals.ts` — every preset verb writes this grammar since the cutover (#207) |
+| `entity.*` | the shared entity record (#197); `@superself/fold` `entities.ts` owns the fold | `state.ts`, `main.ts`, `goals.ts` — every preset verb writes this grammar since the cutover (#207) |
 | `project.archived`, `project.restored` | the project's own two-state lifecycle (#283); `paths.ts` owns the fold, beside the store's other per-project state, because the scope resolver and the model enumeration both read it | `archive.ts` |
 | `work.run-started`, `work.run-exited` | the process transitions | `main.ts` |
 | `report.*` | work reports, and the ruling a person makes on one — `report.added`, `report.confirmed` (#316) | `main.ts` |
@@ -192,7 +243,7 @@ that still inform surviving state (`run.*` into attempt history,
 old workspace must keep folding — `test/process.test.mjs` proves a log holding
 retired-namespace events still folds.
 
-- Enforcement: `model.ts` and the per-domain reducers dispatch on the type
+- Enforcement: the package's `model.ts` and its per-domain reducers dispatch on the type
   string, so an unowned namespace folds into nothing. Review catches it earlier.
 
 ### The record lifecycle
@@ -235,7 +286,7 @@ The older spellings a type shipped before the unification keep working — `work
 retire --successor <work-id>` and `state add --link supersedes:<id>` are the
 same transitions under other names — but a new type ships the shared flag, and
 a `--supersedes` target belonging to another type is refused by naming that
-type's add verb, from the one table in `entities.ts`.
+type's add verb, from the one table in `@superself/fold` `entities.ts`.
 
 `--why` is required on every transition. A supersession is excused from it only
 where the successor's text is the reason — a decision replaced by a decision, a
@@ -291,7 +342,7 @@ naming the same record — so `work done --report` comes back whole while
 
 Lifecycle refs also survive log order. A union merge orders lines by neither
 time nor dependency, so a retraction can sit above the decision it withdraws;
-`model.ts` `reconcileLifecycle` settles the linking transitions in a second
+`@superself/fold` `model.ts` `reconcileLifecycle` settles the linking transitions in a second
 pass over the same events. Only transitions that are no-ops against a record
 already in its terminal state run there — a revision, which accumulates, does
 not.
@@ -300,7 +351,8 @@ not.
   `--supersedes` and no withdrawal leaves records that can only be replaced,
   never taken back, which is the state #166 was opened over.
 - The statement types are declared once in code, as `STATEMENT_TYPES` in
-  `model.ts`. It is load-bearing rather than documentation: the per-record
+  `@superself/fold` `model.ts`, re-exported by the CLI's. It is load-bearing
+  rather than documentation: the per-record
   history `views.ts` renders reads a record's settled status from it, so a type
   missing an entry stops saying which of its records still hold.
 - Enforcement: `test/lifecycle.test.mjs` reads `STATEMENT_TYPES` out of the
@@ -313,7 +365,7 @@ not.
 
 Standing rules, not per-issue reminders:
 
-- `AttemptSummary` (`model.ts`) is the folded shape of what an old `run.*`
+- `AttemptSummary` (`@superself/fold` `model.ts`) is the folded shape of what an old `run.*`
   history left on a work unit. It is read-only history now; extend it only if
   a surviving surface needs more of that history, and never declare a parallel
   summary type.
@@ -378,7 +430,7 @@ Standing rules, not per-issue reminders:
   registered slug is that project, `workspace` is all of them. The retired
   `project` keyword is refused by name, never read as the omission. A record's
   events stay in the log that already holds them however often its scope moves,
-  so `entities.ts` `scopeTarget` and `rendersIn` are the one place a stored
+  so `@superself/fold` `entities.ts` `scopeTarget` and `rendersIn` are the one place a stored
   scope becomes an answer about a project, and the caps count per render target
   across every store. This is not the read scope above and never merges with it:
   `--project` asks which project a read answers for, `--scope` states where a

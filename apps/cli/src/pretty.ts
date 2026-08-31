@@ -13,6 +13,15 @@
 // in, which is why the same row's id is dimmed beside it (#264).
 
 import {
+    artifactPointer,
+    contributionsOf,
+    criteriaNote,
+    isCurrent,
+    openObjectives,
+    personOwned,
+    rendersIn
+} from "@superself/fold";
+import {
     AttentionGroup,
     ATTENTION_ORDER,
     AttentionRow,
@@ -30,12 +39,10 @@ import {
     ScopableVerb,
     WorkState
 } from "./model.js";
-import { artifactPointer, criteriaNote, isCurrent, personOwned, rendersIn } from "./entities.js";
 import { readInstance, runbookInstances, runbookRow } from "./runbooks.js";
 import { effectiveSkills, skillRow } from "./skills.js";
 import { claimNote } from "./ledger.js";
 import { sessionToken } from "./machine.js";
-import { contributionsOf, openObjectives } from "./objectives.js";
 import { bold, dim, displayWidth, dumbTerminal, firstLine, fitDisplay, green, oneLine, padDisplay, plural, red, termColumns, yellow } from "./style.js";
 import { CliError, Pointer } from "./types.js";
 

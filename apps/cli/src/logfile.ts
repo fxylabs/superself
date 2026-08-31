@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED } from "./entities.js";
+import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED } from "@superself/fold";
 import { projectStateDir } from "./paths.js";
 import { CliError, SelfEvent } from "./types.js";
 

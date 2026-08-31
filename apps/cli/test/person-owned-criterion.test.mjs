@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkContract } from "../dist/contract.js";
-import { criteriaNote, criteriaProgress, personOwned } from "../dist/entities.js";
+import { criteriaNote, criteriaProgress, personOwned } from "@superself/fold";
 import { COMMANDS } from "../dist/main.js";
 import { buildModel } from "../dist/model.js";
 import { renderWorkList } from "../dist/pretty.js";
