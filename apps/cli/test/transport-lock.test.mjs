@@ -9,7 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-    appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync
+    appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+    utimesSync, writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -257,6 +258,19 @@ test("rewrite refuses a torn read: a file that does not end at a line ending is 
     rmSync(store, { recursive: true, force: true });
 });
 
+test("rewrite refuses a torn read: the rewrite is never handed a text that stops inside a line", () =>
+{
+    const store = scratch();
+    const file = join(store, "queue.jsonl");
+    writeFileSync(file, "one\ntwo");
+    const nonce = acquireSyncLock(store);
+    let handed = null;
+    assert.equal(publishRewrite(store, file, nonce, (text) => { handed = text; return "kept\n"; }), false);
+    assert.equal(handed, null, "a rewrite handed half a record either throws — cancelling work its caller has "
+        + "already done — or answers with a replacement that is missing it");
+    rmSync(store, { recursive: true, force: true });
+});
+
 test("rewrite refuses: a file created while the rewrite ran is not written over", () =>
 {
     const store = scratch();
@@ -341,6 +355,33 @@ test("rewrite stolen: a holder whose lock was taken publishes nothing", () =>
     assert.equal(readFileSync(file, "utf8"), "the original\n");
     assert.equal(readdirSync(store).filter((name) => name.includes(".tmp-")).length, 0,
         "and the half-written replacement is cleaned up rather than left to be found");
+    rmSync(store, { recursive: true, force: true });
+});
+
+test("rewrite refuses: a publish that cannot write answers no rather than raising", () =>
+{
+    const store = scratch();
+    const file = join(store, "queue.jsonl");
+    writeFileSync(file, "the original\n");
+    const nonce = acquireSyncLock(store);
+    // A store this holder may no longer write in stands for every way a step of
+    // a publish can fail — a full disk, a temp file swept out from under it by
+    // the holder that took its lock. The caller is a catch-up in front of
+    // somebody's command, and every row of the pull table ends in that command
+    // running: a raised ENOSPC or ENOENT would leave a person's `self project
+    // list` dead on a stack trace it has nothing to do with.
+    let published;
+    try
+    {
+        published = publishRewrite(store, file, nonce, () => { chmodSync(store, 0o500); return "rewritten\n"; });
+    }
+    finally
+    {
+        chmodSync(store, 0o700);
+    }
+    assert.equal(published, false, "the same answer a stolen lock gets, and safe for the same reason");
+    assert.equal(readFileSync(file, "utf8"), "the original\n",
+        "nothing was renamed, so the original is whole and the next sync works the replacement out again");
     rmSync(store, { recursive: true, force: true });
 });
 

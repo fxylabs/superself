@@ -308,7 +308,10 @@ file with a cut-off last line in place, and the next command to read it would
 tell a person to repair by hand a file nothing had damaged; another append into
 the gap would fuse the cut line onto the next and make that true. So the publish
 refuses, the original stands, and the next sync reads a file that has settled.
-The recovered tail is carried the same way — whole lines and no part of one.
+The first read is checked before the rewrite is handed it and not only after,
+because a rewrite given half a record either throws — cancelling work its caller
+has already done — or answers with a replacement that is missing it. The
+recovered tail is carried the same way: whole lines and no part of one.
 
 **An empty read is not permission to write over whatever turned up.** With
 nothing to open, both reads are empty and the comparison between them proves
@@ -323,6 +326,8 @@ to prevent.
 | the tail is carried as whole lines, never half of one | `rewrite carries late tail` |
 | a file rewritten under the rewrite is left alone | `rewrite refuses` |
 | a read that stops inside a line is not published on, and the refusal is a pass and not a state | `rewrite refuses a torn read` |
+| and is never handed to the rewrite either | `rewrite refuses a torn read` |
+| a publish that cannot write answers no rather than raising | `rewrite refuses` |
 | a file created while the rewrite ran is not written over | `rewrite refuses` |
 | a holder whose lock was taken publishes nothing, and cleans up its temp | `rewrite stolen` |
 | a publish that refused carries no tail, and does not double one | `rewrite carries late tail` |

@@ -404,6 +404,14 @@ function publishCarrying(storeDir: string, file: string, nonce: string,
     rewrite: (text: string) => string, original: number | null): boolean
 {
     const before = bytesFrom(original, 0).toString("utf8");
+    if (endsMidLine(before))
+    {
+        // Before `rewrite` is handed it, and not only after: a text whose last
+        // line is cut in half is one a rewrite either throws on — cancelling
+        // work its caller has already done — or answers with a replacement
+        // that is missing that record.
+        return false;
+    }
     const replacement = rewrite(before);
     const carried = bytesFrom(original, 0);
     const after = carried.toString("utf8");
@@ -437,8 +445,15 @@ function publishCarrying(storeDir: string, file: string, nonce: string,
 function unpublishable(before: string, after: string, original: number | null, file: string): boolean
 {
     return !after.startsWith(before)
-        || (after !== "" && !after.endsWith("\n"))
+        || endsMidLine(after)
         || (original === null && existsSync(file));
+}
+
+// A read of a file every writer of which ends its lines. Empty is not mid-line:
+// it is a file nothing has written to yet.
+function endsMidLine(text: string): boolean
+{
+    return text !== "" && !text.endsWith("\n");
 }
 
 // The appends that landed after the second read and before the rename.
