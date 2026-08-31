@@ -74,10 +74,68 @@ export function buildModel(storeDir: string, slug: string, now: Date): ProjectMo
 // still read.
 export function workspaceModels(storeDir: string, first?: string): ProjectModel[]
 {
-    const slugs = activeProjects(storeDir).map((entry) => entry.slug);
-    const rest = slugs.filter((slug) => slug !== first);
     const now = new Date();
-    return (first === undefined ? rest : [first, ...rest]).map((slug) => buildModel(storeDir, slug, now));
+    const rest = foldedOthers(storeDir, activeProjects(storeDir).map((entry) => entry.slug)
+        .filter((slug) => slug !== first), now);
+    return first === undefined ? rest : [buildModel(storeDir, first, now), ...rest];
+}
+
+// The folds of the projects an answer is not about — every one that reads, and a
+// line on stderr naming each one that does not. Exported because the workspace
+// answer is folded in more than one shape: this module builds the list a command
+// reasons over, and `views.ts` builds the one it renders from, and both of them
+// are the same rule about somebody else's damaged store.
+export function foldedOthers(storeDir: string, slugs: string[], now: Date): ProjectModel[]
+{
+    return slugs.flatMap((slug) => isolated(storeDir, slug, now));
+}
+
+// One project's unreadable state is that project's problem. A workspace-wide
+// answer folds every registered log, and a server-backed store puts a second
+// file beside each one that a half-written line can damage — so without this, a
+// queue nobody has looked at in a month takes down `self status` for the four
+// projects that are fine.
+//
+// The project an answer is about never comes through here, and that is the whole
+// of the distinction. `self work` asks for the workspace so a record can render
+// where its scope points, but the project it is *about* is the one it named:
+// swallowing that one's failure would answer about a project out of a log that
+// would not read, which is the quiet wrong answer this file otherwise refuses to
+// give. It is folded directly by its caller, and its refusal is the loud one it
+// has always been.
+//
+// The line goes to stderr, and names the project so the sentence underneath it
+// can be acted on: a piped read still gets exactly the bytes it always got.
+function isolated(storeDir: string, slug: string, now: Date): ProjectModel[]
+{
+    try
+    {
+        return [buildModel(storeDir, slug, now)];
+    }
+    catch (error)
+    {
+        noteUnreadable(slug, (error as Error).message);
+        return [];
+    }
+}
+
+// Once per project per invocation. A single command folds the workspace several
+// times over — every surface that asks what another project holds asks again —
+// and the same sentence five times reads as five broken projects.
+const noted = new Set<string>();
+
+export function resetUnreadableNotices(): void
+{
+    noted.clear();
+}
+
+function noteUnreadable(slug: string, why: string): void
+{
+    if (!noted.has(slug))
+    {
+        noted.add(slug);
+        console.error(`project "${slug}" is left out of this answer — its state could not be read: ${why}`);
+    }
 }
 
 // Which registered projects hold the record a call names (#302). A confirm

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { readEvents } from "../dist/logfile.js";
 import { WORKSPACE_FILE } from "../dist/mode.js";
 import { PENDING_FILE, refuseOversizedAppend } from "../dist/pending.js";
-import { demoWorkspace, machine, must, selfIn } from "./harness.mjs";
+import { demoWorkspace, git, machine, must, selfIn } from "./harness.mjs";
 import { writeCredential } from "./pr7-lib.mjs";
 
 const ACCOUNT = "acct_01J8STOREMODE";
@@ -82,6 +82,25 @@ function appendLogLine(ws, event, slug = "demo")
 {
     const file = join(projectDir(ws, slug), "log.jsonl");
     writeFileSync(file, (existsSync(file) ? readFileSync(file, "utf8") : "") + JSON.stringify(event) + "\n");
+}
+
+// A second registered project in the same workspace, so a cell can say what one
+// project's damage does to the answer about another.
+async function secondProject(box, ws, slug)
+{
+    const dir = join(ws, slug);
+    mkdirSync(dir, { recursive: true });
+    git(box, dir, ["init", "-q", "-b", "main"]);
+    await must(box, dir, ["project", "init", "--name", slug, "--desc", "the other project"]);
+    return dir;
+}
+
+// Half a line, as a crash between two writes or a network read cut off mid
+// record leaves one. Appended, because what is under test is a file that holds
+// good records as well as this one.
+function damage(file)
+{
+    writeFileSync(file, (existsSync(file) ? readFileSync(file, "utf8") : "") + "{not json\n");
 }
 
 function storedEvent(id, type, payload)
@@ -149,6 +168,23 @@ test("M6: a store holding registry.jsonl and nothing new stays git-backed under 
     {
         assert.equal((await selfIn(box, demo, args)).code, 0, `self ${args.join(" ")} answers in a git-backed store`);
     }
+});
+
+// `self setup` is the verb a person runs when they are not sure what this
+// machine is pointed at, so describing a server-backed store in git's words —
+// "0 commits, no remote" — reported a healthy store as a broken one.
+test("M7: `self setup` names which kind of store this is", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const gitBacked = await must(box, demo, ["setup"]);
+    assert.match(gitBacked.out, /store .*\(git-backed, \d+ commits/);
+
+    const other = machine();
+    const server = await serverBackedWorkspace(other);
+    const serverBacked = await must(other, server.demo, ["setup"]);
+    assert.match(serverBacked.out, /store .*\(server-backed\)/);
+    assert.doesNotMatch(serverBacked.out, /commits/, "a store with no git history is not described by one");
 });
 
 /* ── A. the queue, and the log read back off it ────────────────────── */
@@ -246,6 +282,21 @@ test("A8: events written as one state change queue as one row", async () =>
     const rows = pendingRows(ws);
     assert.equal(rows.length, 2, "two appends, two rows — and never one append split across two");
     assert.ok(rows.every((row) => row.events.length >= 1));
+});
+
+// The duplicate lives in the queue alone, which is the case a set taken off the
+// server's copy cannot see: a machine that crashed between sending an append and
+// marking it sent resends it, and both rows are unsent as far as this file says.
+test("A9: one event id in two queued appends is read once", async () =>
+{
+    const box = machine();
+    const { ws, demo } = await serverBackedWorkspace(box);
+    await must(box, demo, ["goal", "add", "ship the thing"]);
+    const [row] = pendingRows(ws);
+    appendPendingLine(ws, { append_id: `${row.append_id}X`, events: row.events });
+
+    assert.equal(pendingRows(ws).length, 2, "the fixture is two appends carrying one event id");
+    assert.equal(readEvents(storeDir(ws), "demo").length, 1, "one act is one record however many rows carry it");
 });
 
 /* ── C. what a commit covers ───────────────────────────────────────── */
@@ -432,6 +483,22 @@ test("W5: the account is read once at the entry point, so a second command reads
     assert.deepEqual(written[1].actor, { account: ACCOUNT });
 });
 
+// The archive path builds its own narrowed context, because the event belongs to
+// the named project's log while the branch stamp belongs to this directory. It
+// has to drop the same two fields every other narrowing drops and no more: an
+// archive recorded from the wrong checkout still has somebody who recorded it.
+test("W6: archiving a project from another project's checkout still names the account", async () =>
+{
+    const box = machine();
+    const { ws, demo } = await serverBackedWorkspace(box, { account: ACCOUNT });
+    await secondProject(box, ws, "other");
+    await must(box, demo, ["project", "archive", "other", "--why", "not this quarter"]);
+
+    const written = pendingRows(ws, "other").flatMap((row) => row.events);
+    assert.ok(written.some((event) => event.type === "project.archived"), "the archive landed in the named project's queue");
+    assert.ok(written.every((event) => event.actor?.account === ACCOUNT));
+});
+
 /* ── the queue file itself ─────────────────────────────────────────── */
 
 test("Q1: a queue line that will not parse stops the read and names the file", async () =>
@@ -456,6 +523,113 @@ test("Q2: the store directory is made where it is missing, so the first append h
     await must(box, demo, ["goal", "add", "ship the thing"]);
 
     assert.ok(existsSync(join(projectDir(ws), PENDING_FILE)));
+});
+
+// A workspace-wide answer folds every project's log. One project's queue nobody
+// has looked at in a month must not be the reason the other four cannot be read
+// — and the line that says so has to be actionable, since there is no repair
+// command to point at.
+test("Q3: one project's damaged queue leaves the rest of the workspace readable", async () =>
+{
+    const box = machine();
+    const { ws, demo } = await serverBackedWorkspace(box);
+    await secondProject(box, ws, "other");
+    await must(box, demo, ["goal", "add", "ship the thing"]);
+    damage(join(projectDir(ws, "other"), PENDING_FILE));
+
+    const answered = await selfIn(box, demo, ["status"]);
+    assert.equal(answered.code, 0, "the project that reads is still answered for");
+    assert.match(answered.out, /project "other" is left out of this answer/);
+    assert.match(answered.out, /pending\.jsonl line 1 is not readable as JSON/);
+    assert.match(answered.out, /take the line out/, "the sentence says what to do, since no command repairs it");
+});
+
+// The other half of the same rule, and the one that keeps it honest. A command
+// about a project reads that project's own log, so damage there is the loud
+// refusal it has always been — answering out of a log that would not read is
+// exactly the quiet wrong answer the isolation above must not buy.
+test("Q4: the same damage under a command about that project itself is still refused", async () =>
+{
+    const box = machine();
+    const { ws, demo } = await serverBackedWorkspace(box);
+    await must(box, demo, ["goal", "add", "ship the thing"]);
+    damage(join(projectDir(ws), PENDING_FILE));
+
+    for (const args of [["work"], ["status"], ["log"], ["context"]])
+    {
+        const refused = await selfIn(box, demo, args);
+        assert.notEqual(refused.code, 0, `self ${args.join(" ")} must not answer out of a log it could not read`);
+        assert.match(refused.out, /pending\.jsonl line 2 is not readable as JSON/);
+    }
+});
+
+// The server's copy gets the queue file's treatment, and needs it more: this is
+// the file a pull appends to, so a read cut off mid-record leaves exactly this.
+test("Q5: a damaged line in the server's copy stops the read and names the file and line", async () =>
+{
+    const box = machine();
+    const { ws, demo } = await serverBackedWorkspace(box);
+    appendLogLine(ws, storedEvent("01SERVERONE", "goal.set", { text: "from the server" }));
+    damage(join(projectDir(ws), "log.jsonl"));
+
+    const refused = await selfIn(box, demo, ["log"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /log\.jsonl line 2 is not readable as JSON/);
+    assert.match(refused.out, /take the line out/);
+});
+
+/* ── E. the entry point ────────────────────────────────────────────── */
+
+// Who this machine is logged in as is read on the way into a command, which
+// means it is read on the way into `--version` unless it is placed after the
+// two questions that are about the binary rather than about a workspace.
+test("E1: `--version` answers on a machine whose pointer will not parse", async () =>
+{
+    const box = machine();
+    await demoWorkspace(box);
+    writeFileSync(join(box.env.XDG_CONFIG_HOME, "superself", "machine.json"), "{not json\n");
+
+    const answered = await selfIn(box, box.root, ["--version"]);
+    assert.equal(answered.code, 0, "a question about the binary needs no readable pointer");
+    assert.match(answered.out, /^\d+\.\d+\.\d+/);
+});
+
+test("E2: a command that needs the pointer refuses in a sentence rather than a stack", async () =>
+{
+    const box = machine();
+    await demoWorkspace(box);
+    writeFileSync(join(box.env.XDG_CONFIG_HOME, "superself", "machine.json"), "{not json\n");
+
+    const refused = await selfIn(box, box.root, ["status"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /machine\.json is not readable as JSON/);
+    assert.match(refused.out, /self workspace/, "the sentence names the way back");
+    assert.doesNotMatch(refused.out, /SyntaxError/);
+});
+
+// A caller who named a profile stated an intention about whose records these
+// are. Recording them under nobody without a word is the failure they would
+// find out about last.
+test("E3: a named profile that does not resolve says so, once", async () =>
+{
+    const box = machine();
+    const { demo } = await serverBackedWorkspace(box, { account: ACCOUNT });
+
+    const answered = await selfIn(box, demo, ["goal", "add", "ship the thing"], { SUPERSELF_PROFILE: "nobody" });
+    assert.equal(answered.code, 0, "a missing account is never a reason to refuse the work");
+    assert.equal(answered.out.match(/records no account/g).length, 1, "one line, not one per read");
+    assert.match(answered.out, /profile "nobody"/);
+});
+
+test("E4: a machine logged in to nothing says nothing about it", async () =>
+{
+    const box = machine();
+    const { demo } = await serverBackedWorkspace(box);
+
+    const answered = await selfIn(box, demo, ["goal", "add", "ship the thing"]);
+    assert.equal(answered.code, 0);
+    assert.doesNotMatch(answered.out, /records no account/,
+        "not being logged in is the ordinary state of a machine, not news");
 });
 
 /* ── N. a store with no git repository at all ──────────────────────── */

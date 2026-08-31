@@ -37,7 +37,7 @@ import { WrittenBy, writtenBy } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
-import { applicableConventions, buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, reviewRefusal, workScope, workspaceModels, WorkState } from "./model.js";
+import { applicableConventions, buildModel, DecisionState, ProjectModel, readableModels, ReportEntry, resetUnreadableNotices, reviewRefusal, workScope, workspaceModels, WorkState } from "./model.js";
 import {
     checkoutMatches,
     checkoutProject,
@@ -139,13 +139,25 @@ async function main(argv: string[]): Promise<void>
     {
         return;
     }
+    // After those two and not before them: this reads the machine's pointer off
+    // disk, and `--version` is a question about the binary that a machine whose
+    // config will not parse is still entitled to an answer to. Inside `main`,
+    // so it is inside the catch — an unreadable pointer owes its caller the
+    // sentence every other unreadable file gets rather than a stack.
+    noteAccount();
     // Host flags are consumed once, here, for every command. `self app install
     // email --no-journal` is as reasonable a request as the same flag on a
     // mini-app verb, and neither leaf should have to declare an option about
     // whether this machine keeps a record of its own calls.
     suppressJournal(argv.includes("--no-journal"));
     stateIntent(hostIntent(argv));
-    const args = hostFlagsRemoved(argv);
+    await dispatch(hostFlagsRemoved(argv));
+}
+
+// Who owns the verb, most specific first: a built-in, then an installed
+// mini-app's, then an alias somebody wrote for one of those.
+async function dispatch(args: string[]): Promise<void>
+{
     const resolved = resolveCommand(COMMANDS, args);
     if (resolved !== null)
     {
@@ -4075,6 +4087,7 @@ function resetInvocation(): void
     dropCollected();
     resetVerifierCalls();
     resetCredentialWarnings();
+    resetUnreadableNotices();
     selectJsonMode(false);
     suppressJournal(false);
     useAccount(undefined);
@@ -4103,10 +4116,6 @@ export async function runCli(argv: string[]): Promise<void>
     process.exitCode = 0;
     try
     {
-        // Inside the catch, not in front of it: this reads a file off the
-        // machine, and a machine whose config will not parse owes its caller
-        // the sentence every other unreadable file gets rather than a stack.
-        noteAccount();
         await main(argv);
     }
     catch (error)

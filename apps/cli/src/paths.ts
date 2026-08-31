@@ -306,10 +306,13 @@ export function readScope(cwd: string, choice: ScopeChoice): CliContext
 // The same context with the directory's own project taken off it: which store
 // this is and who this machine is logged in as are facts about the machine and
 // travel, and the project is a fact about a directory and does not. Written
-// once because all three callers drop the same two fields, and one of them
-// dropping the account by hand would silently take the author off every record
-// a `--project` write makes.
-function workspaceOnly(ctx: CliContext): CliContext
+// once because every caller drops the same two fields, and one of them dropping
+// the account by hand would silently take the author off every record a write
+// naming another project makes.
+//
+// Exported for the one caller outside this module — `archive.ts`, which names a
+// project rather than running in it and had built the narrowed context by hand.
+export function workspaceOnly(ctx: CliContext): CliContext
 {
     return { workspaceDir: ctx.workspaceDir, storeDir: ctx.storeDir, account: ctx.account };
 }

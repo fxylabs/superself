@@ -17,13 +17,31 @@
 // apart:
 //
 //   { append_id, events }                 one append, exactly as it was made
-//   { sent: append_id }                   the server has it
+//   { sent: append_id }                   the server has given it back
 //   { blocked: append_id, code, at }      it will not be retried
 //
 // This module writes the first shape and reads all three. What writes the other
 // two is the transport that sends an append and records what came back — and a
 // reader has to understand a mark before anything writes one, or the first mark
 // written would be a row the CLI reads as an append.
+//
+// `sent` is the pull's mark and never the push's. A push answering 200 says the
+// server accepted the append, which is not yet the same fact: the mark takes
+// those events out of every read below, and until the server's copy holds them
+// the queue is the only place they exist on this machine. So the rule is the
+// narrow one — the mark goes down only after a pull has seen every one of that
+// append's event ids arrive in `log.jsonl`. Written off the push, a 200 whose
+// records the server then lost would leave a record no read can reach and no
+// command can resend.
+//
+// A meaning added later is a new field on one of these three shapes, never a
+// fourth shape. The reader tells rows apart by the keys it knows, so a row that
+// is neither an append nor a mark is silently nothing to it — which is the
+// right answer for a CLI meeting a newer store, and the wrong one for a fourth
+// shape that meant "this append is settled": that append would read on an older
+// machine as one still waiting to go, and it would be folded twice. A new field
+// on `{sent}` is ignored by that same older reader, which still gets the
+// settlement itself right.
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "./ids.js";
@@ -42,6 +60,9 @@ interface PendingAppend
     events: SelfEvent[];
 }
 
+// The append is in `log.jsonl` beside this file — the server took it and a pull
+// has read it back. Not "the push succeeded": the two are one fact only once
+// the server's copy holds it, and the reader below trusts this mark that far.
 interface PendingSent
 {
     sent: string;
@@ -182,6 +203,7 @@ function parseRow(line: string, file: string, number: number): PendingRow
     catch
     {
         throw new CliError(`${file} line ${number} is not readable as JSON — it holds records this machine has `
-            + "not sent yet, so it is repaired rather than discarded");
+            + "not sent yet, so it is repaired by hand rather than discarded: open the file, read that one line, "
+            + "and put back the record it was meant to be or take the line out");
     }
 }

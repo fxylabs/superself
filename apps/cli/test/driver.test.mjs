@@ -12,7 +12,7 @@
 // the in-process driver whichever driver the rest of the suite is running.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { drive, git, machine, workIdIn } from "./harness.mjs";
 import { holdAppends } from "../dist/pipeline.js";
@@ -129,10 +129,16 @@ test("cell 7: a --json failure puts its envelope on stdout, not on stderr", asyn
     assert.equal(errorIn(refused.out).code, "login_required");
 });
 
+// The fixture is the project marker rather than a damaged `log.jsonl`, which is
+// what it used to be. A log line that will not parse now has a sentence of its
+// own — it names the file and the line, because the log is a file a pull appends
+// to and a truncated line is an ordinary thing to meet. What this cell is about
+// is the driver's last resort, so it needs an error nothing has words for, and
+// an unparseable `.self` is one.
 test("cell 8: an error the CLI has no sentence for is exit 1 with the stack, as node would have printed it", async () =>
 {
-    const { box, ws, demo } = await scratch();
-    appendFileSync(join(ws, ".superself", "projects", "demo", "log.jsonl"), "not json\n");
+    const { box, demo } = await scratch();
+    writeFileSync(join(demo, ".self"), "{not json\n");
     const crashed = await drive(box, demo, ["log"]);
     assert.equal(crashed.code, 1);
     assert.match(crashed.out, /SyntaxError/);
