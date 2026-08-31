@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { approvedIn, must, mustPerson, workIdIn } from "./harness.mjs";
 import {
     ACCOUNT, appends, blocks, connectedMachine, detachedEnv, event, eventually, logRows,
-    projectDir, queueAppend, registryRows, sentMarks, syncEnv, unsent
+    projectDir, queueAppend, registryRows, sentMarks, storeDir, syncEnv, unsent
 } from "./transport-lib.mjs";
 
 const READ = ["project", "list"];
@@ -345,6 +345,28 @@ test("registry dropped: a project deleted elsewhere with nothing queued leaves t
     server.state.projects.delete("spare");
     await must(box, demo, READ, syncEnv());
     assert.ok(!registryRows(ws).some((entry) => entry.slug === "spare"));
+});
+
+test("registry deduped: two rows for one project are folded back to one", async (t) =>
+{
+    const { box, ws, demo, server } = await connected(t);
+    await must(box, demo, READ, syncEnv());
+    // The state a registration made outside the sync lock can leave behind: the
+    // command appended its own row while a reconciliation was publishing a list
+    // that already held one, and the rewrite carried the append onto the end.
+    // Neither writer was wrong and nothing was lost — but every walk over the
+    // registry now visits the project twice, says its notices twice and folds it
+    // twice, and nothing else would ever take the second row out.
+    const file = join(storeDir(ws), "registry.jsonl");
+    writeFileSync(file, registryRows(ws).map((row) => JSON.stringify(row) + "\n").join("")
+        + JSON.stringify({ slug: "demo", added: "2026-08-31T00:00:00.000Z" }) + "\n");
+    assert.equal(registryRows(ws).filter((row) => row.slug === "demo").length, 2);
+
+    await must(box, demo, READ, syncEnv());
+    assert.equal(registryRows(ws).filter((row) => row.slug === "demo").length, 1,
+        "the next reconciliation is what tidies it, so no command has to be the one that never happens");
+    assert.equal(registryRows(ws).find((row) => row.slug === "demo").id, server.projectId("demo"),
+        "and the row that stays is the one every lookup was already reading");
 });
 
 /* ── the process the command leaves behind ─────────────────────────── */

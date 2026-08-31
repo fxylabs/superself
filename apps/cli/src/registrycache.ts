@@ -62,10 +62,29 @@ export function reconcileRegistry(storeDir: string, projects: ServerProject[], k
     const byslug = new Map(projects.map((project) => [project.slug, project]));
     const held = new Set(keep);
     rewriteRegistry(storeDir, nonce, (rows) => [
-        ...rows.filter((row) => byslug.has(row.slug) || row.id === undefined || held.has(row.slug))
+        ...oncePerSlug(rows).filter((row) => byslug.has(row.slug) || row.id === undefined || held.has(row.slug))
             .map((row) => merged(row, byslug.get(row.slug))),
         ...projects.filter((project) => !rows.some((row) => row.slug === project.slug)).map(added)
     ]);
+}
+
+// One row per slug, the first winning — which is the row `projectIdOf` above
+// reads, so this folds the list down to the answer every reader was already
+// giving.
+//
+// Two rows for one slug is a state this file can arrive at without anybody
+// being wrong. Registering a project is a foreground append, deliberately
+// outside the sync lock; a reconciliation that adds the same project the
+// workspace has just started listing is a rewrite that carries that append onto
+// its end. Neither can see the other. Nothing is lost by the duplicate — every
+// lookup is by slug or id — but every walk over the registry visits the project
+// twice, which is a notice said twice and a fold run twice, and nothing else
+// would ever remove it. So the next reconciliation removes it, here.
+function oncePerSlug(rows: RegistryEntry[]): RegistryEntry[]
+{
+    const first = new Map<string, RegistryEntry>();
+    rows.forEach((row) => first.set(row.slug, first.get(row.slug) ?? row));
+    return [...first.values()];
 }
 
 function merged(row: RegistryEntry, project: ServerProject | undefined): RegistryEntry
