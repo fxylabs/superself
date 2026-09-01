@@ -37,6 +37,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "tsc && node --test test/*.test.mjs",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
