@@ -17,3 +17,10 @@ supportedArchitectures:
 
 onlyBuiltDependencies:
   - esbuild
+
+# The CLI depends on `@superself/fold` by its real version rather than through
+# the workspace protocol, so the tarball npm publishes is installable as it
+# stands. This setting is what keeps the development loop unchanged: a
+# dependency a workspace package already satisfies is linked from `apps/`
+# rather than fetched.
+linkWorkspacePackages: true

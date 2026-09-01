@@ -8,8 +8,73 @@ permissions:
   contents: read
   id-token: write # npm Trusted Publishing (OIDC) — no token secret
 
+# Two `v*` tags pushed together, or a tag re-pushed while its run is still in
+# flight, would otherwise race the same `npm publish` and one of them would lose
+# to an opaque 409. Queued rather than cancelled: a run that has already
+# published the fold must be allowed to finish publishing the CLI.
+#
+# The queue holds one waiting run, not a line of them: a group keeps at most one
+# pending run, and a third `v*` tag pushed while one is in flight and one is
+# waiting cancels the waiting one even here, where nothing is cancelled in
+# progress. That tag then publishes nothing and says so only as a cancelled run.
+# One tag per release is the rule (docs/maintainers/releases.md) and this is
+# what breaking it looks like.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+# One tag publishes two packages: `@superself/fold`, which the CLI folds an
+# event log with, and `superself`, which depends on it by an exact version. The
+# order is the whole design of this file.
+#
+#   gate  ->  publish-fold  ->  publish-cli
+#
+# `gate` collects every reason to refuse before the first upload, because a
+# published version can never be replaced. The order of the other two is what
+# makes a half-run survivable: a fold version nobody depends on yet is inert,
+# while a CLI whose dependency is not on the registry is installable by nobody.
+# A fold that publishes and a CLI that then fails leaves the registry exactly as
+# usable as it was; the reverse would not, so the reverse cannot happen.
 jobs:
-  publish:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The gate asks whether this tag's commit is on `main`, which is a
+          # question about history a shallow clone does not have.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: The release branch has to be here to be compared against
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      # The tag against the CLI's version, the CLI's pin against the fold
+      # version this run publishes, and both against what the registry already
+      # holds. Every refusal is a sentence, and they are all collected before
+      # anything uploads.
+      - name: The tag, the versions and the pin must agree before anything publishes
+        run: node scripts/release-gate.mjs --tag "$GITHUB_REF_NAME" --branch origin/main
+      # The CLI's `prepublishOnly` runs this too, but that is inside
+      # `publish-cli` — after the fold is already on the registry and can never
+      # be taken back. A `rootkeys.ts` left in the rotation state is the one
+      # refusal that would fail the run halfway, so it is collected here with
+      # every other reason to refuse. The hook stays where it is as the last
+      # line in front of the upload itself.
+      - name: A CLI pinning a development root key must not reach a publish job
+        run: pnpm --filter superself release-keys
+      # The pair, packed and installed from a registry — the check that the
+      # pin resolves, the tarballs carry their dist, and the installed binary
+      # runs. It is the last thing between a broken pairing and the registry.
+      - name: The packed pair must install from a registry and run
+        run: node scripts/pack-install-smoke.mjs
+
+  publish-fold:
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,28 +87,31 @@ jobs:
       # node 22 bundles npm 10; OIDC publishing needs npm 11.5+
       - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
-      - name: The tag must name the version being published
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG="$(node -p "require('./apps/cli/package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "tag v$TAG does not match package version $PKG" >&2
-            exit 1
-          fi
-      # The CLI depends on `@superself/fold` through the workspace protocol, and
-      # `npm publish` uploads that spec verbatim — a published CLI carrying
-      # `workspace:*` cannot be installed by anyone. Publishing the package and
-      # pinning the CLI to a real version is a follow-up change; until it lands,
-      # a release stops here rather than shipping a broken tarball. The value is
-      # captured before grep so a node failure fails the step instead of
-      # slipping through as "nothing matched".
+      # The guard, kept as the last line in front of `npm publish` rather than
+      # trusted to the gate job alone. `npm publish` uploads a `workspace:` spec
+      # verbatim, and a published package carrying one cannot be installed by
+      # anyone — so the check stands where the mistake would be made.
       - name: No unresolved workspace dependency may be published
-        run: |
-          DEPS="$(node -p "const p = require('./apps/cli/package.json'); JSON.stringify({ ...p.dependencies, ...p.optionalDependencies, ...p.peerDependencies })")"
-          if echo "$DEPS" | grep -q 'workspace:'; then
-            echo "apps/cli still depends on a workspace package — publish @superself/fold first and pin the CLI to its version" >&2
-            exit 1
-          fi
+        run: node scripts/no-workspace-protocol.mjs apps/fold
       # prepublishOnly rebuilds before anything uploads; the test tier ran in PR CI
+      - run: npm publish
+        working-directory: apps/fold
+
+  publish-cli:
+    needs: publish-fold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@11
+      - run: pnpm install --frozen-lockfile
+      - name: No unresolved workspace dependency may be published
+        run: node scripts/no-workspace-protocol.mjs apps/cli
+      # prepublishOnly runs the pinned-trust-anchor gate and rebuilds
       - run: npm publish
         working-directory: apps/cli

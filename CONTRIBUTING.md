@@ -280,11 +280,17 @@ pnpm build
 pnpm typecheck
 pnpm test
 pnpm structure
+pnpm smoke
 ```
+
+`pnpm smoke` packs `apps/cli` and `apps/fold` and installs the CLI tarball from
+a throwaway registry, which is the only check that sees what a published pair
+does (#430). It needs `pnpm build` to have run and nothing else — no network,
+no npm account.
 
 `pnpm test` is the full tier and runs once and alone per machine (see
 [Tests](#tests)); when another suite is already running on your machine, run
-the other three plus the test files you touched, and say in the pull request
+the other four plus the test files you touched, and say in the pull request
 body that the full suite is left to CI.
 
 `pnpm structure` needs history to diff against, so it refuses on a shallow
@@ -317,10 +323,11 @@ much as to hand-written work:
   the commit author.
 - The pull request title names the issue's outcome, and the body contains
   `Closes #N` for the single accepted issue.
-- Run `pnpm build`, `pnpm typecheck`, `pnpm test` and `pnpm structure` locally
-  — CI runs the same four on every pull request. The full `pnpm test` runs
+- Run `pnpm build`, `pnpm typecheck`, `pnpm test`, `pnpm structure` and
+  `pnpm smoke` locally — CI runs the same five on every pull request. The full
+  `pnpm test` runs
   once and alone per machine; a session that is not alone runs the other
-  three plus the suites it touched and says in the body that the full suite is
+  four plus the suites it touched and says in the body that the full suite is
   left to CI.
 - Do not use `gh pr edit`; it rewrites fields you did not intend to touch. Set
   the title and body at `gh pr create` time, or PATCH the specific field through
