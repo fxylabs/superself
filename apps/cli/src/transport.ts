@@ -47,6 +47,19 @@ export interface WorkspaceSession
     token: string;
 }
 
+// All one request needs: where the server is, and the token to send.
+//
+// Every route but one is addressed inside a workspace, and a workspace session
+// answers this by holding more than it. The exception is the list of workspaces
+// the calling account is a member of (C1 v0.9.6), which the connect flow asks
+// before there is a store to read a workspace out of — so the address it sends
+// is the account's own.
+interface Addressed
+{
+    base: string;
+    token: string;
+}
+
 // Read once per push or pull run rather than per request. A background pusher
 // never refreshes — the foreground holds the credential lock for that, and two
 // processes refreshing one grant is what the credential module's whole marker
@@ -78,7 +91,7 @@ interface ApiSpec
     body?: JsonValue;
 }
 
-async function apiCall(session: WorkspaceSession, spec: ApiSpec): Promise<ApiAnswer>
+async function apiCall(session: Addressed, spec: ApiSpec): Promise<ApiAnswer>
 {
     const url = new URL(`${session.base}${spec.path}`);
     Object.entries(spec.query ?? {}).forEach(([key, value]) => url.searchParams.set(key, value));
@@ -94,7 +107,7 @@ async function apiCall(session: WorkspaceSession, spec: ApiSpec): Promise<ApiAns
     }
 }
 
-function request(session: WorkspaceSession, spec: ApiSpec): RequestInit
+function request(session: Addressed, spec: ApiSpec): RequestInit
 {
     return {
         method: spec.method,
@@ -194,6 +207,23 @@ export function pullAfter(session: WorkspaceSession, slug: string, after: number
 export function listProjects(session: WorkspaceSession): Promise<ApiAnswer>
 {
     return apiCall(session, { method: "GET", path: projectsPath(session) });
+}
+
+// The workspaces this account is an active member of, closed ones included and
+// marked by status (C1 v0.9.6). The only route outside the workspace segment,
+// and the reason it exists: an account may belong to several workspaces, so
+// `self init --cloud` attaches a machine by choosing from a list rather than by
+// knowing an id by heart.
+//
+// It takes no session and opens none, because there is no store yet to open one
+// from. `openSession` reads a store's marker — a store says which server holds
+// its records; this reads the profile, because the account is all there is.
+export function listWorkspaces(): Promise<ApiAnswer>
+{
+    assertTlsPolicy();
+    const profile = readProfile(resolveProfileName());
+    return apiCall({ base: assertApiBase(profile.api_base), token: profile.access_token },
+        { method: "GET", path: "/api/workspaces" });
 }
 
 export function createProject(session: WorkspaceSession, slug: string, description?: string): Promise<ApiAnswer>

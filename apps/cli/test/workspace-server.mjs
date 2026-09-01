@@ -38,6 +38,10 @@ export const MAX_PAYLOAD_BYTES = 256 * 1024;
 // the CLI caches; `log` is keyed by slug and holds stored events in the order
 // they were accepted, which is what makes `server_seq` a position rather than a
 // timestamp.
+// `memberships` is the calling account's, which is a fact about the account
+// rather than about this workspace's records — it is here because it is state a
+// case adjusts, and the default is the one workspace this server serves, which
+// is what a case that says nothing about memberships means.
 function workspace(options)
 {
     const projects = new Map();
@@ -48,7 +52,13 @@ function workspace(options)
         description: project.description,
         workspace: options.wsId
     }));
-    return { projects, log, nextId: (options.projects ?? []).length };
+    return {
+        projects,
+        log,
+        nextId: (options.projects ?? []).length,
+        memberships: options.workspaces
+            ?? [{ id: options.wsId, name: options.wsName ?? "the test workspace", status: "active" }]
+    };
 }
 
 function define(projects, log, project)
@@ -177,6 +187,15 @@ function hidden()
 
 function resolve(call, ctx)
 {
+    // The one route outside the workspace segment (C1 v0.9.6, openapi 0.9.4):
+    // the calling account's active memberships, closed workspaces included and
+    // marked by status so a client can show them and refuse them. A Runtime
+    // token gets the concealing 404 here — this mock holds no token kinds, so
+    // that half of the rule is the CLI's own and is not staged.
+    if (call.path === "/api/workspaces")
+    {
+        return call.method === "GET" ? { status: 200, body: ctx.state.memberships } : null;
+    }
     const projects = `/api/workspaces/${ctx.wsId}/projects`;
     if (call.path === projects)
     {

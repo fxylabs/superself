@@ -42,11 +42,19 @@ export function machineWorkspace(): string | null
     return readMachineConfig().workspace ?? null;
 }
 
-export function setMachineWorkspace(workspaceDir: string): void
+// Where this machine's workspace is, or — with `null` — that it has none.
+//
+// The second half is what a flow that has to undo its own pointer needs: a
+// machine that pointed nowhere before an aborted `self init --cloud` has to
+// point nowhere after it, and a pointer left naming a directory the flow then
+// removed fails every later command somewhere further from the mistake.
+export function setMachineWorkspace(workspaceDir: string | null): void
 {
     const file = machineConfigPath();
+    const { workspace, ...rest } = readMachineConfig();
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify({ ...readMachineConfig(), workspace: workspaceDir }, null, 2) + "\n");
+    const next = workspaceDir === null ? rest : { ...rest, workspace: workspaceDir };
+    writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
 }
 
 // The session a run belongs to, as an opaque token stamped on every event.

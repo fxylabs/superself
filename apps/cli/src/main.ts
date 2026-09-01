@@ -1,6 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
-import { createInterface } from "node:readline/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
     completionRefusal,
     CRITERION_BLOCKED,
@@ -1671,6 +1670,14 @@ async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<C
     {
         return alreadyThere(storeDir, named);
     }
+    // Here rather than where the code is used. The cloud branch reads it after
+    // an inline device login, so a typo in it used to cost a browser, a page
+    // and an approval before the refusal — while the git branch has always
+    // refused it first. Both branches now answer a bad code the same way.
+    if (values.lang !== undefined)
+    {
+        validLang(String(values.lang));
+    }
     return withAgents(await storeOf(named ?? askStoreMode(), cwd, storeDir, values), values);
 }
 
@@ -1683,7 +1690,7 @@ function storeOf(mode: StoreMode, cwd: string, storeDir: string,
 {
     if (mode === "cloud")
     {
-        return connectCloud(cwd, storeDir, values.workspace, async () => validLang(values.lang ?? await askLang()));
+        return connectCloud(cwd, storeDir, values.workspace, () => validLang(values.lang ?? askLang()));
     }
     if (values.workspace !== undefined)
     {
@@ -1697,9 +1704,9 @@ function storeOf(mode: StoreMode, cwd: string, storeDir: string,
 // rather than about where the records go: the agents here are the ones that
 // will be offering to register projects, whichever workspace those projects
 // end up in.
-async function withAgents(made: CommandOutput, values: CommandInput<typeof INIT_OPTIONS>["values"]): Promise<CommandOutput>
+function withAgents(made: CommandOutput, values: CommandInput<typeof INIT_OPTIONS>["values"]): CommandOutput
 {
-    const agents = values.agents === true || await askAgents();
+    const agents = values.agents === true || askAgents();
     return agents ? [...made, ...connectMachineAgents()] : made;
 }
 
@@ -1757,7 +1764,7 @@ function readStoreMode(answer: string): StoreMode
 async function gitInit(cwd: string, storeDir: string,
     values: CommandInput<typeof INIT_OPTIONS>["values"]): Promise<CommandOutput>
 {
-    const lang = validLang(values.lang ?? await askLang());
+    const lang = validLang(values.lang ?? askLang());
     ensureDir(storeDir);
     writeFileSync(join(storeDir, "registry.jsonl"), "");
     writeFileSync(join(storeDir, "config.json"), JSON.stringify({ lang }) + "\n");
@@ -1788,8 +1795,8 @@ function alreadyThere(storeDir: string, named: StoreMode | undefined): CommandOu
     }
     if (serverBacked(storeDir))
     {
-        throw new CliError(`${storeDir} is a server-backed workspace store — one store is one or the other, and this `
-            + "machine is attached to a workspace already");
+        throw new CliError(`${storeDir} is a server-backed workspace store — one store is one or the other, and ${
+            attachedTo(storeDir)}`);
     }
     if (named === "cloud")
     {
@@ -1799,16 +1806,40 @@ function alreadyThere(storeDir: string, named: StoreMode | undefined): CommandOu
     return [{ kind: "receipt", text: `workspace already initialized at ${storeDir}` }];
 }
 
-// Asked once, at the only moment a person is certain to be present.
-async function askAgents(): Promise<boolean>
+// Whether this machine is actually using the store that is there.
+//
+// The marker says the store keeps its records on a server; it says nothing
+// about whether this machine ever finished attaching to it. A flow killed
+// between the marker and the pointer leaves exactly that — a store whose
+// records are a server's and a machine pointing nowhere — and claiming
+// "attached already" over it left no `self init` able to move and named
+// neither remedy.
+function attachedTo(storeDir: string): string
 {
-    if (!process.stdin.isTTY || !process.stdout.isTTY)
+    if (machineWorkspace() === dirname(storeDir))
+    {
+        return "this machine is attached to a workspace already";
+    }
+    return "this machine is not using it — run `self workspace " + dirname(storeDir) + "` to point this machine at "
+        + "it, or remove that directory to start over";
+}
+
+// Asked once, at the only moment a person is certain to be present — and
+// `atKeyboard` is what "certain" means here rather than a pair of terminals.
+//
+// A runner stamps an attempt marker on every child it starts, and such a
+// process can have both ends of a terminal: reading `isTTY` alone put this
+// question to an agent that will never answer it, after the store had already
+// been written. `false` is the answer a process with nobody behind it always
+// gave down a pipe, and it is the answer it gives now however many terminals
+// it has.
+function askAgents(): boolean
+{
+    if (!atKeyboard())
     {
         return false;
     }
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question("tell the agents on this machine about self, so they offer to register projects? [Y/n]: ");
-    rl.close();
+    const answer = askLine("tell the agents on this machine about self, so they offer to register projects? [Y/n]: ");
     return !answer.trim().toLowerCase().startsWith("n");
 }
 
@@ -1846,16 +1877,18 @@ function cmdWorkspace(path: string | undefined): CommandOutput
     return [{ kind: "receipt", text: `this machine now uses the workspace at ${dir}` }];
 }
 
-async function askLang(): Promise<string>
+// The same decision as every other question this command asks, for the same
+// reason: an agent's process is not a person however many terminals it has,
+// and one that is asked this hangs on it forever. `en` is what a piped caller
+// has always been given and is what a marked process is given now.
+function askLang(): string
 {
-    if (!process.stdin.isTTY || !process.stdout.isTTY)
+    if (!atKeyboard())
     {
         return "en";
     }
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question("language for the HTML views (en, ko, …) [en]: ");
-    rl.close();
-    return answer.trim() === "" ? "en" : answer.trim();
+    const answer = askLine("language for the HTML views (en, ko, …) [en]: ").trim();
+    return answer === "" ? "en" : answer;
 }
 
 function validLang(code: string): string
@@ -1995,6 +2028,12 @@ function refuseRegisteredHere(storeDir: string, projectDir: string): void
 // holder is named where a directory is known, and where none is — a registry
 // row whose marker was never written — completing it is the link, so both
 // remedies are handed over in the one pass.
+//
+// The second is a completion and not a dead end, which is why this stays a
+// refusal: `project link` records the link, writes the marker, guarantees the
+// state directory and folds, exactly as a registration does after its row
+// (#251 T1.7, T3.1). What must not happen is `project init` writing a second
+// row for a slug that has one.
 function refuseTakenSlug(storeDir: string, projectDir: string, slug: string): void
 {
     if (!readRegistry(storeDir).some((entry) => entry.slug === slug))

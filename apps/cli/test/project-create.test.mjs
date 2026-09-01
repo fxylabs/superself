@@ -176,3 +176,73 @@ test("project J9 short-scopes: a credential without the workspace scopes is refu
     assert.equal(server.calls.length, seen, "the workspace was asked about a credential the local check had answered");
     assert.deepEqual(registered(ws), ["demo"]);
 });
+
+/* ── J10–J11: the window around a creation that answered 201 ───────── */
+
+test("project J10 adopt-own: a 409 over a project this account can reach finishes the registration it started", async (t) =>
+{
+    // What a crash in the window leaves: the workspace holds the project, and
+    // this machine holds no row for it. The retry's POST is answered 409 —
+    // indistinguishable on the wire from a slug somebody else took — and the
+    // list is what tells the two apart.
+    //
+    // The catch-up's own list request is refused once, which is what leaves
+    // the registry still not knowing: with it answered, the reconciliation
+    // would add the row first and the refusal would already name the link.
+    let listed = 0;
+    const { box, ws, server } = await connected(t, {
+        projects: [{ slug: "demo" }, { slug: "atlas" }],
+        answer: (call) => call.method === "GET" && call.path.endsWith("/projects") && (listed += 1) === 1
+            ? { status: 503, body: { code: "not_ready", message: "the workspace is starting" } }
+            : undefined
+    });
+    const atlas = room(box, ws, "atlas");
+    const made = await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.match(made.out, /project "atlas" registered/);
+    const row = registryRows(ws).find((entry) => entry.slug === "atlas");
+    assert.equal(row?.id, server.projectId("atlas"), "the adopted row does not carry the workspace's project id");
+    assert.ok(server.calls.some((call) => call.method === "POST" && call.path.endsWith("/projects")),
+        "the retry did not ask the workspace to create the project");
+});
+
+test("project J10 adopt-nothing: a 409 over a project this account cannot reach is still the access refusal", async (t) =>
+{
+    // The list is the whole difference. A slug that is taken and not on it is
+    // a project inside this workspace that this account may not see, and the
+    // sentence it was always given is the right one.
+    const { box, ws } = await connected(t, {
+        answer: creations({ status: 409, body: { code: "slug_taken", message: 'this workspace already has a project "atlas"' } })
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /ask an owner/);
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+test("project J11 sync-off: a machine told not to talk to its workspace does not create a project behind its back", async (t) =>
+{
+    const { box, ws, server } = await connected(t);
+    const atlas = room(box, ws, "atlas");
+    const seen = server.calls.length;
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"],
+        { ...syncEnv(), SUPERSELF_SYNC: "off" });
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /SUPERSELF_SYNC=off/);
+    assert.equal(server.calls.length, seen, "the workspace was asked to create a project by a machine set not to talk to it");
+    assert.deepEqual(registered(ws), ["demo"], "a project was registered here that the workspace never made");
+    assert.ok(!existsSync(join(atlas, ".self")), "a marker was written for a project that was not made");
+});
+
+test("project J11 git-mode-sync-off: a git-backed store registers a project with the same setting", async (t) =>
+{
+    const box = machine();
+    const { ws } = await demoWorkspace(box);
+    const atlas = room(box, ws, "atlas");
+    await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], { SUPERSELF_SYNC: "off" });
+
+    assert.ok(registryRows(ws).some((entry) => entry.slug === "atlas"), "a git-backed store was refused a registration");
+});

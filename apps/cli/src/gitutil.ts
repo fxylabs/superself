@@ -1,5 +1,5 @@
 import { spawnSync, SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns, StdioOptions } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { serverBacked } from "./mode.js";
 import { CliError, fail } from "./types.js";
@@ -547,7 +547,32 @@ export function refListing(dir: string): string
     return listed.ok ? listed.out : "";
 }
 
-export function excludeLocally(dir: string, pattern: string): void
+// Whether this call is what put the pattern there, which is the only thing a
+// caller undoing its own work may take back: a pattern that was already
+// excluded was excluded by somebody else, and removing it would undo a
+// decision this run never made.
+export function excludeLocally(dir: string, pattern: string): boolean
+{
+    const common = gitCommonDir(dir);
+    if (common === null)
+    {
+        return false;
+    }
+    const excludeFile = join(common, "info", "exclude");
+    const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
+    if (current.split("\n").includes(pattern))
+    {
+        return false;
+    }
+    const prefix = current === "" || current.endsWith("\n") ? "" : "\n";
+    appendFileSync(excludeFile, prefix + pattern + "\n");
+    return true;
+}
+
+// The line taken back out, for a flow that added it and then could not finish.
+// Only ever called with what `excludeLocally` reported it had added, so the
+// file goes back to the lines it held before this run touched it.
+export function unexcludeLocally(dir: string, pattern: string): void
 {
     const common = gitCommonDir(dir);
     if (common === null)
@@ -555,11 +580,10 @@ export function excludeLocally(dir: string, pattern: string): void
         return;
     }
     const excludeFile = join(common, "info", "exclude");
-    const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
-    if (current.split("\n").includes(pattern))
+    if (!existsSync(excludeFile))
     {
         return;
     }
-    const prefix = current === "" || current.endsWith("\n") ? "" : "\n";
-    appendFileSync(excludeFile, prefix + pattern + "\n");
+    const kept = readFileSync(excludeFile, "utf8").split("\n").filter((line) => line !== pattern);
+    writeFileSync(excludeFile, kept.join("\n"));
 }
