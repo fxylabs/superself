@@ -185,6 +185,7 @@ same events (C1 v0.9). A git-backed store's `project init` is unchanged.
 | I9 | init --cloud, the first catch-up cannot reach the workspace | no store, no partial files |
 | I10 | init --cloud on a second machine, naming a workspace that already holds a project | it attaches: the registry and the project's log arrive from the workspace |
 | I11 | init inside a store that is already there, git-backed and server-backed, with `--git` and with `--cloud` | the answers that store already gave; nothing is created and nothing is asked |
+| I11 | init inside a store this machine points at through a symlinked path | "attached to a workspace already" — the two paths are compared as the directory each reaches |
 | I12 | init --cloud with a credential granted before the workspace scopes | the local shortage answer naming `self login`; no store |
 | I13 | init --cloud naming a workspace the server answers 404 for | refused, naming the account and the connection; no store |
 | I14 | init --cloud, a runner's attempt marker and both ends of a terminal, no `--lang` and no `--agents` | neither question is asked; the store is made with `en` and no agent block |
@@ -192,15 +193,22 @@ same events (C1 v0.9). A git-backed store's `project init` is unchanged.
 | I14 | init --git, a person at the terminal | both questions are asked and both answers are used |
 | I14 | init --git, piped | `en` and no agent block, as it always was |
 | I15 | ctrl-c during the first catch-up | no store, and a pointer that named another workspace still names it |
-| I15 | the machine pointer cannot be written, after the store and the exclude line | the store is removed and the exclude line taken back out |
+| I15 | ctrl-c twice, the second landing 0.3s, 1s and 2.5s into the cleanup | the real binary, real signals: exits by code and not by signal, and leaves no store either time |
+| I15 | the machine pointer cannot be written, after the store and the exclude line | the store is removed and the exclude line taken back out; the answer is one sentence naming the file, never a stack |
+| I15 | an exclude file whose last line had no newline, after the line is taken back out | byte-for-byte what it held |
+| I15 | the store cannot be removed, and the exclude line still has to come out | the pointer's failure is what is said; the exclude line comes out anyway |
 | I15 | init inside a server-backed store this machine is not pointing at | named as unattached, with `self workspace <dir>` — never "attached already" |
 | I16 | init --cloud, one project's delta cannot be written locally | no store — the first catch-up is the one that may not swallow a local failure |
-| I16 | the first catch-up with a lease that has already gone by | refused, naming how many projects were not read |
+| I16 | a first catch-up whose total is far past what one project is given, every project inside it | read to the end — the bound is per project and moves with the work |
+| I16 | a first catch-up no project of which finishes inside its allowance | refused, naming how many projects were not read |
+| I16 | the sync lock while a long first catch-up runs | one nonce throughout, and never older than one project's allowance — so no other process may steal it |
 | I16 | `GET /projects` answers 200 with a body that is not a list | treated as a catch-up that did not happen; no store |
 | I17 | a store appears in the directory while the inline login is running | refused; what appeared is neither truncated nor removed |
 | I17 | init --cloud --lang with a code that is not one | refused before the device flow starts; no approval is spent |
 | I18 | init --cloud interactively, this account a member of two workspaces | both are listed by name and id, and a number chooses one |
 | I18 | the same question answered with an id | the id chooses |
+| I18 | the same question answered `0x2`, `2e0` or `+2` | refused — an ordinal is digits and nothing else |
+| I18 | a workspace whose id a conformant server wrote as `2`, chosen by typing `2` | the id chooses, not the place on the list |
 | I19 | init --cloud --workspace with an id this account is not an active member of | refused, naming the workspaces it is a member of and `self login`; no store |
 | I19 | a closed workspace, chosen from the list and named with `--workspace` | shown on the list and marked closed, and refused as a choice either way |
 | I20 | init --cloud interactively, this account a member of nothing | one sentence saying so; no question, no stack, no store |
@@ -222,7 +230,7 @@ same events (C1 v0.9). A git-backed store's `project init` is unchanged.
 | id | case | expected |
 |---|---|---|
 | J1 | API mode, the workspace answers 201 | the registry row is written and carries the server's project id |
-| J2 | API mode, 409 | the access-request guidance; no local project, no local files |
+| J2 | API mode, 409 | a refusal; no local project, no local files — see J10 for which of the three sentences |
 | J3 | API mode, 404 | the login/connection guidance; no local project, no local files |
 | J4 | API mode, the workspace cannot be reached | surfaced at the command; no local project |
 | J5 | git mode | unchanged — no request is made and the project is registered |
@@ -230,8 +238,9 @@ same events (C1 v0.9). A git-backed store's `project init` is unchanged.
 | J7 | a project another machine deleted, with records still queued | the queued push does not re-create it — the cached id is what refuses |
 | J8 | an archived project | local writes are still refused |
 | J9 | API mode with a credential short of the workspace scopes | the re-login answer, before any request is made |
-| J10 | API mode, 409, and the slug is on this account's project list | registered here, carrying the id the workspace holds |
+| J10 | API mode, 409, and the slug is on what this account can see | refused naming both ways forward — `self project link <slug> --here` and `--name <slug>`; no row, no marker |
 | J10 | API mode, 409, and the slug is not on it | the access-request guidance, unchanged |
+| J10 | API mode, 409, and the list cannot be read while answering it | its own sentence — the two above are guesses this machine has no grounds for |
 | J11 | API mode under `SUPERSELF_SYNC=off` | refused naming the setting; no request, no row, no marker |
 | J11 | git mode under the same setting | registered, unchanged |
 
@@ -250,11 +259,15 @@ surface the design names is the contract-derived help, which `checkContract`
 already holds to the parser. H1 and H2 are that check applied to the new
 flags rather than a second list to keep in step.
 
-There is no artificial way to reach a lease-expired first catch-up through the
-command surface: the bound is `PULLER_LEASE_MS`, 180 seconds, and no staging
-shortens it. I16 `short-catch-up` states the bound at the call instead, which is
-the seam the module already documents (`until` is a parameter "so that a case
-can state one"). The removal that follows a refusal there is I7's and I9's.
+The first catch-up's bound is per project and moves with the work, so there is
+no total a command-surface case could wait out: a walk that keeps finishing
+projects is never refused, and one that has stopped is refused after a single
+project has overrun `PULLER_LEASE_MS` — 180 seconds, which no staging shortens.
+I16 `long-catch-up`, `stalled-catch-up` and `lock-stays-fresh` state a small
+allowance at the call instead, which is the seam the module documents (`each` is
+a parameter "so that a case can state one"). What follows a refusal there is the
+caller's and is I9's and I16 `delta-write-fails`'s: the same `orRemove` takes the
+store off the disk for every way this flow can end short.
 
 The mock server implements `GET /api/workspaces` and its 200; the contract's
 "Runtime tokens get 404" is not staged, because the mock holds no token kinds

@@ -179,16 +179,26 @@ test("project J9 short-scopes: a credential without the workspace scopes is refu
 
 /* ── J10–J11: the window around a creation that answered 201 ───────── */
 
-test("project J10 adopt-own: a 409 over a project this account can reach finishes the registration it started", async (t) =>
+// A 409 is a name already in use, and the wire says nothing else about it —
+// C1 invariant 3a is that rule. Two things reach it: a creation of this
+// machine's own that answered 201 and died before the registry row was
+// written, and a project a colleague made first. `GET /projects` is what a
+// *member can see* (C1 v0.9.6) and holds both, so it separates neither, and a
+// CLI that registered this directory under the id it found there would bind it
+// to somebody else's records without saying so.
+//
+// So the three cells below are the three sentences, and none of them writes.
+
+test("project J10 taken-reachable: a 409 over a project this account can reach names both ways forward", async (t) =>
 {
-    // What a crash in the window leaves: the workspace holds the project, and
-    // this machine holds no row for it. The retry's POST is answered 409 —
-    // indistinguishable on the wire from a slug somebody else took — and the
-    // list is what tells the two apart.
+    // The state a crash in the window leaves: the workspace holds the project
+    // and this machine holds no row for it. It is also, byte for byte, the
+    // state a colleague having taken the name leaves — which is the reason
+    // this is a refusal that names two commands rather than a guess.
     //
-    // The catch-up's own list request is refused once, which is what leaves
-    // the registry still not knowing: with it answered, the reconciliation
-    // would add the row first and the refusal would already name the link.
+    // The catch-up's own list request is refused once, which is what leaves the
+    // registry still not knowing: with it answered, the reconciliation would
+    // add the row first and the refusal would already name the link.
     let listed = 0;
     const { box, ws, server } = await connected(t, {
         projects: [{ slug: "demo" }, { slug: "atlas" }],
@@ -197,20 +207,24 @@ test("project J10 adopt-own: a 409 over a project this account can reach finishe
             : undefined
     });
     const atlas = room(box, ws, "atlas");
-    const made = await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
 
-    assert.match(made.out, /project "atlas" registered/);
-    const row = registryRows(ws).find((entry) => entry.slug === "atlas");
-    assert.equal(row?.id, server.projectId("atlas"), "the adopted row does not carry the workspace's project id");
+    assert.notEqual(refused.code, 0, "a 409 registered this directory under a project it did not create");
+    assert.match(refused.out, /self project link atlas --here/, "the refusal does not name the completion path");
+    assert.match(refused.out, /self project init --name <slug>/, "the refusal does not name the other way forward");
+    assert.doesNotMatch(refused.out, /ask an owner/, "a project this account can reach was answered as one it cannot");
+    assert.deepEqual(registered(ws), ["demo"], "a refused registration wrote a registry row");
+    assert.ok(!existsSync(join(atlas, ".self")), "a refused registration wrote a marker");
     assert.ok(server.calls.some((call) => call.method === "POST" && call.path.endsWith("/projects")),
         "the retry did not ask the workspace to create the project");
 });
 
-test("project J10 adopt-nothing: a 409 over a project this account cannot reach is still the access refusal", async (t) =>
+test("project J10 taken-hidden: a 409 over a project this account cannot reach is still the access refusal", async (t) =>
 {
-    // The list is the whole difference. A slug that is taken and not on it is
-    // a project inside this workspace that this account may not see, and the
-    // sentence it was always given is the right one.
+    // The list is what makes the two sentences different. A slug that is taken
+    // and not on it is a project inside this workspace that this account may
+    // not see, and `project link` would refuse it too — so the sentence it was
+    // always given is the right one.
     const { box, ws } = await connected(t, {
         answer: creations({ status: 409, body: { code: "slug_taken", message: 'this workspace already has a project "atlas"' } })
     });
@@ -219,6 +233,33 @@ test("project J10 adopt-nothing: a 409 over a project this account cannot reach 
 
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /ask an owner/);
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+test("project J10 taken-unknown: a list that cannot be had during a 409 says so, and claims nothing else", async (t) =>
+{
+    // Neither sentence above is true when the list cannot be read: this machine
+    // does not know whether the project is one it can reach. Answering with
+    // either would send somebody to a command that is going to refuse them.
+    let posted = false;
+    const { box, ws } = await connected(t, {
+        answer: (call) =>
+        {
+            if (call.method === "POST" && call.path.endsWith("/projects"))
+            {
+                posted = true;
+                return { status: 409, body: { code: "slug_taken", message: "taken" } };
+            }
+            return posted && call.method === "GET" && call.path.endsWith("/projects") ? { destroy: true } : undefined;
+        }
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /could not ask whether it is one this account can reach/);
+    assert.doesNotMatch(refused.out, /ask an owner/, "a list nobody could read was answered as a project this account cannot see");
+    assert.doesNotMatch(refused.out, /self project link/, "a list nobody could read was answered as a project this account can reach");
     assert.deepEqual(registered(ws), ["demo"]);
 });
 

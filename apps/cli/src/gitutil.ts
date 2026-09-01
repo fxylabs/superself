@@ -547,32 +547,46 @@ export function refListing(dir: string): string
     return listed.ok ? listed.out : "";
 }
 
-// Whether this call is what put the pattern there, which is the only thing a
-// caller undoing its own work may take back: a pattern that was already
-// excluded was excluded by somebody else, and removing it would undo a
+// The bytes this call appended, or `null` where it appended none — which is the
+// only thing a caller undoing its own work may take back: a pattern that was
+// already excluded was excluded by somebody else, and removing it would undo a
 // decision this run never made.
-export function excludeLocally(dir: string, pattern: string): boolean
+//
+// The bytes rather than a yes, because a yes is not enough to put the file back
+// exactly. Where the file did not end with a newline this has to add one to
+// start its line on, and the file that results is byte-identical to the one an
+// append to a newline-terminated file produces — so the undo cannot work out
+// from the file alone whether that newline was the file's or this call's.
+export function excludeLocally(dir: string, pattern: string): string | null
 {
     const common = gitCommonDir(dir);
     if (common === null)
     {
-        return false;
+        return null;
     }
     const excludeFile = join(common, "info", "exclude");
     const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
     if (current.split("\n").includes(pattern))
     {
-        return false;
+        return null;
     }
-    const prefix = current === "" || current.endsWith("\n") ? "" : "\n";
-    appendFileSync(excludeFile, prefix + pattern + "\n");
-    return true;
+    const added = (current === "" || current.endsWith("\n") ? "" : "\n") + pattern + "\n";
+    appendFileSync(excludeFile, added);
+    return added;
 }
 
 // The line taken back out, for a flow that added it and then could not finish.
-// Only ever called with what `excludeLocally` reported it had added, so the
-// file goes back to the lines it held before this run touched it.
-export function unexcludeLocally(dir: string, pattern: string): void
+//
+// Only ever called with what `excludeLocally` reported it appended, so where
+// those bytes are still the end of the file the file goes back to exactly the
+// bytes it held — the newline the append had to add included, so a file that
+// ended mid-line ends mid-line again.
+//
+// A file something else has appended to since is answered by dropping the
+// pattern's line instead. The exact restore is no longer available there, and
+// leaving the pattern in a file this run put it in would be the worse of the
+// two: it excludes a directory that is about to stop existing.
+export function unexcludeLocally(dir: string, pattern: string, appended: string): void
 {
     const common = gitCommonDir(dir);
     if (common === null)
@@ -584,6 +598,20 @@ export function unexcludeLocally(dir: string, pattern: string): void
     {
         return;
     }
-    const kept = readFileSync(excludeFile, "utf8").split("\n").filter((line) => line !== pattern);
-    writeFileSync(excludeFile, kept.join("\n"));
+    const current = readFileSync(excludeFile, "utf8");
+    writeFileSync(excludeFile, current.endsWith(appended)
+        ? current.slice(0, -appended.length)
+        : withoutLine(current, pattern));
+}
+
+function withoutLine(text: string, pattern: string): string
+{
+    const lines = text.split("\n");
+    const at = lines.indexOf(pattern);
+    if (at < 0)
+    {
+        return text;
+    }
+    lines.splice(at, 1);
+    return lines.join("\n");
 }

@@ -25,8 +25,9 @@ import { askLine, atKeyboard } from "./human.js";
 import { WORKSPACE_SCOPES, deviceLogin } from "./login.js";
 import { machineWorkspace, setMachineWorkspace } from "./machine.js";
 import { WORKSPACE_FILE, syncMode } from "./mode.js";
+import { machineNotice } from "./output.js";
 import { STORE_DIR, ensureDir, invalidateResolution } from "./paths.js";
-import { firstCatchUp } from "./puller.js";
+import { Cancellation, firstCatchUp } from "./puller.js";
 import { WorkspaceSession, createProject, listProjects, listWorkspaces, openSession } from "./transport.js";
 import { CliError, CommandOutput, JsonValue, fail } from "./types.js";
 
@@ -161,14 +162,19 @@ export async function connectCloud(cwd: string, storeDir: string, named: string 
     await ensureCredential();
     const wsId = await chooseWorkspace(named);
     const base = readProfile(resolveProfileName()).api_base;
-    const undo: Undo = { cwd, made: false, excluded: false, pointerWas: machineWorkspace(), pointed: false };
-    await orRemove(storeDir, undo, async () =>
+    // Read before the guard below is armed, because it is the one step here
+    // that may block on a keyboard: a signal handler installed over a blocking
+    // read of fd 0 answers a ctrl-c with a rejection nobody is waiting on yet.
+    // Nothing exists to undo until the write two lines down, so there is
+    // nothing for a signal to catch here either.
+    const views = lang();
+    const undo: Undo = { cwd, made: false, excluded: null, pointerWas: machineWorkspace(), pointed: false };
+    await orRemove(storeDir, undo, async (cancel) =>
     {
-        const views = lang();
         refuseAppeared(storeDir);
         undo.made = true;
         writeStore(storeDir, base, wsId, views);
-        await firstCatchUp(storeDir);
+        await firstCatchUp(storeDir, { cancel });
         undo.excluded = excludeLocally(cwd, STORE_DIR + "/");
         setMachineWorkspace(cwd);
         undo.pointed = true;
@@ -188,7 +194,7 @@ interface Undo
 {
     cwd: string;
     made: boolean;
-    excluded: boolean;
+    excluded: string | null;
     pointerWas: string | null;
     pointed: boolean;
 }
@@ -222,23 +228,41 @@ function refuseAppeared(storeDir: string): void
 // do it again because a later step failed would spend their attention on
 // nothing. Credentials are machine state, like the workspace pointer, and the
 // store is what this undoes.
-async function orRemove(storeDir: string, undo: Undo, work: () => Promise<void>): Promise<void>
+async function orRemove(storeDir: string, undo: Undo, work: (cancel: Cancellation) => Promise<void>): Promise<void>
 {
+    const signal = armed();
     try
     {
-        await work();
+        await signal.raced(work);
     }
     catch (error)
     {
-        if (undo.made)
-        {
-            rmSync(storeDir, { recursive: true, force: true });
-        }
-        rollBack(undo);
-        // The resolver may have cached a registry this store no longer has.
-        invalidateResolution();
+        undone(storeDir, undo);
         throw error;
     }
+    finally
+    {
+        // After the removal and not before it: the whole point of the handler
+        // is that a second ctrl-c lands on it rather than on the default
+        // disposition, and the window a person presses it in is exactly this
+        // one — between the first press and the directory being gone.
+        signal.disarm();
+    }
+}
+
+// Best effort, each step on its own, and none of them may replace the error on
+// its way out: a rollback that raised would answer a person with a consequence
+// instead of the cause, and would skip the steps after it — leaving more behind
+// than the failure it was undoing.
+function undone(storeDir: string, undo: Undo): void
+{
+    if (undo.made)
+    {
+        bestEffort(() => rmSync(storeDir, { recursive: true, force: true }));
+    }
+    rollBack(undo);
+    // The resolver may have cached a registry this store no longer has.
+    invalidateResolution();
 }
 
 // The two machine-level changes, each undone only where this run made it. An
@@ -246,13 +270,97 @@ async function orRemove(storeDir: string, undo: Undo, work: () => Promise<void>)
 // pointer this run never moved is one it has no business moving now.
 function rollBack(undo: Undo): void
 {
-    if (undo.excluded)
+    const added = undo.excluded;
+    if (added !== null)
     {
-        unexcludeLocally(undo.cwd, STORE_DIR + "/");
+        bestEffort(() => unexcludeLocally(undo.cwd, STORE_DIR + "/", added));
     }
     if (undo.pointed)
     {
-        setMachineWorkspace(undo.pointerWas);
+        bestEffort(() => setMachineWorkspace(undo.pointerWas));
+    }
+}
+
+function bestEffort(step: () => void): void
+{
+    try
+    {
+        step();
+    }
+    catch
+    {
+        // Said nowhere on purpose. The error already travelling out of
+        // `orRemove` names what went wrong, and a second sentence about the
+        // tidying would bury it.
+    }
+}
+
+/* ── ctrl-c, from the first byte written to the last one removed ───── */
+
+// The signal, caught for as long as there is a half-made store for it to leave
+// behind — which is longer than the catch-up it interrupts.
+//
+// Without a handler at all, the default disposition kills the process on the
+// signal number, in the middle of the window between the store's marker being
+// written and the machine being pointed at it, leaving the directory the flow
+// promised to take back off the disk. With a handler that disarms as it fires
+// — `process.once`, which is what this was — the same thing happens one
+// keypress later: the removal runs after the pull it interrupted has settled,
+// and a person watching a command that has printed nothing for several seconds
+// presses ctrl-c again into a process that is once more killable.
+//
+// So the handler stays on until the removal has run, and every signal after the
+// first is answered with a line rather than with an exit. There is nothing
+// faster to offer honestly: the losing pull is still writing into the store,
+// and removing the directory out from under it is what puts files back after
+// the removal.
+interface Guard
+{
+    raced: (work: (cancel: Cancellation) => Promise<void>) => Promise<void>;
+    disarm: () => void;
+}
+
+function armed(): Guard
+{
+    const cancel: Cancellation = { requested: false };
+    let interrupt = (): void => undefined;
+    const interrupted = new Promise<never>((_, reject) =>
+    {
+        interrupt = () => reject(new CliError("the first catch-up was interrupted, so nothing was created"));
+    });
+    const onInterrupt = (): void => pressed(cancel, interrupt);
+    process.on("SIGINT", onInterrupt);
+    return {
+        raced: (work) => raceInterrupt(work(cancel), interrupted),
+        disarm: () => process.removeListener("SIGINT", onInterrupt)
+    };
+}
+
+function pressed(cancel: Cancellation, interrupt: () => void): void
+{
+    if (cancel.requested)
+    {
+        machineNotice("notice: still putting this directory back the way it was — one moment");
+        return;
+    }
+    cancel.requested = true;
+    interrupt();
+}
+
+// The loser is waited for rather than abandoned, and that is the whole reason
+// the flag exists beside the rejection: `Promise.race` settles the caller and
+// stops nothing, and the caller's next act is to remove the store. A pull still
+// applying a delta into it would put files back after the removal. Each request
+// carries its own timeout, so the wait is bounded by one of those.
+async function raceInterrupt(running: Promise<void>, interrupted: Promise<never>): Promise<void>
+{
+    try
+    {
+        await Promise.race([running, interrupted]);
+    }
+    finally
+    {
+        await running.catch(() => undefined);
     }
 }
 
@@ -369,18 +477,33 @@ function offered(listed: Membership[]): string
         `  ${index + 1}) ${labelled(workspace)}${closed(workspace) ? " — closed" : ""}\n`).join("");
 }
 
+// The id first, then the place on the list. openapi 0.9.4 puts no pattern on
+// `Workspace.id`, so a server is free to write one that reads as a number —
+// and a machine attached to the wrong workspace because its id happened to be
+// "2" is the mistake this order rules out.
 function chosenBy(listed: Membership[], typed: string): Membership
 {
-    const numbered = Number(typed);
-    const chosen = Number.isInteger(numbered) && numbered >= 1 && numbered <= listed.length
-        ? listed[numbered - 1]
-        : listed.find((workspace) => workspace.id === typed);
+    const chosen = listed.find((workspace) => workspace.id === typed) ?? ordinal(listed, typed);
     if (chosen === undefined)
     {
         throw new CliError(`"${typed}" is neither a number on that list nor an id on it, so nothing was created — `
             + "run `self init --cloud` again and answer with one of them");
     }
     return chosen;
+}
+
+// Digits and nothing else. `Number` reads `0x2`, `1e0` and ` 2 ` as integers,
+// and none of them is a thing that was written on the list — so a person who
+// typed one of them typed something this question does not offer, and being
+// told so is better than being attached to whatever it rounded to.
+function ordinal(listed: Membership[], typed: string): Membership | undefined
+{
+    if (!/^\d+$/.test(typed))
+    {
+        return undefined;
+    }
+    const at = Number(typed);
+    return at >= 1 && at <= listed.length ? listed[at - 1] : undefined;
 }
 
 // The refusal names what this account *can* reach. An id that is not on the
@@ -452,7 +575,7 @@ export async function createWorkspaceProject(storeDir: string, slug: string,
     }
     if (made.status === 409)
     {
-        return adopted(session, slug);
+        throw await taken(session, slug);
     }
     throw refusedCreation(slug, made.status);
 }
@@ -473,32 +596,55 @@ function refuseWithoutSync(slug: string): void
     }
 }
 
-// The 409 that is this machine's own unfinished work.
+// The 409, which is a name already in use and — deliberately — nothing else.
 //
-// A creation that answered 201 and died before the registry row was written
-// leaves a project this account owns and a machine that does not know it. The
-// retry's 409 is, on the wire, the same 409 a slug another member took gets —
-// C1 invariant 3a allows a member to be told a name is occupied and nothing
-// more — so the answer cannot be read off the status.
+// Two different things reach it and the wire cannot tell them apart. A creation
+// that answered 201 and died before the registry row was written leaves a
+// project this account owns and a machine that does not know it; a teammate
+// having taken the name first leaves a project this account must not touch.
+// C1 invariant 3a allows a member to be told a name is occupied and no more, so
+// the status says which of them it is exactly as much as it says anything else:
+// not at all.
 //
-// The list is what tells them apart. `GET /projects` shows a member the
-// projects they can reach, so a slug on it is one this machine may register
-// and a slug that is not is the refusal that was always right.
+// `GET /projects` does not separate them either, and reading it as though it
+// did is the mistake this replaces. C1 v0.9.6 defines that route as the
+// projects a *member can see* — not the projects this account created — so a
+// slug on it is this machine's own unfinished registration or a colleague's
+// project, and taking the id would bind this directory to somebody else's
+// records. `project init` would have quietly done what `project link` is for,
+// against a project the person never named, and their `--desc` would have gone
+// nowhere.
 //
-// Nothing here can resurrect a deleted project (P6): the id adopted is the one
-// the workspace holds *now*, so a slug that was deleted is not on the list at
-// all, and a slug deleted and made again is on it carrying the new project's
-// id — which is exactly the id the cache is supposed to hold.
-async function adopted(session: WorkspaceSession, slug: string): Promise<string>
+// So nothing is guessed and both remedies are said. The list is still asked
+// for, because which of the two sentences is *true* depends on whether this
+// account can reach the project at all — and where the list cannot be had, that
+// is its own sentence rather than the more confident of the two.
+async function taken(session: WorkspaceSession, slug: string): Promise<CliError>
 {
     const listed = await listProjects(session);
-    const rows = listed.reached && listed.status === 200 && Array.isArray(listed.body) ? listed.body : [];
-    const found = (rows as { slug?: unknown; id?: unknown }[]).find((project) => project.slug === slug);
-    if (typeof found?.id !== "string" || found.id === "")
+    if (!listed.reached || listed.status !== 200 || !Array.isArray(listed.body))
     {
-        throw refusedCreation(slug, 409);
+        return fail("project_taken_unknown",
+            `the workspace already holds a project named "${slug}", and this machine could not ask whether it is `
+            + "one this account can reach, so nothing was registered here — check the connection and run this "
+            + "again");
     }
-    return found.id;
+    const rows = listed.body as { slug?: unknown }[];
+    return rows.some((project) => project.slug === slug) ? reachable(slug) : refusedCreation(slug, 409);
+}
+
+// The name is taken by a project this account *can* see, which is both the
+// crashed registration and the colleague's project — so the sentence names the
+// command for each and lets the person say which it is. `project link --here`
+// is the completion path for a registration that died after the 201, and it is
+// equally the right command for a project somebody meant to join.
+function reachable(slug: string): CliError
+{
+    return fail("project_taken",
+        `the workspace already holds a project named "${slug}" — if that is this directory's project, whether `
+        + `because an earlier \`self project init\` did not finish or because it is the one you meant, run \`self `
+        + `project link ${slug} --here\`; if it is somebody else's, register this directory under another name `
+        + "with `self project init --name <slug>`");
 }
 
 // The two the contract names, and everything else.

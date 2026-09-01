@@ -69,8 +69,8 @@ function define(projects, log, project)
 
 /* ── serving ───────────────────────────────────────────────────────── */
 
-// `answer(call, state)` may return a response to send instead of the one the
-// rules below would produce. That is how a case stages something the contract
+// `answer(call, state)` may return — or resolve to — a response to send instead
+// of the one the rules below would produce. That is how a case stages something the contract
 // states but this file has no state to reach — a 503 from a runtime that is not
 // ready, a 5xx, a body that will not parse — without teaching the mock a
 // behaviour the server does not have.
@@ -84,11 +84,15 @@ export async function workspaceServer(options = {})
     {
         const chunks = [];
         request.on("data", (chunk) => chunks.push(chunk));
-        request.on("end", () =>
+        request.on("end", async () =>
         {
             const call = received(request, Buffer.concat(chunks).toString("utf8"));
             calls.push(call);
-            const staged = options.answer?.(call, state, calls.length);
+            // Awaited, so a case can answer with a promise. A workspace that
+            // takes a while is a real thing the CLI has rules about and there
+            // is no state in this file to reach it from — it is staged the
+            // same way a 503 is, by the case saying so.
+            const staged = await options.answer?.(call, state, calls.length);
             reply(response, staged ?? route(call, { wsId, account, state }));
         });
     });

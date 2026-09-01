@@ -54,8 +54,8 @@
 // is not a lock there, and no amount of care in this file makes it one.
 import { randomBytes } from "node:crypto";
 import {
-    Dirent, appendFileSync, closeSync, existsSync, fstatSync, openSync, readSync, readdirSync, readFileSync,
-    renameSync, statSync, unlinkSync, writeFileSync, writeSync
+    Dirent, appendFileSync, closeSync, existsSync, fstatSync, ftruncateSync, openSync, readSync, readdirSync,
+    readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync
 } from "node:fs";
 import { join } from "node:path";
 
@@ -63,15 +63,25 @@ export const SYNC_LOCK_FILE = "sync.lock";
 
 // How long a holder may hold it before another process may take it away.
 //
-// The number is not a guess about how long the work takes; it is the bound
-// every holder enforces on itself. There are two of them and both are bounded:
-// a background pusher gives itself `PUSHER_LEASE_MS` (`pusher.ts`) and a
-// catch-up gives itself `PULLER_LEASE_MS` (`puller.ts`), and each stops where
-// its own bound runs out. So a lock older than this one belongs to a process
-// that either died or has already stopped working. Keeping the numbers apart —
-// every holder's bound strictly under the stealing threshold — is what makes
-// "stale" a fact rather than an opinion, and it is why nothing here needs a
-// heartbeat: a live holder cannot reach this age.
+// The number is not a guess about how long the work takes; it is what every
+// holder's own bound is kept under. A background pusher gives itself
+// `PUSHER_LEASE_MS` (`pusher.ts`) and an ordinary catch-up gives itself
+// `PULLER_LEASE_MS` (`puller.ts`), and each stops where its own bound runs out.
+// So a lock older than this one belongs to a process that either died or has
+// already stopped working, and keeping the numbers apart — every holder's bound
+// strictly under the stealing threshold — is what makes "stale" a fact rather
+// than an opinion.
+//
+// The first catch-up of a store being created is the one holder whose work has
+// no bound that can be stated in advance: it reads every project a workspace
+// holds from empty, and a workspace with enough of them takes longer than any
+// flat number could be set to without either refusing real work or outliving
+// the threshold here. So it holds the same bound over *one project* and moves
+// this stamp forward as it finishes each one (`renewSyncLock`). What that
+// changes is how the invariant is kept — a stamp moved forward rather than a
+// pass that ends — and not that it is kept: a lock this old still belongs to a
+// process that stopped, because a holder that is still getting through projects
+// re-stamps and a holder that is not refuses and lets go.
 export const SYNC_LEASE_MS = 300_000;
 
 interface LockRecord
@@ -104,6 +114,66 @@ export function acquireSyncLock(storeDir: string): string | null
 export function releaseSyncLock(storeDir: string, nonce: string): void
 {
     release(join(storeDir, SYNC_LOCK_FILE), nonce);
+}
+
+// The stamp moved forward, for the one holder whose bound is per project rather
+// than per pass. Never a way to take a lock, and never a way to keep one that
+// is no longer this process's.
+//
+// Written through a descriptor whose contents were checked against this
+// holder's own nonce, which is what makes it safe against the steal next door:
+// a steal renames the inode out of the way and creates a new file, so a holder
+// stolen from between this open and this write re-stamps the unlinked inode
+// nobody will read again, and never writes over its successor's lock. A holder
+// stolen from before the open reads a nonce that is not its own and writes
+// nothing at all.
+export function renewSyncLock(storeDir: string, nonce: string): void
+{
+    restamp(join(storeDir, SYNC_LOCK_FILE), nonce);
+}
+
+// Best-effort, like every other write a sync makes: a lock file that is gone or
+// that this process may not write is a lock that ages the way it did before
+// this existed, which the holder's own refusal already answers for.
+function restamp(path: string, nonce: string): void
+{
+    let handle: number;
+    try
+    {
+        handle = openSync(path, "r+");
+    }
+    catch
+    {
+        return;
+    }
+    try
+    {
+        if (recordOn(handle)?.nonce === nonce)
+        {
+            const record: LockRecord = { pid: process.pid, nonce, at: new Date().toISOString() };
+            ftruncateSync(handle, 0);
+            writeSync(handle, JSON.stringify(record), 0);
+        }
+    }
+    finally
+    {
+        closeSync(handle);
+    }
+}
+
+// The lock as this descriptor sees it, which is not the same question
+// `readLock` answers: that one opens the name again, and the name may by then
+// be a lock somebody else created.
+function recordOn(handle: number): LockRecord | null
+{
+    try
+    {
+        return JSON.parse(bytesFrom(handle, 0).toString("utf8")) as LockRecord;
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 function acquire(path: string, nonce: string): boolean

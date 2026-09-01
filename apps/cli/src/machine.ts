@@ -48,13 +48,27 @@ export function machineWorkspace(): string | null
 // machine that pointed nowhere before an aborted `self init --cloud` has to
 // point nowhere after it, and a pointer left naming a directory the flow then
 // removed fails every later command somewhere further from the mistake.
+// A write that fails is answered the way the read next door is, and for the
+// same reason: this is a file the CLI can name, and a raw `EACCES` from
+// `node:fs` reaches a person as ten frames and a Node version, which is the one
+// answer this CLI does not give for a file it can name. The flow around this
+// one has a rollback to run on the way out, and it cannot run it on a stack.
 export function setMachineWorkspace(workspaceDir: string | null): void
 {
     const file = machineConfigPath();
     const { workspace, ...rest } = readMachineConfig();
-    mkdirSync(dirname(file), { recursive: true });
     const next = workspaceDir === null ? rest : { ...rest, workspace: workspaceDir };
-    writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+    try
+    {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+    }
+    catch (error)
+    {
+        throw new CliError(`${file} could not be written (${(error as { code?: string }).code ?? "unknown error"}) `
+            + "— it holds nothing but which workspace this machine points at; check that the file and its "
+            + "directory are yours to write, then point this machine with `self workspace <path>`");
+    }
 }
 
 // The session a run belongs to, as an opaque token stamped on every event.

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
     completionRefusal,
@@ -1817,12 +1817,37 @@ function alreadyThere(storeDir: string, named: StoreMode | undefined): CommandOu
 // neither remedy.
 function attachedTo(storeDir: string): string
 {
-    if (machineWorkspace() === dirname(storeDir))
+    if (sameDirectory(machineWorkspace(), dirname(storeDir)))
     {
         return "this machine is attached to a workspace already";
     }
     return "this machine is not using it — run `self workspace " + dirname(storeDir) + "` to point this machine at "
         + "it, or remove that directory to start over";
+}
+
+// Two paths, compared as the directory each of them reaches rather than as
+// text. A machine is pointed at what `self workspace` resolved, and a shell
+// standing in the same place through a symlink has a different string for it —
+// so comparing the strings answers "this machine is not using it" for a store
+// this machine is using, and sends somebody to repair a pointer that is right.
+// A path that cannot be resolved is one of the two that is not there, which is
+// an honest "no".
+function sameDirectory(pointer: string | null, dir: string): boolean
+{
+    const at = pointer === null ? null : reachedBy(pointer);
+    return at !== null && at === reachedBy(dir);
+}
+
+function reachedBy(dir: string): string | null
+{
+    try
+    {
+        return realpathSync(dir);
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 // Asked once, at the only moment a person is certain to be present — and

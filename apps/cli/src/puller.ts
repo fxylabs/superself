@@ -33,7 +33,7 @@ import { machineNotice } from "./output.js";
 import { STORE_DIR, invalidateResolution, readRegistry } from "./paths.js";
 import { PENDING_FILE, compactedPending, markSent, markSurfaced, unsentAppends, unsurfacedBlocks } from "./pending.js";
 import { ServerProject, reconcileRegistry } from "./registrycache.js";
-import { acquireSyncLock, publishRewrite, releaseSyncLock } from "./synclock.js";
+import { acquireSyncLock, publishRewrite, releaseSyncLock, renewSyncLock } from "./synclock.js";
 import { ApiAnswer, WorkspaceSession, listProjects, openSession, pullAfter } from "./transport.js";
 import { CliError, JsonValue, SelfEvent } from "./types.js";
 
@@ -47,6 +47,16 @@ import { CliError, JsonValue, SelfEvent } from "./types.js";
 // them reaches the age at which another process takes its lock while it is
 // still working — and the lock's claim that a live holder cannot be that old
 // would be true of the sender and false of this.
+//
+// One number, read two ways, and the difference is whether the pass has a
+// command behind it. An ordinary catch-up stands in front of somebody's
+// command, so this is the whole pass: what it does not reach, the next command
+// reaches, and stopping is free. The first catch-up of a store being created
+// has no next command — it either reads the whole workspace or the store does
+// not exist — so this is what *one project* is given, and the pass goes on for
+// as long as projects keep arriving inside it (`walkSlugs`, `renewSyncLock`).
+// A flat bound there is not a bound on the work; it is a size of workspace this
+// CLI cannot attach to at all, and no retry gets past it.
 export const PULLER_LEASE_MS = 180_000;
 
 // The store this machine points at, where that store keeps its records on a
@@ -182,7 +192,12 @@ export async function pullEverySlug(storeDir: string, session: WorkspaceSession,
 // is set, for the reason `login.ts` gives its own: the loser of a race is still
 // running, and a pull that kept writing into a store the flow is about to take
 // off the disk would put files back after the removal.
-interface Cancellation
+//
+// Set by whoever owns the removal — `cloud.ts`, which is the only caller that
+// has a store to take back — rather than by a handler this file installs. The
+// signal has to stay caught until the directory is gone, and the thing that
+// removes the directory is the thing that knows when that is.
+export interface Cancellation
 {
     requested: boolean;
 }
@@ -199,6 +214,7 @@ interface Cancellation
 interface CatchUpBounds
 {
     until: number;
+    each?: number;
     strict?: boolean;
     cancel?: Cancellation;
 }
@@ -223,6 +239,7 @@ async function walkSlugs(storeDir: string, session: WorkspaceSession, nonce: str
         {
             return { reached: true, left: slugs.length - index };
         }
+        allowed(storeDir, nonce, bounds);
         if (!await pulled(storeDir, session, slug, nonce, bounds))
         {
             return { reached: false, left: slugs.length - index };
@@ -230,6 +247,29 @@ async function walkSlugs(storeDir: string, session: WorkspaceSession, nonce: str
         rememberPlace(storeDir, slug);
     }
     return { reached: true, left: 0 };
+}
+
+// The next project's allowance, granted where the pass has one to grant — and
+// nothing at all where it does not, which is every pass but the first catch-up.
+//
+// Granted *after* the check above and never before it, which is what makes the
+// check mean anything: the deadline in force while a project is pulled is the
+// one set before it started, so the check at the top of the next turn is where
+// that project's own duration is judged. A pass that renewed after each project
+// instead would set a deadline it had just satisfied and never stop at all.
+//
+// The lock's stamp moves with it. The two are one act, not two: a bound this
+// process keeps extending on itself while another process reads a stamp that is
+// not moving would age a live holder into a stealable one, which is the
+// property `SYNC_LEASE_MS` is built on.
+function allowed(storeDir: string, nonce: string, bounds: CatchUpBounds): void
+{
+    if (bounds.each === undefined)
+    {
+        return;
+    }
+    bounds.until = Date.now() + bounds.each;
+    renewSyncLock(storeDir, nonce);
 }
 
 // One project's unreadable files stop that project's catch-up and nothing else,
@@ -504,10 +544,12 @@ function surfaceBlocked(storeDir: string): void
 // workspace this machine is a member of and a directory naming a server nobody
 // has checked. So each way it can end short is a sentence, and the flow that
 // called it takes the store back off the disk.
-// `until` is a parameter here for the reason it is one on the walk: the longest
-// this may live is a property of the pass rather than of the function, and a
-// case that states a bound is how the short pass is asserted at all.
-export async function firstCatchUp(storeDir: string, until = Date.now() + PULLER_LEASE_MS): Promise<void>
+//
+// `each` is a parameter here for the reason `until` is one on the walk: what
+// one project is given is a property of the pass rather than of the function,
+// and a case that states a small one is how the stalled pass is asserted at all
+// without waiting out the shipped number.
+export async function firstCatchUp(storeDir: string, pass: FirstPass = {}): Promise<void>
 {
     const nonce = acquireSyncLock(storeDir);
     if (nonce === null)
@@ -518,7 +560,7 @@ export async function firstCatchUp(storeDir: string, until = Date.now() + PULLER
     }
     try
     {
-        await untilInterrupted((cancel) => firstSync(storeDir, nonce, until, cancel));
+        await firstSync(storeDir, nonce, pass);
     }
     finally
     {
@@ -526,49 +568,24 @@ export async function firstCatchUp(storeDir: string, until = Date.now() + PULLER
     }
 }
 
-// The longest wait `self init --cloud` has, raced against ctrl-c the way
-// `login.ts` races the other one.
-//
-// Without this the default handler kills the process on a signal number, in the
-// middle of the window between the store's marker being written and the machine
-// being pointed at it — so the directory the flow promised to take back off the
-// disk stays, holding a marker naming a workspace nobody finished checking.
-//
-// The loser is waited for rather than abandoned, and that is the whole reason
-// the flag exists beside the rejection: `Promise.race` settles the caller and
-// stops nothing, and the caller's next act is to remove the store. A pull still
-// applying a delta into it would put files back after the removal. Each request
-// carries its own timeout, so the wait is bounded by one of those.
-async function untilInterrupted<T>(work: (cancel: Cancellation) => Promise<T>): Promise<T>
+// What the one catch-up that may refuse is given: the ctrl-c the flow around it
+// is watching for, and what each project is allowed before the pass is called
+// stalled.
+interface FirstPass
 {
-    const cancel: Cancellation = { requested: false };
-    let onInterrupt = (): void => undefined;
-    const interrupted = new Promise<never>((_, reject) =>
-    {
-        onInterrupt = () =>
-        {
-            cancel.requested = true;
-            reject(new CliError("the first catch-up was interrupted, so nothing was created"));
-        };
-        process.once("SIGINT", onInterrupt);
-    });
-    const running = work(cancel);
-    try
-    {
-        return await Promise.race([running, interrupted]);
-    }
-    finally
-    {
-        process.removeListener("SIGINT", onInterrupt);
-        await running.catch(() => undefined);
-    }
+    cancel?: Cancellation;
+    each?: number;
 }
 
-async function firstSync(storeDir: string, nonce: string, until: number, cancel: Cancellation): Promise<void>
+async function firstSync(storeDir: string, nonce: string, pass: FirstPass): Promise<void>
 {
+    const each = pass.each ?? PULLER_LEASE_MS;
+    // Set before the session is opened, so the project list request is inside
+    // the first project's allowance rather than outside every bound there is.
+    const until = Date.now() + each;
     const session = openSession(storeDir);
     refuseUnlisted(await reconcile(storeDir, session, nonce));
-    const walk = await walkSlugs(storeDir, session, nonce, { until, strict: true, cancel });
+    const walk = await walkSlugs(storeDir, session, nonce, { until, each, strict: true, cancel: pass.cancel });
     if (!walk.reached)
     {
         throw unreachable();
@@ -579,17 +596,28 @@ async function firstSync(storeDir: string, nonce: string, until: number, cancel:
     }
 }
 
-// A pass that answered throughout and still did not reach every project: its
-// lease ran out, or somebody interrupted it. Either way the store holds some of
-// the workspace's projects and not others, and the design's rule for this flow
-// is that there is no half state — so it is a refusal and the flow removes the
-// directory, rather than a store whose missing projects would each be
-// discovered by a later command failing somewhere further from the cause.
+// A pass that answered throughout and still did not reach every project:
+// somebody interrupted it, or it stopped getting through them — a project that
+// took longer on its own than the whole of `PULLER_LEASE_MS`, which is a
+// workspace that has stopped answering usefully rather than a large one.
+//
+// Either way the store holds some of the workspace's projects and not others,
+// and the design's rule for this flow is that there is no half state — so it is
+// a refusal and the flow removes the directory, rather than a store whose
+// missing projects would each be discovered by a later command failing
+// somewhere further from the cause.
+//
+// A large workspace does not reach this. The bound is per project and moves
+// with the work, so a walk that keeps finishing projects keeps going however
+// many there are; what a flat bound made of this sentence was a size of
+// workspace no retry could ever get past, since every retry began again from
+// an empty store and stopped at the same place.
 function shortfall(left: number): CliError
 {
-    return new CliError("this machine reached its workspace but did not finish reading it — "
-        + `${left} of its projects were not read, so nothing was created; a store holds all of a workspace's `
-        + "records or none of them, and running `self init --cloud` again starts the catch-up over");
+    return new CliError("this machine reached its workspace but stopped getting through it — "
+        + `${left} of its projects were not read, none of them within the time one project is given, so nothing `
+        + "was created; a store holds all of a workspace's records or none of them, and running `self init --cloud` "
+        + "again starts the catch-up over");
 }
 
 // The project list, which is the request that says whether this machine is a
