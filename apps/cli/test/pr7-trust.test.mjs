@@ -1230,7 +1230,7 @@ test("cell 171: every environment variable the CLI reads, set to a fixture root,
             "SUPERSELF_API_BASE", "SUPERSELF_ATTEMPT_ID", "SUPERSELF_DEBUG", "SUPERSELF_DEV",
             "SUPERSELF_GIT_TIMEOUT_MS", "SUPERSELF_JSON", "SUPERSELF_NO_JOURNAL",
             "SUPERSELF_PLUGIN_DEV", "SUPERSELF_PROFILE",
-            "SUPERSELF_SESSION", "SUPERSELF_SESSION_PID", "TERM",
+            "SUPERSELF_SESSION", "SUPERSELF_SESSION_PID", "SUPERSELF_SYNC", "TERM",
             "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"
         ], "a new environment variable joined the CLI without joining this cell");
         // A module that indexes `process.env` with something other than a

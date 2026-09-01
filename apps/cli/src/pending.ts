@@ -7,6 +7,17 @@
 // can lose a record, and a reader that arrives mid-write finds a shorter file
 // rather than a damaged one.
 //
+// That last clause has a measured limit and it is worth stating where the
+// limits below are. A buffered append publishes its new size a page at a time,
+// so a reader landing inside a *large* one — the 256KB a single event payload
+// may carry, or the megabyte a whole append may — does see a torn last line, at
+// a few percent of reads. Line-sized appends are never observed torn. The one
+// reader that acts on what it saw rather than only reporting it is the sync's
+// rewrite, and it checks: `synclock.ts` refuses to publish a replacement built
+// on a read that does not end at a line ending, and carries only whole lines.
+// Every other reader here refuses the file and names the line, which is the
+// same answer a genuinely damaged file gets and the right one either way.
+//
 // An append lands here and nowhere else. `log.jsonl` beside it is the server's
 // own copy, written only by what comes back from the server, which is what
 // makes every event the property of exactly one of the two files: the queue
@@ -80,6 +91,18 @@ interface PendingBlocked
     code: string;
     at: string;
     detail?: string;
+    // That a person has been told. A background push has no output channel, so
+    // the telling is done by the next command that has one, and this is what
+    // stops it being done again by the one after that.
+    //
+    // A field on the blocked row rather than a fourth row shape, which is the
+    // rule this file's header states: an older CLI reading this row sees a
+    // blocked mark and gets the settlement itself right — the append is not
+    // going anywhere — and ignores the field, which is exactly the right
+    // amount of wrong. A fourth shape would have read to that CLI as neither
+    // an append nor a mark, and the append it settled would have been folded
+    // as one still waiting to go.
+    surfaced?: string;
 }
 
 type PendingRow = PendingAppend | PendingSent | PendingBlocked;
@@ -206,4 +229,99 @@ function parseRow(line: string, file: string, number: number): PendingRow
             + "not sent yet, so it is repaired by hand rather than discarded: open the file, read that one line, "
             + "and put back the record it was meant to be or take the line out");
     }
+}
+
+/* ── the marks the transport writes ────────────────────────────────── */
+
+// The appends the server has not taken, whole, in the order they were made.
+// The transport sends these; `pendingEvents` above reads the same rows for the
+// fold, which is why both answer off one filter — an append the fold has
+// dropped and the transport still sends would be a record on one machine and
+// nowhere else.
+export function unsentAppends(storeDir: string, slug: string): PendingAppend[]
+{
+    const rows = readPending(storeDir, slug);
+    const settled = new Set(rows.flatMap(settledAppend));
+    return rows.filter(isAppend).filter((row) => !settled.has(row.append_id));
+}
+
+// The server has given an append back: a pull has read every one of its event
+// ids out of `log.jsonl`. Never written off a push — the file's header says
+// why, and the rule is the whole reason this mark is the pull's.
+export function markSent(storeDir: string, slug: string, appendIds: string[]): void
+{
+    appendRows(storeDir, slug, appendIds.map((append_id): PendingSent => ({ sent: append_id })));
+}
+
+// The server refused it in a way no retry can fix. What a person is told, and
+// when they are told it, is decided by the next command that has somewhere to
+// print — this only records the fact and the reason for it.
+export function markBlocked(storeDir: string, slug: string, appendId: string, code: string, detail: string): void
+{
+    appendRows(storeDir, slug, [{ blocked: appendId, code, at: new Date().toISOString(), detail }]);
+}
+
+// The blocked appends nobody has been told about yet, one row each and the
+// first mark for an append winning: a re-statement carrying `surfaced` names
+// the same append and the same refusal, so a reader wanting the reason wants
+// the original.
+export function unsurfacedBlocks(storeDir: string, slug: string): PendingBlocked[]
+{
+    const blocks = readPending(storeDir, slug).filter(isBlocked);
+    const told = new Set(blocks.filter((row) => row.surfaced !== undefined).map((row) => row.blocked));
+    const first = new Map<string, PendingBlocked>();
+    blocks.filter((row) => !told.has(row.blocked)).forEach((row) => first.set(row.blocked, first.get(row.blocked) ?? row));
+    return [...first.values()];
+}
+
+// Said once, recorded as the same mark said again with the day it was said on.
+// A row rather than a rewrite, because every change to this file is a row.
+export function markSurfaced(storeDir: string, slug: string, blocks: PendingBlocked[]): void
+{
+    appendRows(storeDir, slug, blocks.map((row) => ({ ...row, surfaced: new Date().toISOString() })));
+}
+
+function isBlocked(row: PendingRow): row is PendingBlocked
+{
+    return typeof (row as PendingBlocked).blocked === "string";
+}
+
+function appendRows(storeDir: string, slug: string, rows: PendingRow[]): void
+{
+    if (rows.length > 0)
+    {
+        const dir = ensureDir(projectStateDir(storeDir, slug));
+        appendFileSync(join(dir, PENDING_FILE), rows.map((row) => JSON.stringify(row) + "\n").join(""));
+    }
+}
+
+/* ── tidying the queue ─────────────────────────────────────────────── */
+
+// What the queue would say with its settled history dropped: every append the
+// server has taken, and every mark about one, gone. What is left is the
+// unsent appends and the blocked ones a person has yet to be told about.
+//
+// Text in and text out, and no filesystem: the caller holds the sync lock and
+// publishes this through the rewrite that carries a concurrent append's bytes
+// onto the end. A crash anywhere before that rename leaves the original whole,
+// so nothing here can lose a record and nothing can apply twice — the worst it
+// costs is a queue file that is longer than it needed to be.
+//
+// A line this reader cannot parse stops the compaction rather than being
+// dropped, for the same reason it stops every other read of this file.
+export function compactedPending(text: string): string
+{
+    const rows = text.split("\n").filter((line) => line.trim() !== "")
+        .map((line, index) => parseRow(line, PENDING_FILE, index + 1));
+    const sent = new Set(rows.flatMap((row) => typeof (row as PendingSent).sent === "string" ? [(row as PendingSent).sent] : []));
+    return rows.filter((row) => !sent.has(appendOf(row))).map((row) => JSON.stringify(row) + "\n").join("");
+}
+
+// Which append a row is about, whichever of the three shapes it is. A row that
+// is none of them belongs to a newer CLI and is about no append this one knows,
+// so it is kept: dropping a row because its meaning is unfamiliar is how a
+// store gets quietly downgraded by the older machine that touched it last.
+function appendOf(row: PendingRow): string
+{
+    return (row as PendingAppend).append_id ?? (row as PendingSent).sent ?? (row as PendingBlocked).blocked ?? "";
 }

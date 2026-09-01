@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CRITERION_BLOCKED, CRITERION_DECLARED, CRITERION_UNBLOCKED } from "@superself/fold";
 import { serverBacked } from "./mode.js";
-import { projectStateDir } from "./paths.js";
+import { ensureDir, projectStateDir } from "./paths.js";
 import { pendingEvents } from "./pending.js";
 import { CliError, SelfEvent } from "./types.js";
 
@@ -206,4 +206,50 @@ function frictionNote(value: unknown): string | undefined
         return undefined;
     }
     return `(friction: ${value.map((sentence) => String(sentence)).join("; ")})`;
+}
+
+/* ── the server's copy, as a pull leaves it ────────────────────────── */
+
+// A row of `log.jsonl` in a server-backed store: the record, and the position
+// the server put it in. The sequence is the server's, gapless within one
+// project's log and strictly increasing, which is the whole reason this file is
+// only ever appended to — there is no arrival that belongs in the middle.
+export type StoredEvent = SelfEvent & { server_seq: number };
+
+// Where a delta pull asks to start. The last row's sequence, or nothing, which
+// is `after=0` and means "everything".
+//
+// Read off the file rather than kept beside it. A cursor in a second file is a
+// second thing to be wrong: it can be written when the append was not, or the
+// other way round, and then this machine either re-reads records it has or
+// skips records it does not. There is no such gap between a file and its own
+// last line.
+export function lastServerSeq(storeDir: string, slug: string): number
+{
+    const stored = readLog(storeDir, slug) as StoredEvent[];
+    const last = stored[stored.length - 1];
+    return typeof last?.server_seq === "number" ? last.server_seq : 0;
+}
+
+// What came back, added to the end. Written in one call so a reader arriving
+// mid-write finds whole rows, and no lock: this is the sync's own file and the
+// sync is single-flight, while the queue beside it is the only file the
+// foreground writes.
+export function appendStoredEvents(storeDir: string, slug: string, events: StoredEvent[]): void
+{
+    if (events.length === 0)
+    {
+        return;
+    }
+    const dir = ensureDir(projectStateDir(storeDir, slug));
+    appendFileSync(join(dir, "log.jsonl"), events.map((event) => JSON.stringify(event) + "\n").join(""));
+}
+
+// Which event ids the server's copy holds. What the `sent` mark is decided on:
+// an append is settled when every id it wrote is in this set, and asking the
+// file rather than trusting a push's 200 is the difference the queue's own
+// header spells out.
+export function storedEventIds(storeDir: string, slug: string): Set<string>
+{
+    return new Set(readLog(storeDir, slug).map((event) => event.id));
 }

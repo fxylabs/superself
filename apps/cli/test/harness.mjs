@@ -35,7 +35,14 @@ export function machine()
         // its own.
         SUPERSELF_SESSION_PID: "",
         CLAUDE_CODE_SESSION_ID: "",
-        CLAUDE_PID: ""
+        CLAUDE_PID: "",
+        // A scratch machine talks to no workspace server. A server-backed store
+        // catches up before every command and sends after it, and a fixture
+        // that wrote a marker and a credential would otherwise have every case
+        // in this suite opening a socket to the address the marker names. The
+        // cases whose subject *is* the sending set this to `inline` and point
+        // the marker at a server of their own.
+        SUPERSELF_SYNC: "off"
     };
     // Deleted rather than blanked: `human.ts` treats either attempt marker
     // existing at all as the mark of an agent's process, so an empty string
