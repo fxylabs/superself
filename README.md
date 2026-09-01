@@ -131,7 +131,7 @@ register an existing project:
 ```bash
 mkdir -p ~/self-workspace
 cd ~/self-workspace
-self init
+self init --git
 
 cd ~/path/to/my-project
 self project init

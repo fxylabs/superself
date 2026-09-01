@@ -31,7 +31,7 @@ const box = machine();
 const ws = join(box.root, "ws");
 const demo = join(ws, "demo");
 mkdirSync(demo, { recursive: true });
-mustSpawn(box, ws, ["init"]);
+mustSpawn(box, ws, ["init", "--git"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 mustSpawn(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
 

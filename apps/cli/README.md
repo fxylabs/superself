@@ -26,7 +26,7 @@ Requires Node 22.12+ and git.
 
 ```sh
 mkdir my-workspace && cd my-workspace
-self init                    # this directory becomes your workspace
+self init --git              # this directory becomes your workspace
 cd ~/code/my-project
 self project init            # register this directory (renders its agent block)
 self goal add "ship the alpha"

@@ -21,7 +21,7 @@ import {
     EXIT_2_OTHER, EXIT_2_WALLET, EXIT_3_CODES, UNREACHABLE_CODES,
     commandDeadlineMs, deriveCallKey, errorCode, exitFor, normalizeError, sanitizeText, toSnake
 } from "../dist/rail.js";
-import { DEFAULT_AGENT_SCOPES } from "../dist/login.js";
+import { DEFAULT_AGENT_SCOPES, WORKSPACE_SCOPES } from "../dist/login.js";
 import { installFixture, jsonLines, jsonOf, railEnv, railServer, selfAsync, selfSplit, writeCredential } from "./pr7-lib.mjs";
 
 function box()
@@ -752,10 +752,21 @@ test("the derived per-command deadline is the outer bound, not a competitor to t
     assert.equal(commandDeadlineMs(120_000), 135_000);
 });
 
-test("the six default agent scopes are the whole August vocabulary", () =>
+// The August vocabulary is the six rail scopes, and #426 added the seven a
+// workspace store needs beside them (design O1 §1). `repo.manage` is
+// deliberately not among them — this CLI creates no repository connections, and
+// a scope requested by default is one a person has to read and decide about on
+// the approve page.
+test("the default agent scopes are the August vocabulary and the seven a workspace store needs", () =>
 {
-    assert.deepEqual([...DEFAULT_AGENT_SCOPES].sort(),
-        ["email.domain.manage", "email.read", "email.send", "landing.deploy", "landing.read", "wallet.read"]);
+    assert.deepEqual([...DEFAULT_AGENT_SCOPES].sort(), [
+        "artifact.read", "artifact.write", "email.domain.manage", "email.read", "email.send",
+        "landing.deploy", "landing.read", "project.manage", "repo.read", "self.read", "self.sync",
+        "self.write", "wallet.read"
+    ]);
+    assert.deepEqual([...WORKSPACE_SCOPES].sort(), [
+        "artifact.read", "artifact.write", "project.manage", "repo.read", "self.read", "self.sync", "self.write"
+    ]);
 });
 
 test("normalizeError never lets a server field through unnamed", () =>

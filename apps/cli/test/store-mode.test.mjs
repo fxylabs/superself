@@ -18,7 +18,9 @@ import { readEvents } from "../dist/logfile.js";
 import { WORKSPACE_FILE } from "../dist/mode.js";
 import { PENDING_FILE, refuseOversizedAppend } from "../dist/pending.js";
 import { demoWorkspace, git, machine, must, selfIn } from "./harness.mjs";
+import { WORKSPACE_SCOPES } from "../dist/login.js";
 import { writeCredential } from "./pr7-lib.mjs";
+import { workspaceServer } from "./workspace-server.mjs";
 
 const ACCOUNT = "acct_01J8STOREMODE";
 
@@ -34,10 +36,19 @@ async function serverBackedWorkspace(box, options = {})
     const { ws, demo } = await demoWorkspace(box);
     if (options.account !== undefined)
     {
-        writeCredential(box, { account: options.account });
+        writeCredential(box, { account: options.account, scopes: WORKSPACE_SCOPES });
+    }
+    // Registered before the marker, for the same reason the marker is written
+    // by hand: since #426 registering a project in a server-backed store is a
+    // conversation with the workspace, and a cell whose subject is what a
+    // *second* project does to the answer about the first has no business
+    // staging that conversation.
+    for (const slug of options.projects ?? [])
+    {
+        await secondProject(box, ws, slug);
     }
     writeFileSync(join(ws, ".superself", WORKSPACE_FILE),
-        JSON.stringify({ base: "https://app.superselfs.com", wsId: "ws_01J8TEST", mode: "api" }) + "\n");
+        JSON.stringify({ base: options.base ?? "https://app.superselfs.com", wsId: options.wsId ?? "ws_01J8TEST", mode: "api" }) + "\n");
     return { ws, demo };
 }
 
@@ -443,7 +454,7 @@ test("W2: a git-backed store's log bytes are what they always were — no accoun
 {
     const box = machine();
     const { ws, demo } = await demoWorkspace(box);
-    writeCredential(box, { account: ACCOUNT });
+    writeCredential(box, { account: ACCOUNT, scopes: WORKSPACE_SCOPES });
     await must(box, demo, ["goal", "add", "ship the thing"]);
 
     assert.ok(logRows(ws).every((event) => event.actor === undefined),
@@ -475,7 +486,7 @@ test("W5: the account is read once at the entry point, so a second command reads
     const box = machine();
     const { ws, demo } = await serverBackedWorkspace(box);
     await must(box, demo, ["goal", "add", "written before logging in"]);
-    writeCredential(box, { account: ACCOUNT });
+    writeCredential(box, { account: ACCOUNT, scopes: WORKSPACE_SCOPES });
     await must(box, demo, ["goal", "add", "written after logging in"]);
 
     const written = pendingRows(ws).flatMap((row) => row.events);
@@ -490,8 +501,7 @@ test("W5: the account is read once at the entry point, so a second command reads
 test("W6: archiving a project from another project's checkout still names the account", async () =>
 {
     const box = machine();
-    const { ws, demo } = await serverBackedWorkspace(box, { account: ACCOUNT });
-    await secondProject(box, ws, "other");
+    const { ws, demo } = await serverBackedWorkspace(box, { account: ACCOUNT, projects: ["other"] });
     await must(box, demo, ["project", "archive", "other", "--why", "not this quarter"]);
 
     const written = pendingRows(ws, "other").flatMap((row) => row.events);
@@ -532,8 +542,7 @@ test("Q2: the store directory is made where it is missing, so the first append h
 test("Q3: one project's damaged queue leaves the rest of the workspace readable", async () =>
 {
     const box = machine();
-    const { ws, demo } = await serverBackedWorkspace(box);
-    await secondProject(box, ws, "other");
+    const { ws, demo } = await serverBackedWorkspace(box, { projects: ["other"] });
     await must(box, demo, ["goal", "add", "ship the thing"]);
     damage(join(projectDir(ws, "other"), PENDING_FILE));
 
@@ -670,13 +679,20 @@ test("N2: a record written into a store with no git repository is undone there",
     assert.ok(events.some((event) => event.refs?.annuls === id), "the undo is a record like any other");
 });
 
-test("N3: a project is registered in a store with no git repository", async () =>
+// Registering is the one write that is not only local since #426 — the
+// workspace makes the project and this machine registers what it made — so
+// this cell has a workspace to talk to. What it is about is unchanged: the
+// store has no git repository, and nothing in the registration reaches for one.
+test("N3: a project is registered in a store with no git repository", async (t) =>
 {
     const box = machine();
-    const { ws } = await noGitWorkspace(box);
+    const server = await workspaceServer({ account: ACCOUNT });
+    t.after(() => server.close());
+    const { ws } = await noGitWorkspace(box, { account: ACCOUNT, base: server.url, wsId: server.wsId });
     const second = join(ws, "second");
     mkdirSync(second, { recursive: true });
-    await must(box, second, ["project", "init", "--name", "second"]);
+    await must(box, second, ["project", "init", "--name", "second"], { SUPERSELF_DEV: "1", SUPERSELF_SYNC: "inline" });
 
-    assert.match((await must(box, second, ["project"])).out, /second/);
+    assert.equal(server.projectId("second") !== undefined, true, "the workspace was not asked to make the project");
+    assert.match((await must(box, second, ["project"], { SUPERSELF_DEV: "1", SUPERSELF_SYNC: "off" })).out, /second/);
 });

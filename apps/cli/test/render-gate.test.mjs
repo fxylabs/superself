@@ -17,7 +17,7 @@ const box = machine();
 const ws = join(box.root, "ws");
 const demo = join(ws, "demo");
 mkdirSync(demo, { recursive: true });
-await must(box, ws, ["init"]);
+await must(box, ws, ["init", "--git"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the render gate", "--no-connect"]);
 

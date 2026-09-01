@@ -27,7 +27,7 @@ async function scratch()
     const ws = join(box.root, "ws");
     const demo = join(ws, "demo");
     mkdirSync(demo, { recursive: true });
-    await ok(box, ws, ["init"]);
+    await ok(box, ws, ["init", "--git"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
     await ok(box, demo, ["project", "init", "--name", "demo", "--desc", "driver cells"]);
     return { box, ws, demo };
@@ -181,7 +181,7 @@ test("cell 12: a git probe taken before a repository existed is not answered fro
     // Asked while `demo` is a plain directory: the probe answers "no checkout
     // here" and would keep answering it for the life of the process.
     assert.equal((await drive(box, demo, ["project", "init", "--name", "demo", "--desc", "too early"])).code, 1);
-    await ok(box, ws, ["init"]);
+    await ok(box, ws, ["init", "--git"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
     await ok(box, demo, ["project", "init", "--name", "demo", "--desc", "driver cells"]);
 });

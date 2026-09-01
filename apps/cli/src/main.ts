@@ -23,6 +23,7 @@ import { applyCommand } from "./apply.js";
 import { archivedListing, PROJECT_ARCHIVE_LEAF, PROJECT_RESTORE_LEAF } from "./archive.js";
 import { helpHint, parseCommand, required, Requirement, unknownOption } from "./args.js";
 import { ARTIFACT_COMMAND, artifactDigest, attachedArtifactLines, commitStaged, resolveArtifactRef, stageArtifacts } from "./artifact.js";
+import { connectCloud, createWorkspaceProject } from "./cloud.js";
 import { connectMachine, connectProject, machineBlock } from "./connect.js";
 import { branch, Command, CommandInput, CommandNode, findCommandByName, leaf, Resolved, resolveCommand } from "./contract.js";
 import { validZone } from "./dates.js";
@@ -33,7 +34,7 @@ import { findTopic, topicPage } from "./guide.js";
 import { attachmentListing, MILESTONE_COMMAND, OBJECTIVE_COMMAND, requireRetirable, requireSupersedableWork, WORK_GOAL_LEAVES } from "./goals.js";
 import { classifyEvidence, commitAll, commonDir, ensureWorkspaceRepo, excludeLocally, headCommit, realPath, repositoryIdentity, resetProbes, topOf } from "./gitutil.js";
 import { cliVersion, commandUsage, rootUsage } from "./help.js";
-import { WrittenBy, writtenBy } from "./human.js";
+import { WrittenBy, askLine, atKeyboard, writtenBy } from "./human.js";
 import { workId, wrongKindHint } from "./ids.js";
 import { findEventByPrefix, readEvents } from "./logfile.js";
 import { machineWorkspace, sessionToken, setMachineWorkspace } from "./machine.js";
@@ -575,7 +576,13 @@ function usageLines(usage: string): string[]
 
 /* ── the option sets this module's leaves declare ──────────────────── */
 
-const INIT_OPTIONS = { lang: { type: "string" }, agents: { type: "boolean" } } as const;
+const INIT_OPTIONS = {
+    lang: { type: "string" },
+    agents: { type: "boolean" },
+    git: { type: "boolean" },
+    cloud: { type: "boolean" },
+    workspace: { type: "string" }
+} as const;
 
 const PROJECT_INIT_OPTIONS = { name: { type: "string" }, desc: { type: "string" }, "no-connect": { type: "boolean" } } as const;
 
@@ -761,13 +768,24 @@ const WORK_CHILDREN: CommandNode[] = [
 export const COMMANDS: Command[] = [
     {
         name: "init",
-        usage: [{ syntax: "init [--lang <code>] [--agents]", description: ["initialize the current directory as a workspace"], verbs: [""] }],
+        usage: [{
+            syntax: "init [--git|--cloud] [--workspace <id>] [--lang <code>] [--agents]",
+            description: ["initialize the current directory as a workspace"],
+            verbs: [""]
+        }],
         detail: [
             "create the workspace store this machine records project state in, and",
-            "point this machine at it.",
+            "point this machine at it. a store keeps its records in a git repository",
+            "this machine commits, or on a workspace server this machine is signed in",
+            "to; with neither flag and a person at the terminal, it asks which.",
             "",
-            "  --lang <code>   language of the HTML views, as a BCP 47 code (en, ko, ja)",
-            "  --agents        tell this machine's agents about self without asking"
+            "  --git             keep the records in a git repository here",
+            "  --cloud           keep them on a workspace server: sign in if this",
+            "                    machine has not, attach to a workspace, and pull it",
+            "  --workspace <id>  the workspace on the server to attach to, so",
+            "                    --cloud needs nobody at the terminal",
+            "  --lang <code>     language of the HTML views, as a BCP 47 code (en, ko, ja)",
+            "  --agents          tell this machine's agents about self without asking"
         ],
         node: leaf("", INIT_OPTIONS, 0, cmdInit)
     },
@@ -1638,14 +1656,107 @@ registerPluginClaims((verb) => pluginVerbs().has(verb));
 
 /* ── the workspace and project verbs this module implements ────────── */
 
+// Which of the two kinds of store this makes, then the making of it.
+//
+// The order is what keeps a question from being asked that has no reason to be:
+// two flags that contradict each other is a mistake whatever the answer would
+// have been, and a directory that is already a store is answered by what is
+// there rather than by asking what to put there.
 async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<CommandOutput>
 {
+    const named = namedMode(values);
     const cwd = process.cwd();
     const storeDir = join(cwd, STORE_DIR);
     if (existsSync(storeDir))
     {
-        return alreadyThere(storeDir);
+        return alreadyThere(storeDir, named);
     }
+    return withAgents(await storeOf(named ?? askStoreMode(), cwd, storeDir, values), values);
+}
+
+// The store the chosen mode makes, and the one flag that belongs to only one of
+// them. `--workspace` names a workspace on a server, and a git-backed store has
+// none — accepting it there would take an argument, do nothing with it, and
+// leave the caller believing this machine was attached to something.
+function storeOf(mode: StoreMode, cwd: string, storeDir: string,
+    values: CommandInput<typeof INIT_OPTIONS>["values"]): Promise<CommandOutput>
+{
+    if (mode === "cloud")
+    {
+        return connectCloud(cwd, storeDir, values.workspace, async () => validLang(values.lang ?? await askLang()));
+    }
+    if (values.workspace !== undefined)
+    {
+        throw new CliError("`--workspace` names a workspace on a server, and a git-backed store keeps its records "
+            + "here — pass `--cloud` to attach this machine to that workspace, and nothing was created");
+    }
+    return gitInit(cwd, storeDir, values);
+}
+
+// Asked of both kinds of store, because it is a question about this machine
+// rather than about where the records go: the agents here are the ones that
+// will be offering to register projects, whichever workspace those projects
+// end up in.
+async function withAgents(made: CommandOutput, values: CommandInput<typeof INIT_OPTIONS>["values"]): Promise<CommandOutput>
+{
+    const agents = values.agents === true || await askAgents();
+    return agents ? [...made, ...connectMachineAgents()] : made;
+}
+
+// A store keeps its records in a git repository this machine commits, or on a
+// workspace server it is signed in to, and one store is one or the other for
+// its whole life.
+type StoreMode = "git" | "cloud";
+
+function namedMode(values: CommandInput<typeof INIT_OPTIONS>["values"]): StoreMode | undefined
+{
+    if (values.git === true && values.cloud === true)
+    {
+        throw new CliError("`--git` and `--cloud` name the two kinds of store a workspace can keep its records in, "
+            + "and one store is one or the other — pass whichever this one is, and nothing was created");
+    }
+    if (values.git === true)
+    {
+        return "git";
+    }
+    return values.cloud === true ? "cloud" : undefined;
+}
+
+// The question, and the refusal that stands in its place where nobody is there
+// to be asked. There is no default: which kind of store this is decides where
+// every record this workspace ever holds is kept, and it is not undone by
+// running the command again — so a machine driving this CLI states it, and a
+// person is asked it.
+function askStoreMode(): StoreMode
+{
+    if (!atKeyboard())
+    {
+        throw new CliError("a workspace store keeps its records in a git repository this machine commits, or on a "
+            + "workspace server this machine is signed in to, and nobody is at this terminal to be asked which — "
+            + "pass `--git` or `--cloud`");
+    }
+    return readStoreMode(askLine("where should this workspace keep its records — [g]it here, or the [c]loud? [g/c]: "));
+}
+
+function readStoreMode(answer: string): StoreMode
+{
+    const said = answer.trim().toLowerCase();
+    if (said === "g" || said === "git")
+    {
+        return "git";
+    }
+    if (said === "c" || said === "cloud")
+    {
+        return "cloud";
+    }
+    throw new CliError(`"${answer.trim()}" is neither, so nothing was created — `
+        + "run `self init` again and answer `g` for a git repository here or `c` for a workspace server");
+}
+
+// The git-backed store, exactly as it has always been made.
+async function gitInit(cwd: string, storeDir: string,
+    values: CommandInput<typeof INIT_OPTIONS>["values"]): Promise<CommandOutput>
+{
     const lang = validLang(values.lang ?? await askLang());
     ensureDir(storeDir);
     writeFileSync(join(storeDir, "registry.jsonl"), "");
@@ -1655,20 +1766,21 @@ async function cmdInit({ values }: CommandInput<typeof INIT_OPTIONS>): Promise<C
     excludeLocally(cwd, STORE_DIR + "/");
     commitAll(storeDir, "self init");
     setMachineWorkspace(cwd);
-    const opened: CommandOutput = [{ kind: "receipt", text: `workspace initialized at ${storeDir} (views in "${lang}")` }];
-    const agents = values.agents === true || await askAgents();
-    return agents ? [...opened, ...connectMachineAgents()] : opened;
+    return [{ kind: "receipt", text: `workspace initialized at ${storeDir} (views in "${lang}")` }];
 }
 
-// What is already at `.superself`, in the three ways it can be there. Only the
+// What is already at `.superself`, in the four ways it can be there. Only the
 // last of them is this command succeeding at nothing.
 //
-// A store is git-backed or server-backed for its whole life, and this verb sets
-// up the git-backed one: it makes the git repository, and that happens outside
-// every path a store's mode could quietly turn into no work. Answering "already
-// initialized" for a server-backed store would be reporting about a store this
-// command could not have made and cannot change.
-function alreadyThere(storeDir: string): CommandOutput
+// A store is git-backed or server-backed for its whole life, and the mode a
+// caller named is answered against the mode that is there: asking for the kind
+// this store is not is a refusal, because nothing this command does could turn
+// one into the other and reporting "already initialized" would say it had.
+//
+// Nothing here asks anything. A directory that is already a store has no
+// question left in it, which is why this stands in front of the one `init`
+// would otherwise ask.
+function alreadyThere(storeDir: string, named: StoreMode | undefined): CommandOutput
 {
     if (!isStore(storeDir))
     {
@@ -1676,8 +1788,13 @@ function alreadyThere(storeDir: string): CommandOutput
     }
     if (serverBacked(storeDir))
     {
-        throw new CliError(`${storeDir} is a server-backed workspace store, and \`self init\` sets up a `
-            + "git-backed one — one store is one or the other");
+        throw new CliError(`${storeDir} is a server-backed workspace store — one store is one or the other, and this `
+            + "machine is attached to a workspace already");
+    }
+    if (named === "cloud")
+    {
+        throw new CliError(`${storeDir} is a git-backed workspace store — one store is one or the other, and `
+            + "`--cloud` makes the kind whose records a workspace server holds");
     }
     return [{ kind: "receipt", text: `workspace already initialized at ${storeDir}` }];
 }
@@ -1910,7 +2027,7 @@ function projectRefusal(verb: string | undefined): string
 // arity gate would answer a stray argument with the syntax alone, and the
 // mistake this verb exists to end is precisely a caller who believes it takes
 // one (#251 T1.8).
-function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_OPTIONS>): CommandOutput
+async function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_OPTIONS>): Promise<CommandOutput>
 {
     if (positionals[0] !== undefined)
     {
@@ -1921,7 +2038,13 @@ function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_O
     const projectDir = resolve(process.cwd());
     const slug = values.name ?? basename(projectDir);
     refuseDuplicateProject(ctx.storeDir, projectDir, slug);
-    registerProject(ctx, projectDir, slug, values.desc);
+    // Where the records live on a server, the workspace makes the project and
+    // this machine registers what the workspace made — id and all. A refusal
+    // arrives here, at the command somebody is waiting on, rather than as a
+    // queue that will not empty; nothing local has been written yet, so
+    // nothing local is left behind by one.
+    const id = serverBacked(ctx.storeDir) ? await createWorkspaceProject(ctx.storeDir, slug, values.desc) : undefined;
+    registerProject(ctx, projectDir, slug, values.desc, id);
     const registered: CommandOutput = [{ kind: "receipt", text: `project "${slug}" registered` }];
     if (values["no-connect"] === true)
     {
@@ -1933,12 +2056,22 @@ function projectInit({ values, positionals }: CommandInput<typeof PROJECT_INIT_O
 // Every write a registration makes, reached only once every refusal above has
 // passed. Nothing here can be undone by a later validation, so no validation
 // may stand later than this call.
-function registerProject(ctx: CliContext, projectDir: string, slug: string, description: string | undefined): void
+function registerProject(ctx: CliContext, projectDir: string, slug: string, description: string | undefined,
+    id: string | undefined): void
 {
     const entry: Record<string, unknown> = { slug, added: new Date().toISOString() };
     if (description !== undefined)
     {
         entry.description = description;
+    }
+    // The workspace's own id for this project, on the row from the moment the
+    // row exists. `pusher.ts` reads it at P6 to tell a project this machine
+    // made and never registered from one the workspace has forgotten, and a
+    // window in which the row is there without it is a window in which a push
+    // would re-create a project somebody deleted.
+    if (id !== undefined)
+    {
+        entry.id = id;
     }
     appendFileSync(join(ctx.storeDir, "registry.jsonl"), JSON.stringify(entry) + "\n");
     // The registry this process already read no longer says what the file says.

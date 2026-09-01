@@ -81,8 +81,8 @@ export function sweep()
     // than the path: a machine with no workspace pointer is told where to make
     // one, and that sentence is as much a read's value as a path is.
     run(box.root, "outside", ["workspace"]);
-    run(ws, "workspace", ["init"]);
-    run(ws, "workspace", ["init"]);
+    run(ws, "workspace", ["init", "--git"]);
+    run(ws, "workspace", ["init", "--git"]);
     git(box, demo, ["init", "-q", "-b", "main"]);
     run(demo, "project", ["project", "init", "--name", "demo", "--desc", "the render gate scenario", "--no-connect"]);
     // Proposed and then confirmed, both from the piped child every command in

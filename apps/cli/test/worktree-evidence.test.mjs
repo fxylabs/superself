@@ -44,7 +44,7 @@ async function registered()
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const repo = repository(box, join(ws, "demo"));
     await must(box, repo, ["project", "init", "--name", "demo", "--no-connect"]);
     return { box, ws, repo };
@@ -160,7 +160,7 @@ test("W6: a project registered at a subdirectory maps into the nested worktree",
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const repo = repository(box, join(ws, "demo"));
     const foo = subdirectory(repo, join("apps", "foo"));
     commit(box, repo, join("apps", "foo", "keep"));
@@ -176,7 +176,7 @@ test("W7: a nested worktree without the registered subdirectory refuses instead 
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const repo = repository(box, join(ws, "demo"));
     const bare = gitOut(box, repo, ["rev-parse", "HEAD"]);
     const foo = subdirectory(repo, join("apps", "foo"));
@@ -226,7 +226,7 @@ test("W11: a registered directory that is no repository records no commit", asyn
     const ws = join(box.root, "ws");
     const plain = join(ws, "plain");
     mkdirSync(plain, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     await must(box, plain, ["project", "init", "--name", "plain", "--no-connect"]);
     await must(box, plain, ["report", await work(box, plain), "did the thing"]);
     const refs = reportedRefs(ws, "plain");

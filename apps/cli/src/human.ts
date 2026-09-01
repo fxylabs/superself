@@ -91,6 +91,30 @@ export function writtenBy(name?: string): WrittenBy
     };
 }
 
+// Whether this process may ask a question at all: somebody at the keyboard, and
+// a screen for the question to appear on. Both ends, unlike `personAtTerminal`
+// above — that one answers "did a person write this", and a question whose text
+// goes down a pipe is one nobody can see themselves being asked.
+export function atKeyboard(): boolean
+{
+    return personAtTerminal() && process.stdout.isTTY === true;
+}
+
+// A question whose answer decides what the command does next, asked on the same
+// line it is answered on. The gate below asks a person to confirm something
+// this CLI already knows it is about to do; this one asks a person to choose,
+// and the command has nothing to say until they have.
+//
+// It checks no terminal itself. Every caller has already decided that asking is
+// possible — the alternative is not a default but a refusal naming the flag
+// that answers the question without a person, and only the caller knows which
+// flag that is.
+export function askLine(question: string): string
+{
+    process.stdout.write(question);
+    return typed();
+}
+
 // The human gate. What makes this input human is the interactive terminal:
 // a process running with piped or scripted stdio never reaches the prompt,
 // and no flag, environment variable or event payload substitutes for it.

@@ -68,13 +68,19 @@ Choose a durable directory outside your project checkouts:
 ```bash
 mkdir -p ~/self-workspace
 cd ~/self-workspace
-self init
+self init --git
 self setup
 ```
 
-`self init` creates `~/self-workspace/.superself` as a Git repository and makes
-`~/self-workspace` the workspace selected by this machine. In an interactive
-terminal it may ask:
+A workspace store keeps its records in one of two places: in a Git repository
+this machine commits, or on a workspace server this machine is signed in to.
+`--git` chooses the first. In an interactive terminal you can leave the flag
+off and answer the question instead; a script or an agent has to state it,
+because which kind of store this is cannot be changed afterwards.
+
+`self init --git` creates `~/self-workspace/.superself` as a Git repository and
+makes `~/self-workspace` the workspace selected by this machine. In an
+interactive terminal it may also ask:
 
 - which language to use for rendered HTML views; and
 - whether to add a small Superself onboarding block to this machine's agent
@@ -85,7 +91,7 @@ records. Machine-level agent onboarding is optional. If you want to request it
 without the prompt, use:
 
 ```bash
-self init --lang <code> --agents
+self init --git --lang <code> --agents
 ```
 
 Replace `<code>` with the view language you want, such as `en`. This can modify agent instruction

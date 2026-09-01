@@ -122,7 +122,7 @@ async function floorState(box)
 {
     const floor = join(box.env.HOME, "floor-workspace");
     mkdirSync(floor, { recursive: true });
-    await must(box, floor, ["init"]);
+    await must(box, floor, ["init", "--git"]);
     return { cwd: enteredDir(box, join(box.env.HOME, "my-project")) };
 }
 

@@ -8,6 +8,7 @@
 // subject.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { WORKSPACE_SCOPES } from "../dist/login.js";
 import { WORKSPACE_FILE } from "../dist/mode.js";
 import { PENDING_FILE } from "../dist/pending.js";
 import { demoWorkspace, machine } from "./harness.mjs";
@@ -38,7 +39,9 @@ export async function connectedMachine(options = {})
     const box = machine();
     const server = options.server ?? await workspaceServer({ account: ACCOUNT, ...options });
     const { ws, demo } = await demoWorkspace(box);
-    writeCredential(box, { account: ACCOUNT, apiBase: server.url, scopes: ["self.sync", "self.read", "self.write", "project.manage"] });
+    // Every scope a workspace store needs, unless the case's subject is a
+    // credential that is short of one.
+    writeCredential(box, { account: ACCOUNT, apiBase: server.url, scopes: options.scopes ?? WORKSPACE_SCOPES });
     markServerBacked(ws, server);
     return { box, ws, demo, server };
 }

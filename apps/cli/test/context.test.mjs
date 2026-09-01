@@ -106,7 +106,7 @@ const NUDGE = /no friction on \d+ of this project's \d+ reports? in the last 30 
 
 mkdirSync(nudgeWs, { recursive: true });
 
-await must(nudgeBox, nudgeWs, ["init"]);
+await must(nudgeBox, nudgeWs, ["init", "--git"]);
 
 // D5 has a machine of its own: the tightened budget below is written into the
 // workspace config, and every cell above renders under the shipped one.
@@ -275,7 +275,7 @@ test("D6: the nudge counts this project's reports, not the workspace's", async (
 test("D5: the nudge fits the budget, and a cut one leaves the stated elision", async () =>
 {
     mkdirSync(cutWs, { recursive: true });
-    await must(cutBox, cutWs, ["init"]);
+    await must(cutBox, cutWs, ["init", "--git"]);
     const dir = await registerProject(cutBox, cutWs, "d5");
     const work = workIdIn((await mustPerson(cutBox, dir, ["work", "add", "d5 outcome"])).out);
     [null, null, null, "d"].forEach((said, index) => reportFixture(cutWs, "d5", work, index, said));

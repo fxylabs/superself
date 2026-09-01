@@ -35,7 +35,7 @@ import { PENDING_FILE, compactedPending, markSent, markSurfaced, unsentAppends, 
 import { ServerProject, reconcileRegistry } from "./registrycache.js";
 import { acquireSyncLock, publishRewrite, releaseSyncLock } from "./synclock.js";
 import { ApiAnswer, WorkspaceSession, listProjects, openSession, pullAfter } from "./transport.js";
-import { JsonValue, SelfEvent } from "./types.js";
+import { CliError, JsonValue, SelfEvent } from "./types.js";
 
 // The longest one catch-up may live, for the reason `PUSHER_LEASE_MS` exists
 // and strictly under `SYNC_LEASE_MS` for the same one: a lock older than the
@@ -165,8 +165,15 @@ async function sync(storeDir: string, nonce: string): Promise<void>
 //
 // `until` is a parameter rather than a deadline this function sets itself, so
 // that a case can state one.
+//
+// The answer is whether the workspace was reachable throughout, which is a fact
+// about the network rather than about any one project — false only where a
+// request did not come back at all. Every ordinary caller ignores it, because
+// every row of the pull table ends in the command running against what this
+// machine holds; the first catch-up of a store being created is the one caller
+// that has nothing to fall back on and reads it.
 export async function pullEverySlug(storeDir: string, session: WorkspaceSession, nonce: string,
-    until: number): Promise<void>
+    until: number): Promise<boolean>
 {
     for (const slug of inTurn(storeDir))
     {
@@ -182,10 +189,11 @@ export async function pullEverySlug(storeDir: string, session: WorkspaceSession,
         // command about a different one.
         if (!await pullProject(storeDir, session, slug, nonce).catch(() => true))
         {
-            return;
+            return false;
         }
         rememberPlace(storeDir, slug);
     }
+    return true;
 }
 
 /* ── whose turn it is ──────────────────────────────────────────────── */
@@ -378,7 +386,7 @@ function isStored(event: unknown): event is StoredEvent
 // makes another machine's new project, removed project or edited description
 // show up here at all, and asking more often would spend a request per command
 // on a list that changes in days.
-async function reconcile(storeDir: string, session: WorkspaceSession, nonce: string): Promise<void>
+async function reconcile(storeDir: string, session: WorkspaceSession, nonce: string): Promise<ApiAnswer>
 {
     const answer = await listProjects(session);
     if (answer.reached && answer.status === 200 && Array.isArray(answer.body))
@@ -388,6 +396,11 @@ async function reconcile(storeDir: string, session: WorkspaceSession, nonce: str
     // Every other answer is the pull table's business and the pull says it: a
     // 404 or a 426 here is the same 404 or 426 the delta is about to get, and
     // saying it twice would be one command reporting one fact two ways.
+    //
+    // Handed back rather than swallowed for the one caller that has no pull
+    // behind it to say anything: the first catch-up of a store being created,
+    // which is the only catch-up in this file that is allowed to fail.
+    return answer;
 }
 
 // The projects this machine still holds records for. A reconciliation may not
@@ -425,4 +438,74 @@ function surfaceBlocked(storeDir: string): void
             + `workspace: ${block.detail ?? block.code}`));
         markSurfaced(storeDir, entry.slug, blocks);
     }
+}
+
+/* ── the catch-up that is allowed to fail ──────────────────────────── */
+
+// What `self init --cloud` runs once the store's marker is on disk, and the one
+// catch-up in this file that can refuse.
+//
+// Every other one is best effort, and rightly: the local files are a complete
+// log of what this machine knows, so a workspace it cannot reach costs a notice
+// and nothing else. This one has no local files behind it — it is what fills
+// them — and finishing it is the difference between a store attached to a
+// workspace this machine is a member of and a directory naming a server nobody
+// has checked. So each way it can end short is a sentence, and the flow that
+// called it takes the store back off the disk.
+export async function firstCatchUp(storeDir: string): Promise<void>
+{
+    const nonce = acquireSyncLock(storeDir);
+    if (nonce === null)
+    {
+        // A store nothing else knows about yet, so this is another process
+        // inside the same directory rather than a busy workspace.
+        throw new CliError("another process is already working in this directory — nothing was created");
+    }
+    try
+    {
+        await firstSync(storeDir, nonce);
+    }
+    finally
+    {
+        releaseSyncLock(storeDir, nonce);
+    }
+}
+
+async function firstSync(storeDir: string, nonce: string): Promise<void>
+{
+    const session = openSession(storeDir);
+    refuseUnlisted(await reconcile(storeDir, session, nonce));
+    if (!await pullEverySlug(storeDir, session, nonce, Date.now() + PULLER_LEASE_MS))
+    {
+        throw unreachable();
+    }
+}
+
+// The project list, which is the request that says whether this machine is a
+// member of the workspace it just named. The workspace API answers one
+// indistinguishable 404 for a non-member, a call outside its scopes and a
+// workspace that is not there (C1 invariant 3), so the sentence names all three
+// rather than picking one it cannot know.
+function refuseUnlisted(answer: ApiAnswer): void
+{
+    if (!answer.reached)
+    {
+        throw unreachable();
+    }
+    if (answer.status === 404)
+    {
+        throw new CliError("the workspace server has no such workspace for this machine — check the id, and "
+            + "check that this machine is signed in as an account that is a member of it with `self login`");
+    }
+    if (answer.status !== 200)
+    {
+        throw new CliError(`the workspace server answered ${answer.status} when asked for this workspace's projects, `
+            + "so nothing was created");
+    }
+}
+
+function unreachable(): CliError
+{
+    return new CliError("this machine could not reach the workspace server, so nothing was created — "
+        + "a store is attached to a workspace that answered, never to one that might be there");
 }
