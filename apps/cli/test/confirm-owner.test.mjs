@@ -44,7 +44,7 @@ async function workspace()
     const beta = join(ws, "beta");
     mkdirSync(alpha, { recursive: true });
     mkdirSync(beta, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     git(box, alpha, ["init", "-q", "-b", "main"]);
     git(box, beta, ["init", "-q", "-b", "main"]);
     await must(box, alpha, ["project", "init", "--name", "alpha", "--no-connect"]);
@@ -180,7 +180,7 @@ async function capped()
     const other = join(capWs, "beta");
     mkdirSync(owner, { recursive: true });
     mkdirSync(other, { recursive: true });
-    await must(capBox, capWs, ["init"]);
+    await must(capBox, capWs, ["init", "--git"]);
     git(capBox, owner, ["init", "-q", "-b", "main"]);
     git(capBox, other, ["init", "-q", "-b", "main"]);
     await must(capBox, owner, ["project", "init", "--name", "alpha", "--no-connect"]);
@@ -239,7 +239,7 @@ test("cells 13-16 setup: the owning project's checkout is removed after its reco
 {
     const dir = join(goneWs, "alpha");
     mkdirSync(dir, { recursive: true });
-    await must(goneBox, goneWs, ["init"]);
+    await must(goneBox, goneWs, ["init", "--git"]);
     git(goneBox, dir, ["init", "-q", "-b", "main"]);
     await must(goneBox, dir, ["project", "init", "--name", "alpha", "--no-connect"]);
     await must(goneBox, dir, ["goal", "add", "a direction"]);
@@ -314,7 +314,7 @@ test("cells 20 and 21: an archived owner is refused by the append gate, wherever
     const archivedWs = join(archivedBox.root, "ws");
     const dir = join(archivedWs, "alpha");
     mkdirSync(dir, { recursive: true });
-    await must(archivedBox, archivedWs, ["init"]);
+    await must(archivedBox, archivedWs, ["init", "--git"]);
     git(archivedBox, dir, ["init", "-q", "-b", "main"]);
     await must(archivedBox, dir, ["project", "init", "--name", "alpha", "--no-connect"]);
     const id = entityIn((await must(archivedBox, dir, ["state", "add", "a record set aside with its project", "--proposed"])).out);

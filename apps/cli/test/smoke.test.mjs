@@ -60,7 +60,7 @@ test("the root usage carries the surviving surface and none of the cut one", () 
 
 test("init creates a workspace this machine resolves", () =>
 {
-    const init = self(["init"]);
+    const init = self(["init", "--git"]);
     assert.equal(init.code, 0, init.out);
     const status = self(["status"]);
     assert.equal(status.code, 0, status.out);

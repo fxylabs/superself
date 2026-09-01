@@ -1,10 +1,10 @@
 $ self workspace   (in outside, exit 0)
 no workspace set — run `self init` in the directory that should hold it
 
-$ self init   (in workspace, exit 0)
+$ self init --git   (in workspace, exit 0)
 workspace initialized at <root>/ws/.superself (views in "en")
 
-$ self init   (in workspace, exit 0)
+$ self init --git   (in workspace, exit 0)
 workspace already initialized at <root>/ws/.superself
 
 $ self project init --name demo --desc the render gate scenario --no-connect   (in project, exit 0)
@@ -163,7 +163,8 @@ re-render every project view.
 $ self    (in project, exit 0)
 usage: self <command>
 
-  init [--lang <code>] [--agents]            initialize the current directory as a workspace
+  init [--git|--cloud] [--workspace <id>] [--lang <code>] [--agents]
+                                             initialize the current directory as a workspace
   workspace [<path>]                         show or set the workspace this machine uses
   lang [<code>]                              show or set the language of the HTML views
   theme [<name>]                             show or set the viewer accent theme (violet, cyan, orange, mono)

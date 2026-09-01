@@ -30,7 +30,7 @@ const other = join(ws, "other");
 // three states, an artifact and enough records for a search to find several.
 mkdirSync(demo, { recursive: true });
 mkdirSync(other, { recursive: true });
-await must(box, ws, ["init"]);
+await must(box, ws, ["init", "--git"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 git(box, other, ["init", "-q", "-b", "main"]);
 await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the listing migration", "--no-connect"]);
@@ -114,7 +114,7 @@ async function machineWithProjects(slugs)
     const root = join(own.root, "ws");
     const project = join(root, "demo");
     mkdirSync(project, { recursive: true });
-    await must(own, root, ["init"]);
+    await must(own, root, ["init", "--git"]);
     git(own, project, ["init", "-q", "-b", "main"]);
     await must(own, project, ["project", "init", "--name", "demo", "--desc", "the scratch project", "--no-connect"]);
     for (const slug of slugs)
@@ -316,7 +316,7 @@ test("stage 3 cell 12: an empty listing prints its own wording and nothing under
 test("stage 3 cell 12: a workspace with no project registered answers as it always did", async () =>
 {
     const bare = machine();
-    await must(bare, bare.root, ["init"]);
+    await must(bare, bare.root, ["init", "--git"]);
     const answer = await selfIn(bare, bare.root, ["project"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, "no projects registered — run `self project init` inside a project directory\n");

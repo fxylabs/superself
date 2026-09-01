@@ -25,7 +25,7 @@ const box = machine();
 const ws = join(box.root, "ws");
 const project = join(ws, "styled");
 mkdirSync(project, { recursive: true });
-mustSpawn(box, ws, ["init"]);
+mustSpawn(box, ws, ["init", "--git"]);
 git(box, project, ["init", "-q", "-b", "main"]);
 mustSpawn(box, project, ["project", "init", "--name", "styled", "--no-connect"]);
 mustSpawn(box, project, ["state", "add", "T4-4 the highlighted phrase", "--exposure", "search"]);

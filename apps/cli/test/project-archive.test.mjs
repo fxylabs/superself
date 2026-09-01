@@ -43,7 +43,7 @@ async function two()
     const beta = join(ws, "beta");
     mkdirSync(alpha, { recursive: true });
     mkdirSync(beta, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     git(box, alpha, ["init", "-q", "-b", "main"]);
     git(box, beta, ["init", "-q", "-b", "main"]);
     await must(box, alpha, ["project", "init", "--name", "alpha", "--no-connect"]);

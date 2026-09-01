@@ -32,7 +32,7 @@ const other = join(ws, "other");
 // another session, one closed — and records at every exposure.
 mkdirSync(demo, { recursive: true });
 mkdirSync(other, { recursive: true });
-await must(box, ws, ["init"]);
+await must(box, ws, ["init", "--git"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 git(box, other, ["init", "-q", "-b", "main"]);
 await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the document migration", "--no-connect"]);
@@ -104,7 +104,7 @@ async function machineWithDemo()
     const root = join(own.root, "ws");
     const project = join(root, "demo");
     mkdirSync(project, { recursive: true });
-    await must(own, root, ["init"]);
+    await must(own, root, ["init", "--git"]);
     git(own, project, ["init", "-q", "-b", "main"]);
     await must(own, project, ["project", "init", "--name", "demo", "--desc", "a scratch project", "--no-connect"]);
     return { box: own, ws: root, demo: project };

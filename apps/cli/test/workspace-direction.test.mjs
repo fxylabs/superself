@@ -95,7 +95,7 @@ async function workspaceOf(...slugs)
     const ws = join(box.root, "ws");
     const world = { box, ws };
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     for (const slug of ["alpha", "beta", ...slugs])
     {
         world[slug] = join(ws, slug);

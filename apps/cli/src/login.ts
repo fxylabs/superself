@@ -44,9 +44,31 @@ import { CommandOutput, JsonValue, fail, refuse } from "./types.js";
 // plugin needs a credential, and the scopes are declared by plugins that are
 // not installed yet — and the consent gate is the approve page, which shows the
 // exact list with the device label, IP, hostname and start time, not the flag.
-export const DEFAULT_AGENT_SCOPES = [
+const RAIL_SCOPES = [
     "email.send", "email.read", "email.domain.manage", "landing.deploy", "landing.read", "wallet.read"
 ];
+
+// What a workspace store needs, from the vocabulary C1 §3 fixes: the three
+// `self.*` scopes the sync layer sends and receives under, the two `artifact.*`
+// ones a record's attachments travel under, `repo.read` for the connections a
+// project's evidence names, and `project.manage` for creating a project at all.
+//
+// `repo.manage` is deliberately not here. Creating and deleting a workspace's
+// repository connections is not something this CLI does, and a scope requested
+// by default is a scope on the approve page a person has to read and decide
+// about — asking for one nothing spends is asking for trust with nothing behind
+// it.
+//
+// This list is also the shortage test. A credential granted before these
+// existed carries none of them, and the workspace answers one indistinguishable
+// 404 for a non-member, an out-of-scope call and an absent project (C1
+// invariant 3) — so nothing on the wire can say "your credential is old", and
+// this comparison is where that is found out.
+export const WORKSPACE_SCOPES = [
+    "self.sync", "self.read", "self.write", "artifact.read", "artifact.write", "repo.read", "project.manage"
+];
+
+export const DEFAULT_AGENT_SCOPES = [...RAIL_SCOPES, ...WORKSPACE_SCOPES];
 
 // Increment applied on every `slow_down`. The client never polls faster than
 // the interval it was given.
@@ -416,16 +438,46 @@ function defaultLabel(): string
     }
 }
 
+// What `self login` asks for, and what asks for it on behalf of somebody else.
+//
+// The connect flow behind `self init --cloud` starts a login where this machine
+// holds no credential, and it starts *this* one rather than a second
+// implementation of the device flow — the pacing rules at the top of this file
+// are the whole reason a naive second one would burn the grant.
+interface DeviceLoginRequest
+{
+    base?: string;
+    profile?: string;
+    label?: string;
+    scopes?: string[];
+    noOpen?: boolean;
+    timeoutS?: number;
+}
+
+export async function deviceLogin(request: DeviceLoginRequest = {}): Promise<Approved>
+{
+    const base = request.base ?? process.env.SUPERSELF_API_BASE ?? DEFAULT_API_BASE;
+    const profile = request.profile ?? loginProfile(undefined);
+    const session = loginSession(profile);
+    const label = request.label ?? defaultLabel();
+    const start = await startDevice(base, session, label, request.scopes ?? DEFAULT_AGENT_SCOPES);
+    announce(start, request.noOpen === true);
+    const approved = await pollUntilApproved(base, session, start, request.timeoutS);
+    await commitLogin(profile, profileFrom(base, start, approved, label));
+    return approved;
+}
+
 async function runLogin(input: CommandInput<typeof LOGIN_OPTIONS>): Promise<CommandOutput>
 {
-    const base = apiBaseOf(input.values);
     const profile = loginProfile(input.values.profile);
-    const session = loginSession(profile);
-    const label = String(input.values.label ?? defaultLabel());
-    const start = await startDevice(base, session, label, scopesOf(input.values));
-    announce(start, input.values["no-open"] === true);
-    const approved = await pollUntilApproved(base, session, start, timeoutOf(input.values.timeout));
-    await commitLogin(profile, profileFrom(base, start, approved, label));
+    const approved = await deviceLogin({
+        base: apiBaseOf(input.values),
+        profile,
+        label: input.values.label === undefined ? undefined : String(input.values.label),
+        scopes: scopesOf(input.values),
+        noOpen: input.values["no-open"] === true,
+        timeoutS: timeoutOf(input.values.timeout)
+    });
     return signedIn(profile, approved);
 }
 

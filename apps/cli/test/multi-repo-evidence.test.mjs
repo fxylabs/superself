@@ -53,7 +53,7 @@ async function oneLink()
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const a = repo(box, join(ws, "demo"));
     await must(box, a, ["project", "init", "--name", "demo", "--no-connect"]);
     const b = repo(box, join(ws, "other"));
@@ -77,7 +77,7 @@ async function folderLink()
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const f = join(ws, "proj");
     const a = repo(box, join(f, "a"));
     const b = repo(box, join(f, "b"));
@@ -396,7 +396,7 @@ test("E26: a folder link with no repository below leaves stored verdicts untouch
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const f = join(ws, "empty");
     mkdirSync(f);
     await must(box, f, ["project", "init", "--name", "empty", "--no-connect"]);
@@ -449,7 +449,7 @@ test("E29: a repository with no commit records no repository", async () =>
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const dir = join(ws, "fresh");
     mkdirSync(dir);
     git(box, dir, ["init", "-q", "-b", "main"]);

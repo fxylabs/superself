@@ -1,0 +1,289 @@
+// `self project init` where the store keeps its records on a workspace server
+// (#426).
+//
+// Every cell is named for its row in
+// `docs/maintainers/case-tables/426-command-surface.md` — `project J2 taken` —
+// and the shape is always the same: the workspace answers, and the assertion is
+// about what is left on this machine afterwards. The rule the whole file is
+// about is that no answer leaves a project registered here that the workspace
+// did not make, because such a project's every record would queue behind a 404
+// nobody is watching.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { demoWorkspace, git, machine, must, selfIn } from "./harness.mjs";
+import { blocks, connectedMachine, queueAppend, registryRows, syncEnv, unsent } from "./transport-lib.mjs";
+
+// A directory inside the workspace that is a repository of its own and holds no
+// project yet — what `self project init` is run in.
+function room(box, ws, name)
+{
+    const dir = join(ws, name);
+    mkdirSync(dir, { recursive: true });
+    git(box, dir, ["init", "-q", "-b", "main"]);
+    return dir;
+}
+
+async function connected(t, options = {})
+{
+    const built = await connectedMachine({ projects: [{ slug: "demo" }], ...options });
+    t.after(() => built.server.close());
+    return built;
+}
+
+// Staged for the creation call alone. The catch-up a command runs first has its
+// own answers, and a case that replaced those too would be staging the whole
+// conversation rather than the one turn it is about.
+function creations(staged)
+{
+    return (call) => call.method === "POST" && call.path.endsWith("/projects") ? staged : undefined;
+}
+
+function registered(ws)
+{
+    return registryRows(ws).map((row) => row.slug);
+}
+
+/* ── J1–J4: the three answers creation has, and no answer at all ───── */
+
+test("project J1 created: a 201 registers the project here and caches the server's id for it", async (t) =>
+{
+    const { box, ws, server } = await connected(t);
+    const atlas = room(box, ws, "atlas");
+    await must(box, atlas, ["project", "init", "--name", "atlas", "--desc", "a new one", "--no-connect"], syncEnv());
+
+    assert.equal(server.projectId("atlas"), "prj_2", "the workspace did not make the project");
+    const row = registryRows(ws).find((entry) => entry.slug === "atlas");
+    assert.equal(row?.id, server.projectId("atlas"), "the registry row does not carry the server's project id");
+    assert.equal(row?.description, "a new one");
+});
+
+test("project J2 taken: a 409 sends the caller to ask for access and registers nothing here", async (t) =>
+{
+    const { box, ws, server } = await connected(t, {
+        answer: creations({ status: 409, body: { code: "slug_taken", message: 'this workspace already has a project "atlas"' } })
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /ask an owner/, "the 409 did not say what a caller can do about it");
+    assert.deepEqual(registered(ws), ["demo"], "a project the workspace refused was registered here anyway");
+    assert.ok(!existsSync(join(ws, ".superself", "projects", "atlas")), "a local project directory was left behind");
+    assert.ok(!existsSync(join(atlas, ".self")), "a marker was written for a project that was not made");
+});
+
+test("project J3 denied: a 404 sends the caller to the connection and the account, and registers nothing", async (t) =>
+{
+    const { box, ws } = await connected(t, {
+        answer: creations({ status: 404, body: { code: "not_found", message: "no such workspace, project or record" } })
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /self login/);
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+test("project J4 unreachable: a workspace that does not answer is surfaced, and registers nothing", async (t) =>
+{
+    const { box, ws } = await connected(t, { answer: creations({ destroy: true }) });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /could not reach/);
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+/* ── J5: the store that keeps its records here ─────────────────────── */
+
+test("project J5 git-mode: a git-backed store registers a project without asking anybody", async () =>
+{
+    const box = machine();
+    const { ws } = await demoWorkspace(box);
+    const atlas = room(box, ws, "atlas");
+    await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"]);
+
+    const row = registryRows(ws).find((entry) => entry.slug === "atlas");
+    assert.ok(row !== undefined, "the project was not registered");
+    assert.equal(row.id, undefined, "a git-backed store cached a server id it has no server for");
+});
+
+/* ── J6: the creation and the records that follow it ───────────────── */
+
+test("project J6 creator-acl: a record made right after the creation reaches the project the creation made", async (t) =>
+{
+    const { box, ws, server } = await connected(t);
+    const atlas = room(box, ws, "atlas");
+    await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+    await must(box, atlas, ["goal", "add", "ship the first release"], syncEnv());
+
+    assert.equal(server.eventsIn("atlas").length > 0, true,
+        "the push after the creation did not reach the project it had just made");
+    assert.equal(blocks(ws, "atlas").length, 0, "the push was refused for a project this machine had just created");
+});
+
+/* ── J7: the id cache, from the side that writes it ────────────────── */
+
+test("project J7 no-resurrection: a queued push does not re-create a project another machine deleted", async (t) =>
+{
+    const { box, ws, server } = await connected(t);
+    const atlas = room(box, ws, "atlas");
+    await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+    assert.equal(registryRows(ws).find((entry) => entry.slug === "atlas")?.id, server.projectId("atlas"));
+
+    // What another machine deleting it looks like from here: the workspace
+    // stops holding it, and this machine still has a queue for it.
+    server.state.projects.delete("atlas");
+    server.state.log.delete("atlas");
+    const queued = queueAppend(ws, { slug: "atlas" });
+    const creates = server.calls.filter((call) => call.method === "POST" && call.path.endsWith("/projects")).length;
+    await must(box, ws, ["project", "list"], syncEnv());
+
+    assert.equal(server.calls.filter((call) => call.method === "POST" && call.path.endsWith("/projects")).length, creates,
+        "the push re-created a project somebody had deleted");
+    assert.equal(blocks(ws, "atlas")[0]?.blocked, queued.append_id, "the records went nowhere and said so");
+    assert.deepEqual(unsent(ws, "atlas"), [], "and nothing is still trying");
+});
+
+/* ── J8: what an archived project still refuses ────────────────────── */
+
+test("project J8 archived: an archived project refuses a local write, exactly as it did", async (t) =>
+{
+    const { box, ws, demo } = await connected(t);
+    await must(box, ws, ["project", "archive", "demo", "--why", "nobody is working on it"], syncEnv());
+    const refused = await selfIn(box, demo, ["goal", "add", "one more thing"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /archived/);
+});
+
+/* ── J9: the credential is checked before anything is asked ────────── */
+
+test("project J9 short-scopes: a credential without the workspace scopes is refused before any request", async (t) =>
+{
+    const { box, ws, server } = await connected(t, { scopes: [] });
+    const atlas = room(box, ws, "atlas");
+    const seen = server.calls.length;
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"],
+        { ...syncEnv(), SUPERSELF_SYNC: "off" });
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /self login/);
+    assert.equal(server.calls.length, seen, "the workspace was asked about a credential the local check had answered");
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+/* ── J10–J11: the window around a creation that answered 201 ───────── */
+
+// A 409 is a name already in use, and the wire says nothing else about it —
+// C1 invariant 3a is that rule. Two things reach it: a creation of this
+// machine's own that answered 201 and died before the registry row was
+// written, and a project a colleague made first. `GET /projects` is what a
+// *member can see* (C1 v0.9.6) and holds both, so it separates neither, and a
+// CLI that registered this directory under the id it found there would bind it
+// to somebody else's records without saying so.
+//
+// So the three cells below are the three sentences, and none of them writes.
+
+test("project J10 taken-reachable: a 409 over a project this account can reach names both ways forward", async (t) =>
+{
+    // The state a crash in the window leaves: the workspace holds the project
+    // and this machine holds no row for it. It is also, byte for byte, the
+    // state a colleague having taken the name leaves — which is the reason
+    // this is a refusal that names two commands rather than a guess.
+    //
+    // The catch-up's own list request is refused once, which is what leaves the
+    // registry still not knowing: with it answered, the reconciliation would
+    // add the row first and the refusal would already name the link.
+    let listed = 0;
+    const { box, ws, server } = await connected(t, {
+        projects: [{ slug: "demo" }, { slug: "atlas" }],
+        answer: (call) => call.method === "GET" && call.path.endsWith("/projects") && (listed += 1) === 1
+            ? { status: 503, body: { code: "not_ready", message: "the workspace is starting" } }
+            : undefined
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0, "a 409 registered this directory under a project it did not create");
+    assert.match(refused.out, /self project link atlas --here/, "the refusal does not name the completion path");
+    assert.match(refused.out, /self project init --name <slug>/, "the refusal does not name the other way forward");
+    assert.doesNotMatch(refused.out, /ask an owner/, "a project this account can reach was answered as one it cannot");
+    assert.deepEqual(registered(ws), ["demo"], "a refused registration wrote a registry row");
+    assert.ok(!existsSync(join(atlas, ".self")), "a refused registration wrote a marker");
+    assert.ok(server.calls.some((call) => call.method === "POST" && call.path.endsWith("/projects")),
+        "the retry did not ask the workspace to create the project");
+});
+
+test("project J10 taken-hidden: a 409 over a project this account cannot reach is still the access refusal", async (t) =>
+{
+    // The list is what makes the two sentences different. A slug that is taken
+    // and not on it is a project inside this workspace that this account may
+    // not see, and `project link` would refuse it too — so the sentence it was
+    // always given is the right one.
+    const { box, ws } = await connected(t, {
+        answer: creations({ status: 409, body: { code: "slug_taken", message: 'this workspace already has a project "atlas"' } })
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /ask an owner/);
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+test("project J10 taken-unknown: a list that cannot be had during a 409 says so, and claims nothing else", async (t) =>
+{
+    // Neither sentence above is true when the list cannot be read: this machine
+    // does not know whether the project is one it can reach. Answering with
+    // either would send somebody to a command that is going to refuse them.
+    let posted = false;
+    const { box, ws } = await connected(t, {
+        answer: (call) =>
+        {
+            if (call.method === "POST" && call.path.endsWith("/projects"))
+            {
+                posted = true;
+                return { status: 409, body: { code: "slug_taken", message: "taken" } };
+            }
+            return posted && call.method === "GET" && call.path.endsWith("/projects") ? { destroy: true } : undefined;
+        }
+    });
+    const atlas = room(box, ws, "atlas");
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], syncEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /could not ask whether it is one this account can reach/);
+    assert.doesNotMatch(refused.out, /ask an owner/, "a list nobody could read was answered as a project this account cannot see");
+    assert.doesNotMatch(refused.out, /self project link/, "a list nobody could read was answered as a project this account can reach");
+    assert.deepEqual(registered(ws), ["demo"]);
+});
+
+test("project J11 sync-off: a machine told not to talk to its workspace does not create a project behind its back", async (t) =>
+{
+    const { box, ws, server } = await connected(t);
+    const atlas = room(box, ws, "atlas");
+    const seen = server.calls.length;
+    const refused = await selfIn(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"],
+        { ...syncEnv(), SUPERSELF_SYNC: "off" });
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /SUPERSELF_SYNC=off/);
+    assert.equal(server.calls.length, seen, "the workspace was asked to create a project by a machine set not to talk to it");
+    assert.deepEqual(registered(ws), ["demo"], "a project was registered here that the workspace never made");
+    assert.ok(!existsSync(join(atlas, ".self")), "a marker was written for a project that was not made");
+});
+
+test("project J11 git-mode-sync-off: a git-backed store registers a project with the same setting", async (t) =>
+{
+    const box = machine();
+    const { ws } = await demoWorkspace(box);
+    const atlas = room(box, ws, "atlas");
+    await must(box, atlas, ["project", "init", "--name", "atlas", "--no-connect"], { SUPERSELF_SYNC: "off" });
+
+    assert.ok(registryRows(ws).some((entry) => entry.slug === "atlas"), "a git-backed store was refused a registration");
+});

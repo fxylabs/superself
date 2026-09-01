@@ -11,7 +11,7 @@ export XDG_STATE_HOME="$PWD/scratch/state"
 command -v self >/dev/null || { echo "self is not on PATH"; exit 1; }
 (
     cd scratch/ws
-    self init --lang en >/dev/null
+    self init --git --lang en >/dev/null
 )
 cd scratch/ws/delegation-day
 git init -q .

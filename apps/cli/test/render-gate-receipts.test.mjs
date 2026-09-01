@@ -22,7 +22,7 @@ const box = machine();
 const ws = join(box.root, "ws");
 const demo = join(ws, "demo");
 mkdirSync(demo, { recursive: true });
-await must(box, ws, ["init"]);
+await must(box, ws, ["init", "--git"]);
 git(box, demo, ["init", "-q", "-b", "main"]);
 await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the receipt migration", "--no-connect"]);
 
@@ -71,7 +71,7 @@ test("stage 2 cell 4: a piped `self clone` answers with its three lines, in orde
     const store = join(cloneBox.root, "origin");
     const project = join(store, "app");
     mkdirSync(project, { recursive: true });
-    await must(cloneBox, store, ["init"]);
+    await must(cloneBox, store, ["init", "--git"]);
     git(cloneBox, project, ["init", "-q", "-b", "main"]);
     await must(cloneBox, project, ["project", "init", "--name", "app", "--no-connect"]);
     const target = join(cloneBox.root, "copy");
@@ -125,10 +125,10 @@ test("stage 2 cell 7: on a machine with no workspace, `self init` answers with t
 {
     const bare = machine();
     const store = join(realpathSync(bare.root), ".superself");
-    const answer = await selfIn(bare, bare.root, ["init"]);
+    const answer = await selfIn(bare, bare.root, ["init", "--git"]);
     assert.equal(answer.code, 0, answer.out);
     assert.equal(answer.out, `workspace initialized at ${store} (views in "en")\n`);
-    const again = await selfIn(bare, bare.root, ["init"]);
+    const again = await selfIn(bare, bare.root, ["init", "--git"]);
     assert.equal(again.out, `workspace already initialized at ${store}\n`);
 });
 

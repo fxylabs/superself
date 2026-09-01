@@ -25,7 +25,7 @@ async function trio()
     const box = machine();
     const ws = join(box.root, "ws");
     mkdirSync(ws, { recursive: true });
-    await must(box, ws, ["init"]);
+    await must(box, ws, ["init", "--git"]);
     const dirs = {};
     for (const slug of ["alpha", "beta", "gamma"])
     {

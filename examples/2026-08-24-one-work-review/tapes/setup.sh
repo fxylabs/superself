@@ -15,7 +15,7 @@ export NPM_CONFIG_USERCONFIG="$PWD/scratch/npmrc"
 
 (
     cd scratch/ws
-    self init --lang en >/dev/null
+    self init --git --lang en >/dev/null
 )
 
 git clone -q ../repository.bundle scratch/ws/local-docs-check
