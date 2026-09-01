@@ -573,7 +573,14 @@ test("init I15 interrupted-catch-up: ctrl-c during the first catch-up leaves no 
     // kill the process in the middle of.
     const server = await servedWorkspace(t, {
         projects: [{ slug: "atlas" }, { slug: "beta" }],
-        answer: (call) => (call.path.endsWith("/events") ? process.emit("SIGINT") : undefined) && undefined
+        answer: (call) =>
+        {
+            if (call.path.endsWith("/events"))
+            {
+                process.emit("SIGINT");
+            }
+            return undefined;
+        }
     });
     signedIn(box, server);
     const elsewhere = emptyRoom(box, "elsewhere");

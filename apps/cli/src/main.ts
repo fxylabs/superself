@@ -782,7 +782,8 @@ export const COMMANDS: Command[] = [
             "  --cloud           keep them on a workspace server: sign in if this",
             "                    machine has not, attach to a workspace, and pull it",
             "  --workspace <id>  the workspace on the server to attach to, so",
-            "                    --cloud needs nobody at the terminal",
+            "                    --cloud needs nobody at the terminal. with a person",
+            "                    there it is picked from this account's workspaces",
             "  --lang <code>     language of the HTML views, as a BCP 47 code (en, ko, ja)",
             "  --agents          tell this machine's agents about self without asking"
         ],
