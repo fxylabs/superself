@@ -40,7 +40,7 @@
     "release-keys": "node test/release-keys.mjs"
   },
   "dependencies": {
-    "@superself/fold": "workspace:*"
+    "@superself/fold": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "22.10.5",

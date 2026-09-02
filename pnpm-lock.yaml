@@ -11,7 +11,7 @@ importers:
   apps/cli:
     dependencies:
       '@superself/fold':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../fold
     devDependencies:
       '@types/node':

@@ -9,8 +9,9 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm -r test && node --test scripts/*.test.mjs",
     "structure": "pnpm --filter superself structure",
+    "smoke": "node scripts/pack-install-smoke.mjs",
     "typecheck": "pnpm -r typecheck"
   }
 }

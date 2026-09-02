@@ -29,3 +29,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm structure
+      # The two packages are published from one tag and depend on each other by
+      # version, so what can be wrong about them is a thing neither package's
+      # own suite can see: a pin that does not resolve, a `files` field that
+      # dropped `dist/`, a bin the tarball stripped the executable bit from.
+      # Running it here means a broken pairing is a red pull request rather
+      # than something found on the publish path.
+      - run: pnpm smoke

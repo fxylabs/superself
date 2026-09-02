@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMANDS } from "../dist/main.js";
+import { commandLeaves } from "../dist/contract.js";
 import { approvedIn, demoWorkspace, git, idIn, machine, must, mustPerson, personIn, selfIn, workIdIn } from "./harness.mjs";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
@@ -343,4 +344,58 @@ test("connect writes one managed block, of a fixed shape, to both instruction fi
     const sections = [...blocks[0].block.matchAll(/^#{2,3} .+$/gm)].map((m) => m[0]);
     assert.deepEqual(sections, ["## Project state (superself)"],
         "the managed block holds a section beyond project state after a convention was recorded");
+});
+
+/* ── proof 5: the catalogue names the flags the parser accepts ─────── */
+
+// The family table in cli.md is a summary and says so — several rows abbreviate
+// a verb's options, and one that spelled every flag of every verb would be the
+// help page with worse formatting. What a summary may never do is name a flag
+// the parser does not accept: a reader copies the line, and a flag that is not
+// there is a refusal they cannot act on. That direction is asserted for the
+// whole table.
+//
+// `init` is held to the stronger rule — the catalogue entry is the contract's
+// syntax line, flag for flag. It is the first command anybody runs, and its
+// flags decide which kind of store they get; a summary that drops `--git` and
+// `--cloud` there does not summarize the choice, it hides it. That is exactly
+// the drift #430 found and this is what keeps it from coming back.
+function catalogueEntries()
+{
+    const table = tier1("docs/reference/cli.md").match(/\| Family \| Current entry points \|\n[\s\S]*?\n\n/);
+    assert.ok(table !== null, "cli.md lost its family table of entry points");
+    // A `|` inside a table cell is escaped, and is a `|` to the reader.
+    return [...table[0].matchAll(/`([^`]+)`/g)].map((found) => found[1].replaceAll("\\|", "|"));
+}
+
+function longFlags(syntax)
+{
+    return [...syntax.matchAll(/--[a-z][a-z-]*/g)].map((found) => found[0].slice(2));
+}
+
+function declaredFlags(command)
+{
+    return new Set(commandLeaves(command).flatMap(({ leaf }) => Object.keys(leaf.options)));
+}
+
+test("H1: every flag the cli.md catalogue names is one the parser accepts", () =>
+{
+    for (const entry of catalogueEntries())
+    {
+        const verb = entry.split(/\s+/)[0];
+        const command = COMMANDS.find((candidate) => candidate.name === verb);
+        assert.ok(command !== undefined, `the cli.md catalogue names \`${verb}\`, which is not a command`);
+        for (const flag of longFlags(entry))
+        {
+            assert.ok(declaredFlags(command).has(flag),
+                `the cli.md catalogue offers \`${entry}\`, and \`${verb}\` declares no --${flag}`);
+        }
+    }
+});
+
+test("H2: the catalogue's init entry is the contract's init syntax, flag for flag", () =>
+{
+    const declared = COMMANDS.find((command) => command.name === "init").usage[0].syntax;
+    const documented = catalogueEntries().find((entry) => entry.split(/\s+/)[0] === "init");
+    assert.equal(documented, declared, "cli.md and `self init --help` offer different flags");
 });

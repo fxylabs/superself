@@ -111,6 +111,42 @@ re-export the pieces of the package their own callers already ask them for —
 `plural`, `countCharacters` and `Verdict` — so there is one declaration of each
 and one import line to change if the package moves.
 
+### How the two are released
+
+Two packages, one tag, one order (#430). `apps/cli` is published as `superself`
+and `apps/fold` as `@superself/fold`, and the CLI depends on the fold by the
+**exact version** released beside it — `"@superself/fold": "0.1.0"`, never a
+range and never the workspace protocol, which `npm publish` uploads verbatim
+into a tarball nobody can install.
+
+The development loop is unchanged by that pin. `linkWorkspacePackages` in
+`pnpm-workspace.yaml` is what keeps it unchanged: a dependency a workspace
+package already satisfies is linked from `apps/` rather than fetched, so
+`pnpm install` still puts `apps/fold` behind `@superself/fold` and an edit to
+the fold is an edit the CLI's next `tsc` reads.
+
+A `v*` tag push runs `.github/workflows/publish.yml`, which is three jobs in a
+line:
+
+| Job | What it is for |
+| --- | --- |
+| `gate` | every reason to refuse, collected before the first upload: the tag against the CLI's version, the CLI's pin against the fold version this run publishes, both against what the registry already holds, the tag's commit against `main` — and then the pair, packed and installed from a registry, in `scripts/pack-install-smoke.mjs` |
+| `publish-fold` | `npm publish` in `apps/fold` |
+| `publish-cli` | `npm publish` in `apps/cli`, and only after the fold succeeded |
+
+The order is the design rather than a convenience. A published version can
+never be replaced, so a run that gets halfway has to leave the registry usable:
+a fold version nothing depends on yet is inert, while a CLI whose dependency is
+not on the registry is installable by nobody. The gate refuses ahead of both,
+and the `needs:` edge is the second line of defence — `publish-order.test.mjs`
+asserts it, because no test of either package can see a yaml file.
+
+The rules live in `scripts/release-gate.mjs` as a function of facts rather than
+in the workflow's shell, so `scripts/release-gate.test.mjs` can state a tag, two
+manifests and a registry and read the refusal back. The workspace-protocol guard
+is the one rule stated twice: in the gate, and again as the last step in front
+of each `npm publish`, where the mistake would actually be made.
+
 ## Subsystems
 
 No subsystem directories remain: the runner, supervisor, work-spec, evidence
