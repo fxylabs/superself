@@ -141,7 +141,8 @@ comes back is that host's 404 page rather than anything the notes are about
 The first tag that would publish a package needs one thing steps 1–9 cannot do,
 once, by hand: see
 [Bootstrapping a package's first publish](#bootstrapping-a-packages-first-publish).
-`@superself/fold` has never been published, so the next release is that tag.
+`@superself/fold` has been published since v0.13.0, so no current package
+needs it; the next new package will.
 
 Desktop and platform artifacts are not published from here yet. When they are,
 step 8 grows to build every platform from the same tag and verify all required
@@ -208,8 +209,10 @@ npmjs.com — so it cannot be configured for a package that does not exist. The
 first `npm publish` of a new name under OIDC therefore fails `ENEEDAUTH`, and no
 amount of re-tagging changes that.
 
-`superself` is already on the registry and needs none of this. `@superself/fold`
-has never been published, so the first release needs the sequence below once.
+Both packages are on the registry now and need none of this: `superself` was
+there first, and `@superself/fold` went through the sequence below on
+2026-09-02, ahead of v0.13.0. It stays here as the record for the next new
+package.
 
 1. Check out the release commit, or one adjacent to it, and edit
    `apps/fold/package.json`'s version locally to a **placeholder below every
