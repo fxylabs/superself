@@ -1,6 +1,6 @@
 {
   "name": "@superself/fold",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The fold: an event log read as project state. The core the `self` CLI and the Workspace API server share, so both answer from one calculation.",
   "license": "Apache-2.0",
   "repository": {

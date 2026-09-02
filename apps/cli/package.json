@@ -1,6 +1,6 @@
 {
   "name": "superself",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Version control for your project's state. Installs the `self` CLI.",
   "license": "Apache-2.0",
   "repository": {
@@ -40,7 +40,7 @@
     "release-keys": "node test/release-keys.mjs"
   },
   "dependencies": {
-    "@superself/fold": "0.1.0"
+    "@superself/fold": "0.1.1"
   },
   "devDependencies": {
     "@types/node": "22.10.5",
