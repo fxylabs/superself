@@ -1,4 +1,4 @@
-// Design §7.2 — the device-flow client. Cells 22–35, 136 and 173–178.
+// Design §7.2 — the device-flow client. Cells 22–35, 136, 173–178 and 179–187.
 //
 // The rail here is a real loopback server, so the poll pacing these cells are
 // about is the pacing the shipped transport actually produces. The interval is
@@ -13,9 +13,9 @@ import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { demoWorkspace, machine } from "./harness.mjs";
+import { CLOSED_LOOPBACK, demoWorkspace, machine } from "./harness.mjs";
 import {
-    configRoot, credentialsFile, jsonLines, lockFile, markerPath, railEnv, railServer,
+    configRoot, credentialsFile, jsonLines, jsonOf, lockFile, markerPath, railEnv, railServer,
     selfAsync, writeCredential, writeMarkerFixture
 } from "./pr7-lib.mjs";
 
@@ -576,4 +576,171 @@ test("a 429 on poll is the IP limiter, not a refusal — the login backs off and
     gaps.forEach((gap) => assert.ok(gap >= 5900, `polled again after ${gap}ms, without widening`));
     assert.equal(jsonLines(result.out).length, 2, "the rate limit reached stdout");
     assert.match(result.err, /rate-limiting/);
+});
+
+/* ── cells 179–187: an answer that is not a workspace API response ─── */
+//
+// The default base is the live product host, and that host does not serve the
+// workspace API today: `POST /api/device/start` against it comes back as a
+// Next.js 404 page. `readAnswer` used to turn any body that would not parse
+// into `{ message: <2 KB of it> }`, so the refusal a person saw was `error:`
+// followed by a page of markup that named neither the server nor the status
+// (#434). These cells fix the shape of the sentence that replaced it.
+
+// A 404 page of about the size the live host actually sends.
+const NOT_FOUND_PAGE = `<!DOCTYPE html><html><head><title>404: This page could not be found</title></head>`
+    + `<body>${"<div>This page could not be found.</div>".repeat(48)}</body></html>`;
+
+// One login against a rail that answers the device start with something other
+// than this API's envelope. The rail's own host is returned, because what the
+// sentence must name is the server the request actually went to.
+async function startAnswering(it, answer, args = ["--no-open"])
+{
+    const rail = await railServer((call) => (call.path === "/api/device/start" ? answer : { status: 404, body: {} }));
+    try
+    {
+        const result = await selfAsync(it, it.demo, ["login", ...args], { ...railEnv(rail), SUPERSELF_API_BASE: rail.url });
+        return { ...result, host: new URL(rail.url).host };
+    }
+    finally
+    {
+        await rail.close();
+    }
+}
+
+// "No `<` in the output" is the property, and the hint's own `<url>` placeholder
+// is the one bracket that is not the body's. Asserted this way rather than as a
+// markup pattern, so a page that arrives in some other shape fails too.
+function noMarkup(result, what)
+{
+    assert.equal(result.all.replaceAll("<url>", "").includes("<"), false, what);
+}
+
+test("cell 179: an HTML 404 on device start is described in one sentence, never quoted", async () =>
+{
+    const it = box();
+    const bytes = Buffer.byteLength(NOT_FOUND_PAGE);
+    const result = await startAnswering(it,
+        { status: 404, headers: { "content-type": "text/html; charset=utf-8" }, body: NOT_FOUND_PAGE });
+
+    assert.equal(result.code, 1, result.all);
+    assert.ok(result.all.includes(`the server at ${result.host} answered 404 with text/html (${bytes} bytes) `
+        + "at /api/device/start, which is not a workspace API response"), result.all);
+    noMarkup(result, "the 404 page reached the output");
+    assert.match(result.all, /--api-base/, "the refusal does not say what chooses the server");
+    assert.match(result.all, /SUPERSELF_API_BASE/);
+});
+
+test("cell 180: a text/plain gateway banner is measured and named, not echoed", async () =>
+{
+    const it = box();
+    const result = await startAnswering(it,
+        { status: 502, headers: { "content-type": "text/plain" }, body: "Bad Gateway" });
+
+    assert.notEqual(result.code, 0);
+    assert.ok(result.all.includes(`the server at ${result.host} answered 502 with text/plain (11 bytes) `
+        + "at /api/device/start, which is not a workspace API response"), result.all);
+    assert.equal(result.all.includes("Bad Gateway"), false, "the banner was echoed into the refusal");
+});
+
+test("cell 181: a proxy that answers a page with 200 is refused, not read as a device start", async () =>
+{
+    const it = box();
+    const result = await startAnswering(it,
+        { status: 200, headers: { "content-type": "text/html" }, body: NOT_FOUND_PAGE });
+
+    assert.notEqual(result.code, 0, "a page with a 200 on it was taken for a device start");
+    assert.match(result.all, /answered 200 with text\/html .* which is not a workspace API response/);
+    noMarkup(result, "the page reached the output");
+});
+
+test("cell 182: a page mid-poll is the same sentence, and it names the poll's own path", async () =>
+{
+    const it = box();
+    const device = deviceRail({
+        interval: 1,
+        poll: () => ({ status: 404, headers: { "content-type": "text/html" }, body: NOT_FOUND_PAGE })
+    });
+    const rail = await railServer(device.handler);
+    try
+    {
+        const result = await selfAsync(it, it.demo, ["login", "--no-open", ...base(rail)], railEnv(rail));
+        assert.notEqual(result.code, 0);
+        assert.match(result.all, /answered 404 with text\/html .* at \/api\/device\/poll/);
+        noMarkup(result, "the page reached the output");
+    }
+    finally
+    {
+        await rail.close();
+    }
+});
+
+test("cell 183: a JSON error body still renders the server's own message", async () =>
+{
+    const it = box();
+    const result = await startAnswering(it, { status: 400, body: { code: "invalid_scope", message: "y" } },
+        ["--json", "--no-open"]);
+
+    assert.equal(result.code, 1);
+    const envelope = jsonOf(result.out).error;
+    assert.equal(envelope.code, "invalid_scope");
+    assert.equal(envelope.message, "y", "a JSON error body no longer speaks for itself");
+    assert.equal(envelope.status, undefined, "a JSON error body was described as though it were a page");
+});
+
+test("cell 184: the --json refusal carries the answer's shape and none of its body", async () =>
+{
+    const it = box();
+    const bytes = Buffer.byteLength(NOT_FOUND_PAGE);
+    const result = await startAnswering(it,
+        { status: 404, headers: { "content-type": "text/html; charset=utf-8" }, body: NOT_FOUND_PAGE },
+        ["--json", "--no-open"]);
+
+    const envelope = jsonOf(result.out).error;
+    assert.equal(envelope.code, "device_login_failed");
+    assert.equal(envelope.status, 404);
+    assert.equal(envelope.content_type, "text/html");
+    assert.equal(envelope.bytes, bytes);
+    assert.equal(envelope.host, result.host);
+    assert.equal(envelope.path, "/api/device/start");
+    assert.equal(JSON.stringify(envelope).includes("This page could not be found"), false,
+        "the body travelled inside the machine-readable refusal");
+});
+
+test("cell 185: the harness points every spawned CLI at a closed loopback, never at the default base", async () =>
+{
+    const it = box();
+    // Deleted from this process's own environment, so nothing but the harness's
+    // pin stands between a spawned CLI and `DEFAULT_API_BASE` — which is the
+    // live product host, and is where the release-notes run that found #434
+    // went.
+    delete process.env.SUPERSELF_API_BASE;
+    assert.equal(it.env.SUPERSELF_API_BASE, CLOSED_LOOPBACK, "a scratch machine carries no pinned base");
+    const result = await selfAsync(it, it.demo, ["login", "--no-open", "--timeout", "1"]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.all, /127\.0\.0\.1/, "the refusal does not name the address the harness pinned");
+    assert.doesNotMatch(result.all, /superselfs\.com/, "a spawned CLI reached for the live product host");
+});
+
+test("cell 186: an empty body on a refusal is measured as one, not read as an envelope", async () =>
+{
+    const it = box();
+    const result = await startAnswering(it, { status: 404, body: "" });
+
+    assert.equal(result.code, 1, result.all);
+    assert.ok(result.all.includes(`the server at ${result.host} answered 404 with an empty body (0 bytes) `
+        + "at /api/device/start, which is not a workspace API response"), result.all);
+});
+
+test("cell 187: JSON that is not an object is described, and reads no field off itself", async () =>
+{
+    const it = box();
+    // Valid JSON, and nothing an envelope can be read out of. Reading `code`
+    // off a bare string used to be a TypeError rather than a refusal.
+    const result = await startAnswering(it, { status: 400, body: "\"oops\"" });
+
+    assert.equal(result.code, 1, result.all);
+    assert.match(result.all, /answered 400 with application\/json \(6 bytes\) at \/api\/device\/start/);
+    assert.equal(result.all.includes("oops"), false, "the body was quoted into the refusal");
 });

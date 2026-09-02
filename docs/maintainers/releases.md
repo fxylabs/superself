@@ -131,6 +131,13 @@ rules against this repository's own two manifests on every pull request, so a
 release pull request that moved one of the three numbers and not another is red
 long before it is a bad tag.
 
+Step 5's notes quote real CLI output, so set `SUPERSELF_API_BASE` to a closed
+loopback — `https://127.0.0.1:9` — before running any `--cloud` command whose
+output will be pasted. With no base set the CLI goes to `DEFAULT_API_BASE`,
+which is the live product host and does not serve the workspace API, so what
+comes back is that host's 404 page rather than anything the notes are about
+(#434).
+
 The first tag that would publish a package needs one thing steps 1–9 cannot do,
 once, by hand: see
 [Bootstrapping a package's first publish](#bootstrapping-a-packages-first-publish).

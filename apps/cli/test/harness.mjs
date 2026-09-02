@@ -15,6 +15,12 @@ import { runCli } from "../dist/main.js";
 
 const bin = fileURLToPath(new URL("../bin/self.mjs", import.meta.url));
 
+// The address every scratch machine's API base points at: loopback, on the
+// discard port, over https — so it is a base the CLI accepts and a connection
+// that is refused rather than answered. Exported because the cell that proves
+// the guard is on asserts against this and not against a spelling of its own.
+export const CLOSED_LOOPBACK = "https://127.0.0.1:9";
+
 export function machine()
 {
     const root = mkdtempSync(join(tmpdir(), "self-test-"));
@@ -42,7 +48,13 @@ export function machine()
         // in this suite opening a socket to the address the marker names. The
         // cases whose subject *is* the sending set this to `inline` and point
         // the marker at a server of their own.
-        SUPERSELF_SYNC: "off"
+        SUPERSELF_SYNC: "off",
+        // Nothing spawned by this suite may reach the live product host. A case
+        // that names no base would otherwise take `DEFAULT_API_BASE` — which is
+        // how a release-notes run posted `/api/device/start` at
+        // `app.superselfs.com` and got a 404 page back (#434). A case with a
+        // server of its own overrides this through `extra`.
+        SUPERSELF_API_BASE: CLOSED_LOOPBACK
     };
     // Deleted rather than blanked: `human.ts` treats either attempt marker
     // existing at all as the mark of an agent's process, so an empty string

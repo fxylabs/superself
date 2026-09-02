@@ -163,6 +163,81 @@ export function sanitizeText(value: string): string
     return value.replace(ANSI_ESCAPE, "").replace(CONTROL_CHARS, "");
 }
 
+/* ── an answer that is not a workspace API response (#434) ─────────── */
+
+// What this CLI knows about a body it could not read as the API's envelope:
+// everything a person needs to tell "the server is not there" from "I am
+// signed out" from "the API changed", and deliberately **not** the body. A
+// refusal is one sentence somebody can act on, and 2 KB of a web server's 404
+// page is not that.
+//
+// Not exported: no caller names it, they read `foreign` off an answer and hand
+// it straight back to the two functions below.
+interface ForeignAnswer
+{
+    status: number;
+    // The media type alone; empty where the server named none.
+    content_type: string;
+    bytes: number;
+    host: string;
+    path: string;
+}
+
+// The flag and the variable that choose the server, said the same way wherever
+// one of these refusals is raised.
+const API_BASE_HINT = "--api-base <url> or SUPERSELF_API_BASE chooses the server";
+
+// A response header is attacker-controlled text like any other server string,
+// so it is sanitized; its parameters are dropped because `charset=utf-8` is not
+// what a person is reading the sentence for; and it is short by construction,
+// because a header of any length must not become the sentence.
+const MEDIA_TYPE_CAP = 80;
+
+function mediaType(header: string | undefined): string
+{
+    return sanitizeText(header ?? "").split(";")[0].trim().toLowerCase().slice(0, MEDIA_TYPE_CAP);
+}
+
+// `host` and `pathname`, never the whole URL: a query string can carry a token
+// and "where did the request go" is answered without one.
+function foreignAnswer(status: number, headers: Record<string, string>, bytes: number, url: string): ForeignAnswer
+{
+    const at = new URL(url);
+    return { status, content_type: mediaType(headers["content-type"]), bytes, host: at.host, path: at.pathname };
+}
+
+// The one sentence, built here and nowhere else, so a device start, a poll, a
+// refresh and a rail call all say the same thing about the same server.
+export function foreignMessage(foreign: ForeignAnswer): string
+{
+    return `the server at ${foreign.host} answered ${foreign.status} with ${bodyPhrase(foreign)} `
+        + `at ${foreign.path}, which is not a workspace API response`;
+}
+
+function bodyPhrase(foreign: ForeignAnswer): string
+{
+    if (foreign.bytes === 0)
+    {
+        return "an empty body (0 bytes)";
+    }
+    return `${foreign.content_type === "" ? "a non-JSON body" : foreign.content_type} (${foreign.bytes} bytes)`;
+}
+
+// The machine half of the same sentence. Every field is one a `--json` consumer
+// can branch on, and the body is absent from this for the reason it is absent
+// from the sentence.
+export function foreignFields(foreign: ForeignAnswer): ErrorFields
+{
+    return {
+        status: foreign.status,
+        ...(foreign.content_type === "" ? {} : { content_type: foreign.content_type }),
+        bytes: foreign.bytes,
+        host: foreign.host,
+        path: foreign.path,
+        hint: API_BASE_HINT
+    };
+}
+
 function snakeKey(key: string): string
 {
     return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").toLowerCase();
@@ -198,10 +273,23 @@ function field(body: RawBody, name: string): string | undefined
     return typeof value === "string" ? sanitizeText(value) : undefined;
 }
 
+function isRecord(value: unknown): boolean
+{
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// The body as this API's envelope, or an empty one. A server that answered with
+// a JSON array, a bare string or nothing at all sent no envelope, and reading a
+// field off it would be a crash where a refusal belongs.
+function envelope(body: RawBody): RawBody
+{
+    return isRecord(body) ? body : {};
+}
+
 function details(body: RawBody): RawBody
 {
     const value = body.details;
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RawBody : {};
+    return isRecord(value) ? value as RawBody : {};
 }
 
 // The app code, in the order the three producers put it. The framework's own
@@ -209,9 +297,10 @@ function details(body: RawBody): RawBody
 // (`ConflictError`, `AuthFlowError`) and carries nothing a client can branch on.
 export function errorCode(body: RawBody): string
 {
-    return field(body, "code")
-        ?? field(details(body), "code")
-        ?? field(body, "__type")
+    const found = envelope(body);
+    return field(found, "code")
+        ?? field(details(found), "code")
+        ?? field(found, "__type")
         ?? "unknown_error";
 }
 
@@ -236,18 +325,19 @@ function numberField(body: RawBody, name: string): number | undefined
 // the server is not in production and may name server filesystem paths.
 export function normalizeError(body: RawBody): { code: string; message: string; fields: ErrorFields }
 {
-    const inner = details(body);
+    const found = envelope(body);
+    const inner = details(found);
     const fields: ErrorFields = {};
-    assign(fields, "hint", field(inner, "hint") ?? field(body, "hint"));
+    assign(fields, "hint", field(inner, "hint") ?? field(found, "hint"));
     assign(fields, "retry_after_s", numberField(inner, "retryAfterS"));
-    assign(fields, "request_id", requestId(body));
-    assign(fields, "review_id", field(inner, "reviewId") ?? field(body, "reviewId"));
-    assign(fields, "min_version", field(inner, "minVersion") ?? field(body, "min_version"));
+    assign(fields, "request_id", requestId(found));
+    assign(fields, "review_id", field(inner, "reviewId") ?? field(found, "reviewId"));
+    assign(fields, "min_version", field(inner, "minVersion") ?? field(found, "min_version"));
     assign(fields, "rule_hits", inner.ruleHits === undefined ? undefined : toSnake(inner.ruleHits));
     assign(fields, "refusals", inner.refusals === undefined ? undefined : toSnake(inner.refusals));
     return {
-        code: errorCode(body),
-        message: field(inner, "message") ?? field(body, "message") ?? "the rail refused the request",
+        code: errorCode(found),
+        message: field(inner, "message") ?? field(found, "message") ?? "the rail refused the request",
         fields
     };
 }
@@ -648,7 +738,7 @@ function refreshOutcome(profile: string, answer: HttpAnswer): RefreshAnswer
     {
         return answer.body as unknown as RefreshAnswer;
     }
-    const { code, message } = normalizeError(answer.body as RawBody);
+    const { code, message } = refusalOf(answer);
     if (answer.status === 401 && REFRESH_REFUSALS.includes(code))
     {
         removeMarker(profile);
@@ -700,6 +790,10 @@ interface HttpAnswer
     headers: Record<string, string>;
     body: JsonValue;
     text: string;
+    // Present exactly when the body was not this API's envelope. Every refusal
+    // path reads this instead of the body, which is what keeps a web server's
+    // page out of all of them (#434).
+    foreign?: ForeignAnswer;
 }
 
 // How many bytes a caller will accept, and what to call it when the answer is
@@ -740,7 +834,7 @@ async function httpOnce(url: string, options: HttpOptions): Promise<HttpAnswer>
             body: options.body as BodyInit | undefined,
             signal: abort.signal
         });
-        return await readAnswer(response, options.cap ?? DEFAULT_CAP);
+        return await readAnswer(response, url, options.cap ?? DEFAULT_CAP);
     }
     finally
     {
@@ -769,21 +863,54 @@ function linkAbort(local: AbortController, external: AbortSignal | undefined): (
     return () => external.removeEventListener("abort", relay);
 }
 
-async function readAnswer(response: Response, cap: ResponseCap): Promise<HttpAnswer>
+async function readAnswer(response: Response, url: string, cap: ResponseCap): Promise<HttpAnswer>
 {
-    const text = await capped(response, cap);
+    const received = await capped(response, cap);
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
-    let body: JsonValue = null;
+    const body = parsedBody(received.text);
+    const answer = { status: response.status, headers, body, text: received.text };
+    if (isRecord(body))
+    {
+        return answer;
+    }
+    return { ...answer, foreign: foreignAnswer(response.status, headers, received.bytes, url) };
+}
+
+// A body that will not parse reads as `null`, and the answer says what it was
+// instead. It used to become `{ message: <2 KB of the body> }`, which is how a
+// Next.js 404 page reached the top of a refusal (#434).
+function parsedBody(text: string): JsonValue
+{
     try
     {
-        body = text === "" ? null : JSON.parse(text) as JsonValue;
+        return text === "" ? null : JSON.parse(text) as JsonValue;
     }
     catch
     {
-        body = { message: sanitizeText(text.slice(0, HUMAN_STRING_CAP)) };
+        return null;
     }
-    return { status: response.status, headers, body, text };
+}
+
+// What the answer says about itself: the body's own envelope where there is
+// one, and the one non-JSON sentence where there is not. Every refusal path in
+// this module reads an answer through this rather than through its body.
+function refusalOf(answer: HttpAnswer): { code: string; message: string; fields: ErrorFields }
+{
+    if (answer.foreign === undefined)
+    {
+        return normalizeError(answer.body as RawBody);
+    }
+    return { code: "unknown_error", message: foreignMessage(answer.foreign), fields: foreignFields(answer.foreign) };
+}
+
+// The text, and the number of bytes it arrived as. A refusal reports a body's
+// size on the wire rather than the characters it decoded to, which are not the
+// same number for anything but ASCII.
+interface Received
+{
+    text: string;
+    bytes: number;
 }
 
 // The answer to "a hostile server sends a gigabyte", and the only length limit
@@ -794,12 +921,12 @@ async function readAnswer(response: Response, cap: ResponseCap): Promise<HttpAns
 // server defeats simply by answering: the memory is already gone by the time
 // the number is known. `content-length` is not consulted either, for the same
 // reason — the server controls it.
-async function capped(response: Response, cap: ResponseCap): Promise<string>
+async function capped(response: Response, cap: ResponseCap): Promise<Received>
 {
     const body = response.body;
     if (body === null)
     {
-        return "";
+        return { text: "", bytes: 0 };
     }
     const reader = body.getReader();
     const chunks: Uint8Array[] = [];
@@ -819,7 +946,7 @@ async function capped(response: Response, cap: ResponseCap): Promise<string>
         }
         chunks.push(step.value);
     }
-    return new TextDecoder().decode(joinChunks(chunks, size));
+    return { text: new TextDecoder().decode(joinChunks(chunks, size)), bytes: size };
 }
 
 function joinChunks(chunks: Uint8Array[], size: number): Uint8Array
@@ -1082,7 +1209,14 @@ async function sendAndReplay(call: RailCall, profile: Profile, callKey: string |
 // genuinely unclassified and says so.
 function terminal401(profile: string, answer: HttpAnswer, code: string): CliError
 {
-    const { message } = normalizeError(answer.body as RawBody);
+    const { message } = refusalOf(answer);
+    // Not a credential problem at all. A 401 whose body is not this API's
+    // envelope came from something standing in front of the API, and sending an
+    // agent to `self login` against that is a loop it cannot win (#434).
+    if (answer.foreign !== undefined)
+    {
+        return fail(mapStatus(answer, "unknown_error"), message, foreignFields(answer.foreign));
+    }
     if (code === "unknown_error" || /Error$/.test(code))
     {
         return fail("agent_credential_not_accepted",
@@ -1155,12 +1289,12 @@ function entryFor(call: RailCall, callKey: string | undefined, exit: number, cod
 
 function railFailure(answer: HttpAnswer, callKey: string | undefined): CliError
 {
-    const { code, message, fields } = normalizeError(answer.body as RawBody);
-    const mapped = mapStatus(answer, code);
+    const said = refusalOf(answer);
+    const mapped = mapStatus(answer, said.code);
     const exit = exitFor(mapped);
-    const withPace = { ...fields, ...paceFor(mapped, fields, answer.headers) };
+    const withPace = { ...said.fields, ...paceFor(mapped, said.fields, answer.headers) };
     const complete = exit === 3 && callKey !== undefined ? { ...withPace, idempotency_key: callKey } : withPace;
-    return new CliError(message, mapped, complete, exit);
+    return new CliError(said.message, mapped, complete, exit);
 }
 
 // Statuses that carry no app code of their own still have to reach a code an
@@ -1314,23 +1448,29 @@ async function attempt(url: string, options: HttpOptions): Promise<HttpAnswer>
             // spin the backoff loop on a signal that will not change.
             if (options.signal?.aborted || !retryableError(error) || n === TRANSPORT_ATTEMPTS)
             {
-                throw offline(error);
+                throw offline(error, url);
             }
             await backoff(backoffMs(n));
         }
     }
-    throw offline(last);
+    throw offline(last, url);
 }
 
 // Offline, DNS failure and connect timeout are "retry this unchanged later",
 // not "you did something wrong" — so exit 3, with a pace, rather than exit 1.
-function offline(error: unknown): CliError
+//
+// It names the host for the reason a foreign answer does: a refusal that does
+// not say where the request went cannot tell "the server is not there" from
+// "the base is wrong" (#434).
+function offline(error: unknown, url: string): CliError
 {
     if (error instanceof CliError)
     {
         return error;
     }
-    return pending("network_unavailable", "the rail could not be reached", { retry_after_s: 5 });
+    const host = new URL(url).host;
+    return pending("network_unavailable", `the server at ${host} could not be reached`,
+        { host, retry_after_s: 5, hint: API_BASE_HINT });
 }
 
 /* ── the unauthenticated endpoints ─────────────────────────────────── */
@@ -1344,6 +1484,9 @@ export interface PublicAnswer
     // signature over the **parsed** object, so it wants the text rather than
     // this module's normalization of it.
     text: string;
+    // Present exactly when the body was not this API's envelope, and the whole
+    // of what a caller may say about it (#434).
+    foreign?: ForeignAnswer;
 }
 
 // An unauthenticated `GET`, for the one document that is public by
@@ -1365,7 +1508,20 @@ export async function publicGet(base: string, path: string, session: RailSession
         timeoutMs: REQUEST_TIMEOUT_MS,
         ...(options.cap === undefined ? {} : { cap: options.cap })
     });
-    return { status: answer.status, headers: answer.headers, body: answer.body, text: answer.text };
+    return publicAnswer(answer);
+}
+
+// One shape for both unauthenticated endpoints, so a caller of either reads a
+// foreign answer the same way.
+function publicAnswer(answer: HttpAnswer): PublicAnswer
+{
+    return {
+        status: answer.status,
+        headers: answer.headers,
+        body: answer.body,
+        text: answer.text,
+        ...(answer.foreign === undefined ? {} : { foreign: answer.foreign })
+    };
 }
 
 // The device endpoints carry no credential, so they cannot go through
@@ -1385,5 +1541,5 @@ export async function publicPost(base: string, path: string, body: JsonValue,
     };
     const url = `${assertApiBase(base)}${path}`;
     const answer = retry ? await attempt(url, options) : await httpOnce(url, options);
-    return { status: answer.status, headers: answer.headers, body: answer.body, text: answer.text };
+    return publicAnswer(answer);
 }

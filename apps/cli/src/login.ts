@@ -28,7 +28,9 @@ import { cliVersion } from "./help.js";
 import { jsonLine, jsonMode } from "./output.js";
 import { installedPlugins } from "./plugins.js";
 import { localTimestamp } from "./pretty.js";
-import { PublicAnswer, RailSession, publicPost, railRequest, sanitizeText } from "./rail.js";
+import {
+    PublicAnswer, RailSession, foreignFields, foreignMessage, publicPost, railRequest, sanitizeText
+} from "./rail.js";
 import { CommandOutput, JsonValue, fail, refuse } from "./types.js";
 
 /* ── constants ─────────────────────────────────────────────────────── */
@@ -123,7 +125,10 @@ async function startDevice(base: string, session: RailSession, label: string, sc
 {
     const answer = await publicPost(base, "/api/device/start", { device_label: label, scopes }, session);
     const body = asRecord(answer.body);
-    if (answer.status !== 200)
+    // A 200 is not a start unless it is this API's envelope. A proxy in front of
+    // the workspace answers a page with 200, and reading a device code out of
+    // one produces an empty code that fails four steps further on (#434).
+    if (answer.status !== 200 || answer.foreign !== undefined)
     {
         throw deviceRefusal(answer, body);
     }
@@ -140,15 +145,23 @@ async function startDevice(base: string, session: RailSession, label: string, sc
 // so it is exit 2 rather than an error the agent might try again.
 function deviceRefusal(answer: PublicAnswer, body: Record<string, JsonValue>): Error
 {
+    // Before anything is read out of the body, because a rate limiter names no
+    // code and a 429 is its own cause whatever it answered with.
+    if (answer.status === 429)
+    {
+        return fail("rate_limited", "too many device-login attempts from this address");
+    }
+    // Described, never quoted. This used to render up to 2 KB of whatever a web
+    // server sent — an HTML error page, a proxy banner, a CDN challenge (#434).
+    if (answer.foreign !== undefined)
+    {
+        return fail("device_login_failed", foreignMessage(answer.foreign), foreignFields(answer.foreign));
+    }
     const code = text(body, "code");
     const message = text(body, "message") || "the device login was refused";
     if (code === "access_denied")
     {
         return refuse("access_denied", message);
-    }
-    if (answer.status === 429)
-    {
-        return fail("rate_limited", "too many device-login attempts from this address");
     }
     return fail(code === "expired_token" ? "device_code_expired" : (code || "device_login_failed"), message);
 }
@@ -257,7 +270,7 @@ function readPoll(answer: PublicAnswer, state: PollState): Approved | null
     {
         return rateLimited(state);
     }
-    if (answer.status !== 200)
+    if (answer.status !== 200 || answer.foreign !== undefined)
     {
         throw deviceRefusal(answer, body);
     }
@@ -637,7 +650,8 @@ export const LOGIN_COMMAND: Command = {
         "  --no-open             never launch a browser",
         "  --timeout <s>         give up before the grant expires",
         "  --profile <name>      write a named profile instead of the default",
-        "  --api-base <url>      a rail other than the hosted one",
+        "  --api-base <url>      a rail other than the hosted one; SUPERSELF_API_BASE",
+        "                        is the same choice made from the environment",
         "  --json                JSON Lines: one pending object, then one approved"
     ],
     node: leaf("", LOGIN_OPTIONS, 0, runLogin)
