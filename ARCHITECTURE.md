@@ -115,7 +115,8 @@ and one import line to change if the package moves.
 
 Two packages, one tag, one order (#430). `apps/cli` is published as `superself`
 and `apps/fold` as `@superself/fold`, and the CLI depends on the fold by the
-**exact version** released beside it — `"@superself/fold": "0.1.0"`, never a
+**exact version** released beside it — a pin such as `"@superself/fold": "0.1.1"`
+that moves with every release, never a
 range and never the workspace protocol, which `npm publish` uploads verbatim
 into a tarball nobody can install.
 
