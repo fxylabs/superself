@@ -89,6 +89,15 @@ export interface ErrorFields
     // The CLI-attached sub-cause on `login_required`. The server sends no such
     // field; it is how one exit-1 code stays branchable.
     reason?: string;
+    // What an answer that is not a workspace API response was instead, and
+    // where the request went to get it (#434). The body is deliberately not
+    // among them: a refusal describes a 404 page, it never pastes one. `host`
+    // travels alone on an unreachable server, which has a place but no answer.
+    status?: number;
+    content_type?: string;
+    bytes?: number;
+    host?: string;
+    path?: string;
 }
 
 // The exit vocabulary of design §11, and the whole of it:

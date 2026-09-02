@@ -158,7 +158,10 @@ function reply(response, given)
         "X-Superself-Api": API_VERSION,
         ...(given.headers ?? {})
     });
-    response.end(given.body === undefined ? "" : JSON.stringify(given.body));
+    // `raw` is sent exactly as written, for the one thing a contract response
+    // can never be: the page a web server standing in front of the API answers
+    // with (#434). `body` stays JSON, so no case sends one by accident.
+    response.end(given.raw ?? (given.body === undefined ? "" : JSON.stringify(given.body)));
 }
 
 /* ── the response priority ─────────────────────────────────────────── */

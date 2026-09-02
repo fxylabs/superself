@@ -204,6 +204,59 @@ test("init I7 login-fails: a login that does not complete leaves no store and no
     nothingWasMade(box, room);
 });
 
+// The page a web server standing in front of the workspace answers with. Not
+// this API's envelope, and — until #434 — 2 KB of it was the refusal a person
+// saw: `readAnswer` read any unparseable body as `{ message: <the body> }`.
+const NOT_FOUND_PAGE = `<!DOCTYPE html><html><head><title>404</title></head>`
+    + `<body>${"<div>This page could not be found.</div>".repeat(48)}</body></html>`;
+
+// "No `<` in the output", with the hint's own `<url>` placeholder set aside as
+// the one bracket that did not come from a body.
+function noMarkup(result, what)
+{
+    assert.equal(result.out.replaceAll("<url>", "").includes("<"), false, what);
+}
+
+test("init I7 login-non-json: a page where the device start belongs is one sentence, and leaves nothing", async (t) =>
+{
+    const box = machine();
+    const server = await servedWorkspace(t, {
+        answer: (call) => (call.path === "/api/device/start"
+            ? { status: 404, headers: { "content-type": "text/html; charset=utf-8" }, raw: NOT_FOUND_PAGE }
+            : undefined)
+    });
+    const room = emptyRoom(box);
+    const refused = await selfIn(box, room, ["init", "--cloud", "--workspace", server.wsId],
+        cloudEnv({ SUPERSELF_API_BASE: server.url }));
+
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(`the server at ${new URL(server.url).host} answered 404 with text/html `
+        + `(${Buffer.byteLength(NOT_FOUND_PAGE)} bytes) at /api/device/start, which is not a workspace API response`),
+    refused.out);
+    assert.match(refused.out, /--api-base/, "the refusal does not say what chooses the server");
+    noMarkup(refused, "the 404 page reached the output");
+    nothingWasMade(box, room);
+});
+
+test("init I3 workspace-list-non-json: the list's own refusal stands, and quotes nothing", async (t) =>
+{
+    const box = machine();
+    const server = await servedWorkspace(t, {
+        answer: (call) => (call.path === "/api/workspaces"
+            ? { status: 404, headers: { "content-type": "text/html; charset=utf-8" }, raw: NOT_FOUND_PAGE }
+            : undefined)
+    });
+    signedIn(box, server);
+    const room = emptyRoom(box);
+    const refused = await selfIn(box, room, ["init", "--cloud", "--workspace", server.wsId], cloudEnv());
+
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /cannot ask which workspaces its account is a member of/,
+        "the 404 branch no longer says what it is about");
+    noMarkup(refused, "the 404 page reached the output");
+    nothingWasMade(box, room);
+});
+
 test("init I8 no-workspace-named: nobody to ask is refused by name, and writes nothing", async () =>
 {
     const box = machine();

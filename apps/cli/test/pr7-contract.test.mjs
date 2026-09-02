@@ -78,7 +78,11 @@ async function probe(answer, args = ["probe", "--json"], plugin = railPlugin())
 const ENVELOPE = {
     code: true, message: true, hint: false, console_url: false, retry_after_s: false,
     idempotency_key: false, request_id: false, rule_hits: false, refusals: false,
-    review_id: false, min_version: false, reason: false
+    review_id: false, min_version: false, reason: false,
+    // What an answer that is not a workspace API response was instead, and
+    // where the request went to get it. `host` travels alone on a server that
+    // did not answer at all, which has a place but no status and no body (#434).
+    status: false, content_type: false, bytes: false, host: false, path: false
 };
 
 function assertEnvelope(text, expected = {})

@@ -175,12 +175,14 @@ same events (C1 v0.9). A git-backed store's `project init` is unchanged.
 | I1 | init, a person at the terminal, no flag | the git/cloud question is asked, and the answer chooses the branch |
 | I2 | init --git | the git init that shipped, byte for byte — same files, same receipt |
 | I3 | init --cloud --workspace, logged in with the workspace scopes | no login is started; marker written; the workspace's projects arrive; the store is there |
+| I3 | init --cloud --workspace, and the workspace list answers a web server's page instead of the API | the list's own refusal, which names neither the page nor any of it |
 | I4 | init --cloud, this machine holds no credential | the device flow runs inline and the same run goes on to make the store |
 | I5 | init, nobody at the terminal, no flag | refused, naming `--git` and `--cloud`; nothing is asked and no file is written |
 | I5 | init, no flag, a terminal but a runner's attempt marker on the process | the same refusal — an agent's process is not a person, however many terminals it has |
 | I6 | init --git --cloud | refused; no file is written |
 | I6 | init --git --workspace | refused rather than ignored — `--workspace` names a workspace a git-backed store has none of |
 | I7 | init --cloud, the inline login fails | no store, no partial files |
+| I7 | init --cloud, and the device start answers a web server's page instead of the API | one sentence naming the server, the status, the media type and the size; no store, no partial files |
 | I8 | init --cloud, no workspace named and nobody to ask | refused, naming `--workspace`; no store, no partial files |
 | I9 | init --cloud, the first catch-up cannot reach the workspace | no store, no partial files |
 | I10 | init --cloud on a second machine, naming a workspace that already holds a project | it attaches: the registry and the project's log arrive from the workspace |
