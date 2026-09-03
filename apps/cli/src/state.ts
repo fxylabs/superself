@@ -342,6 +342,11 @@ interface ComposedValues
     // site that already counts it, and the registration keeps its place: after
     // every other refusal, before the record's own event (#238).
     artifact?: string[];
+    // The order the composed record takes inside its tier. `addOptionalFields`
+    // already prefers a stated priority over the row's; without this field a
+    // composed add could only fall back to its `AliasDefaults` row constant,
+    // and `instruction add --priority` would silently record 50 (#440).
+    priority?: string;
     // Whether the composed record is proposed rather than asserted. A verb
     // that replaces a standing record on a person's say-so — `runbook revise`
     // (#171) — records the successor as a proposal so nothing is displaced
@@ -814,7 +819,7 @@ function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
 
 // Said once wherever a token number is printed, so a reader always knows
 // whether the figure came from a measurement or from the shipped estimate.
-function estimateNote(scale: TokenScale): string
+export function estimateNote(scale: TokenScale): string
 {
     return scale.measured ? "" : ` (estimated at ${scale.perCharacter} tokens per character; \`self tokens\` records a measurement)`;
 }

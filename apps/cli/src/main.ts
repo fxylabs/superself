@@ -84,6 +84,7 @@ import { annulledIds, coupledUnit, dependentRefusal, dependentsOf, requireUndoab
 import { resetHomeRule } from "./redact.js";
 import { verdictsFrozen } from "./reachability.js";
 import { RUNBOOK_COMMAND } from "./runbook.js";
+import { INSTRUCTION_COMMAND } from "./instruction.js";
 import { SKILL_COMMAND } from "./skill.js";
 import { dropCollected, recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { claimMoves, claimNote, noteSessionSeen, recordProcess } from "./ledger.js";
@@ -116,7 +117,7 @@ import { cloneStore, ensureSyncConfig, remoteAdd, syncStore } from "./sync.js";
 import { bold, dim, markdownHeadings, styled } from "./style.js";
 import { openFile, validTheme, viewFile } from "./view.js";
 import { RENDER_OPTIONS } from "./pretty.js";
-import { contextOutput, handoffContextLines, handoffOutput, HandoffSnapshot, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
+import { contextOutput, handoffContextLines, handoffInstructionLines, handoffOutput, HandoffSnapshot, historyOutput, projectLog, statusOutput, workList, workspaceLog } from "./views.js";
 import { APP_COMMAND, registerHostVerbs } from "./app.js";
 import { LOGIN_COMMAND, LOGOUT_COMMAND, WHOAMI_COMMAND, clientTag } from "./login.js";
 import { currentAccount, resetCredentialWarnings, resolveProfileName } from "./credentials.js";
@@ -1499,6 +1500,7 @@ export const COMMANDS: Command[] = [
     ALIAS_COMMAND,
     RUNBOOK_COMMAND,
     SKILL_COMMAND,
+    INSTRUCTION_COMMAND,
     {
         name: "connect",
         usage: [
@@ -3020,6 +3022,7 @@ function captureHandoff(ctx: CliContext, wanted: string, project: string | undef
         sourceModels: sources, conventions,
         contextLines: handoffContextLines(ctx.storeDir, found.model, sources,
             new Set(conventions.map((item) => item.id)), verdicts),
+        instructions: handoffInstructionLines(found.model, sources),
         verdicts, archived, ownerCheckoutAvailable: handoffCheckoutAvailable(ctx, found.slug)
     };
 }

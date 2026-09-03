@@ -13,6 +13,7 @@ import {
     rendersIn
 } from "@superself/fold";
 import { commonProtocolLines } from "./connect.js";
+import { instructionLines, instructionsRenderedIn, isInstruction } from "./instructions.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { annulledEvents, eventRecord, eventSummary, readEvents } from "./logfile.js";
@@ -200,6 +201,14 @@ export function handoffContextLines(storeDir: string, target: ProjectModel, mode
     return lines(renderProjectContext(context, limit, scopedIn(models, target.slug), models, excluded));
 }
 
+// The `instruction render` the packet carries (#440), read through the one
+// helper the command itself reads through: the packet and the command can
+// never hand a session two different manuals.
+export function handoffInstructionLines(target: ProjectModel, models: ProjectModel[]): string[]
+{
+    return instructionLines(instructionsRenderedIn(models, target.slug));
+}
+
 export interface HandoffSnapshot
 {
     readAt: string;
@@ -211,6 +220,10 @@ export interface HandoffSnapshot
     sourceModels: ProjectModel[];
     conventions: HandoffConvention[];
     contextLines: string[];
+    // The `instruction render` this project answers with, line for line
+    // (#440). Uncapped and mandatory: the packet's one capped section is the
+    // context subsection, and an instruction is not in that projection at all.
+    instructions: string[];
     verdicts: Record<string, Verdict>;
     archived: boolean;
     ownerCheckoutAvailable: boolean;
@@ -230,6 +243,7 @@ function renderHandoff(snapshot: HandoffSnapshot): string[]
         "## Authority", ...authorityLines(), "",
         "## Common Superself protocol", ...handoffSection("COMMON PROTOCOL", protocolRows()), "",
         "## Applicable conventions", ...handoffSection("APPLICABLE CONVENTIONS", conventionRows(snapshot.conventions)), "",
+        "## Instructions", ...handoffSection("INSTRUCTIONS", instructionRows(snapshot.instructions)), "",
         "## Current project context", ...handoffSection("CURRENT PROJECT CONTEXT", contextRows(snapshot.contextLines)), "",
         "## Work unit", ...handoffSection("WORK UNIT", workRows(snapshot)), "",
         "## Reports", ...handoffSection("REPORTS", reportRows(snapshot.work)), "",
@@ -287,6 +301,15 @@ function conventionRows(conventions: HandoffConvention[]): HandoffRow[]
         row(`CONVENTION ${convention.id}`, `recorded ${convention.ts}`),
         row(`CONVENTION ${convention.id}`, `${convention.text}${artifactPointer(convention.artifact)}`)
     ]);
+}
+
+// Beside the conventions because both are standing direction, and before the
+// context subsection because that subsection is the one capped thing in the
+// packet (#440). The render is handed over whole: it is not part of the
+// context projection, so nothing here has to argue with a budget.
+function instructionRows(linesToRender: string[]): HandoffRow[]
+{
+    return linesToRender.map((line) => row("INSTRUCTION", line));
 }
 
 function contextRows(linesToRender: string[]): HandoffRow[]
@@ -402,7 +425,7 @@ function snapshotLimitLines(snapshot: HandoffSnapshot): string[]
     return [
         `readAt: ${snapshot.readAt}; every packet section uses the captured target/source model graph`,
         "Only the current project-context subsection keeps the existing 3,000-token cap.",
-        "Protocol, conventions, work, and reports are mandatory and are not silently truncated.",
+        "Protocol, instructions, conventions, work, and reports are mandatory and are not silently truncated.",
         "Portable holder state stops at the durable claim timestamp; session, PID, claim note, and local liveness are excluded.",
         "This command is read-only: it appends no event, creates no file, and starts no agent."
     ];
@@ -450,6 +473,12 @@ function renderProjectContext(model: ProjectModel, limit: number, foreign: Entit
     return assembleContext(head, sections, fitKeeps(head, sections, limit));
 }
 
+// A full-exposure instruction is absent from every section below because it is
+// not in this projection at all (#440): it renders whole through `self
+// instruction render`, outside the 3,000-token budget this page spends. The
+// predicate is conditional where the runbook-run and skill ones are not, and
+// that is what makes a demoted instruction fall back into `indexSection` with
+// no further code.
 function projectContextSections(model: ProjectModel, foreign: EntityState[], all: ProjectModel[] = [], excluded = new Set<string>()): { head: string[]; sections: ContextSection[] }
 {
     const project = shellArgument(model.slug);
@@ -465,7 +494,8 @@ function projectContextSections(model: ProjectModel, foreign: EntityState[], all
         // live-state section below is the render it gets, and a record printed
         // in two blocks of one page is one record read twice (#171). A skill
         // is absent for the same reason again — its block is `## Skills`.
-        && !isRunbookRun(item) && !isSkill(item)));
+        && !isRunbookRun(item) && !isSkill(item)
+        && !(isInstruction(item) && item.exposure === "full")));
     return {
         head: [`# ${model.slug}`, ""],
         sections: [
