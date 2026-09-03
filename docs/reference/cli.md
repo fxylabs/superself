@@ -78,14 +78,15 @@ has approved a credential for it.
   current document; a load falls back to a valid cache, so an installed mini-app
   keeps working offline and a revocation reaches it within a day.
 
-Commands that reach the rail accept `--json`, and so do the two local reads
-that declare a payload of their own — `store size` and `instruction render`:
-one object on stdout, snake_case keys, and — on a failure — the error envelope
-on **stdout** as well, so an agent capturing stdout gets parseable output on
-every path. Exit codes are `0` ok, `1` error, `2` refused by policy, `3`
-pending and worth retrying unchanged. `SUPERSELF_JSON=1` selects the same mode
-for a whole session and is ignored by commands that have no machine contract,
-so exporting it never changes what an existing verb prints.
+Commands that reach the rail accept `--json` — one object on stdout,
+snake_case keys — and so do the two local reads that declare a payload of
+their own, `store size` and `instruction render`, each in its own shape. On a
+failure the error envelope prints on **stdout** as well, so an agent capturing
+stdout gets parseable output on every path. Exit codes are `0` ok, `1` error,
+`2` refused by policy, `3` pending and worth retrying unchanged.
+`SUPERSELF_JSON=1` selects the same mode for a whole session and is ignored by
+commands that have no machine contract, so exporting it never changes what an
+existing verb prints.
 
 Every rail call is recorded in a local journal at
 `$XDG_STATE_HOME/superself/calls.jsonl`, mode `0600`, capped at 1000 lines. It

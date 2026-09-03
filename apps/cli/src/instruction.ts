@@ -201,18 +201,26 @@ function requireAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], position
 // every surface that renders one flattens it — the listing and the render
 // through `oneLine`, while `--json` hands the caller the breaks the render
 // hid. Refused here, the way `skill.ts` refuses a multi-line `--command`, so
-// no surface has to decide what a second line meant.
+// no surface has to decide what a second line meant. Trimmed first, as
+// `skill.ts`'s `requireLine` trims, so padding and a trailing newline record
+// clean rather than carrying whitespace nobody meant.
+//
+// The refusal covers every control character `oneLine` collapses, not just
+// `\n`/`\r`: a tab or another control byte breaks the same flatten-to-one-line
+// promise, and refusing it here is what keeps this wording accurate for
+// whatever a caller typed.
 //
 // The first 40 characters are quoted back flattened: the refusal names the
 // record the caller meant without printing the break it is about.
 function requireOneLine(text: string): string
 {
-    if (/[\n\r]/.test(text))
+    const trimmed = text.trim();
+    if (/[\x00-\x1f\x7f]/.test(trimmed))
     {
-        throw new CliError(`an instruction is one line — "${oneLine(text).slice(0, 40)}…" holds a line break;`
+        throw new CliError(`an instruction is one line — "${oneLine(trimmed).slice(0, 40)}…" holds a line break;`
             + " record each step as its own --kind procedure instruction, ordered by --priority");
     }
-    return text;
+    return trimmed;
 }
 
 // One section, from one flag. Two `--kind`s state two sections for one record,
@@ -382,15 +390,14 @@ function instructionRender({ values }: CommandInput<typeof RENDER_OPTIONS>): Com
 // The machine shape, section for section and entry for entry with the render
 // above it (§D-11): the two are built from one ordering, so a caller reading
 // the payload and a session reading the text can never be handed two answers.
-// The text itself is one line by construction — `requireOneLine` refuses a
-// break at the add — so the string this emits raw and the line the render
-// flattens through `oneLine` are the same string, which is the other half of
-// that claim.
+// `text` is flattened through `oneLine`, the same transform the render
+// applies, so the string this emits and the line the render prints are the
+// same string for every record — including one a raw `state add` minted,
+// which `requireOneLine` never saw.
 //
-// Every entry carries all five keys, and an absent one is `null` rather than
-// missing. A record a raw `state add` minted can hold no priority and an add
-// can be made with no `--why`, so a shape that dropped the key would make the
-// caller's reader branch on which keys arrived to find that out.
+// `priority` and `why` are present only when the record carries them: an
+// absent optional field is omitted, the way `login.ts` omits `console_base`,
+// rather than written as `null` for the caller's reader to branch on.
 function sectionPayload(section: InstructionSection): JsonValue
 {
     return {
@@ -398,10 +405,10 @@ function sectionPayload(section: InstructionSection): JsonValue
         heading: section.heading,
         entries: section.entries.map((entry) => ({
             id: entry.id,
-            text: entry.text,
-            priority: entry.priority ?? null,
+            text: oneLine(entry.text),
+            ...(entry.priority === undefined ? {} : { priority: entry.priority }),
             scope: entry.scope,
-            why: entry.why ?? null
+            ...(entry.why === undefined ? {} : { why: entry.why })
         }))
     };
 }

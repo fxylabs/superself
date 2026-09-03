@@ -512,7 +512,7 @@ test("G7: a fold rewrites an older block in both untracked instruction files, an
 const LAYERED_MODULES = ["instruction.ts", "instructions.ts", "skill.ts", "skills.ts",
     "runbook.ts", "runbooks.ts"];
 
-test("G16: the layer table names every verb module and the domain module beside it", () =>
+test("G16: the layer table names #440's, #391's and #379's six modules", () =>
 {
     const table = tier1("ARCHITECTURE.md").match(/\| Layer \| Modules \| Owns \|\n[\s\S]*?\n\n/);
     assert.ok(table !== null, "ARCHITECTURE.md lost its layer table");

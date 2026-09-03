@@ -8,15 +8,15 @@ Where the tests live:
 
 | Group | Cells | File |
 |---|---|---|
-| A — `instruction add` | 34 (A1–A34) | `apps/cli/test/instruction.test.mjs` |
+| A — `instruction add` | 35 (A1–A35) | `apps/cli/test/instruction.test.mjs` |
 | B — `self instruction` / `instruction list` | 20 (B1–B20) | `apps/cli/test/instruction.test.mjs` |
-| C — `instruction render` | 26 (C1–C26) | `apps/cli/test/instruction-render.test.mjs` |
+| C — `instruction render` | 27 (C1–C27) | `apps/cli/test/instruction-render.test.mjs` |
 | D — context, search, handoff and the plugin | 15 (D1–D15) | `apps/cli/test/instruction-context.test.mjs` |
 | E — placement | 19 (E1–E19) | `apps/cli/test/instruction-place.test.mjs` |
 | F — lifecycle | 15 (F1–F15) | `apps/cli/test/instruction-context.test.mjs` |
 | G — surfaces | 16 (G1–G16) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
 
-**145 designed cells.**
+**147 designed cells.**
 
 Cells changed while the code was written, and why — the table is the contract,
 so a cell the code proved wrong is corrected here rather than skipped:
@@ -170,10 +170,31 @@ code, and the cell that proves it moves with it here:
   "Layering"), and it no longer needs to, because its callers hand it the set.
   The importers asserted are `skill.ts`, `instruction.ts` and `views.ts`.
 - **G16** — new. ARCHITECTURE.md's layer table names the layer a module is in,
-  and it named neither of #440's modules, nor #391's or #345's. Rows are added
+  and it named neither of #440's modules, nor #391's or #379's. Rows are added
   for all six and the cell holds them there. Scoped to those six: the unscoped
   rule fails today on `cloud.ts`, `design.ts`, `sweep.ts` and `undo.ts`, which
   predate this change; widening the cell is the follow-up that adds their rows.
+
+Cells added and changed in review round 2 of #443, and why. The round-2 review
+found no blocking finding; every `should` and `optional` it raised is applied
+in the code, and the cell that proves it moves with it here:
+
+- **A35** — new. `requireOneLine` now trims before testing, as `skill.ts`'s
+  `requireLine` does, and refuses every control character `oneLine` collapses
+  rather than only `\n`/`\r`, so a tab breaks the one-line promise the same
+  way a line break does. The cell drives padded and trailing-newline text
+  recording trimmed, a mid-text tab refused with A34's wording, and nothing
+  recorded on refusal.
+- **C27** — new. `sectionPayload` now flattens `text` through `oneLine`, the
+  transform the render already applies, so a raw `state add` record with a
+  control character in its text can no longer show one string in the render
+  and a different one in `--json`. The cell seeds that disagreement through
+  `state add` and asserts the render line and the payload `text` agree.
+- **D-11** — amended again. `priority` and `why` are now present only when
+  the record carries them, an absent optional field omitted rather than
+  written `null`, matching the CLI's existing convention (`login.ts`'s
+  `console_base`). **C20** now asserts the key set per entry instead of
+  asserting every entry carries five keys with `null` for an absent one.
 
 A cell runs a command through `must` or `selfIn` from `test/harness.mjs`
 (CONTRIBUTING.md, "Reaching the CLI from a test"): both run it in the test
@@ -306,13 +327,15 @@ on one is marked **decided here**.
   `render` shows what a session must follow; a record its author moved to the
   search tier is one they took out of the rendered set. Cell **C11**, **E15**.
 - **D-11 — the `--json` payload.** `render --json` emits
-  `{"project": "<slug>", "sections": [{"kind": "tool", "heading": "Tools", "entries": [{"id": "e-…", "text": "…", "priority": 50, "scope": "project", "why": "…"}]}]}`
+  `{"project": "<slug>", "sections": [{"kind": "tool", "heading": "Tools", "entries": [{"id": "e-…", "text": "…", "scope": "project", "priority": 50, "why": "…"}]}]}`
   — sections in render order, entries in render order, empty sections omitted
-  as in D-2. Every entry carries all five keys, always: `why` is `null` where
-  the add stated none, and `priority` is `null` where the record has none — a
-  raw `state add` can mint one. A shape that dropped the key instead would make
-  the caller's reader branch on which keys arrived to find that out
-  — **amended in review round 1**. Cells **C20**–**C22**.
+  as in D-2. `text` is flattened through `oneLine`, the same transform the
+  render applies, so the render and the payload agree on one string for every
+  record, including one a raw `state add` minted — **amended in review round
+  2**. `priority` and `why` are present only when the record carries them: an
+  absent optional field is omitted, never `null`, matching the CLI's existing
+  convention (`login.ts`'s `console_base`) — **amended in review round 2**.
+  Cells **C20**–**C22**, **C27**.
 - **D-12 — `--workspace` with `--scope`.** Refused by name:
   `--workspace and --scope name the same thing two ways — pass one of them`.
   Cell **A15**.
@@ -374,9 +397,10 @@ given, absent, or malformed; scope omitted, `--workspace`, `--scope <slug>`,
 `--scope project`, `--scope <unregistered>`, `--scope <archived>`; the
 `--supersedes` target's kind — instruction, skill, runbook, convention, raw
 `state add` entity, unknown id, already-superseded instruction; `--kind` passed
-once vs twice; the text one line vs holding a line break; the project full
-tier under / at / over its cap; `--proposed` on / off; a workspace of one
-project vs several; a person at the keyboard vs a session.
+once vs twice; the text one line vs holding a line break vs a control
+character vs padded or trailing whitespace; the project full tier under / at /
+over its cap; `--proposed` on / off; a workspace of one project vs several; a
+person at the keyboard vs a session.
 
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
@@ -414,6 +438,7 @@ project vs several; a person at the keyboard vs a session.
 | A32 | after A17's refusal, same cwd | `self instruction` | the advertised command answers: the one standing instruction is listed and the skill is not |
 | A33 | as A1 | `--kind rule --kind tool` | refused: `--kind states the one section this instruction renders under, and was passed twice — pass rule, tool, or procedure once`; nothing recorded — **added in review round 1** |
 | A34 | as A1 | `instruction add "<a text holding a line break>" --kind procedure` | refused: `an instruction is one line — "<first 40 characters>…" holds a line break; record each step as its own --kind procedure instruction, ordered by --priority`; the refusal is one line, and nothing is recorded — **added in review round 1** |
+| A35 | as A1 | `--kind rule` with `"  padded  "`, then with `"text\n"`, then with `"run\tthe suites"` | the first two record trimmed — `padded`, `text`; the third is refused with A34's wording, its quoted head flattened by `oneLine` same as a line break's; nothing recorded on the refusal — **added in review round 2** |
 
 ## 4.2 Group B — `self instruction` and `instruction list`
 
@@ -460,7 +485,8 @@ slug; a raw `state add --label instruction` with no kind label, with two, and
 with a preset label beside it; `--json` / `SUPERSELF_JSON=1`; cwd inside /
 outside a project; an unreadable store among the registered ones; the full tier
 far over its cap; a `--workspace` record whose owning project is archived; an
-entry with no `why` and one with no priority.
+entry with no `why` and one with no priority; a raw-verb record whose text
+holds a control character `oneLine` collapses.
 
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
@@ -483,13 +509,14 @@ entry with no `why` and one with no priority.
 | C17 | `self state add "raw note" --label instruction --exposure full` | `instruction render` | renders under `## Unclassified`, printed after `## Procedures` — **decided here (D-1)** |
 | C18 | `self state add "raw note" --label instruction --label procedure --label rule --exposure full` | `instruction render` | renders under `## Rules` — the kind is the first of `rule`, `tool`, `procedure` the label list holds, membership never position |
 | C19 | `self state add "raw note" --label instruction --label convention --exposure full` | `instruction render`, then `self context` | absent from the render — `sourceOf` folds it to `EntitySource "convention"`, so `source !== undefined` and the predicate rejects it; present in `self context` as an ordinary full-exposure record |
-| C20 | one of each kind, a fourth added with no `--why`, and a fifth from `state add --label instruction --exposure full` | `instruction render --json` | one JSON object on stdout and nothing around it: `project`, then `sections` in render order, each `{kind, heading, entries}` with `entries` `{id, text, priority, scope, why}` in render order; empty sections absent. `Object.keys` is those five for every one of the five entries, the fourth's `why` is `null`, and the fifth's `why` and `priority` are both `null` — **decided here (D-11)**, entry shape **amended in review round 1** |
+| C20 | one of each kind, a fourth added with no `--why`, and a fifth from `state add --label instruction --exposure full` | `instruction render --json` | one JSON object on stdout and nothing around it: `project`, then `sections` in render order, each `{kind, heading, entries}` with `entries` `{id, text, scope, ...}` in render order; empty sections absent. `Object.keys`, order aside, is `[id, text, priority, scope, why]` for the three seeded with `--why` (five keys), `[id, text, priority, scope]` for the fourth (four keys, no `why`), and `[id, text, scope]` for the fifth (three keys, no `priority` and no `why`) — **decided here (D-11)**, entry shape **amended in review round 1**, key presence **amended in review round 2** |
 | C21 | as C20, `SUPERSELF_JSON=1`, no `--json` | `instruction render` | the identical payload — the leaf declares `--json`, so the ambient preference is honoured here where B11 ignores it |
 | C22 | as C20 | `instruction render` and `instruction render --json` | the payload's entry ids and their order equal the rendered lines and their order, section for section |
 | C23 | `fullTokens` set to 20 with several full instructions already recorded | `instruction render`, then `instruction add` | every entry renders whole and untruncated; the add is refused by the cap refusal of A23 — parity with `context.test.mjs` "a store over a cap renders in full while state add stays gated" |
 | C24 | one full instruction | `self context` | the render's head line `# Instructions — follow; do not restate.` appears nowhere in `self context` — `render` is a separate command and is never spliced in, because `fitKeeps` never cuts `head` and would zero every other section |
 | C25 | project A holds instructions, cwd outside every registered project | `instruction render --project A` | A's render, exit 0 — naming the project is what answers C16's refusal — **added in review round 1** |
 | C26 | project B holds a `--workspace` instruction, then B is archived | `instruction render` in A and in C, then `--project B` | absent from both A's and C's render — `workspaceModels` walks `activeProjects` — and present when B is named. The current behaviour, pinned rather than decided — **added in review round 1** |
+| C27 | a raw `state add "first line\nsecond line" --label instruction --exposure full`, and `instruction add $'run\tthe suites' --kind rule` seeded through `state add` too, since A35 refuses the tab at the add | `instruction render` and `instruction render --json` | the render's `- <text>` line and the payload entry's `text` are the identical, `oneLine`-flattened string for both records — **added in review round 2** |
 
 ## 4.4 Group D — context, search, handoff and the plugin
 
@@ -600,7 +627,7 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
 | G13 | one instruction recorded | `self fold` | `FOLD_VERSION` is still 1 and the state directory gains no `instruction/` folder |
 | G14 | the built contract | `self --help` and `self instruction --help` | both carry exactly `instruction`, `instruction add`, `instruction list` and `instruction render`; no `--format`, no `--type instruction`, no fourth verb |
 | G15 | one `renderedIn` in `model.ts` | `structure.test.mjs` | `skill.ts` and `instructions.ts` declare no local `renderedIn` and `instructions.ts` no `instructionsRenderedIn`; `skill.ts`, `instruction.ts` and `views.ts` import the shared one from `./model.js` — asserted on the source text, the way that file asserts every other module fact — **added in review round 1** |
-| G16 | ARCHITECTURE.md's layer table | `docs.test.mjs` | the table names a layer for `instruction.ts`, `instructions.ts`, `skill.ts`, `skills.ts`, `runbook.ts` and `runbooks.ts` — scoped to those six; the four other unnamed modules predate this change — **added in review round 1** |
+| G16 | ARCHITECTURE.md's layer table | `docs.test.mjs` test `G16: the layer table names #440's, #391's and #379's six modules` | the table names a layer for `instruction.ts`, `instructions.ts`, `skill.ts`, `skills.ts`, `runbook.ts` and `runbooks.ts` — scoped to those six; the four other unnamed modules predate this change — **added in review round 1** |
 
 ## What this table does not cover
 

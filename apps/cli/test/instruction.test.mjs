@@ -489,6 +489,22 @@ test("A34: a text holding a line break is refused, and nothing is recorded", asy
     assert.equal((await must(ground.box, ground.demo, ["instruction"])).out.includes("targeted suites"), false);
 });
 
+test("A35: padding and a trailing newline record trimmed; a mid-text tab is refused like a line break", async () =>
+{
+    const ground = await floor();
+    const before = events(ground.ws).length;
+    const padded = await add(ground, "  padded  ", "rule");
+    assert.equal(recordOf(ground.ws, padded).payload.text, "padded");
+    const trailed = await add(ground, "text\n", "rule");
+    assert.equal(recordOf(ground.ws, trailed).payload.text, "text");
+    const refused = await ground.self(["instruction", "add", "run\tthe suites", "--kind", "rule"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /an instruction is one line — "run the suites…" holds a line break;/);
+    assert.match(refused.out,
+        /record each step as its own --kind procedure instruction, ordered by --priority/);
+    assert.equal(events(ground.ws).length, before + 2);
+});
+
 /* ── group B: reading the list ─────────────────────────────────────── */
 
 test("B1: a project with no instructions says so and names the verb that records one", async () =>

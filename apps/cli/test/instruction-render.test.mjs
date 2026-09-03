@@ -323,18 +323,20 @@ test("C20: --json emits one object: sections in render order, entries in render 
         [["tool", "Tools"], ["rule", "Rules"], ["procedure", "Procedures"], ["unclassified", "Unclassified"]]);
     const entries = payload.sections.flatMap((section) => section.entries);
     assert.equal(entries.length, 5);
-    // Five keys on every entry, always, and an absent field is `null` rather
-    // than a key the caller's reader has to branch on the presence of.
-    for (const entry of entries)
+    // An absent optional field is omitted, never a `null` key the caller's
+    // reader has to branch on the presence of.
+    const withWhy = entries.filter((entry) => entry.text !== "a rule nobody stated a reason for"
+        && entry.text !== "raw note");
+    assert.equal(withWhy.length, 3);
+    for (const entry of withWhy)
     {
         assert.deepEqual(Object.keys(entry), ["id", "text", "priority", "scope", "why"], JSON.stringify(entry));
     }
     const noReason = entries.find((entry) => entry.text === "a rule nobody stated a reason for");
-    assert.equal(noReason.why, null);
+    assert.deepEqual(Object.keys(noReason), ["id", "text", "priority", "scope"], JSON.stringify(noReason));
     assert.equal(noReason.priority, 50);
     const raw = entries.find((entry) => entry.text === "raw note");
-    assert.equal(raw.why, null);
-    assert.equal(raw.priority, null);
+    assert.deepEqual(Object.keys(raw), ["id", "text", "scope"], JSON.stringify(raw));
     assert.equal(payload.sections.some((section) => section.entries.length === 0), false);
 });
 
@@ -415,4 +417,27 @@ test("C26: a --workspace instruction whose project is archived leaves every proj
     }
     // Naming it explicitly is how its own set is still read (#283).
     assert.match(await render(ground, ["--project", "other"]), /- every project reviews before merge/);
+});
+
+test("C27: the render line and the --json text agree for a raw record `oneLine` flattens", async () =>
+{
+    const ground = await floor();
+    // `instruction add` refuses a line break and, since A35, a tab too; both
+    // are still recordable through the raw verb, which is exactly where the
+    // render and the payload used to disagree.
+    await must(ground.box, ground.demo,
+        ["state", "add", "first line\nsecond line", "--label", "instruction", "--exposure", "full"]);
+    await must(ground.box, ground.demo,
+        ["state", "add", "run\tthe suites", "--label", "instruction", "--exposure", "full"]);
+    // Neither seeded record states a priority, so `orderEntities` ties them at
+    // equal priority and equal scope and falls to recency: the second add,
+    // being newer, renders first.
+    const rendered = await render(ground);
+    const lines = rendered.split("\n").filter((line) => line.startsWith("- "));
+    assert.deepEqual(lines, ["- run the suites", "- first line second line"]);
+    const payload = JSON.parse((await must(ground.box, ground.demo,
+        ["instruction", "render", "--json"])).out.trim());
+    const texts = payload.sections.flatMap((section) => section.entries.map((entry) => entry.text));
+    assert.deepEqual(texts, ["run the suites", "first line second line"]);
+    assert.deepEqual(lines.map((line) => line.slice(2)), texts);
 });

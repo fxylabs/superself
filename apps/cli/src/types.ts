@@ -244,6 +244,8 @@ interface DocumentBlock
 //
 // Under `--json` the gate prints `data` and nothing else. Otherwise it calls
 // exactly one of the thunks, like every other block.
+//
+// An absent optional field is omitted, never `null`.
 export interface PayloadBlock
 {
     kind: "payload";
