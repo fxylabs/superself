@@ -37,7 +37,7 @@ test("the plugin entry exports what the loader reads, and the config has the doc
     assert.throws(() => Config({ maxOutputChars: "lots" }));
 });
 
-test("apply registers four tools, and the /self command only where a command registry exists", () =>
+test("apply registers five tools, and the /self command only where a command registry exists", () =>
 {
     const registered = [];
     const injected = [];
@@ -46,7 +46,7 @@ test("apply registers four tools, and the /self command only where a command reg
         inject: (services, callback) => injected.push({ services, callback }),
     };
     apply(ctx, Config({}));
-    assert.deepEqual(registered, ["superself_context", "superself_work", "superself_report", "superself_decide"]);
+    assert.deepEqual(registered, ["superself_context", "superself_work", "superself_report", "superself_decide", "superself_instructions"]);
     assert.equal(injected.length, 1);
     assert.deepEqual(injected[0].services, ["commands"]);
     const commands = [];
