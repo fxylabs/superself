@@ -8,15 +8,15 @@ Where the tests live:
 
 | Group | Cells | File |
 |---|---|---|
-| A — `instruction add` | 32 (A1–A32) | `apps/cli/test/instruction.test.mjs` |
-| B — `self instruction` / `instruction list` | 17 (B1–B17) | `apps/cli/test/instruction.test.mjs` |
-| C — `instruction render` | 24 (C1–C24) | `apps/cli/test/instruction-render.test.mjs` |
-| D — context, search, handoff and the plugin | 13 (D1–D13) | `apps/cli/test/instruction-context.test.mjs` |
-| E — placement | 18 (E1–E18) | `apps/cli/test/instruction-place.test.mjs` |
+| A — `instruction add` | 34 (A1–A34) | `apps/cli/test/instruction.test.mjs` |
+| B — `self instruction` / `instruction list` | 20 (B1–B20) | `apps/cli/test/instruction.test.mjs` |
+| C — `instruction render` | 26 (C1–C26) | `apps/cli/test/instruction-render.test.mjs` |
+| D — context, search, handoff and the plugin | 15 (D1–D15) | `apps/cli/test/instruction-context.test.mjs` |
+| E — placement | 19 (E1–E19) | `apps/cli/test/instruction-place.test.mjs` |
 | F — lifecycle | 15 (F1–F15) | `apps/cli/test/instruction-context.test.mjs` |
-| G — surfaces | 14 (G1–G14) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
+| G — surfaces | 16 (G1–G16) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
 
-**133 designed cells.**
+**145 designed cells.**
 
 Cells changed while the code was written, and why — the table is the contract,
 so a cell the code proved wrong is corrected here rather than skipped:
@@ -59,6 +59,121 @@ so a cell the code proved wrong is corrected here rather than skipped:
   (its alias half is in `guide.test.mjs`), and **G13** in
   `instruction.test.mjs` beside A29 — `structure.test.mjs` reaches no CLI, and
   G13's claim is about what a fold leaves on disk.
+
+Cells added and changed in review round 1 of #443, and why. The review found
+no blocking finding; every `should` and `optional` it raised is applied in the
+code, and the cell that proves it moves with it here:
+
+- **A31** — "only `by` differs" was asserted as "the two `by` values are not
+  equal", which one differing field satisfies. The cell now states the fields
+  the two payloads agree on — `text`, `labels`, `exposure`, `scope`,
+  `priority` — and that the one they differ on reads `person` against `agent`.
+- **A33** — new. `--kind` is declared `multiple: true` and a second value is
+  refused by name, as `skill.ts` does for `--command`: a single option would
+  let the parser keep the last value and drop the first without a word. The
+  refusal reads `--kind states the one section this instruction renders under,
+  and was passed twice — pass rule, tool, or procedure once`.
+- **A34** — new. `sanitize.ts` admits `0x0a`, so a multi-line text was
+  recordable, and the surfaces disagreed about it: the listing and the render
+  flattened it through `oneLine` while `--json` emitted the breaks. Refused at
+  the add instead, the way `requireLine` refuses a multi-line `--command`:
+  `an instruction is one line — "<first 40 characters>…" holds a line break;
+  record each step as its own --kind procedure instruction, ordered by
+  --priority`. The quoted head is flattened, so the refusal is itself one line.
+- **B4**, **C4** — the cells named all three `orderEntities` legs and the tests
+  drove one, the scope leg. Both now drive all three: two CLI adds are
+  milliseconds apart and can never share a `ts`, so the recency and id legs are
+  seeded with `logFixture` — a stated `ts` for the newer-first leg, and a pair
+  sharing one `ts` for the leg where only the id is left.
+- **B5**–**B9**, **B18**, **B19** — the closing line read `<n> tokens — <n> of
+  the <cap>-token <scope> full cap (<pct>%)`, which reads as tier occupancy and
+  is not: it counts the instructions alone. It keeps counting them and now says
+  so — `instructions hold <n> tokens — …` (§D-6). **B18** is new and pins the
+  distinction: one instruction and one non-instruction full record in one tier,
+  where the line says 23 and the tier's own cap refusal says 73.
+- **B7** — the cell drove a project-scoped record, where `project` is also what
+  the old private spelling produced. It now drives a `--scope <other>`
+  instruction listed from that other project, so the word `project` is
+  `scopeLabel`'s answer — the exported one `state.ts`'s refusals are spelled
+  with, not a second spelling of the same tier.
+- **B15**, **C15** — the harness merges stdout and stderr into one string, so
+  which stream the sentence came out on is not provable in this process. The
+  text assertion stands and the tests carry a note saying what it does not
+  prove; the stream half is a property of `console.error` and is covered where
+  the harness can see it.
+- **B19** — new. `estimateNote` was appended to every share line, so a store
+  holding both a project set and a workspace manual printed the same sentence
+  twice. It closes the last line only, and this cell counts the occurrences.
+- **B20** — new. Nothing drove an unknown leaf under `instruction`; the cell
+  pins that `self instruction bogus` answers with the branch usage.
+- **C13** — `/archived/` passed on the word alone, wherever it came from. The
+  cell now asserts the notice's whole sentence, as `handoff.test.mjs` asserts
+  its own archived notice: `project "<slug>" is archived (<date>: <why>) — run
+  \`self project restore <slug>\` to bring it back`.
+- **C20**, **D-11** — the payload omitted `why` and `priority` where the record
+  had none, so a reader had to branch on which keys arrived to learn that. Every
+  entry now carries all five keys, with `null` for an absent one. The cell seeds
+  the two shapes that produce one: an add with no `--why`, and a raw
+  `state add --label instruction --exposure full`, which can hold no priority.
+- **C25** — new. `instruction render --project <slug>` from outside every
+  registered project renders that project's set; C16's refusal is what a call
+  from there with no `--project` gets, and nothing drove the other half.
+- **C26** — new. A `--workspace` instruction whose owning project is archived
+  leaves every project's render, because `workspaceModels` walks
+  `activeProjects`. Pinned as the current behaviour, not decided here; the
+  "does not cover" list says so.
+- **D7** — the cell asserted one `INSTRUCTION | ` line. It now asserts the
+  whole block equals `instruction render`'s output line for line under the
+  prefix, which is what "the packet and the command read through one helper"
+  means.
+- **D14** — new. With no instructions, `snapshot.instructions` was
+  `[INSTRUCTION_HEAD]`, so the packet carried a populated-looking
+  `## Instructions` holding a head line and nothing under it. The empty render
+  is dropped before `handoffSection`, so the section reads `DATA | (none)` as
+  every other empty section does.
+- **D15** — new. A store that already used `state add --label instruction
+  --exposure full` loses those records from `self context` on upgrade. Accepted
+  — the label is the mechanism — and pinned so it is visible: such a record is
+  absent from `self context`, renders under `## Unclassified`, and is still
+  found by default `self search`. The "does not cover" list states it, and so
+  does the pull request.
+- **E7** — `/index/` passed on the word wherever it came from, including the
+  `--exposure index` a receipt echoes back. The cell asserts
+  `placement: project · index`.
+- **E19** — new. `self undo` of the `entity.placed` that demoted an instruction
+  restores it to the render; the undo verb was driven over the add and the
+  retraction and not over the placement.
+- **G1** — the cell checked that every flag the catalogue row names is one the
+  parser accepts, which a row missing a flag satisfies. It now asserts the three
+  catalogue entries are byte-identical to `INSTRUCTION_COMMAND.usage[n].syntax`,
+  as H2 does for `init`, and that cli.md's `--json` paragraph names
+  `instruction render` — one of the two local reads that declare a payload.
+- **G3** — kept as it is. It is a proxy for the diff claim: the fixture is
+  regenerated and committed, so what this cell can see is that no `instruction`
+  line reached it outside the root usage listing, not that the committed diff
+  held nothing else.
+- **G5**, **D-7** — the managed-block bullet said what to run and not what an
+  empty answer means, so the head line alone reads as a broken command. The
+  bullet gains `If it prints only its head line, this workspace has recorded
+  none yet.`, and the cell asserts the whole bullet.
+- **G12** — the `subsystemOf` assertion could not fail for a `src/*.ts` path and
+  is dropped. In its place the cell asserts the header carries the trust
+  paragraph `skill.ts` carries: what an instruction is, that anyone who can
+  append to the store can write one, and that the CLI only prints it.
+- **G15** — new. `instructions.ts`'s `instructionsRenderedIn` was
+  byte-identical to `skill.ts`'s `renderedIn` and its name misdescribed it — it
+  collects every record that renders, not the instructions. One `renderedIn`
+  lives in `model.ts`, which ARCHITECTURE.md names the owner of the store walks,
+  and the cell asserts neither module kept a copy and that every caller imports
+  the shared one. Its stated form was that `instructions.ts` imports it too; it
+  cannot — a domain module may not import `model.ts` (ARCHITECTURE.md,
+  "Layering"), and it no longer needs to, because its callers hand it the set.
+  The importers asserted are `skill.ts`, `instruction.ts` and `views.ts`.
+- **G16** — new. ARCHITECTURE.md's layer table names the layer a module is in,
+  and it named neither of #440's modules, nor #391's or #345's. Rows are added
+  for all six and the cell holds them there. Scoped to those six: the unscoped
+  rule fails today on `cloud.ts`, `design.ts`, `sweep.ts` and `undo.ts`, which
+  predate this change; widening the cell is the follow-up that adds their rows.
 
 A cell runs a command through `must` or `selfIn` from `test/harness.mjs`
 (CONTRIBUTING.md, "Reaching the CLI from a test"): both run it in the test
@@ -155,17 +270,28 @@ on one is marked **decided here**.
   missing priority to `MAX_SAFE_INTEGER`, so an absent default would put every
   instruction below every priced record in any shared ordering. Cell **A8**.
 - **D-6 — the cap-share line.** `self instruction` closes with
-  `<n> tokens — <n> of the <cap>-token <scope> full cap (<pct>%)<estimate note>`,
+  `instructions hold <n> tokens — <n> of the <cap>-token <scope> full cap (<pct>%)<estimate note>`,
   where the estimate note is `estimateNote`'s text verbatim and `<scope>` is
   `project` or `workspace` as `scopeLabel` spells it. One line per occupied
   tier, so a workspace manual and a project set are never added together into a
-  number neither cap governs. Cells **B5**–**B9**.
+  number neither cap governs. The line counts the instructions and nothing else:
+  the tier itself holds every full-exposure record, so its own occupancy is a
+  larger number, and the cap refusals in `state.ts` are where that one is
+  stated. The subject is named in the line rather than left to be read into it
+  — **amended in review round 1**. The estimate note closes the last line only,
+  since it is one statement about where every number on the page came from.
+  Cells **B5**–**B9**, **B18**, **B19**.
 - **D-7 — the managed-block bullet.** One bullet in `BLOCK_BODY`, placed
   directly after the `Session start: run \`self context\`` bullet:
   `- Then run \`self instruction render\` and follow it; it is the operating`
-  `  manual for this workspace and is outside the context render budget.`
+  `  manual for this workspace and is outside the context render budget. If it`
+  `  prints only its head line, this workspace has recorded none yet.`
   A bullet, not a heading — `docs.test.mjs` asserts the block's section
-  headings. Cells **G5**, **G6**.
+  headings. The closing sentence is what a session reading the head line alone
+  needs to be told, since an empty render is otherwise indistinguishable from a
+  command that failed to answer — **amended in review round 1**, wrapped to the
+  block's own width, which is prose formatting and not a third line of meaning.
+  Cells **G5**, **G6**.
 - **D-8 — the handoff section.** `## Instructions`, placed directly after
   `## Applicable conventions` and before `## Current project context`, wrapped
   by `handoffSection` as `--- BEGIN INSTRUCTIONS (renderer-owned) ---`. Beside
@@ -182,7 +308,11 @@ on one is marked **decided here**.
 - **D-11 — the `--json` payload.** `render --json` emits
   `{"project": "<slug>", "sections": [{"kind": "tool", "heading": "Tools", "entries": [{"id": "e-…", "text": "…", "priority": 50, "scope": "project", "why": "…"}]}]}`
   — sections in render order, entries in render order, empty sections omitted
-  as in D-2. Cells **C20**–**C22**.
+  as in D-2. Every entry carries all five keys, always: `why` is `null` where
+  the add stated none, and `priority` is `null` where the record has none — a
+  raw `state add` can mint one. A shape that dropped the key instead would make
+  the caller's reader branch on which keys arrived to find that out
+  — **amended in review round 1**. Cells **C20**–**C22**.
 - **D-12 — `--workspace` with `--scope`.** Refused by name:
   `--workspace and --scope name the same thing two ways — pass one of them`.
   Cell **A15**.
@@ -243,7 +373,8 @@ archived project's checkout; `--kind` given, absent, or unknown; `--priority`
 given, absent, or malformed; scope omitted, `--workspace`, `--scope <slug>`,
 `--scope project`, `--scope <unregistered>`, `--scope <archived>`; the
 `--supersedes` target's kind — instruction, skill, runbook, convention, raw
-`state add` entity, unknown id, already-superseded instruction; the project full
+`state add` entity, unknown id, already-superseded instruction; `--kind` passed
+once vs twice; the text one line vs holding a line break; the project full
 tier under / at / over its cap; `--proposed` on / off; a workspace of one
 project vs several; a person at the keyboard vs a session.
 
@@ -281,6 +412,8 @@ project vs several; a person at the keyboard vs a session.
 | A30 | as A1 | `--kind rule --why "so a PR is never reviewed by its author"`, then `--label worker` | the `why` is on the payload and prints in `state show`; `--label` is refused: `unknown option '--label' — run \`self instruction --help\`` — the `reserved` spread can never silently discard a caller's label because no such flag exists |
 | A31 | as A1 | the same add through `mustPerson` and through `must` | both land; only `by` differs — the add has no keyboard gate |
 | A32 | after A17's refusal, same cwd | `self instruction` | the advertised command answers: the one standing instruction is listed and the skill is not |
+| A33 | as A1 | `--kind rule --kind tool` | refused: `--kind states the one section this instruction renders under, and was passed twice — pass rule, tool, or procedure once`; nothing recorded — **added in review round 1** |
+| A34 | as A1 | `instruction add "<a text holding a line break>" --kind procedure` | refused: `an instruction is one line — "<first 40 characters>…" holds a line break; record each step as its own --kind procedure instruction, ordered by --priority`; the refusal is one line, and nothing is recorded — **added in review round 1** |
 
 ## 4.2 Group B — `self instruction` and `instruction list`
 
@@ -291,7 +424,8 @@ another project's project-scoped record; `SUPERSELF_JSON=1` set / unset;
 estimated; `fullTokens` at its 1,000 default vs raised in `config.json`; the
 full tier under / over its cap; proposed / superseded / retracted / demoted
 records present; cwd inside / outside a project; an unreadable project store
-among the registered ones.
+among the registered ones; a non-instruction record in the same tier; a leaf
+the branch does not have.
 
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
@@ -312,6 +446,9 @@ among the registered ones.
 | B15 | three registered projects, one store unreadable, a `--workspace` instruction in a readable one | `self instruction` | the readable projects' instructions are listed; stderr carries `project "<slug>" is left out of this answer — its state could not be read: <why>`; exit 0 |
 | B16 | no instructions, at the cwd B1's answer was read in | the `self instruction add "<text>" --kind rule` line B1 advertised | records one instruction; `self instruction` then lists it |
 | B17 | two registered projects | `self instruction list --project <other>` | refused: `unknown option '--project' — run \`self instruction --help\`` — reading another project's set is `instruction render --project` — **decided here (D-13)** |
+| B18 | one instruction and one non-instruction full record in the same tier | `self instruction` | the share line's numbers are the instructions' alone — `instructions hold 23 tokens — 23 of the 1000-token project full cap (2%)`; what the tier itself holds is the larger number the cap refusal states — **added in review round 1** |
+| B19 | one project-scoped and one `--workspace` instruction, no `self tokens` run | `self instruction` | two share lines, and the estimate note on the last of them exactly once — **added in review round 1** |
+| B20 | any state | `self instruction bogus` | refused with the branch usage: `usage: self instruction \| add "<text>" --kind rule\|tool\|procedure \| render [--project <slug>]` — **added in review round 1** |
 
 ## 4.3 Group C — `instruction render`
 
@@ -322,7 +459,8 @@ superseded / retracted; scope project / `--workspace` / another project's;
 slug; a raw `state add --label instruction` with no kind label, with two, and
 with a preset label beside it; `--json` / `SUPERSELF_JSON=1`; cwd inside /
 outside a project; an unreadable store among the registered ones; the full tier
-far over its cap.
+far over its cap; a `--workspace` record whose owning project is archived; an
+entry with no `why` and one with no priority.
 
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
@@ -345,11 +483,13 @@ far over its cap.
 | C17 | `self state add "raw note" --label instruction --exposure full` | `instruction render` | renders under `## Unclassified`, printed after `## Procedures` — **decided here (D-1)** |
 | C18 | `self state add "raw note" --label instruction --label procedure --label rule --exposure full` | `instruction render` | renders under `## Rules` — the kind is the first of `rule`, `tool`, `procedure` the label list holds, membership never position |
 | C19 | `self state add "raw note" --label instruction --label convention --exposure full` | `instruction render`, then `self context` | absent from the render — `sourceOf` folds it to `EntitySource "convention"`, so `source !== undefined` and the predicate rejects it; present in `self context` as an ordinary full-exposure record |
-| C20 | one of each kind | `instruction render --json` | one JSON object on stdout and nothing around it: `project`, then `sections` in render order, each `{kind, heading, entries}` with `entries` `{id, text, priority, scope, why}` in render order; empty sections absent — **decided here (D-11)** |
+| C20 | one of each kind, a fourth added with no `--why`, and a fifth from `state add --label instruction --exposure full` | `instruction render --json` | one JSON object on stdout and nothing around it: `project`, then `sections` in render order, each `{kind, heading, entries}` with `entries` `{id, text, priority, scope, why}` in render order; empty sections absent. `Object.keys` is those five for every one of the five entries, the fourth's `why` is `null`, and the fifth's `why` and `priority` are both `null` — **decided here (D-11)**, entry shape **amended in review round 1** |
 | C21 | as C20, `SUPERSELF_JSON=1`, no `--json` | `instruction render` | the identical payload — the leaf declares `--json`, so the ambient preference is honoured here where B11 ignores it |
 | C22 | as C20 | `instruction render` and `instruction render --json` | the payload's entry ids and their order equal the rendered lines and their order, section for section |
 | C23 | `fullTokens` set to 20 with several full instructions already recorded | `instruction render`, then `instruction add` | every entry renders whole and untruncated; the add is refused by the cap refusal of A23 — parity with `context.test.mjs` "a store over a cap renders in full while state add stays gated" |
 | C24 | one full instruction | `self context` | the render's head line `# Instructions — follow; do not restate.` appears nowhere in `self context` — `render` is a separate command and is never spliced in, because `fitKeeps` never cuts `head` and would zero every other section |
+| C25 | project A holds instructions, cwd outside every registered project | `instruction render --project A` | A's render, exit 0 — naming the project is what answers C16's refusal — **added in review round 1** |
+| C26 | project B holds a `--workspace` instruction, then B is archived | `instruction render` in A and in C, then `--project B` | absent from both A's and C's render — `workspaceModels` walks `activeProjects` — and present when B is named. The current behaviour, pinned rather than decided — **added in review round 1** |
 
 ## 4.4 Group D — context, search, handoff and the plugin
 
@@ -357,7 +497,8 @@ State variables: exposure `full` vs demoted to `index`; scope project vs
 `--workspace`; a workspace of one project vs several; a work unit open for the
 handoff; the store under vs far over the retention caps; the dsh plugin's
 runner; `--type` given as `entity` vs `instruction` vs omitted; `--all` vs the
-default search set; cwd inside a project.
+default search set; cwd inside a project; a store holding no instruction at
+all; a record carrying the label from before this verb existed.
 
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
@@ -374,6 +515,8 @@ default search set; cwd inside a project.
 | D11 | one of each kind | the dsh `superself_instructions` tool | `superselfTools(run)` returns five definitions; the fifth takes no parameters, is concurrency-safe, runs `["instruction", "render"]`, and returns the render text |
 | D12 | `fullTokens` 20 and `indexTokens` 20, several full instructions and two index records | `self context`, `instruction render`, `state add` | the index rows render in full, the instruction render prints whole, and `state add` is still refused by the index cap — the parity `context.test.mjs` pins for records now pinned for instructions |
 | D13 | project A holds a `--workspace` instruction, three projects registered | `self context` and `instruction render` in each | absent from every project's `self context`; present in every project's `instruction render` |
+| D14 | no instructions, one open work unit | `self handoff <work-id>` | the packet carries `## Instructions` holding exactly `DATA \| (none)` between its markers, and no `INSTRUCTION \| ` line anywhere — an empty render reads as every other empty section does — **added in review round 1** |
+| D15 | `self state add "<text>" --label instruction --exposure full`, recorded before the upgrade | `self context`, `instruction render`, default `self search` | absent from `self context`; renders under `## Unclassified`; found by default `self search`. The behaviour change an existing store sees, pinned rather than prevented — **added in review round 1** |
 
 ## 4.5 Group E — placement
 
@@ -382,7 +525,8 @@ State variables: the actor — a person (`mustPerson`) vs a session (`must`);
 superseded vs retracted; the move — demotion, promotion, scope, priority, none,
 no-op; `--why` given or not; the destination tier under / at / over its cap; the
 index tier's own room; the record's owning log this project's vs another's; the
-scope destination active vs archived.
+scope destination active vs archived; the placement standing vs taken back with
+`self undo`.
 
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
@@ -404,6 +548,7 @@ scope destination active vs archived.
 | E16 | one retracted instruction | `state place <id> --priority 1` | refused: `<id> was retracted — a withdrawn record no longer renders, so it has no placement to change` |
 | E17 | project A's log owns a `--workspace` instruction, cwd in project B | `state place <id> --exposure index --why "…"` from B | resolves here and the `entity.placed` lands in **A's** log; afterwards both projects' `instruction render` omit it and both `## Index` blocks hold it |
 | E18 | one full instruction, the index tier at `indexTokens` | `state place <full id> --exposure index --why "…"` | refused: `the project index tier holds <n> of <cap> tokens and this text adds <m> more — name what demotes: … demote first with \`self state place <id> --exposure search --why "<reason>"\``; running that advertised line from there frees the room and the demotion then lands — **amended in implementation** |
+| E19 | one full instruction demoted to `index` | `self undo <the entity.placed>` | the demotion is taken back: `<id> is placed where it was — the placement was taken back`, `state show` reads `placement: project · full`, the record renders again and leaves `## Index` — **added in review round 1** |
 
 ## 4.6 Group F — lifecycle
 
@@ -454,6 +599,8 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
 | G12 | the new `instruction.ts` | `node test/structure.mjs` | passes at `maxFunctionLines = 30` with `printingModules = []` and `sanctionedEdges = []`: every function is inside 30 lines, the module puts nothing on stdout outside `src/output.ts`, and it introduces no subsystem edge |
 | G13 | one instruction recorded | `self fold` | `FOLD_VERSION` is still 1 and the state directory gains no `instruction/` folder |
 | G14 | the built contract | `self --help` and `self instruction --help` | both carry exactly `instruction`, `instruction add`, `instruction list` and `instruction render`; no `--format`, no `--type instruction`, no fourth verb |
+| G15 | one `renderedIn` in `model.ts` | `structure.test.mjs` | `skill.ts` and `instructions.ts` declare no local `renderedIn` and `instructions.ts` no `instructionsRenderedIn`; `skill.ts`, `instruction.ts` and `views.ts` import the shared one from `./model.js` — asserted on the source text, the way that file asserts every other module fact — **added in review round 1** |
+| G16 | ARCHITECTURE.md's layer table | `docs.test.mjs` | the table names a layer for `instruction.ts`, `instructions.ts`, `skill.ts`, `skills.ts`, `runbook.ts` and `runbooks.ts` — scoped to those six; the four other unnamed modules predate this change — **added in review round 1** |
 
 ## What this table does not cover
 
@@ -492,3 +639,34 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
   render does with what it mints.
 - **A hosted runtime appending the render to a system prompt.** Out of scope in
   the issue; the CLI only prints it.
+- **A store that already used the label.** `instruction` is a free label, so a
+  store that recorded `self state add "<text>" --label instruction --exposure
+  full` before this release holds records this verb now reads as instructions.
+  On upgrade they leave `self context` — the render's exclusion predicate is
+  about the label, and the label is the mechanism — and appear in `instruction
+  render` under `## Unclassified`, where a raw add's record belongs. They are
+  still found by default `self search` and still charge the same tier. Accepted
+  rather than migrated: a rule that looked at *when* a record was written would
+  be a second definition of what an instruction is. **D15** pins the behaviour
+  and the pull request states it.
+- **A workspace-scoped instruction in an archived project.** It leaves every
+  other project's render, because `workspaceModels` walks `activeProjects` and
+  an archived project is out of every workspace-wide answer until it is
+  restored (#283). That is the existing rule for every scoped record, not a
+  decision this issue makes; **C26** pins it so a change to it is visible.
+- **Where a full tier at its cap leaves the add.** An instruction is recorded
+  at full exposure, so an add into a tier already at `fullTokens` is refused —
+  by the same gate as every other full record, and with the same remedies:
+  `--demote <id>` on the add, or freeing room first. The `instruction add`
+  detail block says so; **A23** and **A25** pin the two refusals, and no cell is
+  added for the sentence.
+- **Which stream a workspace-wide notice went to.** The harness merges stdout
+  and stderr, so **B15** and **C15** prove the sentence was printed and the
+  answer still stood, never that it was on stderr. The stream is `model.ts`'s
+  `console.error`, and a test that could see the difference would have to spawn
+  the CLI rather than run it in process.
+- **The whole diff of the golden fixture.** **G3** reads the committed fixture
+  and proves no `instruction` line reached it outside the root usage listing.
+  That is a proxy for "the only change is the root usage listing": the fixture
+  is regenerated and committed, so a byte that moved somewhere the word does not
+  appear is caught by the golden comparison beside it, not by G3.
