@@ -134,6 +134,8 @@ const BLOCK_BODY: readonly string[] = [
         "command is unavailable.",
         "",
         "- Session start: run `self context` and treat its output as current truth.",
+        "- Then run `self instruction render` and follow it; it is the operating",
+        "  manual for this workspace and is outside the context render budget.",
         "- Write for the reader by default: answers to the person in their language,",
         "  records — events, decisions, reports, conventions — in English, so a record",
         "  stays readable to whoever opens it next. A project that wants it otherwise",
