@@ -24,8 +24,11 @@ import {
     invocationStateViolations,
     credentialIsolationViolations,
     credentialModules,
+    maxFunctionLines,
     memoryTree,
     packageRoot,
+    printingModules,
+    sanctionedEdges,
     parseSource,
     printSiteViolations,
     rootKeyViolations,
@@ -648,4 +651,68 @@ test("the publish gate has no environment opt-out", () =>
         // rather than inverting the gate.
         assert.deepEqual(rootKeyViolations(keyPins("root-2026a", "root-2026b")), []);
     });
+});
+
+// ---------------------------------------------------------------- #440
+
+// Cell G12 of docs/maintainers/case-tables/440-instructions.md. The gate's own
+// repository-wide cases above already answer for the whole tree; this one is
+// about the two modules #440 adds, and it quotes the thresholds from
+// structure.mjs rather than restating them, so a raised ceiling moves this
+// case with it.
+test("G12: the instruction modules pass the gate at its declared thresholds", () =>
+{
+    const tree = diskTree(packageRoot);
+    const added = ["src/instruction.ts", "src/instructions.ts"];
+    for (const path of added)
+    {
+        assert.ok(tree.paths.includes(path), `${path} is not in the tree`);
+        for (const span of functionSpans(parseSource(tree, path)))
+        {
+            assert.ok(span.lines <= maxFunctionLines,
+                `${path}:${span.line} ${span.name} is ${span.lines} lines, over the ${maxFunctionLines}-line ceiling`);
+        }
+    }
+    // The header states what an instruction is and who can write one. It is
+    // the paragraph `skill.ts` carries for the same reason — this store is
+    // synced, so a rule appended anywhere is read everywhere — and a reader
+    // arriving at the module has to meet it before the code.
+    const source = tree.read("src/instruction.ts");
+    // Read as prose rather than as source: the paragraph is wrapped, so a
+    // sentence of it spans two comment lines.
+    const header = source.slice(0, source.indexOf("\nimport ")).replace(/^\s*\/\/ ?/gm, "").replace(/\s+/g, " ");
+    assert.ok(header.includes("anyone who can append to this store can write one"), header);
+    assert.ok(header.includes("It never runs a line an instruction names"), header);
+    assert.ok(header.includes("it prints what the store holds"), header);
+    assert.deepEqual(printingModules, [], "a module was added back to the print allowlist");
+    assert.deepEqual(sanctionedEdges, [], "an import edge was sanctioned");
+    const printing = new Set(printSiteViolations(tree).map((violation) => violation.file));
+    assert.deepEqual(added.filter((path) => printing.has(path)), []);
+    const crossing = importDirectionViolations(tree).map((violation) => violation.file);
+    assert.deepEqual(added.filter((path) => crossing.includes(path)), []);
+});
+
+// Cell G15 of the same table. `instructions.ts` and `skill.ts` each held a
+// byte-identical copy of the collector, under two names; one lives in
+// `model.ts` now, which ARCHITECTURE.md names the owner of the store walks.
+// The assertion is on the source text, the way this file asserts every other
+// module fact: the point is that no second copy came back, which a behavioural
+// test could not see.
+test("G15: one `renderedIn` serves every surface, and no module keeps a copy", () =>
+{
+    const tree = diskTree(packageRoot);
+    assert.match(tree.read("src/model.ts"), /^export function renderedIn\(models: ProjectModel\[\], viewer: string\)/m);
+    for (const path of ["src/skill.ts", "src/instructions.ts"])
+    {
+        assert.doesNotMatch(tree.read(path), /function renderedIn\(/,
+            `${path} declares a local renderedIn — the collector is model.ts's`);
+    }
+    assert.doesNotMatch(tree.read("src/instructions.ts"), /instructionsRenderedIn/);
+    for (const path of ["src/skill.ts", "src/instruction.ts", "src/views.ts"])
+    {
+        const imported = tree.read(path).match(/import \{([^}]*)\} from "\.\/model\.js";/);
+        assert.ok(imported !== null, `${path} imports nothing from model.js`);
+        assert.ok(imported[1].split(",").map((name) => name.trim()).includes("renderedIn"),
+            `${path} does not import the shared renderedIn`);
+    }
 });

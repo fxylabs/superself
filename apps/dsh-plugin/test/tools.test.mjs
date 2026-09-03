@@ -17,11 +17,11 @@ function fixture()
 
 const exec = { signal: undefined };
 
-test("the four tools register under stable names with string output", () =>
+test("the five tools register under stable names with string output", () =>
 {
     const { tools } = fixture();
     assert.deepEqual(Object.keys(tools).sort(),
-        ["superself_context", "superself_decide", "superself_report", "superself_work"]);
+        ["superself_context", "superself_decide", "superself_instructions", "superself_report", "superself_work"]);
     for (const tool of Object.values(tools))
     {
         assert.equal(tool.output.schema.type, "string");
@@ -106,4 +106,22 @@ test("reads may run in parallel; writes stay exclusive", () =>
     assert.equal(tools.superself_work.isConcurrencySafe({ action: "start", id: "w-abc12" }), false);
     assert.equal(tools.superself_report.isConcurrencySafe, undefined);
     assert.equal(tools.superself_decide.isConcurrencySafe, undefined);
+});
+
+// Cells D11 and G9 of docs/maintainers/case-tables/440-instructions.md. The
+// tool table is this suite's subject, so both cells about it are asserted
+// here rather than from the CLI's own suite, which would have to reach across
+// packages for a build it does not produce.
+test("D11 / G9: superself_instructions is the fifth tool and runs `instruction render`", async () =>
+{
+    const { calls, tools } = fixture();
+    const definitions = superselfTools(async () => ({ ok: true, text: "" }));
+    assert.equal(definitions.length, 5);
+    assert.equal(definitions[4].name, "superself_instructions");
+    const tool = tools.superself_instructions;
+    assert.deepEqual(tool.parameters.properties, {});
+    assert.equal(tool.isConcurrencySafe({}), true);
+    assert.equal(tool.output.schema.type, "string");
+    assert.equal(await tool.execute({}, exec), "ran: instruction render");
+    assert.deepEqual(calls, [["instruction", "render"]]);
 });

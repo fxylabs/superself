@@ -12,7 +12,7 @@ across sessions, across projects, and across agent tools, with a human
 approving what counts as decided and done.
 
 Tested against `@deepseek-ai/dsh@0.1.1-rc.2`. dsh is a release candidate and
-its plugin API will break; this adapter is kept thin (four tools, one command,
+its plugin API will break; this adapter is kept thin (five tools, one command,
 one runner) so re-targeting is cheap. The peer range in `package.json` names
 the line it was tested on.
 
@@ -40,6 +40,7 @@ without a shell, or open an issue.
 | `superself_work` | `self work` / `self work show <id>` / `self work start <id>` | `action` is `list`, `show`, or `start`; `id` is validated as `w-[a-z0-9]+`. |
 | `superself_report` | `self report <id> "<text>" [--evidence <commit>]` | Refuses an empty `text`. |
 | `superself_decide` | `self decide "<text>" [--why <reason>]` | Refuses an empty `text`. |
+| `superself_instructions` | `self instruction render` | The workspace's execution rules, tool notes and procedures, whole — outside the context render budget. |
 
 Every tool shells out to the installed `self` with an argv array — no shell,
 no reimplementation of self's logic. A refusal (self not installed, no project

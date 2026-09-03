@@ -206,6 +206,19 @@ test("cell 12: installing a plugin that claims a built-in verb is refused verb_r
     assert.match(result.all, /"work" is a built-in command/);
 });
 
+// Cell G11 of docs/maintainers/case-tables/440-instructions.md, plugin half.
+// `registerHostVerbs` is fed `COMMANDS.map(name)`, so a verb added to the
+// contract is reserved against a plugin the day it is added — with no edit
+// here and none in `aliases.ts`. The alias half is in guide.test.mjs.
+test("G11: a plugin claiming the `instruction` verb is refused verb_reserved", async () =>
+{
+    const it = box();
+    const result = await installThrough(it, releaseDocument({ key: "instruction", verbs: ["instruction"] }),
+        ["instruction"]);
+    assert.equal(result.code, 1);
+    assert.match(result.all, /"instruction" is a built-in command/);
+});
+
 test("cell 13: installing a plugin that claims an alias row is refused verb_conflicts_alias", async () =>
 {
     const it = await workspaceBox();

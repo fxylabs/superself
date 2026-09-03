@@ -399,3 +399,127 @@ test("H2: the catalogue's init entry is the contract's init syntax, flag for fla
     const documented = catalogueEntries().find((entry) => entry.split(/\s+/)[0] === "init");
     assert.equal(documented, declared, "cli.md and `self init --help` offer different flags");
 });
+
+/* ── group G of #440: the surfaces a new top-level verb touches ────── */
+
+// Cells G1, G2, G5, G6 and G7 of
+// docs/maintainers/case-tables/440-instructions.md.
+
+// The stronger rule H2 holds `init` to, for the same reason: `instruction` is
+// a new verb, and the catalogue row is the first place a reader meets its
+// flags. Byte-for-byte against the contract's own syntax lines, so a flag
+// added to one and not the other is a red build rather than drift somebody
+// finds later.
+test("G1: the cli.md catalogue's Instructions row is the contract's syntax, line for line", () =>
+{
+    const command = COMMANDS.find((candidate) => candidate.name === "instruction");
+    assert.ok(command !== undefined, "cli.md names `instruction`, which is not a command");
+    const entries = catalogueEntries().filter((entry) => entry.split(/\s+/)[0] === "instruction");
+    assert.deepEqual(entries, command.usage.map((usage) => usage.syntax),
+        "cli.md and `self instruction --help` offer different lines");
+    for (const flag of longFlags(entries.join(" ")))
+    {
+        assert.ok(declaredFlags(command).has(flag),
+            `the cli.md catalogue names --${flag}, and \`instruction\` declares no such option`);
+    }
+    // The `--json` paragraph is the other half of the row: `instruction render`
+    // is one of the two local reads that declare a payload, and a reader who
+    // takes "commands that reach the rail" literally would never try it.
+    const paragraph = tier1("docs/reference/cli.md").split("\n\n")
+        .find((block) => block.startsWith("Commands that reach the rail accept `--json`"));
+    assert.ok(paragraph !== undefined, "cli.md lost its --json paragraph");
+    assert.ok(paragraph.includes("`instruction render`"), paragraph);
+});
+
+test("G2: the catalogue's verb fence carries `instruction`, and still diffs clean", () =>
+{
+    const page = tier1("docs/reference/cli.md");
+    const block = page.match(/top-level verbs:\n\n```text\n([\s\S]*?)```/);
+    const documented = block[1].split(/\s+/).filter((word) => word !== "");
+    assert.ok(documented.includes("instruction"), "the cli.md verb fence does not name `instruction`");
+    assert.deepEqual([...documented].sort(), [...COMMANDS.map((command) => command.name)].sort());
+});
+
+test("G5: the managed block gains the render bullet without gaining a section heading", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const blocks = ["AGENTS.md", "CLAUDE.md"]
+        .map((name) => managedBlock(name, readFileSync(join(demo, name), "utf8")));
+    assert.equal(blocks[0], blocks[1]);
+    assert.deepEqual([...blocks[0].matchAll(/^#{2,3} .+$/gm)].map((found) => found[0]),
+        ["## Project state (superself)"]);
+    for (const block of blocks)
+    {
+        assert.ok(block.includes("- Then run `self instruction render` and follow it; it is the operating\n"
+            + "  manual for this workspace and is outside the context render budget. If it\n"
+            + "  prints only its head line, this workspace has recorded none yet.\n"), block);
+        assert.ok(block.indexOf("- Session start: run `self context`") < block.indexOf("- Then run `self instruction"),
+            "the render bullet does not follow the session-start bullet");
+    }
+});
+
+test("G6: the line the managed block advertises runs as written from that checkout", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const block = managedBlock("AGENTS.md", readFileSync(join(demo, "AGENTS.md"), "utf8"));
+    const advertised = block.split("\n").find((line) => line.includes("`self instruction render`"));
+    assert.ok(advertised !== undefined, "the block advertises no render line");
+    const rendered = await must(box, demo, advertised.match(/`self ([^`]+)`/)[1].split(" "));
+    assert.equal(rendered.code, 0);
+    assert.match(rendered.out, /^# Instructions — follow; do not restate\.$/m);
+});
+
+// G7 as amended during implementation: this repository does not track
+// AGENTS.md or CLAUDE.md (.gitignore, and proof 4 above says why), so there is
+// no checked-in file to compare the new template against. What there is, is a
+// checkout whose untracked instruction files hold an older block — which is
+// what every developer's tree looks like the moment this change lands — and
+// the rule that a fold rewrites both of them in place, touching nothing that
+// is checked in.
+test("G7: a fold rewrites an older block in both untracked instruction files, and nothing tracked", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const stale = `${BLOCK_BEGIN} v0.0.1 -->\n## Project state (superself)\n\nan older block\n${BLOCK_END}`;
+    for (const name of ["AGENTS.md", "CLAUDE.md"])
+    {
+        writeFileSync(join(demo, name), `# ${name}\n\n${stale}\n`);
+    }
+    writeFileSync(join(demo, "README.md"), "tracked content\n");
+    await must(box, demo, ["fold"]);
+    const blocks = ["AGENTS.md", "CLAUDE.md"]
+        .map((name) => managedBlock(name, readFileSync(join(demo, name), "utf8")));
+    assert.equal(blocks[0], blocks[1]);
+    for (const block of blocks)
+    {
+        assert.equal(block.includes("an older block"), false, "the stale block survived the fold");
+        assert.ok(block.includes("- Then run `self instruction render` and follow it"), block);
+    }
+    assert.equal(readFileSync(join(demo, "README.md"), "utf8"), "tracked content\n");
+});
+
+// Cell G16 of the same table. ARCHITECTURE.md's layer table is where a module
+// declares which layer it is in, and the rule above it — "a new module joins an
+// existing layer or declares a new one here first" — is only enforceable if the
+// table names the modules.
+//
+// Scoped to the six verb modules #440 and #391 are about. The unscoped rule —
+// every `apps/cli/src/*.ts` is named — fails today on `cloud.ts`, `design.ts`,
+// `sweep.ts` and `undo.ts`, which predate this change and are nothing to do
+// with it; widening this cell is the follow-up that adds their rows.
+const LAYERED_MODULES = ["instruction.ts", "instructions.ts", "skill.ts", "skills.ts",
+    "runbook.ts", "runbooks.ts"];
+
+test("G16: the layer table names #440's, #391's and #379's six modules", () =>
+{
+    const table = tier1("ARCHITECTURE.md").match(/\| Layer \| Modules \| Owns \|\n[\s\S]*?\n\n/);
+    assert.ok(table !== null, "ARCHITECTURE.md lost its layer table");
+    const named = new Set(table[0].split("\n").flatMap((line) =>
+        [...(line.split("|")[2] ?? "").matchAll(/`([^`]+)`/g)].map((found) => found[1])));
+    for (const module of LAYERED_MODULES)
+    {
+        assert.ok(named.has(module), `ARCHITECTURE.md's layer table names no layer for ${module}`);
+    }
+});

@@ -23,7 +23,7 @@ import { chainHead, EntityState, isCurrent, isLive, rendersIn, scopeTarget } fro
 import { Requirement, required, requireText } from "./args.js";
 import { storedDocument } from "./artifact.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
-import { ProjectModel, workspaceModels } from "./model.js";
+import { ProjectModel, renderedIn, workspaceModels } from "./model.js";
 import { notice } from "./output.js";
 import { readScopes, requireProject, SCOPE_OPTIONS } from "./paths.js";
 import { makeEvent } from "./pipeline.js";
@@ -530,16 +530,6 @@ function requireDroppable(model: ProjectModel, wanted: string | undefined): Enti
 }
 
 /* ── the read verbs ────────────────────────────────────────────────── */
-
-// Every skill that answers in one project: its own records plus every other
-// project's workspace-scoped ones. `rendersIn` is the rule the context
-// projection already collects by, so a name reaches here exactly where a row
-// renders.
-function renderedIn(models: ProjectModel[], viewer: string): EntityState[]
-{
-    return models.flatMap((model) => model.entities.filter((item) => item.status === "confirmed"
-        && isCurrent(item) && rendersIn(item, model.slug, viewer)));
-}
 
 function skillList({ values }: CommandInput<typeof SCOPE_OPTIONS>): CommandOutput
 {

@@ -1,4 +1,4 @@
-// The four model-facing tools. Each maps its arguments onto one `self` argv
+// The five model-facing tools. Each maps its arguments onto one `self` argv
 // and returns whatever the runner answers — a refusal is a message the model
 // reads, never a throw.
 
@@ -34,6 +34,22 @@ function contextTool(run: Runner): ToolDefinition
         output: TEXT_OUTPUT,
         isConcurrencySafe: () => true,
         execute: (_args, exec) => run(["context"], exec.signal).then((outcome) => outcome.text),
+    });
+}
+
+// The operating manual a session follows, whole (#440). It is a separate tool
+// from `superself_context` because it is a separate command: an instruction is
+// outside the context render budget, so the two are read together and neither
+// is spliced into the other.
+function instructionsTool(run: Runner): ToolDefinition
+{
+    return defineTool({
+        name: "superself_instructions",
+        description: "Print the instructions this Superself workspace holds: the execution rules, tool notes and procedures every session here follows, grouped by kind. Read it at session start beside superself_context and follow it. Runs `self instruction render`.",
+        parameters: {},
+        output: TEXT_OUTPUT,
+        isConcurrencySafe: () => true,
+        execute: (_args, exec) => run(["instruction", "render"], exec.signal).then((outcome) => outcome.text),
     });
 }
 
@@ -133,5 +149,5 @@ function decideTool(run: Runner): ToolDefinition
 
 export function superselfTools(run: Runner): ToolDefinition[]
 {
-    return [contextTool(run), workTool(run), reportTool(run), decideTool(run)];
+    return [contextTool(run), workTool(run), reportTool(run), decideTool(run), instructionsTool(run)];
 }

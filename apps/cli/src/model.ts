@@ -9,7 +9,7 @@
 // still asks it, and there is one import line to change the day the package
 // moves.
 
-import { applyLocalOverlay, foldEvents, ProjectModel } from "@superself/fold";
+import { applyLocalOverlay, EntityState, foldEvents, isCurrent, ProjectModel, rendersIn } from "@superself/fold";
 import { readEvents } from "./logfile.js";
 import { sessionToken } from "./machine.js";
 import { activeProjects, readRegistry, readStoreConfig, readVerdicts } from "./paths.js";
@@ -136,6 +136,20 @@ function noteUnreadable(slug: string, why: string): void
         noted.add(slug);
         console.error(`project "${slug}" is left out of this answer — its state could not be read: ${why}`);
     }
+}
+
+// Every record that answers in one project: its own confirmed current records
+// plus every other project's workspace-scoped ones. `rendersIn` is the rule
+// the context projection already collects by, so a record reaches a listing
+// exactly where a row renders.
+//
+// It sits here, with the store walks, because three surfaces read it — the
+// skill listing, the instruction render and the handoff packet — and a copy
+// beside each one is how two surfaces come to answer with two different sets.
+export function renderedIn(models: ProjectModel[], viewer: string): EntityState[]
+{
+    return models.flatMap((model) => model.entities.filter((item) => item.status === "confirmed"
+        && isCurrent(item) && rendersIn(item, model.slug, viewer)));
 }
 
 // Which registered projects hold the record a call names (#302). A confirm

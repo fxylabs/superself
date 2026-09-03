@@ -29,6 +29,7 @@ prints them during the same run.
 | The entity grammar | `state ...` (the raw record every preset folds into), `alias ...` (the table behind the preset verbs) |
 | Reusable procedures | `runbook add "<name>" --stage s`, `runbook show <id|name>`, `runbook revise <id> --stage s --why w`, `runbook start <id> --instance <key>`, `runbook advance <key> --why w`, `runbook hold\|approve\|stop\|resume\|link <key>` |
 | Reusable skills | `skill [--project <slug>]`, `skill add "<name>" --command "<line>" --purpose "<what it is for>" [--workspace]`, `skill add "<name>" --file <path> --purpose "<what it is for>"`, `skill show <id\|name>`, `skill drop <id\|name> --why w` |
+| Instructions | `instruction [list]`, `instruction add "<text>" --kind rule\|tool\|procedure [--priority n] [--workspace\|--scope <slug>] [--supersedes <id>] [--demote <id>] [--proposed] [--why w]`, `instruction render [--project <slug>] [--json]` |
 | Work and evidence | `work ...`, `report <work-id> "<summary>"`, `handoff <work-id> [--project <slug>]`, `artifact ...` |
 | Store size and maintenance | `store size [--json]`, `store compact` |
 | Process ledger | `work started <id> --pid N`, `work exited <id> [--code N]` |
@@ -41,7 +42,7 @@ The command catalogue currently includes these top-level verbs:
 
 ```text
 init workspace lang theme timezone tokens project remote sync clone
-goal objective milestone decide work handoff report artifact store convention state alias runbook skill
+goal objective milestone decide work handoff report artifact store convention state alias runbook skill instruction
 undo apply
 connect view context status setup
 log search fold sweep
@@ -77,13 +78,15 @@ has approved a credential for it.
   current document; a load falls back to a valid cache, so an installed mini-app
   keeps working offline and a revocation reaches it within a day.
 
-Commands that reach the rail accept `--json`: one object on stdout, snake_case
-keys, and — on a failure — the error envelope on **stdout** as well, so an
-agent capturing stdout gets parseable output on every path. Exit codes are
-`0` ok, `1` error, `2` refused by policy, `3` pending and worth retrying
-unchanged. `SUPERSELF_JSON=1` selects the same mode for a whole session and is
-ignored by commands that have no machine contract, so exporting it never
-changes what an existing verb prints.
+Commands that reach the rail accept `--json` — one object on stdout,
+snake_case keys — and so do the two local reads that declare a payload of
+their own, `store size` and `instruction render`, each in its own shape. On a
+failure the error envelope prints on **stdout** as well, so an agent capturing
+stdout gets parseable output on every path. Exit codes are `0` ok, `1` error,
+`2` refused by policy, `3` pending and worth retrying unchanged.
+`SUPERSELF_JSON=1` selects the same mode for a whole session and is ignored by
+commands that have no machine contract, so exporting it never changes what an
+existing verb prints.
 
 Every rail call is recorded in a local journal at
 `$XDG_STATE_HOME/superself/calls.jsonl`, mode `0600`, capped at 1000 lines. It

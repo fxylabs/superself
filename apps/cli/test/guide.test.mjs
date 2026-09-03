@@ -134,3 +134,57 @@ test("the concept pages and the command pages are both answerable offline", () =
     }
     assert.ok(TOPICS.length > 0, "the guide declares no topic");
 });
+
+/* ── group G of #440: the help surfaces the new verb reaches ───────── */
+
+// Cells G4, G10, G11 (the alias half) and G14 of
+// docs/maintainers/case-tables/440-instructions.md.
+
+test("G4: the placement topic states that a full-exposure instruction is outside the budget", () =>
+{
+    const topic = TOPICS.find((item) => item.name === "placement");
+    const body = topic.body.join("\n");
+    assert.ok(body.includes("it is outside the 3,000-token context render"), body);
+    assert.ok(body.includes("`self instruction render`"), body);
+    const page = self(["help", "placement"]);
+    assert.ok(page.includes("A full-exposure instruction is the one record placement keeps out of"), page);
+    assert.ok(page.includes("budget and renders whole through `self instruction render`."), page);
+});
+
+test("G10: `self help instruction` resolves through commandUsage — syntax, detail and the requirement", () =>
+{
+    const page = self(["help", "instruction"]);
+    assert.match(page, /^usage: self instruction \[list\]$/m);
+    assert.match(page, /^ {7}self instruction add "<text>" --kind rule\|tool\|procedure/m);
+    assert.match(page, /^ {7}self instruction render \[--project <slug>\] \[--json\]$/m);
+    assert.ok(page.includes("an instruction is an execution rule, a tool note or a procedure every"), page);
+    assert.ok(page.includes("required, and refused in one pass when missing:"), page);
+    assert.match(page, /instruction add\s+--kind/);
+    assert.equal(TOPICS.some((topic) => topic.name === "instruction"), false,
+        "#440 adds no concept page for `instruction`, as #391 added none for `skill`");
+});
+
+test("G11: `instruction` is a reserved verb no alias row may carry", async () =>
+{
+    const refused = await selfIn(box, demo, ["alias", "add", "instruction", "--label", "x"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /"instruction" is a built-in command, not an alias/);
+    assert.ok(COMMANDS.map((command) => command.name).includes("instruction"),
+        "the reserved list and the plugin claim guard are both fed from COMMANDS");
+});
+
+test("G14: the contract carries exactly the four instruction leaves, and no --format", () =>
+{
+    const command = COMMANDS.find((candidate) => candidate.name === "instruction");
+    assert.deepEqual(commandLeaves(command).map((entry) => entry.leaf.name).sort(),
+        ["", "add", "list", "render"]);
+    const root = rootUsage(COMMANDS);
+    for (const line of ["instruction [list]", 'instruction add "<text>" --kind rule|tool|procedure',
+        "instruction render [--project <slug>] [--json]"])
+    {
+        assert.ok(root.includes(line), `the root usage listing lost \`${line}\``);
+    }
+    const page = self(["help", "instruction"]);
+    assert.equal(page.includes("--format"), false, page);
+    assert.equal(page.includes("--type"), false, page);
+});

@@ -96,3 +96,20 @@ test("an explicitly named archived target remains readable and names root-safe r
     assert.match(packet.out, /archived target: from the workspace root, run `self project restore 'demo'`/);
     assert.match(packet.out, /archived rule/);
 });
+
+// Cell G8 of docs/maintainers/case-tables/440-instructions.md. The snapshot
+// limits are the packet's own statement of what may be cut and what may not,
+// and the instruction render is one of the sections that may not — so the
+// sentence names it, verbatim.
+test("G8: the snapshot limits name the instructions among the sections that are never truncated", async () =>
+{
+    await must(box, demo, ["instruction", "add", "tests run on the dev VM", "--kind", "rule"]);
+    const packet = await must(box, ws, ["handoff", work, "--project", "demo"]);
+    assert.ok(packet.out.includes("## Snapshot limits"), packet.out);
+    assert.ok(packet.out.includes(
+        "Protocol, instructions, conventions, work, and reports are mandatory and are not silently truncated."),
+    packet.out);
+    assert.ok(packet.out.includes("Only the current project-context subsection keeps the existing 3,000-token cap."),
+        packet.out);
+    assert.match(packet.out, /^INSTRUCTION \| - tests run on the dev VM$/m);
+});

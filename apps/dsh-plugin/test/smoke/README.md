@@ -26,7 +26,7 @@ printf -- "- insert:\n    - id: superself-probe\n      name: '%s'\n" "$PWD/apps/
 (cd "$HOME/proj" && npx -y @deepseek-ai/dsh@0.1.1-rc.2 --profile scratch --patch "$DSH_HOME/probe.yml")
 ```
 
-Expected, in order: the four tool names; `self context` of the scratch project;
+Expected, in order: the five tool names; `self context` of the scratch project;
 the open work list; the bad-id refusal; the empty-text refusal; a recorded
 decision; the context again, now carrying that decision; `/self registered`;
 `PROBE DONE`. A `tools` load failure or an rc API change shows up here first.
