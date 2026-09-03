@@ -14,9 +14,51 @@ Where the tests live:
 | D — context, search, handoff and the plugin | 13 (D1–D13) | `apps/cli/test/instruction-context.test.mjs` |
 | E — placement | 18 (E1–E18) | `apps/cli/test/instruction-place.test.mjs` |
 | F — lifecycle | 15 (F1–F15) | `apps/cli/test/instruction-context.test.mjs` |
-| G — surfaces | 14 (G1–G14) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `structure.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
+| G — surfaces | 14 (G1–G14) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
 
 **133 designed cells.**
+
+Cells changed while the code was written, and why — the table is the contract,
+so a cell the code proved wrong is corrected here rather than skipped:
+
+- **A5** — the requirement gate prints `spell(requirement)`, which is the flags
+  alone; a requirement's `value` renders on the help page, not in the refusal.
+  The cell now reads `self instruction add needs --kind: which section it
+  renders under`.
+- **F2** — the same gate as A5, and the same correction: `spell(requirement)`
+  prints the flags alone, so the refusal reads `self state retract needs
+  --why: why the record no longer holds`, with no `"<text>"` after the flag.
+- **B7**, **B8**, **B9** — every cap sentence in `state.ts` prints `${cap}`
+  unformatted, so the share line reads `1000-token`, not `1,000-token`. One
+  comma here would be two spellings of one number.
+- **F3** — the disclosure headline is built from `SUBJECT.retract`, which is
+  "takes back": ``this takes back a confirmed instruction — `self undo` takes
+  it back``. The cell's point — that `commonLabel` reads `labels[0]`, so the
+  noun is `instruction` — is unchanged.
+- **E18** — `requireDemotableSeat` admits a `--demote` target only at the
+  exposure of the tier being entered, so a demotion *out of* full can never
+  name a full record and can never raise `requireDemotionRoom`'s refusal. The
+  cell keeps its seeded state and takes the refusal that state does raise,
+  `requireTokenRoom`'s: `the project index tier holds <n> of <cap> tokens and
+  this text adds <m> more — name what demotes: … demote first with \`self state
+  place <id> --exposure search --why "<reason>"\``, whose advertised line frees
+  the room and lets the demotion land. `requireDemotionRoom` keeps the coverage
+  it already has in `place.test.mjs`.
+- **G7** — this repository does not track `AGENTS.md` or `CLAUDE.md`
+  (`.gitignore`; `docs.test.mjs`'s proof 4 says why), so there is no checked-in
+  file to compare the new template against. The cell now reads: a fold in a
+  checkout whose untracked `AGENTS.md` / `CLAUDE.md` hold an older block
+  rewrites both to the new template, and no checked-in file changes.
+- **D11** lands in `apps/dsh-plugin/test/tools.test.mjs` beside G9, whose
+  subject it shares: asserting it from the CLI's suite would reach across
+  packages for a build that suite does not produce. **D10** keeps its CLI half
+  — that `self context`'s bytes did not move — in
+  `instruction-context.test.mjs`.
+- **G3** lands in `golden.test.mjs`, **G8** in `handoff.test.mjs`, **G11**'s
+  plugin half in `pr7-loader.test.mjs` where the signed-release fixture lives
+  (its alias half is in `guide.test.mjs`), and **G13** in
+  `instruction.test.mjs` beside A29 — `structure.test.mjs` reaches no CLI, and
+  G13's claim is about what a fold leaves on disk.
 
 A cell runs a command through `must` or `selfIn` from `test/harness.mjs`
 (CONTRIBUTING.md, "Reaching the CLI from a test"): both run it in the test
@@ -211,7 +253,7 @@ project vs several; a person at the keyboard vs a session.
 | A2 | as A1 | `--kind tool` | `labels ["instruction","tool"]` |
 | A3 | as A1 | `--kind procedure` | `labels ["instruction","procedure"]` |
 | A4 | as A1 | `--kind harness` | refused: ``"harness" is not an instruction kind — pass rule (a judgement or execution rule), tool (a note about a command), or procedure (steps in a fixed order)`` — **decided here** |
-| A5 | as A1 | `--kind` omitted | refused by the requirement gate: `self instruction add needs --kind <rule\|tool\|procedure>: which section it renders under` |
+| A5 | as A1 | `--kind` omitted | refused by the requirement gate: `self instruction add needs --kind: which section it renders under` — **amended in implementation** |
 | A6 | as A1 | `instruction add "" --kind rule` and `"   "` | refused by the text gate: `usage: self instruction add "<text>"` |
 | A7 | as A1 | `--kind rule --priority 10` | payload `priority 10` — the `ComposedValues.priority` widening |
 | A8 | as A1 | `--priority` omitted | payload `priority 50`, written by the row — **decided here (D-5)** |
@@ -259,7 +301,7 @@ among the registered ones.
 | B4 | two `rule` entries at priority 20, one `--workspace` and one project-scoped, different `ts` | `self instruction` | the order is `orderEntities`: workspace first (`scopeRank`), then newer `ts`, then id |
 | B5 | one instruction, no `self tokens` run | `self instruction` | the closing line carries the total and ` (estimated at <n> tokens per character; \`self tokens\` records a measurement)` |
 | B6 | after `self tokens` records a measurement | `self instruction` | the same line, with no estimate note |
-| B7 | one project instruction, `fullTokens` at its 1,000 default | `self instruction` | the share line reads `<n> tokens — <n> of the 1,000-token project full cap (<pct>%)` — **decided here (D-6)** |
+| B7 | one project instruction, `fullTokens` at its 1,000 default | `self instruction` | the share line reads `<n> tokens — <n> of the 1000-token project full cap (<pct>%)` — **decided here (D-6)**, cap spelling **amended in implementation** |
 | B8 | `config.json` `fullTokens` raised to 4,000 | `self instruction` | the share is against 4,000, not 1,000 |
 | B9 | one project-scoped and one `--workspace` instruction | `self instruction` | two share lines, one per occupied tier: `project full cap` and `workspace full cap`; neither total includes the other's tokens — **decided here (D-6)** |
 | B10 | one instruction | `self instruction list --json` | refused by name on stdout as a JSON envelope: ``\`self instruction list\` has no --json contract yet``, code `json_unsupported`, hint `read the human output, or use a command that declares --json` |
@@ -361,7 +403,7 @@ scope destination active vs archived.
 | E15 | one full instruction | `state place <id> --exposure search --why "kept for the record"` | it leaves `instruction render` and `## Index`; `## Index`'s trailing line counts it; default `self search` finds it — **decided here (D-10)** |
 | E16 | one retracted instruction | `state place <id> --priority 1` | refused: `<id> was retracted — a withdrawn record no longer renders, so it has no placement to change` |
 | E17 | project A's log owns a `--workspace` instruction, cwd in project B | `state place <id> --exposure index --why "…"` from B | resolves here and the `entity.placed` lands in **A's** log; afterwards both projects' `instruction render` omit it and both `## Index` blocks hold it |
-| E18 | one full instruction, the index tier at `indexTokens` | `state place <full id> --exposure index --why "…" --demote <index id>` | refused: `the named demotion would put the project index tier at <n> of <cap> tokens — free index room first with \`self state place <id> --exposure search --why "<reason>"\``; running that advertised line from there frees the room and the demotion then lands |
+| E18 | one full instruction, the index tier at `indexTokens` | `state place <full id> --exposure index --why "…"` | refused: `the project index tier holds <n> of <cap> tokens and this text adds <m> more — name what demotes: … demote first with \`self state place <id> --exposure search --why "<reason>"\``; running that advertised line from there frees the room and the demotion then lands — **amended in implementation** |
 
 ## 4.6 Group F — lifecycle
 
@@ -374,8 +416,8 @@ inside a project.
 | Cell | Seeded state | Operation | Expected outcome |
 |---|---|---|---|
 | F1 | one live instruction | `state retract <id> --why "the VM moved"` | `entity.retracted`; it leaves `instruction render`, `self instruction`, `self context` and the default `self search` set |
-| F2 | one live instruction | `state retract <id>` | refused by the requirement gate: `self state retract needs --why "<text>": why the record no longer holds` |
-| F3 | one live instruction | `state retract <id> --why "…"` | the disclosure prints first: the headline is ``this withdraws a confirmed instruction — `self undo` takes it back`` (`commonLabel` reads `labels[0]`), and the target line reads `<id>  instruction  confirmed <ts>  (<age>)` followed by the quoted text |
+| F2 | one live instruction | `state retract <id>` | refused by the requirement gate: `self state retract needs --why: why the record no longer holds` — **amended in implementation** |
+| F3 | one live instruction | `state retract <id> --why "…"` | the disclosure prints first: the headline is ``this takes back a confirmed instruction — `self undo` takes it back`` (`commonLabel` reads `labels[0]`; **amended in implementation**), and the target line reads `<id>  instruction  confirmed <ts>  (<age>)` followed by the quoted text |
 | F4 | after F3, same cwd | the advertised `self undo` | the retraction is taken back; the instruction renders again |
 | F5 | one live instruction, a session, no keyboard | `must … state retract <id> --why "…"` | it lands, with the disclosure printed. Since #400 only `artifact prune` refuses without a keyboard — see disagreement 2 |
 | F6 | one instruction with a `why` | `state show <id>` | the ordinary entity page: the text, `[instruction, rule]`, `placement: project · full`, and the `why` |
@@ -404,7 +446,7 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
 | G4 | `guide.ts`'s `placement` topic gains the sentence that a full-exposure instruction is outside the 3,000-token context render budget and renders through `self instruction render` | `guide.test.mjs`, then `self help placement` | the topic body carries the sentence and the page prints it |
 | G5 | `BLOCK_BODY` gains one bullet after the `Session start` bullet | `docs.test.mjs` "connect writes one managed block, of a fixed shape, to both instruction files" | the block's section headings are unchanged — the addition is a bullet, not a heading — and both instruction files carry the new bullet — **decided here (D-7)** |
 | G6 | a checkout whose `AGENTS.md` holds the new block | the `self instruction render` line the bullet advertises, run from that checkout | it runs as written and prints the render |
-| G7 | the repository's own checked-in `AGENTS.md` and `CLAUDE.md` | `docs.test.mjs`'s managed-block proof | both equal the new `connect.ts` template applied to this repository's state — both files are regenerated in the same commit as the `BLOCK_BODY` change |
+| G7 | a checkout whose untracked `AGENTS.md` / `CLAUDE.md` hold an older block | `self fold` from that checkout | `refreshBlocks` rewrites both to the new template; no checked-in file changes — this repository tracks neither file — **amended in implementation** |
 | G8 | `snapshotLimitLines` amended | `handoff.test.mjs` | its fixed text names the instructions section among the uncapped ones, asserted verbatim — **decided here (D-9)** |
 | G9 | `superselfTools(run)` amended | `apps/dsh-plugin/test/tools.test.mjs` | five tool definitions; `superself_instructions` is registered, declares no parameters, is concurrency-safe, and maps onto the argv `["instruction", "render"]` |
 | G10 | `instruction` in `COMMANDS` | `self help instruction` | resolves through `commandUsage`: the three usage lines, the detail, and `--kind` in the `required, and refused in one pass when missing:` list. No `guide.ts` topic is added for `instruction` — parity with #391's `skill` |

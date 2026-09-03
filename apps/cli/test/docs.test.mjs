@@ -399,3 +399,99 @@ test("H2: the catalogue's init entry is the contract's init syntax, flag for fla
     const documented = catalogueEntries().find((entry) => entry.split(/\s+/)[0] === "init");
     assert.equal(documented, declared, "cli.md and `self init --help` offer different flags");
 });
+
+/* ── group G of #440: the surfaces a new top-level verb touches ────── */
+
+// Cells G1, G2, G5, G6 and G7 of
+// docs/maintainers/case-tables/440-instructions.md.
+
+test("G1: the cli.md catalogue gains an Instructions family row the parser accepts whole", () =>
+{
+    const entries = catalogueEntries().filter((entry) => entry.split(/\s+/)[0] === "instruction");
+    assert.deepEqual(entries.map((entry) => entry.split(/\s+/).slice(0, 2).join(" ").replace(/"$/, "")),
+        ["instruction [list]", "instruction add", "instruction render"]);
+    const command = COMMANDS.find((candidate) => candidate.name === "instruction");
+    assert.ok(command !== undefined, "cli.md names `instruction`, which is not a command");
+    for (const entry of entries)
+    {
+        for (const flag of longFlags(entry))
+        {
+            assert.ok(declaredFlags(command).has(flag),
+                `the cli.md catalogue offers \`${entry}\`, and \`instruction\` declares no --${flag}`);
+        }
+    }
+    for (const flag of ["kind", "priority", "workspace", "scope", "supersedes", "demote", "proposed", "why",
+        "project", "json"])
+    {
+        assert.ok(entries.some((entry) => longFlags(entry).includes(flag)),
+            `the catalogue's Instructions row does not name --${flag}`);
+    }
+});
+
+test("G2: the catalogue's verb fence carries `instruction`, and still diffs clean", () =>
+{
+    const page = tier1("docs/reference/cli.md");
+    const block = page.match(/top-level verbs:\n\n```text\n([\s\S]*?)```/);
+    const documented = block[1].split(/\s+/).filter((word) => word !== "");
+    assert.ok(documented.includes("instruction"), "the cli.md verb fence does not name `instruction`");
+    assert.deepEqual([...documented].sort(), [...COMMANDS.map((command) => command.name)].sort());
+});
+
+test("G5: the managed block gains the render bullet without gaining a section heading", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const blocks = ["AGENTS.md", "CLAUDE.md"]
+        .map((name) => managedBlock(name, readFileSync(join(demo, name), "utf8")));
+    assert.equal(blocks[0], blocks[1]);
+    assert.deepEqual([...blocks[0].matchAll(/^#{2,3} .+$/gm)].map((found) => found[0]),
+        ["## Project state (superself)"]);
+    for (const block of blocks)
+    {
+        assert.ok(block.includes("- Then run `self instruction render` and follow it; it is the operating\n"
+            + "  manual for this workspace and is outside the context render budget."), block);
+        assert.ok(block.indexOf("- Session start: run `self context`") < block.indexOf("- Then run `self instruction"),
+            "the render bullet does not follow the session-start bullet");
+    }
+});
+
+test("G6: the line the managed block advertises runs as written from that checkout", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const block = managedBlock("AGENTS.md", readFileSync(join(demo, "AGENTS.md"), "utf8"));
+    const advertised = block.split("\n").find((line) => line.includes("`self instruction render`"));
+    assert.ok(advertised !== undefined, "the block advertises no render line");
+    const rendered = await must(box, demo, advertised.match(/`self ([^`]+)`/)[1].split(" "));
+    assert.equal(rendered.code, 0);
+    assert.match(rendered.out, /^# Instructions — follow; do not restate\.$/m);
+});
+
+// G7 as amended during implementation: this repository does not track
+// AGENTS.md or CLAUDE.md (.gitignore, and proof 4 above says why), so there is
+// no checked-in file to compare the new template against. What there is, is a
+// checkout whose untracked instruction files hold an older block — which is
+// what every developer's tree looks like the moment this change lands — and
+// the rule that a fold rewrites both of them in place, touching nothing that
+// is checked in.
+test("G7: a fold rewrites an older block in both untracked instruction files, and nothing tracked", async () =>
+{
+    const box = machine();
+    const { demo } = await demoWorkspace(box);
+    const stale = `${BLOCK_BEGIN} v0.0.1 -->\n## Project state (superself)\n\nan older block\n${BLOCK_END}`;
+    for (const name of ["AGENTS.md", "CLAUDE.md"])
+    {
+        writeFileSync(join(demo, name), `# ${name}\n\n${stale}\n`);
+    }
+    writeFileSync(join(demo, "README.md"), "tracked content\n");
+    await must(box, demo, ["fold"]);
+    const blocks = ["AGENTS.md", "CLAUDE.md"]
+        .map((name) => managedBlock(name, readFileSync(join(demo, name), "utf8")));
+    assert.equal(blocks[0], blocks[1]);
+    for (const block of blocks)
+    {
+        assert.equal(block.includes("an older block"), false, "the stale block survived the fold");
+        assert.ok(block.includes("- Then run `self instruction render` and follow it"), block);
+    }
+    assert.equal(readFileSync(join(demo, "README.md"), "utf8"), "tracked content\n");
+});
