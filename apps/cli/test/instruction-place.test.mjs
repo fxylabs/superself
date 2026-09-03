@@ -23,7 +23,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { demoWorkspace, git, machine, must, mustPerson, receiptIn, selfIn } from "./harness.mjs";
+import { demoWorkspace, git, idIn, machine, must, mustPerson, receiptIn, selfIn } from "./harness.mjs";
 
 async function floor()
 {
@@ -160,7 +160,10 @@ test("E7: both halves of that remedy work — confirm then demote, or propose at
     assert.match((await must(ground.box, ground.demo, ["state", "show", id])).out, /placement: project · index/);
     const fresh = entityIn(receiptIn((await must(ground.box, ground.demo, ["state", "add", "a quiet note",
         "--label", "instruction", "--label", "rule", "--exposure", "index", "--proposed"])).out));
-    assert.match((await must(ground.box, ground.demo, ["state", "show", fresh])).out, /index/);
+    // The placement line itself: `/index/` alone passes on the word wherever it
+    // came from — the `--exposure index` echoed back in a receipt would do it.
+    assert.match((await must(ground.box, ground.demo, ["state", "show", fresh])).out,
+        /placement: project · index/);
 });
 
 test("E8: promotion back to full needs no --why, and returns the record to the render", async () =>
@@ -306,4 +309,18 @@ test("E18: a demotion into a crowded index tier is refused, and the advertised l
         "--why", "narrower than it looked"]);
     assert.match((await must(ground.box, ground.demo, ["state", "show", moving])).out, /placement: project · index/);
     assert.equal((await render(ground)).includes("tests run on the dev VM"), false);
+});
+
+test("E19: undoing the demotion's `entity.placed` puts the instruction back in the render", async () =>
+{
+    const ground = await floor();
+    const id = await add(ground, "tests run on the dev VM", "rule");
+    const placed = await must(ground.box, ground.demo,
+        ["state", "place", id, "--exposure", "index", "--why", "narrower than it looked"]);
+    assert.equal((await render(ground)).includes("tests run on the dev VM"), false);
+    const undone = await must(ground.box, ground.demo, ["undo", idIn(placed.out)]);
+    assert.match(undone.out, new RegExp(`${id} is placed where it was — the placement was taken back`));
+    assert.match(await render(ground), /- tests run on the dev VM/);
+    assert.match((await must(ground.box, ground.demo, ["state", "show", id])).out, /placement: project · full/);
+    assert.equal((await context(ground)).includes("tests run on the dev VM"), false);
 });

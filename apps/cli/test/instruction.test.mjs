@@ -29,7 +29,8 @@ import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FOLD_VERSION } from "@superself/fold";
-import { demoWorkspace, git, machine, must, mustPerson, receiptIn, selfIn } from "./harness.mjs";
+import { ulid } from "../dist/ids.js";
+import { demoWorkspace, git, logFixture, machine, must, mustPerson, receiptIn, selfIn } from "./harness.mjs";
 
 /* ── the floor every cell stands on ────────────────────────────────── */
 
@@ -87,6 +88,21 @@ function setCaps(ws, caps)
     const file = join(ws, ".superself", "config.json");
     const config = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
     writeFileSync(file, JSON.stringify({ ...config, tokensPerCharacter: 1, tokensMeasured: true, ...caps }) + "\n");
+}
+
+// One `entity.confirmed` exactly as the pipeline writes one, so a cell can
+// state the `ts` and the id the ordering turns on: two adds driven through the
+// CLI are milliseconds apart and can never be made to share a `ts`.
+function ruleFixture(ground, text, ts, id)
+{
+    logFixture(ground.ws, "demo", {
+        id: ulid(), ts, type: "entity.confirmed", origin: { actor: "agent", confirmed: true }, project: "demo",
+        payload: {
+            entity: id, text, labels: ["instruction", "rule"], links: [], criteria: [],
+            exposure: "full", scope: "project", priority: 20, by: { kind: "agent" }
+        }
+    });
+    return id;
 }
 
 /* ── group A: recording an instruction ─────────────────────────────── */
@@ -414,11 +430,20 @@ test("A31: the add has no keyboard gate — a person and a session both land, di
 {
     const ground = await floor();
     const typed = entityIn((await mustPerson(ground.box, ground.demo,
-        ["instruction", "add", "a rule a person recorded", "--kind", "rule"])).out);
-    const driven = await add(ground, "a rule a session recorded", "rule");
+        ["instruction", "add", "a rule somebody recorded", "--kind", "rule", "--priority", "20"])).out);
+    const driven = await add(ground, "a rule somebody recorded", "rule", ["--priority", "20"]);
+    const written = [recordOf(ground.ws, typed).payload, recordOf(ground.ws, driven).payload];
     assert.equal(recordOf(ground.ws, typed).type, "entity.confirmed");
     assert.equal(recordOf(ground.ws, driven).type, "entity.confirmed");
-    assert.notDeepEqual(recordOf(ground.ws, typed).payload.by, recordOf(ground.ws, driven).payload.by);
+    // The two records are the same record twice over, `by` excluded: the same
+    // text, the same section, the same tier, the same scope, the same order.
+    for (const field of ["text", "labels", "exposure", "scope", "priority"])
+    {
+        assert.deepEqual(written[0][field], written[1][field], `the two adds disagree on ${field}`);
+    }
+    assert.notDeepEqual(written[0].by, written[1].by);
+    assert.equal(written[0].by.kind, "person");
+    assert.equal(written[1].by.kind, "agent");
 });
 
 test("A32: after the skill refusal, the advertised `self instruction` answers with the instruction alone", async () =>
@@ -432,6 +457,36 @@ test("A32: after the skill refusal, the advertised `self instruction` answers wi
     assert.match(listed.out, /tests run on the dev VM/);
     assert.equal(listed.out.includes(skill), false, "the skill is listed as an instruction");
     assert.match(listed.out, /1 instruction/);
+});
+
+test("A33: a second --kind is refused by name, and nothing is recorded", async () =>
+{
+    const ground = await floor();
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["instruction", "add", "x", "--kind", "rule", "--kind", "tool"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out,
+        /--kind states the one section this instruction renders under, and was passed twice/);
+    assert.match(refused.out, /— pass rule, tool, or procedure once/);
+    assert.equal(events(ground.ws).length, before);
+});
+
+test("A34: a text holding a line break is refused, and nothing is recorded", async () =>
+{
+    const ground = await floor();
+    const before = events(ground.ws).length;
+    const text = "run the targeted suites, then commit and push\nthen watch CI";
+    const refused = await ground.self(["instruction", "add", text, "--kind", "procedure"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out,
+        /an instruction is one line — "run the targeted suites, then commit and…" holds a line break;/);
+    assert.match(refused.out,
+        /record each step as its own --kind procedure instruction, ordered by --priority/);
+    // The refusal is itself one line: the quoted head is flattened, so the
+    // break it is about is never printed into the reader's terminal.
+    assert.equal(refused.out.trimEnd().split("\n").length, 1, refused.out);
+    assert.equal(events(ground.ws).length, before);
+    assert.equal((await must(ground.box, ground.demo, ["instruction"])).out.includes("targeted suites"), false);
 });
 
 /* ── group B: reading the list ─────────────────────────────────────── */
@@ -469,14 +524,25 @@ test("B3: the listing groups Tools, Rules, Procedures in that order, by priority
         < rows.findIndex((line) => line.includes("a rule")), "priority 5 did not read before priority 20");
 });
 
-test("B4: a priority tie falls to orderEntities — workspace first, then newer, then id", async () =>
+test("B4: a priority tie falls to orderEntities — scope, then newer `ts`, then id", async () =>
 {
     const ground = await floor();
     await sibling(ground, "other");
-    const older = await add(ground, "the project's own rule", "rule", ["--priority", "20"]);
+    const own = await add(ground, "the project's own rule", "rule", ["--priority", "20"]);
     const shared = await add(ground, "the workspace rule", "rule", ["--priority", "20", "--workspace"]);
+    // The second and third legs need a stated `ts`: the pair that shares one is
+    // where the id is the only tie-break left, and two CLI adds never share it.
+    const older = ruleFixture(ground, "the older project rule", "2026-08-01T00:00:00.000Z", "e-bbbb1");
+    const newer = ruleFixture(ground, "the newer project rule", "2026-08-02T00:00:00.000Z", "e-bbbb2");
+    const lower = ruleFixture(ground, "one of a pair minted together", "2026-07-01T00:00:00.000Z", "e-aaaa1");
+    const higher = ruleFixture(ground, "the other of that pair", "2026-07-01T00:00:00.000Z", "e-aaaa2");
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.ok(out.indexOf(shared) < out.indexOf(older), "the workspace record did not sort first at equal priority");
+    const at = (id) => out.indexOf(id);
+    assert.ok(at(shared) < at(own), "the workspace record did not sort first at equal priority");
+    assert.ok(at(newer) < at(older), "the newer record did not sort above the older one at equal priority and scope");
+    assert.ok(at(lower) < at(higher), "the id did not break the tie two records sharing a `ts` leave");
+    assert.deepEqual([at(shared), at(own), at(newer), at(older), at(lower), at(higher)]
+        .filter((position) => position === -1), [], out);
 });
 
 test("B5: an unmeasured store says its token total is an estimate, and how to measure it", async () =>
@@ -484,8 +550,8 @@ test("B5: an unmeasured store says its token total is an estimate, and how to me
     const ground = await floor();
     await add(ground, "tests run on the dev VM", "rule");
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, / tokens — /);
-    assert.match(out, / \(estimated at [0-9.]+ tokens per character; `self tokens` records a measurement\)/);
+    assert.match(out, /^instructions hold \d+ tokens — \d+ of the \d+-token project full cap \(\d+%\)/m);
+    assert.match(out, / \(estimated at [0-9.]+ tokens per character; `self tokens` records a measurement\)$/m);
 });
 
 test("B6: once `self tokens` records a measurement the estimate note is gone", async () =>
@@ -494,17 +560,23 @@ test("B6: once `self tokens` records a measurement the estimate note is gone", a
     await add(ground, "tests run on the dev VM", "rule");
     await must(ground.box, ground.demo, ["tokens", "10", "40"]);
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, / tokens — /);
+    assert.match(out, /^instructions hold \d+ tokens — \d+ of the \d+-token project full cap \(\d+%\)$/m);
     assert.equal(out.includes("estimated at"), false, out);
 });
 
 test("B7: the closing line states the share of the full cap the instructions occupy", async () =>
 {
     const ground = await floor();
+    const other = await sibling(ground, "other");
     setCaps(ground.ws, {});
-    await add(ground, "tests run on the dev VM", "rule");
-    const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
+    // Recorded from demo and scoped into `other`, then listed from `other`: the
+    // tier the share is about is that project's own, and `scopeLabel` is what
+    // spells it — the project a listing is standing in is `project`, wherever
+    // the record's log sits.
+    await add(ground, "tests run on the dev VM", "rule", ["--scope", "other"]);
+    const out = (await must(ground.box, other, ["instruction"])).out;
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
+    assert.equal(out.includes("other full cap"), false, out);
 });
 
 test("B8: a raised fullTokens is the cap the share is against", async () =>
@@ -513,7 +585,7 @@ test("B8: a raised fullTokens is the cap the share is against", async () =>
     setCaps(ground.ws, { fullTokens: 4000 });
     await add(ground, "tests run on the dev VM", "rule");
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^23 tokens — 23 of the 4000-token project full cap \(1%\)$/m);
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 4000-token project full cap \(1%\)$/m);
     assert.equal(out.includes("1000-token"), false);
 });
 
@@ -525,8 +597,8 @@ test("B9: a project set and a workspace manual get one share line each, neither 
     await add(ground, "tests run on the dev VM", "rule");
     await add(ground, "reviewed before merge", "rule", ["--workspace"]);
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
-    assert.match(out, /^21 tokens — 21 of the 1000-token workspace full cap \(2%\)$/m);
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
+    assert.match(out, /^instructions hold 21 tokens — 21 of the 1000-token workspace full cap \(2%\)$/m);
     assert.equal(out.includes("44 tokens"), false, "the two tiers were added together");
 });
 
@@ -594,6 +666,10 @@ test("B14: the listing outside every registered project is refused", async () =>
     assert.match(refused.out, /not inside a registered project — run `self project init` here to register it/);
 });
 
+// The harness merges stdout and stderr into one string, so which stream the
+// line came out on is not provable in this process — the table says so under
+// group B. What is provable, and what this asserts, is that the sentence is
+// printed and the answer still stands.
 test("B15: one unreadable store is named on stderr and the readable ones still answer", async () =>
 {
     const ground = await floor();
@@ -624,6 +700,48 @@ test("B17: --project is not an option on the listing — another project's set i
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /unknown option '--project' — run `self instruction --help`/);
     assert.equal((await must(ground.box, ground.demo, ["instruction", "render", "--project", "other"])).code, 0);
+});
+
+test("B18: the share line counts the instructions alone, not what the tier holds", async () =>
+{
+    const ground = await floor();
+    setCaps(ground.ws, {});
+    await add(ground, "tests run on the dev VM", "rule");
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    const out = (await must(ground.box, ground.demo, ["instruction"])).out;
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
+    assert.equal(out.includes("an ordinary full record"), false, out);
+    // What the tier itself holds is the larger number, and the line above is
+    // not it: the cap refusal is where tier occupancy is stated.
+    setCaps(ground.ws, { fullTokens: 80 });
+    const refused = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /the project full tier holds 73 of 80 tokens/);
+});
+
+test("B19: the estimate note closes the last share line and is said once", async () =>
+{
+    const ground = await floor();
+    await sibling(ground, "other");
+    await add(ground, "tests run on the dev VM", "rule");
+    await add(ground, "reviewed before merge", "rule", ["--workspace"]);
+    const out = (await must(ground.box, ground.demo, ["instruction"])).out;
+    const shares = out.split("\n").filter((line) => line.startsWith("instructions hold "));
+    assert.equal(shares.length, 2, out);
+    assert.equal(out.split("estimated at").length - 1, 1, out);
+    assert.match(shares.at(-1),
+        / \(estimated at [0-9.]+ tokens per character; `self tokens` records a measurement\)$/);
+    assert.match(shares[0], /\(\d+%\)$/);
+});
+
+test("B20: an unknown leaf under `instruction` is refused with the branch usage", async () =>
+{
+    const ground = await floor();
+    const refused = await ground.self(["instruction", "bogus"]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out,
+        /usage: self instruction \| add "<text>" --kind rule\|tool\|procedure \| render \[--project <slug>\]/);
 });
 
 /* ── group G: the one surface cell that needs a store ──────────────── */

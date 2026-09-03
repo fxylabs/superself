@@ -2,7 +2,9 @@
 // instruction render answers with, which section each one falls under, the
 // order the sections and their entries print in, and the lines they print as.
 // Domain layer — it reads the entity fold and its own peers only, never the
-// model that calls it.
+// model that calls it. Which records answer in one project is the store walk
+// `renderedIn` (`model.ts`), one layer up: every surface here is handed that
+// set rather than collecting one of its own.
 //
 // Nothing here is stored. An instruction is an entity labelled `instruction`
 // whose `source` is undefined: the rule is its text, its section a second
@@ -12,7 +14,7 @@
 // row in `BUILTIN_ROWS`, and no `@superself/fold` change: `FOLD_VERSION`
 // stays at 1.**
 
-import { EntityState, isCurrent, orderEntities, ProjectModel, rendersIn } from "@superself/fold";
+import { EntityState, isCurrent, orderEntities } from "@superself/fold";
 import { oneLine } from "./style.js";
 
 // The one label this surface records under. Never a row in `BUILTIN_ROWS` —
@@ -67,17 +69,6 @@ function renderedInstructions(rendered: EntityState[]): EntityState[]
 {
     return orderEntities(rendered.filter((item) => isInstruction(item)
         && item.status === "confirmed" && isCurrent(item) && item.exposure === "full"));
-}
-
-// Every record that answers in one project: its own confirmed current records
-// plus every other project's workspace-scoped ones. `rendersIn` is the rule
-// the context projection already collects by, so an instruction reaches a
-// render exactly where a row renders. Shared by the command and the handoff
-// packet, so the two can never answer with two different sets.
-export function instructionsRenderedIn(models: ProjectModel[], viewer: string): EntityState[]
-{
-    return models.flatMap((model) => model.entities.filter((item) => item.status === "confirmed"
-        && isCurrent(item) && rendersIn(item, model.slug, viewer)));
 }
 
 export interface InstructionSection

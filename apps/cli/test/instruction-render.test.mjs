@@ -24,7 +24,8 @@ import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { INSTRUCTION_HEAD } from "../dist/instructions.js";
-import { demoWorkspace, git, machine, must, receiptIn, selfIn } from "./harness.mjs";
+import { ulid } from "../dist/ids.js";
+import { demoWorkspace, git, logFixture, machine, must, receiptIn, selfIn } from "./harness.mjs";
 
 async function floor()
 {
@@ -75,6 +76,21 @@ function setCaps(ws, caps)
     writeFileSync(file, JSON.stringify({ ...config, tokensPerCharacter: 1, tokensMeasured: true, ...caps }) + "\n");
 }
 
+// One `entity.confirmed` exactly as the pipeline writes one, so a cell can
+// state the `ts` and the id the ordering turns on: two adds driven through the
+// CLI are milliseconds apart and can never be made to share a `ts`.
+function toolFixture(ground, text, ts, id)
+{
+    logFixture(ground.ws, "demo", {
+        id: ulid(), ts, type: "entity.confirmed", origin: { actor: "agent", confirmed: true }, project: "demo",
+        payload: {
+            entity: id, text, labels: ["instruction", "tool"], links: [], criteria: [],
+            exposure: "full", scope: "project", priority: 20, by: { kind: "agent" }
+        }
+    });
+    return text;
+}
+
 /* ── group C: the render ───────────────────────────────────────────── */
 
 test("C1: an empty store renders the head alone, with no section heading, exit 0", async () =>
@@ -117,8 +133,21 @@ test("C4: a priority tie inside a section falls to orderEntities, exactly as the
     await sibling(ground, "other");
     await add(ground, "the project's own tool note", "tool", ["--priority", "20"]);
     await add(ground, "the workspace tool note", "tool", ["--priority", "20", "--workspace"]);
-    const out = await render(ground);
-    assert.ok(out.indexOf("the workspace tool note") < out.indexOf("the project's own tool note"), out);
+    // The second and third legs need a stated `ts`: the pair that shares one is
+    // where the id is the only tie-break left, and two CLI adds never share it.
+    toolFixture(ground, "the older tool note", "2026-08-01T00:00:00.000Z", "e-bbbb1");
+    toolFixture(ground, "the newer tool note", "2026-08-02T00:00:00.000Z", "e-bbbb2");
+    toolFixture(ground, "one of a pair minted together", "2026-07-01T00:00:00.000Z", "e-aaaa1");
+    toolFixture(ground, "the other of that pair", "2026-07-01T00:00:00.000Z", "e-aaaa2");
+    const lines = (await render(ground)).split("\n").filter((line) => line.startsWith("- "));
+    assert.deepEqual(lines, [
+        "- the workspace tool note",
+        "- the project's own tool note",
+        "- the newer tool note",
+        "- the older tool note",
+        "- one of a pair minted together",
+        "- the other of that pair"
+    ]);
 });
 
 test("C5: a --workspace instruction recorded in one project renders in another", async () =>
@@ -203,7 +232,11 @@ test("C13: --project naming an archived project renders it, with the archived no
     await must(ground.box, ground.demo, ["project", "archive", "other", "--why", "finished"]);
     const out = await render(ground, ["--project", "other"]);
     assert.match(out, /- other's standing rule/);
-    assert.match(out, /archived/);
+    // The whole sentence, the way handoff.test.mjs asserts its own archived
+    // notice: a bare /archived/ would pass on the word alone, wherever it came
+    // from, and the remedy the notice names is the half a reader acts on.
+    assert.match(out, new RegExp("^project \"other\" is archived \\(\\d{4}-\\d{2}-\\d{2}: finished\\)"
+        + " — run `self project restore other` to bring it back$", "m"));
 });
 
 test("C14: --project naming no registered project is refused, and names `self project`", async () =>
@@ -215,6 +248,10 @@ test("C14: --project naming no registered project is refused, and names `self pr
     assert.match(refused.out, /unknown project "nosuch" — run `self project` to list the registered slugs/);
 });
 
+// The harness merges stdout and stderr into one string, so which stream the
+// line came out on is not provable in this process — the table says so under
+// group C. What is provable, and what this asserts, is that the sentence is
+// printed and the render still stands.
 test("C15: one unreadable store is named on stderr and the readable set still renders", async () =>
 {
     const ground = await floor();
@@ -272,13 +309,32 @@ test("C20: --json emits one object: sections in render order, entries in render 
     await add(ground, "a rule", "rule", ["--why", "because"]);
     await add(ground, "a tool note", "tool", ["--why", "because"]);
     await add(ground, "a procedure", "procedure", ["--why", "because"]);
+    // The two shapes an entry can arrive in with a field missing: an add made
+    // with no --why, and a raw `state add` record, which can hold no priority
+    // and no kind label at all.
+    await add(ground, "a rule nobody stated a reason for", "rule");
+    await must(ground.box, ground.demo,
+        ["state", "add", "raw note", "--label", "instruction", "--exposure", "full"]);
     const out = (await must(ground.box, ground.demo, ["instruction", "render", "--json"])).out;
     const payload = JSON.parse(out.trim());
     assert.equal(out.trim(), JSON.stringify(payload), "something was printed around the object");
     assert.equal(payload.project, "demo");
     assert.deepEqual(payload.sections.map((section) => [section.kind, section.heading]),
-        [["tool", "Tools"], ["rule", "Rules"], ["procedure", "Procedures"]]);
-    assert.deepEqual(Object.keys(payload.sections[0].entries[0]), ["id", "text", "priority", "scope", "why"]);
+        [["tool", "Tools"], ["rule", "Rules"], ["procedure", "Procedures"], ["unclassified", "Unclassified"]]);
+    const entries = payload.sections.flatMap((section) => section.entries);
+    assert.equal(entries.length, 5);
+    // Five keys on every entry, always, and an absent field is `null` rather
+    // than a key the caller's reader has to branch on the presence of.
+    for (const entry of entries)
+    {
+        assert.deepEqual(Object.keys(entry), ["id", "text", "priority", "scope", "why"], JSON.stringify(entry));
+    }
+    const noReason = entries.find((entry) => entry.text === "a rule nobody stated a reason for");
+    assert.equal(noReason.why, null);
+    assert.equal(noReason.priority, 50);
+    const raw = entries.find((entry) => entry.text === "raw note");
+    assert.equal(raw.why, null);
+    assert.equal(raw.priority, null);
     assert.equal(payload.sections.some((section) => section.entries.length === 0), false);
 });
 
@@ -327,4 +383,36 @@ test("C24: the render is never spliced into `self context` — its head appears 
     const context = (await must(ground.box, ground.demo, ["context"])).out;
     assert.equal(context.includes(INSTRUCTION_HEAD), false, context);
     assert.match(await render(ground), new RegExp(`^${INSTRUCTION_HEAD}$`, "m"));
+});
+
+test("C25: --project renders a named project's set from outside every registered one", async () =>
+{
+    const ground = await floor();
+    await sibling(ground, "other");
+    await add(ground, "demo's own standing rule", "rule");
+    // The workspace root is inside no project, which is where C16's refusal
+    // comes from; naming the project is what answers it.
+    const out = await must(ground.box, ground.ws, ["instruction", "render", "--project", "demo"]);
+    assert.equal(out.code, 0, out.out);
+    assert.match(out.out, /- demo's own standing rule/);
+    assert.match(out.out, new RegExp(`^${INSTRUCTION_HEAD}$`, "m"));
+});
+
+test("C26: a --workspace instruction whose project is archived leaves every project's render", async () =>
+{
+    const ground = await floor();
+    const other = await sibling(ground, "other");
+    const third = await sibling(ground, "third");
+    await must(ground.box, other, ["instruction", "add", "every project reviews before merge",
+        "--kind", "rule", "--workspace"]);
+    await must(ground.box, ground.demo, ["project", "archive", "other", "--why", "finished"]);
+    // `workspaceModels` walks `activeProjects`, so an archived project's log is
+    // in no other project's answer — including for a record scoped to them all.
+    // The current behaviour, pinned; the table says it is not a decision.
+    for (const cwd of [ground.demo, third])
+    {
+        assert.equal((await render(ground, [], cwd)).includes("every project reviews before merge"), false);
+    }
+    // Naming it explicitly is how its own set is still read (#283).
+    assert.match(await render(ground, ["--project", "other"]), /- every project reviews before merge/);
 });

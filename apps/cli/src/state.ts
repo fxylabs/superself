@@ -716,8 +716,11 @@ export function tierOf(target: string, exposure: Exposure): CappedTier | undefin
 
 // How a tier reads to the caller: the project it ran in is "project", exactly
 // as it always was, and any other destination is named by its slug so a
-// refusal says where the room ran out (#181 T5.2).
-function scopeLabel(target: string, here: string): string
+// refusal says where the room ran out (#181 T5.2). Exported because a tier is
+// named on more than one surface: `instruction list` closes with a share of
+// the tier its records occupy, and a listing that spelled the same tier a
+// second way would be two vocabularies for one number.
+export function scopeLabel(target: string, here: string): string
 {
     return target === here ? "project" : target;
 }

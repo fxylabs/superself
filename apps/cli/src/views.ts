@@ -13,7 +13,7 @@ import {
     rendersIn
 } from "@superself/fold";
 import { commonProtocolLines } from "./connect.js";
-import { instructionLines, instructionsRenderedIn, isInstruction } from "./instructions.js";
+import { instructionLines, isInstruction } from "./instructions.js";
 import { claimNote, judgeProcess } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { annulledEvents, eventRecord, eventSummary, readEvents } from "./logfile.js";
@@ -32,6 +32,7 @@ import {
     planNote,
     projectGoalLine,
     ProjectModel,
+    renderedIn,
     HandoffConvention,
     isOpenWork,
     ReportEntry,
@@ -206,7 +207,7 @@ export function handoffContextLines(storeDir: string, target: ProjectModel, mode
 // never hand a session two different manuals.
 export function handoffInstructionLines(target: ProjectModel, models: ProjectModel[]): string[]
 {
-    return instructionLines(instructionsRenderedIn(models, target.slug));
+    return instructionLines(renderedIn(models, target.slug));
 }
 
 export interface HandoffSnapshot
@@ -307,9 +308,14 @@ function conventionRows(conventions: HandoffConvention[]): HandoffRow[]
 // context subsection because that subsection is the one capped thing in the
 // packet (#440). The render is handed over whole: it is not part of the
 // context projection, so nothing here has to argue with a budget.
+//
+// A render of nothing is the head line by itself (§D-3) — what a concatenating
+// caller splices, and not something this packet holds. It is dropped here so
+// the section reads `DATA | (none)`, the way every other empty section of the
+// packet reads, instead of looking populated to the session reading it.
 function instructionRows(linesToRender: string[]): HandoffRow[]
 {
-    return linesToRender.map((line) => row("INSTRUCTION", line));
+    return linesToRender.length <= 1 ? [] : linesToRender.map((line) => row("INSTRUCTION", line));
 }
 
 function contextRows(linesToRender: string[]): HandoffRow[]

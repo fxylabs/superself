@@ -147,13 +147,24 @@ test("D7: the packet carries ## Instructions between the conventions and the con
 {
     const ground = await floor();
     await add(ground, "tests run on the dev VM", "rule");
+    await add(ground, "`self report` carries --friction", "tool");
+    await add(ground, "targeted suites, then commit, then CI", "procedure");
     const work = await unit(ground);
     const packet = (await must(ground.box, ground.demo, ["handoff", work])).out;
     assert.ok(packet.indexOf("## Applicable conventions") < packet.indexOf("## Instructions"), packet);
     assert.ok(packet.indexOf("## Instructions") < packet.indexOf("## Current project context"), packet);
-    assert.match(packet, /--- BEGIN INSTRUCTIONS \(renderer-owned\) ---/);
-    assert.match(packet, /--- END INSTRUCTIONS \(renderer-owned\) ---/);
-    assert.match(packet, /^INSTRUCTION \| - tests run on the dev VM$/m);
+    // The block is the render, line for line under the prefix — the packet and
+    // the command read through one helper, and this is what says so.
+    const rendered = (await must(ground.box, ground.demo, ["instruction", "render"])).out;
+    const block = section(packet, "Instructions").split("\n");
+    assert.equal(block[1], "--- BEGIN INSTRUCTIONS (renderer-owned) ---");
+    assert.equal(block.at(-1), "--- END INSTRUCTIONS (renderer-owned) ---");
+    assert.deepEqual(block.slice(2, -1).map((line) => line.replace(/^INSTRUCTION \| /, "")),
+        rendered.replace(/\n$/, "").split("\n"));
+    for (const line of block.slice(2, -1))
+    {
+        assert.match(line, /^INSTRUCTION \| /, line);
+    }
 });
 
 test("D8: the snapshot limits name the instructions among the uncapped sections", async () =>
@@ -224,6 +235,40 @@ test("D13: a --workspace instruction is out of every context and in every render
         assert.match((await must(ground.box, cwd, ["instruction", "render"])).out,
             /- every project reviews before merge/);
     }
+});
+
+test("D14: a project with no instructions hands over a section that reads `(none)`", async () =>
+{
+    const ground = await floor();
+    const work = await unit(ground);
+    const packet = (await must(ground.box, ground.demo, ["handoff", work])).out;
+    // The head line alone is an empty render (§D-3), and the packet drops it:
+    // an empty section reads the way every other empty section of the packet
+    // reads, rather than looking populated to the session that gets it.
+    assert.deepEqual(section(packet, "Instructions").split("\n"), [
+        "## Instructions",
+        "--- BEGIN INSTRUCTIONS (renderer-owned) ---",
+        "DATA | (none)",
+        "--- END INSTRUCTIONS (renderer-owned) ---"
+    ]);
+    assert.equal(packet.includes("INSTRUCTION | "), false, packet);
+});
+
+// The behaviour change this verb makes to a store that already used the word:
+// `instruction` is a free label, and a store that recorded one before this
+// release now has a record the context render leaves out. Accepted — the label
+// is the mechanism — and pinned here so it is visible rather than discovered.
+test("D15: a pre-existing `instruction` label leaves `self context` and enters the render", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an older standing rule", "--label", "instruction", "--exposure", "full"]);
+    const context = (await must(ground.box, ground.demo, ["context"])).out;
+    assert.equal(context.includes("an older standing rule"), false, context);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out,
+        /## Unclassified\n- an older standing rule/);
+    assert.match((await must(ground.box, ground.demo, ["search", "older standing"])).out,
+        /an older standing rule/);
 });
 
 /* ── group F: the life of one instruction ──────────────────────────── */

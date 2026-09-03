@@ -13,6 +13,15 @@
 // `instruction` whose section is a second label beside it, written through the
 // `reserved` spread exactly as `runbook start` writes `[runbook-run, <key>]`.
 //
+// **An instruction is text a session is told to follow, and anyone who can
+// append to this store can write one.** The store is synced between machines
+// and clones, so a rule appended anywhere is read everywhere, by every session
+// that runs the render. The CLI's part in that is one thing only: it prints
+// what the store holds. It never runs a line an instruction names, never
+// fetches anything one points at, and gives an instruction no authority over
+// the harness or the system prompt above it — a session decides what to do
+// with what it reads, exactly as it does with `self context`.
+//
 // It is outside the 3,000-token context render budget because it is not in
 // the context projection at all: one predicate in `projectContextSections`
 // (`views.ts`) excludes a full-exposure instruction, and `instruction render`
@@ -30,10 +39,9 @@ import {
     InstructionKind,
     InstructionSection,
     instructionSections,
-    instructionsRenderedIn,
     isInstruction
 } from "./instructions.js";
-import { buildModel, workspaceModels } from "./model.js";
+import { buildModel, renderedIn, workspaceModels } from "./model.js";
 import {
     ProjectContext,
     readScopes,
@@ -44,7 +52,7 @@ import {
     tokenScale,
     TokenScale
 } from "./paths.js";
-import { composedEntityAdd, estimateNote } from "./state.js";
+import { composedEntityAdd, estimateNote, scopeLabel } from "./state.js";
 import { oneLine, tokensOf } from "./style.js";
 import { CliError, CommandOutput, JsonValue } from "./types.js";
 
@@ -57,7 +65,11 @@ const EMPTY_LISTING = "no instructions recorded — record one with"
     + ' `self instruction add "<text>" --kind rule|tool|procedure`';
 
 const ADD_OPTIONS = {
-    kind: { type: "string" },
+    // Repeatable so a second one is refused by name (#238's rule), exactly as
+    // `skill.ts` declares `--command`: an instruction renders under one
+    // section, and a single option would let the parser keep the last value
+    // and drop the first without a word.
+    kind: { type: "string", multiple: true },
     priority: { type: "string" },
     workspace: { type: "boolean" },
     scope: { type: "string" },
@@ -123,6 +135,11 @@ export const INSTRUCTION_COMMAND: Command = {
         "--supersedes, a withdrawal is `self state retract`, and `self undo` takes an",
         "add back.",
         "",
+        "an instruction is recorded at full exposure, which is where the render reads",
+        "from. When the full tier is at its cap the add is refused rather than quietly",
+        "trimmed: pass `--demote <id>` to name the confirmed entity that moves one tier",
+        "down and makes room, or free the room first and record it after.",
+        "",
         "  --kind <rule|tool|procedure>  which section it renders under: a rule is a",
         "                        judgement or execution rule, a tool is a note about a",
         "                        command, a procedure is steps in a fixed order",
@@ -173,10 +190,42 @@ interface AskedInstruction
 function requireAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positionals: string[]): AskedInstruction
 {
     return {
-        text: requireText(positionals[0], ADD_USAGE),
-        kind: requireKind(required(values.kind)),
+        text: requireOneLine(requireText(positionals[0], ADD_USAGE)),
+        kind: requireOneKind(values.kind),
         ...requireScope(values)
     };
+}
+
+// An instruction is one line by construction, and this is where that becomes
+// true. `sanitize.ts` admits `0x0a`, so a multi-line text is recordable, and
+// every surface that renders one flattens it — the listing and the render
+// through `oneLine`, while `--json` hands the caller the breaks the render
+// hid. Refused here, the way `skill.ts` refuses a multi-line `--command`, so
+// no surface has to decide what a second line meant.
+//
+// The first 40 characters are quoted back flattened: the refusal names the
+// record the caller meant without printing the break it is about.
+function requireOneLine(text: string): string
+{
+    if (/[\n\r]/.test(text))
+    {
+        throw new CliError(`an instruction is one line — "${oneLine(text).slice(0, 40)}…" holds a line break;`
+            + " record each step as its own --kind procedure instruction, ordered by --priority");
+    }
+    return text;
+}
+
+// One section, from one flag. Two `--kind`s state two sections for one record,
+// which is not a narrower ask, so it is refused rather than resolved to
+// whichever the parser read last.
+function requireOneKind(stated: string[] | undefined): InstructionKind
+{
+    if ((stated ?? []).length > 1)
+    {
+        throw new CliError("--kind states the one section this instruction renders under, and was passed twice"
+            + " — pass rule, tool, or procedure once");
+    }
+    return requireKind(required((stated ?? [])[0]));
 }
 
 // The kind is what decides the section, so an unrecognised one is refused
@@ -255,7 +304,7 @@ function requireInstructionTargets(ctx: ProjectContext, wanted: string[]): void
 function instructionList(): CommandOutput
 {
     const ctx = requireProject(process.cwd());
-    const sections = instructionSections(instructionsRenderedIn(workspaceModels(ctx.storeDir, ctx.project), ctx.project));
+    const sections = instructionSections(renderedIn(workspaceModels(ctx.storeDir, ctx.project), ctx.project));
     const entries = sections.flatMap((section) => section.entries);
     return [{
         kind: "listing",
@@ -282,30 +331,39 @@ function scopeWord(entity: EntityState): string
 // One line per occupied tier (§D-6). A `--workspace` instruction charges the
 // workspace full tier and a project-scoped one charges this project's, so
 // adding them together would produce a number neither cap governs.
+//
+// The estimate note closes the last line and no other: it is one statement
+// about where every number on the page came from, and saying it once per tier
+// would print the same sentence twice for a store holding both.
 function shareLines(ctx: ProjectContext, entries: EntityState[]): string[]
 {
     const config = readStoreConfig(ctx.storeDir);
     const scale = tokenScale(config);
     const cap = retentionCaps(config).full;
-    return ["project", "workspace"]
-        .map((tier) => ({ tier, held: entries.filter((entry) => tierOfEntry(entry) === tier) }))
+    const shares = [ctx.project, "workspace"]
+        .map((target) => ({ target, held: entries.filter((entry) => tierTarget(entry, ctx.project) === target) }))
         .filter((group) => group.held.length > 0)
-        .map((group) => shareLine(group.tier, group.held, cap, scale));
+        .map((group) => shareLine(scopeLabel(group.target, ctx.project), group.held, cap, scale));
+    return shares.map((share, at) => at === shares.length - 1 ? share + estimateNote(scale) : share);
 }
 
 // Which capped tier an instruction that renders here occupies: the workspace
-// full tier, or this project's. `rendersIn` already settled that no third
-// answer reaches this list.
-function tierOfEntry(entity: EntityState): string
+// full tier, or the tier of the project this listing is about. `rendersIn`
+// already settled that no third answer reaches this list.
+function tierTarget(entity: EntityState, here: string): string
 {
-    return entity.scope === "workspace" ? "workspace" : "project";
+    return entity.scope === "workspace" ? "workspace" : here;
 }
 
-function shareLine(tier: string, held: EntityState[], cap: number, scale: TokenScale): string
+// What the line counts is the instructions and nothing else (§D-6): the tier
+// itself holds every full-exposure record, and the number below would be a
+// different, larger one. So the line says whose tokens they are rather than
+// leaving a reader to read tier occupancy into a figure that is not it.
+function shareLine(scope: string, held: EntityState[], cap: number, scale: TokenScale): string
 {
     const tokens = tokensOf(held.reduce((sum, entry) => sum + entityCharacters(entry), 0), scale.perCharacter);
-    return `${tokens} tokens — ${tokens} of the ${cap}-token ${tier} full cap`
-        + ` (${Math.round((tokens / cap) * 100)}%)${estimateNote(scale)}`;
+    return `instructions hold ${tokens} tokens — ${tokens} of the ${cap}-token ${scope} full cap`
+        + ` (${Math.round((tokens / cap) * 100)}%)`;
 }
 
 /* ── the render itself ─────────────────────────────────────────────── */
@@ -313,7 +371,7 @@ function shareLine(tier: string, held: EntityState[], cap: number, scale: TokenS
 function instructionRender({ values }: CommandInput<typeof RENDER_OPTIONS>): CommandOutput
 {
     const scope = readScopes(process.cwd(), values)[0];
-    const rendered = instructionsRenderedIn(workspaceModels(scope.storeDir, scope.project), scope.project);
+    const rendered = renderedIn(workspaceModels(scope.storeDir, scope.project), scope.project);
     return [{
         kind: "payload",
         data: { project: scope.project, sections: instructionSections(rendered).map(sectionPayload) },
@@ -324,6 +382,15 @@ function instructionRender({ values }: CommandInput<typeof RENDER_OPTIONS>): Com
 // The machine shape, section for section and entry for entry with the render
 // above it (§D-11): the two are built from one ordering, so a caller reading
 // the payload and a session reading the text can never be handed two answers.
+// The text itself is one line by construction — `requireOneLine` refuses a
+// break at the add — so the string this emits raw and the line the render
+// flattens through `oneLine` are the same string, which is the other half of
+// that claim.
+//
+// Every entry carries all five keys, and an absent one is `null` rather than
+// missing. A record a raw `state add` minted can hold no priority and an add
+// can be made with no `--why`, so a shape that dropped the key would make the
+// caller's reader branch on which keys arrived to find that out.
 function sectionPayload(section: InstructionSection): JsonValue
 {
     return {
@@ -332,9 +399,9 @@ function sectionPayload(section: InstructionSection): JsonValue
         entries: section.entries.map((entry) => ({
             id: entry.id,
             text: entry.text,
-            ...(entry.priority === undefined ? {} : { priority: entry.priority }),
+            priority: entry.priority ?? null,
             scope: entry.scope,
-            ...(entry.why === undefined ? {} : { why: entry.why })
+            why: entry.why ?? null
         }))
     };
 }
