@@ -14,9 +14,9 @@ Where the tests live:
 | D — context, search, handoff and the plugin | 15 (D1–D15) | `apps/cli/test/instruction-context.test.mjs` |
 | E — placement | 19 (E1–E19) | `apps/cli/test/instruction-place.test.mjs` |
 | F — lifecycle | 15 (F1–F15) | `apps/cli/test/instruction-context.test.mjs` |
-| G — surfaces | 16 (G1–G16) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
+| G — surfaces | 17 (G1–G17) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
 
-**147 designed cells.**
+**148 designed cells.**
 
 Cells changed while the code was written, and why — the table is the contract,
 so a cell the code proved wrong is corrected here rather than skipped:
@@ -195,6 +195,20 @@ in the code, and the cell that proves it moves with it here:
   written `null`, matching the CLI's existing convention (`login.ts`'s
   `console_base`). **C20** now asserts the key set per entry instead of
   asserting every entry carries five keys with `null` for an absent one.
+
+A cell added after the fact, and why — #445 found that the machine-level block
+`connectMachine` writes into `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` and
+`~/.gemini/GEMINI.md` pointed a session at `self context` alone, naming no way
+to reach `self instruction render`, so the row it should have gained beside G5
+was missing from this table:
+
+- **G17** — new. `renderMachineBlock` (`connect.ts`) gains one bullet directly
+  after the `self context` bullet, wrapped to the block's own width, mirroring
+  `BLOCK_BODY`'s own `self instruction render` bullet: `- Also run \`self
+  instruction render\` and follow it: the workspace's execution rules, tool
+  notes and procedures, rendered whole outside the context budget. Outside a
+  registered project, \`self instruction render --project <slug>\`. If it
+  prints only its head line, none are recorded yet.` — **added for #445**.
 
 A cell runs a command through `must` or `selfIn` from `test/harness.mjs`
 (CONTRIBUTING.md, "Reaching the CLI from a test"): both run it in the test
@@ -628,6 +642,7 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
 | G14 | the built contract | `self --help` and `self instruction --help` | both carry exactly `instruction`, `instruction add`, `instruction list` and `instruction render`; no `--format`, no `--type instruction`, no fourth verb |
 | G15 | one `renderedIn` in `model.ts` | `structure.test.mjs` | `skill.ts` and `instructions.ts` declare no local `renderedIn` and `instructions.ts` no `instructionsRenderedIn`; `skill.ts`, `instruction.ts` and `views.ts` import the shared one from `./model.js` — asserted on the source text, the way that file asserts every other module fact — **added in review round 1** |
 | G16 | ARCHITECTURE.md's layer table | `docs.test.mjs` test `G16: the layer table names #440's, #391's and #379's six modules` | the table names a layer for `instruction.ts`, `instructions.ts`, `skill.ts`, `skills.ts`, `runbook.ts` and `runbooks.ts` — scoped to those six; the four other unnamed modules predate this change — **added in review round 1** |
+| G17 | `renderMachineBlock` (`connect.ts`) gains the render bullet after the `self context` bullet | `docs.test.mjs` test `G17: the machine-level block points every session at \`self instruction render\`, in all three agent files` | `self connect --global` into a scratch machine holding `.claude`, `.codex` and `.gemini` writes the whole bullet into `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` alike — **added for #445** |
 
 ## What this table does not cover
 
