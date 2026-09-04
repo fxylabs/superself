@@ -28,6 +28,13 @@
 // is a separate command a caller concatenates. Splicing it into `context`
 // would zero every other section — `fitKeeps` never cuts `head` and measures
 // the whole string.
+//
+// Being outside that projection, it charges neither retention tier at any
+// exposure (#446): the tier caps exist so `context` fits its budget, and a
+// record nothing ever elides has no business competing for room with the
+// records that are elided. `instructionTokens` is the cap it does charge —
+// its own, per render target, 2,000 tokens by default — and this module's
+// listing closes with the share of it this project holds.
 
 import { EntityState, entityCharacters } from "@superself/fold";
 import { Requirement, required, requireText } from "./args.js";
@@ -74,7 +81,6 @@ const ADD_OPTIONS = {
     workspace: { type: "boolean" },
     scope: { type: "string" },
     supersedes: { type: "string", multiple: true },
-    demote: { type: "string", multiple: true },
     proposed: { type: "boolean" },
     why: { type: "string" }
 } as const;
@@ -110,7 +116,7 @@ export const INSTRUCTION_COMMAND: Command = {
         },
         {
             syntax: 'instruction add "<text>" --kind rule|tool|procedure [--priority n]'
-                + " [--workspace|--scope <slug>] [--supersedes <id>] [--demote <id>] [--proposed] [--why w]",
+                + " [--workspace|--scope <slug>] [--supersedes <id>] [--proposed] [--why w]",
             description: ["record a rule, a tool note or a procedure every session here is handed whole"],
             verbs: ["add"]
         },
@@ -129,16 +135,18 @@ export const INSTRUCTION_COMMAND: Command = {
         "that projection at all, so `instruction render` prints every one of them",
         "whole, in a fixed section order, however far the store stands over its caps.",
         "",
-        "it is still an ordinary record. It charges the retention caps like any other,",
-        "and no cap has an exemption for it — raising `fullTokens` in the store's",
-        "config.json is the remedy, as it is for every kind. A correction is",
-        "--supersedes, a withdrawal is `self state retract`, and `self undo` takes an",
-        "add back.",
+        "it is still an ordinary record: a correction is --supersedes, a withdrawal is",
+        "`self state retract`, and `self undo` takes an add back. What it does not do is",
+        "charge a retention tier. `fullTokens` and `indexTokens` bound what `self",
+        "context` renders, and an instruction is in no part of that projection, so it",
+        "charges neither of them at any exposure and demoting a goal, an objective or a",
+        "convention frees it nothing.",
         "",
-        "an instruction is recorded at full exposure, which is where the render reads",
-        "from. When the full tier is at its cap the add is refused rather than quietly",
-        "trimmed: pass `--demote <id>` to name the confirmed entity that moves one tier",
-        "down and makes room, or free the room first and record it after.",
+        "it is bounded by `instructionTokens` instead — its own cap in the store's",
+        "config.json, 2,000 tokens by default, counted per render target. Past it the",
+        "add is refused rather than quietly trimmed, and the room is made among the",
+        "instructions: retire one, supersede one with a shorter text, or raise the cap.",
+        "`self instruction` closes with the share of it this project holds.",
         "",
         "  --kind <rule|tool|procedure>  which section it renders under: a rule is a",
         "                        judgement or execution rule, a tool is a note about a",
@@ -148,8 +156,6 @@ export const INSTRUCTION_COMMAND: Command = {
         "                        every project; its record stays in this project's store",
         "  --scope <slug>        render it in another registered project instead",
         "  --supersedes <id>     the instruction this one replaces; the predecessor retires",
-        "  --demote <id>         past a retention cap: the confirmed entity that frees its",
-        "                        place by moving one tier down; repeatable",
         "  --proposed            record it as a proposal `self state confirm` lands",
         "  --why <text>          why the instruction holds",
         "  --project <slug>      render this registered project's set instead of this",
@@ -280,7 +286,6 @@ function instructionAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS
     return composedEntityAdd(INSTRUCTION_ROW, { labels: [INSTRUCTION_LABEL, asked.kind] }, {
         why: values.why,
         supersedes: values.supersedes,
-        demote: values.demote,
         scope: asked.scope,
         priority: values.priority,
         proposed: values.proposed === true
@@ -336,9 +341,10 @@ function scopeWord(entity: EntityState): string
     return entity.scope === "workspace" ? "workspace" : "project  ";
 }
 
-// One line per occupied tier (§D-6). A `--workspace` instruction charges the
-// workspace full tier and a project-scoped one charges this project's, so
-// adding them together would produce a number neither cap governs.
+// One line per occupied render target (§D-6). A `--workspace` instruction
+// charges the workspace instruction cap and a project-scoped one charges this
+// project's, so adding them together would produce a number neither cap
+// governs.
 //
 // The estimate note closes the last line and no other: it is one statement
 // about where every number on the page came from, and saying it once per tier
@@ -347,7 +353,7 @@ function shareLines(ctx: ProjectContext, entries: EntityState[]): string[]
 {
     const config = readStoreConfig(ctx.storeDir);
     const scale = tokenScale(config);
-    const cap = retentionCaps(config).full;
+    const cap = retentionCaps(config).instruction;
     const shares = [ctx.project, "workspace"]
         .map((target) => ({ target, held: entries.filter((entry) => tierTarget(entry, ctx.project) === target) }))
         .filter((group) => group.held.length > 0)
@@ -355,22 +361,26 @@ function shareLines(ctx: ProjectContext, entries: EntityState[]): string[]
     return shares.map((share, at) => at === shares.length - 1 ? share + estimateNote(scale) : share);
 }
 
-// Which capped tier an instruction that renders here occupies: the workspace
-// full tier, or the tier of the project this listing is about. `rendersIn`
+// Which instruction cap an instruction that renders here charges: the
+// workspace one, or the one of the project this listing is about. `rendersIn`
 // already settled that no third answer reaches this list.
 function tierTarget(entity: EntityState, here: string): string
 {
     return entity.scope === "workspace" ? "workspace" : here;
 }
 
-// What the line counts is the instructions and nothing else (§D-6): the tier
-// itself holds every full-exposure record, and the number below would be a
-// different, larger one. So the line says whose tokens they are rather than
-// leaving a reader to read tier occupancy into a figure that is not it.
+// What the line counts is the instructions and nothing else (§D-6) — which is
+// also, since #446, exactly what the cap it is a share of counts, so the two
+// numbers answer one question. The line still names its subject rather than
+// leaving a reader to read it in: what the full tier beside it holds is a
+// different figure, and its own cap refusal is where that one is stated.
+//
+// Only what renders here is listed, so the share is of the instructions this
+// project is handed, not of every instruction the store holds.
 function shareLine(scope: string, held: EntityState[], cap: number, scale: TokenScale): string
 {
     const tokens = tokensOf(held.reduce((sum, entry) => sum + entityCharacters(entry), 0), scale.perCharacter);
-    return `instructions hold ${tokens} tokens — ${tokens} of the ${cap}-token ${scope} full cap`
+    return `instructions hold ${tokens} tokens — ${tokens} of the ${cap}-token ${scope} instruction cap`
         + ` (${Math.round((tokens / cap) * 100)}%)`;
 }
 

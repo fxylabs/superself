@@ -335,7 +335,7 @@ usage: self <command>
   skill drop <id|name> --why "<why it no longer helps>"
                                              withdraw a skill; what it destroys is disclosed first, exactly as any record is
   instruction [list]                         list the instructions this project renders, by section, with the token total
-  instruction add "<text>" --kind rule|tool|procedure [--priority n] [--workspace|--scope <slug>] [--supersedes <id>] [--demote <id>] [--proposed] [--why w]
+  instruction add "<text>" --kind rule|tool|procedure [--priority n] [--workspace|--scope <slug>] [--supersedes <id>] [--proposed] [--why w]
                                              record a rule, a tool note or a procedure every session here is handed whole
   instruction render [--project <slug>] [--json]
                                              print the operating manual, ready to read beside `self context`
