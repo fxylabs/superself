@@ -368,12 +368,17 @@ test("A24: past the instruction cap --proposed records the proposal, and the con
 test("A25: under the instruction cap the add lands, naming no demotion and no other record kind", async () =>
 {
     const ground = await floor();
+    // The two records the old refusal advertised demoting, filling the full
+    // tier to its cap: this is the state #446 reported, and the add lands.
     await must(ground.box, ground.demo, ["state", "add", "ship the thing", "--label", "goal", "--exposure", "full"]);
     await must(ground.box, ground.demo,
         ["state", "add", "review before merge", "--label", "convention", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 33 });
     const landed = await must(ground.box, ground.demo,
         ["instruction", "add", "tests run on the dev VM", "--kind", "rule"]);
     assert.equal(landed.code, 0);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out,
+        /- tests run on the dev VM/);
     for (const word of ["--demote", "goal", "objective", "convention", "full tier"])
     {
         assert.equal(landed.out.includes(word), false, `the receipt named ${word}:\n${landed.out}`);
@@ -607,17 +612,22 @@ test("A40: the raw verb follows the label — a labelled add lands at a full tie
 test("A41: the raw verb is judged by the instruction cap, and a preset label beside it is not", async () =>
 {
     const ground = await floor();
-    setCaps(ground.ws, { instructionTokens: 30, fullTokens: 1000 });
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    setCaps(ground.ws, { instructionTokens: 30, fullTokens: 60 });
     await add(ground, "tests run on the dev VM", "rule");
     const refused = await ground.self(
         ["state", "add", "a raw note the label makes one", "--label", "instruction", "--exposure", "full"]);
     assert.notEqual(refused.code, 0);
     assert.ok(refused.out.includes(CAP_REFUSAL(23, 30, 30)), refused.out);
     // `sourceOf` reads the convention label, so `source !== undefined` and the
-    // predicate rejects it: it is a convention, and it charges the full tier.
-    const convention = await must(ground.box, ground.demo, ["state", "add", "a raw note the label makes one",
+    // predicate rejects it: the same text is a convention, and it is refused by
+    // the full tier instead — the two caps, told apart by one label.
+    const convention = await ground.self(["state", "add", "a raw note the label makes one",
         "--label", "instruction", "--label", "convention", "--exposure", "full"]);
-    assert.equal(convention.code, 0);
+    assert.notEqual(convention.code, 0);
+    assert.ok(convention.out.includes("the project full tier holds 50 of 60 tokens and this text adds 30 more"),
+        convention.out);
 });
 
 test("A42: --demote on a raw instruction add is refused toward the room that does exist", async () =>
