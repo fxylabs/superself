@@ -766,6 +766,27 @@ test("cell 36: a search matching the bundle's name shows the same one row", asyn
     assert.match(found, /^1 artifact$/m);
 });
 
+// The launch is detached, so the stub's record is waited for rather than read
+// straight away — and its content, not merely its existence, is what is
+// waited for: the shell redirection that makes the stub's output file
+// truncates it before the write lands, so a wait that stops at existence can
+// still read the empty string that redirection left behind on a slow runner.
+// Waited for generously, because what the wait is measuring is the machine's
+// load, not the CLI.
+async function waitForContent(file, tries = 600)
+{
+    for (let attempt = 0; attempt < tries; attempt += 1)
+    {
+        const content = existsSync(file) ? readFileSync(file, "utf8") : "";
+        if (content !== "")
+        {
+            return content;
+        }
+        await wait(25);
+    }
+    return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
 test("cell 37: artifact open at a terminal opens the entry, and the receipt names it with the id", async () =>
 {
     const root = tree("dist", { "index.html": "front door", "assets/app.js": "j" });
@@ -787,15 +808,9 @@ test("cell 37: artifact open at a terminal opens the entry, and the receipt name
     }
     assert.equal(opened.code, 0, opened.out);
     assert.match(opened.printed, new RegExp(`opened dist/index\\.html \\(${meta.id}\\)`));
-    // The launch is detached, so the stub's record is waited for rather than
-    // read straight away — and waited for generously, because what the wait is
-    // measuring is the machine's load, not the CLI.
-    for (let tries = 0; tries < 600 && !existsSync(openedFile); tries += 1)
-    {
-        await wait(25);
-    }
-    assert.ok(existsSync(openedFile), "the stub opener was never reached, so nothing was launched");
-    assert.equal(readFileSync(openedFile, "utf8"), entryFile, "the launch was not aimed at the entry file");
+    const openedPath = await waitForContent(openedFile);
+    assert.ok(openedPath !== "", "the stub opener was never reached, so nothing was launched");
+    assert.equal(openedPath, entryFile, "the launch was not aimed at the entry file");
 });
 
 test("cell 38: with no one at a terminal, artifact open prints the entry's absolute path and launches nothing", async () =>

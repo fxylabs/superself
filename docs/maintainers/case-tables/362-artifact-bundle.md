@@ -202,7 +202,7 @@ a stored file. The **entry** is the one member a person is meant to open.
 | 34 | one bundle and one file recorded | `artifact list` at the workspace root | `dist/ (12 files)` for the bundle, today's row for the file; `total` is 2 |
 | 35 | as above | `artifact search "logo.svg"`, matching only a member | the bundle's one row, never a member row |
 | 36 | as above | `artifact search "dist"` | the same one row |
-| 37 | a bundle | `artifact open <id>` at a terminal | opens the entry file; the receipt names `<name>/<entry>` and the id |
+| 37 | a bundle | `artifact open <id>` at a terminal | opens the entry file; the receipt names `<name>/<entry>` and the id; the test's wait for the stub opener's record reads its content, not merely its existence, since the shell redirection that creates that file truncates it before the write lands (issue #421, amendment) |
 | 38 | a bundle, `SUPERSELF_SESSION` set | `artifact open <id>` | prints the entry file's absolute path and launches nothing |
 | 39 | a bundle whose entry file is not in this store | `artifact open <id>` | refused, naming the bundle path and `self sync` |
 | 40 | a bundle | `work show`, and the folded work document | both render `<id> <name>/ (12 files)`, with no digest in parentheses |
