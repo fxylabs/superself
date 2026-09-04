@@ -712,6 +712,51 @@ test("A45: a label named after an Object.prototype key is no preset source", asy
     assert.match(render, /## Unclassified\n- a raw note the label makes one/);
 });
 
+// #446 round 2's should: kind before lifecycle. A proposed instruction is
+// still an instruction, so naming one with `--demote` took the "still
+// proposed" wording before the hoist — a remedy that led nowhere, since
+// confirming it would only reach A43's refusal next.
+test("A46: --demote naming a proposed instruction is refused as an instruction, not as still proposed", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    const proposed = await add(ground, "tests run on the dev VM", "rule", ["--proposed"]);
+    setCaps(ground.ws, { fullTokens: 60 });
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["state", "add", "a raw note the label makes one",
+        "--exposure", "full", "--demote", proposed]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(`--demote ${proposed} is an instruction — it charges no retention tier, so demoting`
+        + " it frees no room; name a goal, decision, convention or index record with --demote"), refused.out);
+    assert.equal(refused.out.includes("is still proposed"), false, refused.out);
+    assert.equal(events(ground.ws).length, before);
+});
+
+// #446 round 2's optional: `holdsSeat`'s tier branch and `heldCharacters`'s
+// subtraction are one rule stated twice, and this pins them equal with two of
+// each kind seeded, so the equality is not a coincidence of one instruction
+// and one ordinary record — driven through a tier refusal's numbers, as A28
+// and A38 are.
+test("A47: heldCharacters and holdsSeat agree on what a tier holds, with two instructions and two ordinary records", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "the first ordinary full record here", "--exposure", "full"]);
+    await must(ground.box, ground.demo,
+        ["state", "add", "a second ordinary full record here too", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 80 });
+    await add(ground, "tests run on the dev VM", "rule");
+    await add(ground, "reviewed before merge always", "rule");
+    // 35 + 38 = 73: the sum of entityCharacters over exactly the records
+    // holdsSeat reads as holding a seat — the two ordinary ones, neither
+    // instruction — and the number heldCharacters reports for the tier.
+    const refused = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes("the project full tier holds 73 of 80 tokens and this text adds 20 more"),
+        refused.out);
+});
+
 /* ── group B: reading the list ─────────────────────────────────────── */
 
 
@@ -1019,9 +1064,16 @@ test("B23: the share is what the cap holds, at every exposure, and prints where 
     const ground = await floor();
     setCaps(ground.ws, {});
     const quiet = await add(ground, "a demoted standing rule here", "rule");
-    const loud = await add(ground, "tests run on the dev VM", "rule");
+    const replaced = await add(ground, "the wording tests run on the dev VM replaces", "rule");
+    const loud = await add(ground, "tests run on the dev VM", "rule", ["--supersedes", replaced]);
+    await add(ground, "a proposal that never confirms", "rule", ["--proposed"]);
+    const withdrawn = await add(ground, "withdrawn before it ever counted", "rule");
+    await must(ground.box, ground.demo, ["state", "retract", withdrawn, "--why", "no longer holds"]);
     await must(ground.box, ground.demo, ["state", "place", quiet, "--exposure", "index", "--why", "narrower"]);
-    // 28 + 23: the demoted one prints no row and is still in the manual.
+    // 28 + 23: the demoted one prints no row and is still in the manual. The
+    // proposal, the superseded predecessor and the retracted one left the
+    // store's manual the moment they did, exactly as B12 states — this is
+    // where that number is proved, and B12's row now points here truthfully.
     const listed = (await must(ground.box, ground.demo, ["instruction"])).out;
     assert.match(listed, /^instructions hold 51 tokens — 51 of the 2000-token project instruction cap \(3%\)$/m);
     assert.equal(listed.includes("a demoted standing rule here"), false, listed);
@@ -1036,6 +1088,8 @@ test("B23: the share is what the cap holds, at every exposure, and prints where 
     const empty = (await must(ground.box, ground.demo, ["instruction"])).out;
     assert.match(empty, /^instructions hold 51 tokens — 51 of the 60-token project instruction cap \(85%\)$/m);
     assert.equal(empty.includes("no instructions recorded"), false, empty);
+    assert.match(empty, /every instruction is demoted — self context carries them as index lines;/);
+    assert.match(empty, /instruction render prints none/);
 });
 
 /* ── group G: the one surface cell that needs a store ──────────────── */

@@ -242,10 +242,12 @@ work, or a free-labeled entity — folds into one record kind with placement:
   charges: an instruction is outside the context projection the two retention
   tiers exist to bound, so it charges neither of them at any exposure. Past it
   `instruction add` — and a raw `state add --label instruction` — refuses.
-  `--demote` frees nothing here and is refused by name: the room is made among
-  the instructions, by retiring one or superseding one with a shorter text, or
-  by raising `instructionTokens` in `config.json`. `self instruction` closes
-  with the share of it this project's manual holds.
+  `--demote` frees nothing here: `instruction add` declares no such flag, so
+  the parser refuses it as `unknown option '--demote'`, and a raw `state add
+  --label instruction --demote <id>` is refused by name — the room is made
+  among the instructions, by retiring one or superseding one with a shorter
+  text, or by raising `instructionTokens` in `config.json`. `self instruction`
+  closes with the share of it this project's manual holds.
 - `state add --artifact <id|path>` and `convention add --artifact <id|path>`
   point a record at a registered artifact — the guide a rule is too short to
   state. One per record; a second `--artifact` is refused by name. Pass an

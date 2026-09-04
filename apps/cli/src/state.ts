@@ -382,9 +382,10 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     const exposure = values.exposure !== undefined ? validExposure(values.exposure) : row?.exposure ?? "index";
     const target = values.scope === undefined ? ctx.project : validScope(ctx, values.scope);
     const id = entityId();
-    // Resolved before the record's own event and after every other check: a
-    // path registers here, and an artifact nothing points at is the only
-    // wreckage a failure between the two can leave (#238).
+    // Resolved before the record's own event, but before the cap gate below
+    // it too: a path registers here whichever way that gate answers, so a
+    // refusal past the instruction cap can still leave an artifact nothing
+    // points at (#238) — the "does not cover" list says why nothing closes it.
     const artifact = resolveArtifactRef(ctx, values.artifact);
     const payload = { ...addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row),
         ...(artifact === undefined ? {} : { artifact }), ...reserved };
@@ -1114,6 +1115,15 @@ function requireDemotable(records: Placed[], value: string, entered: CappedTier,
     {
         throw new CliError(`--demote ${entity.id} names the record being placed — another entity has to free the room`);
     }
+    // Named before the proposed and lifecycle clauses below, and every clause
+    // in requireDemotableSeat: what kind of record this is settles the answer
+    // regardless of what its lifecycle says, and a proposed or withdrawn
+    // instruction is still an instruction (#446 §D-16, round 2).
+    if (isInstruction(entity))
+    {
+        throw new CliError(`--demote ${entity.id} is an instruction — it charges no retention tier, so `
+            + "demoting it frees no room; name a goal, decision, convention or index record with --demote");
+    }
     if (entity.status === "proposed")
     {
         throw new CliError(`--demote ${entity.id} is still proposed — it holds no place in the ${entered.tier} tier until confirmed`);
@@ -1128,16 +1138,6 @@ function requireDemotable(records: Placed[], value: string, entered: CappedTier,
 
 function requireDemotableSeat(found: Placed, entered: CappedTier, here: string): void
 {
-    // Named before the scope and exposure clauses because it is the reason
-    // neither of them can answer: an instruction charges no retention tier, so
-    // where it sits and at what exposure say nothing about the room demoting it
-    // would free (#446 §D-14). A project-scoped full one passes both clauses
-    // and frees zero, which is the credit this refusal exists to refuse.
-    if (isInstruction(found.entity))
-    {
-        throw new CliError(`--demote ${found.entity.id} is an instruction — it charges no retention tier, so `
-            + "demoting it frees no room; name a goal, decision, convention or index record with --demote");
-    }
     const at = scopeLabel(scopeTarget(found.entity, found.owner), here);
     const into = scopeLabel(entered.target, here);
     if (at !== into)

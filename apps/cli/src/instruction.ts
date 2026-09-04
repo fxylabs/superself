@@ -324,18 +324,29 @@ function instructionList(): CommandOutput
     // The share is what the cap holds, so the empty wording answers to the cap
     // and not to the render: a store whose instructions are all demoted has a
     // manual and is told its size, and only a store holding none at all is
-    // told to record one (§D-6).
+    // told to record one (§D-6). A store the cap holds something for but whose
+    // sections are all empty is every charged instruction demoted out of the
+    // render, and gets a line of its own beside the share so a reader does not
+    // read the bare number as "nothing is recorded".
     const shares = shareLines(ctx, models);
-    return [{
-        kind: "listing",
-        rows: shares.length === 0 ? [EMPTY_LISTING] : [...listRows(sections), ...shares],
-        total: entries.length,
-        noun: "instruction"
-    }];
+    const rows = shares.length === 0
+        ? [EMPTY_LISTING]
+        : sections.length === 0 ? [...shares, ALL_DEMOTED_NOTE] : [...listRows(sections), ...shares];
+    return [{ kind: "listing", rows, total: entries.length, noun: "instruction" }];
 }
+
+const ALL_DEMOTED_NOTE = "every instruction is demoted — self context carries them as index lines;"
+    + " instruction render prints none";
 
 function listRows(sections: InstructionSection[]): string[]
 {
+    // Guarded rather than left to `instructionList`'s branch alone: an empty
+    // `sections` here means every entry list is empty too, and `Math.max` of
+    // no widths is `-Infinity`, not a usable one.
+    if (sections.length === 0)
+    {
+        return [];
+    }
     const width = Math.max(...sections.flatMap((section) =>
         section.entries.map((entry) => String(entry.priority ?? "").length)));
     return sections.flatMap((section) => [section.heading,

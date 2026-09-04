@@ -8,15 +8,15 @@ Where the tests live:
 
 | Group | Cells | File |
 |---|---|---|
-| A — `instruction add` | 45 (A1–A45) | `apps/cli/test/instruction.test.mjs` |
+| A — `instruction add` | 47 (A1–A47) | `apps/cli/test/instruction.test.mjs` |
 | B — `self instruction` / `instruction list` | 23 (B1–B23) | `apps/cli/test/instruction.test.mjs` |
 | C — `instruction render` | 27 (C1–C27) | `apps/cli/test/instruction-render.test.mjs` |
 | D — context, search, handoff and the plugin | 15 (D1–D15) | `apps/cli/test/instruction-context.test.mjs` |
 | E — placement | 21 (E1–E21) | `apps/cli/test/instruction-place.test.mjs` |
 | F — lifecycle | 17 (F1–F17) | `apps/cli/test/instruction-context.test.mjs` |
-| G — surfaces | 17 (G1–G17) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
+| G — surfaces | 18 (G1–G18) | `apps/cli/test/docs.test.mjs`, `guide.test.mjs`, `golden.test.mjs`, `handoff.test.mjs`, `structure.test.mjs`, `pr7-loader.test.mjs`, `instruction.test.mjs`, `apps/dsh-plugin/test/tools.test.mjs` |
 
-**165 designed cells.**
+**168 designed cells.**
 
 Cells changed while the code was written, and why — the table is the contract,
 so a cell the code proved wrong is corrected here rather than skipped:
@@ -344,6 +344,41 @@ all nine applied. The cells that move with them:
   deleted; the credit is stated in §D-15, where it is true, on the add path
   beside **A36**.
 
+Round 2 of that review — no blocking finding, three `should`, three optional,
+all six applied. The cells that move with them:
+
+- **A46** — new. `requireDemotable`'s proposed and `!isLive` clauses ran before
+  `requireDemotableSeat`'s instruction clause, so `--demote <a proposed
+  instruction>` on a full add took "still proposed" — a remedy that led only to
+  **A43**'s refusal once confirmed. The instruction clause is hoisted into
+  `requireDemotable`, above every clause but the one naming the record being
+  placed: kind is judged before lifecycle. The cell drives that `--demote` and
+  asserts the instruction wording, not the proposed one, and nothing recorded.
+- **A47** — new. `holdsSeat`'s tier branch and `heldCharacters`'s subtraction
+  are one rule stated twice (§D-14), and the cell pins them equal with two
+  instructions and two ordinary records seeded rather than one of each: the
+  tier's own count, read off a refusal as **A28** and **A38** read it, is the
+  sum of `entityCharacters` over the two ordinary records alone.
+- **G18** — new. The `instructionTokens` bullet in `docs/reference/cli.md`
+  named the cap and its remedy but pinned neither the 2,000 default nor "per
+  render target" against the built refusal, and read `--demote` as "refused by
+  name" on both paths when `instruction add` refuses it by the parser instead —
+  the flag is not declared there at all. The cell pins the default, the
+  per-target count, and both refusal paths, and the bullet is reworded to say
+  both.
+- **B23** — amended. Seeds one proposed, one superseded and one retracted
+  instruction beside the full and the demoted one, and asserts the share
+  equals confirmed + demoted alone and equals the next refusal's held number —
+  the proof **B12**'s row credits it with, now actually carried.
+- **B12** — amended. Its row already pointed at **B23** for the token half;
+  **B23** now proves what the row claims instead of asserting a narrower state.
+- **A24** — amended. Its own outcome is a landing, not a refusal, so the
+  `events().length` claim the round-1 sub-list credited it with belongs to
+  **F16**, the confirm that refuses — the row now says so by name.
+- **E21** — amended. The fourth answer is the cell's one refusal, and its row
+  now states the `events().length` claim beside it, as **A36** and **A42**'s
+  rows already do.
+
 A cell runs a command through `must` or `selfIn` from `test/harness.mjs`
 (CONTRIBUTING.md, "Reaching the CLI from a test"): both run it in the test
 process, both are `async`, and every call needs an `await`. Where a cell says
@@ -456,7 +491,12 @@ on one is marked **decided here**.
   through the cap's own predicate rather than off the rendered rows —
   **amended in review round: #446, round 1**. The estimate note closes the last
   line only, since it is one statement about where every number on the page came
-  from. Cells **B5**–**B9**, **B18**, **B19**, **B21**, **B23**.
+  from. Where every charged instruction is demoted, `listRows` prints no
+  section — `sections` is empty — and the listing gains one line beside the
+  share instead: `every instruction is demoted — self context carries them as
+  index lines; instruction render prints none`, so a reader does not read the
+  bare share number as "nothing is recorded" — **added in review round: #446,
+  round 2**. Cells **B5**–**B9**, **B18**, **B19**, **B21**, **B23**.
 - **D-7 — the managed-block bullet.** One bullet in `BLOCK_BODY`, placed
   directly after the `Session start: run \`self context\`` bullet:
   `- Then run \`self instruction render\` and follow it; it is the operating`
@@ -519,9 +559,14 @@ on one is marked **decided here**.
   credited nothing for one either, so neither a `--demote` nor a `--supersedes`
   target that is an instruction frees a seat in a retention tier. `--demote`
   refuses such a target by name (§D-16) and a `--supersedes` one is simply
-  credited zero, leaving the refusal's number the tier's own. Cells **A23**,
-  **A25**, **A28**, **A36**, **A38**–**A41**, **A43**, **A44**, **B18**,
-  **B22**, **C23**, **D12**.
+  credited zero, leaving the refusal's number the tier's own. `holdsSeat`,
+  which the credit reads, and `heldCharacters`, which the tier's own count
+  reads, exclude an instruction the same way — one rule, stated twice because
+  one runs before a demotion is summed and the other after the fold's own sum
+  — pinned equal directly rather than through one instruction's absence alone
+  — **added in review round: #446, round 2**. Cells **A23**, **A25**, **A28**,
+  **A36**, **A38**–**A41**, **A43**, **A44**, **A47**, **B18**, **B22**,
+  **C23**, **D12**.
 - **D-15 — the instruction-cap refusals.** Two, one per gate, and neither ever
   names `--demote`, a goal, an objective or a convention: the caller is
   recording a rule and the room is made among the rules.
@@ -549,9 +594,13 @@ on one is marked **decided here**.
   too, wherever the flag is legal — a raw `state add` into a retention tier:
   `<id> is an instruction — it charges no retention tier, so demoting it frees
   no room; name a goal, decision, convention or index record with --demote`.
-  It is stated before the scope and the exposure clauses beside it, because a
-  project-scoped full instruction passes both and frees nothing — **added in
-  review round: #446, round 1**. Cell **A43**.
+  It is stated before every other clause `requireDemotable` and
+  `requireDemotableSeat` raise but the one naming the record being placed: a
+  project-scoped full instruction passes the scope and exposure clauses beside
+  it and frees nothing — **added in review round: #446, round 1** — and a
+  proposed or already-withdrawn instruction is still an instruction, so kind
+  is judged before lifecycle too — **hoisted above the proposed and `!isLive`
+  clauses in review round: #446, round 2**. Cells **A43**, **A46**.
   A placement of an instruction is refused by no cap at all. It enters no
   retention tier at any exposure, and the instruction cap counts a record
   whatever its exposure, so `state place --exposure full|index|search
@@ -658,7 +707,7 @@ project vs several; a person at the keyboard vs a session.
 | A21 | v1 superseded by v2 | `--supersedes <v1 id>` | refused: `<id> was already superseded — nothing is left to supersede` |
 | A22 | as A1 | `--kind rule --proposed` | one `entity.proposed`; absent from `instruction render`; `self context` carries `proposed entity <id>: <text> (confirm with \`self state confirm <id>\`)` |
 | A23 | project full tier at `fullTokens`, holding ordinary records | `instruction add "…" --kind rule` | admitted — an instruction charges no retention tier at any exposure, so the tier that would once have refused it never sees it; the tier's held count is unchanged afterwards — **amended in review round: #446 (D-14)** |
-| A24 | instruction cap at `instructionTokens` | `instruction add "…" --kind rule --proposed` | one `entity.proposed`; propose passes and confirm gates on the instruction cap exactly as on a tier (#240 R3); `self context` carries the `proposed entity` line, and **F16** is the confirm that refuses — **amended in review round: #446 (D-16)** |
+| A24 | instruction cap at `instructionTokens` | `instruction add "…" --kind rule --proposed` | one `entity.proposed`; propose passes and confirm gates on the instruction cap exactly as on a tier (#240 R3); `self context` carries the `proposed entity` line, and **F16** is the confirm that refuses, `events().length` unchanged across that refusal — **amended in review round: #446 (D-16)**, outcome reworded **in round 2 of it** |
 | A25 | instruction cap under its limit | `instruction add "…" --kind rule` | admitted; the answer is the receipt alone, naming no demotion, no goal, no objective and no convention — **amended in review round: #446 (D-16)** |
 | A26 | cwd outside every registered project | `instruction add "…" --kind rule` | refused by `requireProject`; nothing recorded |
 | A27 | cwd inside an archived project's checkout | `instruction add "…" --kind rule` | refused by the append gate: `project "<slug>" is archived, so nothing more is recorded into it — run \`self project restore <slug>\`` |
@@ -678,8 +727,10 @@ project vs several; a person at the keyboard vs a session.
 | A41 | instruction cap at `instructionTokens` | `self state add "…" --label instruction --exposure full` | refused with A36's wording, against the instruction cap; a `--label convention` beside it takes the tier refusal instead, because `sourceOf` reads it as a convention — **added in review round: #446 (D-14)** |
 | A42 | as A41 | `self state add "…" --label instruction --exposure full --demote <full id>` | refused: `--demote frees room in a retention tier and an instruction charges none — retire or supersede an instruction with a shorter text, or raise instructionTokens in config.json`; nothing recorded — **added in review round: #446 (D-16)** |
 | A43 | project full tier at `fullTokens` holding one 50-token ordinary record, and one 23-token full instruction | `self state add "<30 tokens>" --exposure full --demote <the instruction id>` | refused: `--demote <id> is an instruction — it charges no retention tier, so demoting it frees no room; name a goal, decision, convention or index record with --demote`; nothing recorded and the instruction still renders — the tier it was credited to never held it — **added in review round: #446, round 1 (D-14, D-16)** |
-| A44 | as A43 | `self state add "<30 tokens>" --exposure full --supersedes <the instruction id>` | refused by the full cap, and the count it states is the tier's own — `the project full tier holds 50 of 60 tokens and this text adds 30 more` — because a predecessor the tier does not hold frees it nothing; nothing recorded and the instruction still renders — **added in review round: #446, round 1 (D-14)** |
+| A44 | as A43 | `self state add "<30 tokens>" --exposure full --supersedes <the instruction id>` | refused by the full cap, and the count it states is the tier's own — `the project full tier holds 50 of 60 tokens and this text adds 30 more` — because a predecessor the tier does not hold frees it nothing; `events().length` unchanged and the instruction still renders — **added in review round: #446, round 1 (D-14)**, outcome reworded **in round 2 of it** |
 | A45 | project full tier at `fullTokens` holding one ordinary record, the instruction cap at `instructionTokens` | `self state add "<text>" --label instruction --label constructor --exposure full` | refused with A36's wording, against the instruction cap — `constructor` is a key on `Object.prototype` and not a preset source, so the gate and `sourceOf` agree about which cap the record charges; raising `instructionTokens` admits it and it renders under `## Unclassified` — **added in review round: #446, round 1** |
+| A46 | project full tier at `fullTokens` holding one ordinary record, and one full instruction proposed rather than confirmed | `self state add "<text>" --exposure full --demote <the proposed instruction id>` | refused with A43's wording, against the instruction — not `--demote <id> is still proposed`, which the proposed and `!isLive` clauses would have answered had the instruction clause not been hoisted above them; nothing recorded — **added in review round: #446, round 2 (D-16)** |
+| A47 | project full tier at `fullTokens` holding two ordinary records, and two full instructions | `self state add "<text>" --exposure full` | refused, and the held count is the sum of `entityCharacters` over the two ordinary records alone — `heldCharacters` and `holdsSeat` agree with two of each kind seeded, not only with one — **added in review round: #446, round 2 (D-14)** |
 
 ## 4.2 Group B — `self instruction` and `instruction list`
 
@@ -706,7 +757,7 @@ and at index; a leaf the branch does not have.
 | B9 | one project-scoped and one `--workspace` instruction | `self instruction` | two share lines, one per occupied render target: `project instruction cap` and `workspace instruction cap`; neither total includes the other's tokens — **decided here (D-6)**, **amended in review round: #446** |
 | B10 | one instruction | `self instruction list --json` | refused by name on stdout as a JSON envelope: ``\`self instruction list\` has no --json contract yet``, code `json_unsupported`, hint `read the human output, or use a command that declares --json` |
 | B11 | one instruction, `SUPERSELF_JSON=1` in the environment, no `--json` | `self instruction list` | the human listing prints, exit 0 — an ambient preference is ignored on a leaf with no payload contract |
-| B12 | one confirmed, one proposed, one superseded, one retracted, one demoted to `index` | `self instruction` | only the confirmed current full one is listed, and the count excludes the other four. The token total excludes three of them — the proposal, the superseded and the retracted have left the store's manual — and holds the demoted one, which charges the cap at every exposure; **B23** is where that number is asserted — **amended in review round: #446, round 1 (D-6)** |
+| B12 | one confirmed, one proposed, one superseded, one retracted, one demoted to `index` | `self instruction` | only the confirmed current full one is listed, and the count excludes the other four. The token total excludes three of them — the proposal, the superseded and the retracted have left the store's manual — and holds the demoted one, which charges the cap at every exposure; **B23** seeds all five and is where that number is asserted — **amended in review round: #446, round 1 (D-6)**, truthfully **in round 2 of it** |
 | B13 | one instruction demoted to `index` | `self instruction`, then `self context` | absent from the listing; present in `self context` `## Index` as `- [instruction, rule] <text>` |
 | B14 | cwd outside every registered project | `self instruction` | refused by `requireProject` |
 | B15 | three registered projects, one store unreadable, a `--workspace` instruction in a readable one | `self instruction` | the readable projects' instructions are listed; stderr carries `project "<slug>" is left out of this answer — its state could not be read: <why>`; exit 0 |
@@ -717,7 +768,7 @@ and at index; a leaf the branch does not have.
 | B20 | any state | `self instruction bogus` | refused with the branch usage: `usage: self instruction \| add "<text>" --kind rule\|tool\|procedure \| render [--project <slug>]` — **added in review round 1** |
 | B21 | a project-scoped and a `--workspace` instruction, and one ordinary full record in each of the two tiers | `self instruction` | two share lines, each against the `<cap>-token <scope> instruction cap`, and neither counts the other's tokens or the ordinary records beside them — **added in review round: #446 (D-6)** |
 | B22 | one full instruction, one index instruction, and one ordinary record at each exposure | `state add "…" --exposure full`, then `state add "…"`, both past a lowered cap | each refusal's `holds <n> of <cap>` is the ordinary record's tokens alone: an instruction charges neither tier, at either exposure — **added in review round: #446 (D-14)** |
-| B23 | one full instruction (23 tokens) and one demoted to `index` (28), `instructionTokens` at its default and then at 60 | `self instruction`, then an `instruction add` past the lowered cap, then the full one demoted too | the share line reads `instructions hold 51 tokens — 51 of the 2000-token project instruction cap (3%)` with the demoted one's text listed nowhere; the cap refusal's held count is the same 51; and with every instruction demoted the share line still prints — the empty wording answers only to a store the cap holds nothing for — **added in review round: #446, round 1 (D-6)** |
+| B23 | one full instruction (23 tokens) and one demoted to `index` (28), plus one proposed, one superseded (its predecessor) and one retracted instruction, `instructionTokens` at its default and then at 60 | `self instruction`, then an `instruction add` past the lowered cap, then the full one demoted too | the share line reads `instructions hold 51 tokens — 51 of the 2000-token project instruction cap (3%)`, equal to confirmed + demoted alone — the proposal, the superseded predecessor and the retracted one add nothing to it — with the demoted one's text listed nowhere; the cap refusal's held count is the same 51; and with every instruction demoted the share line still prints, beside a line reading `every instruction is demoted — self context carries them as index lines; instruction render prints none` — the empty wording answers only to a store the cap holds nothing for — **added in review round: #446, round 1 (D-6)**, extended and the all-demoted line asserted **in round 2 of it** |
 
 ## 4.3 Group C — `instruction render`
 
@@ -822,7 +873,7 @@ standing vs taken back with `self undo`.
 | E18 | one full instruction and one full ordinary record, the index tier at `indexTokens` | `state place <the instruction> --exposure index --why "…"`, then the same on the ordinary record | the instruction's demotion lands into the crowded tier — it charges no index tier either (§D-14). The ordinary record's is refused: `the project index tier holds <n> of <cap> tokens and this text adds <m> more — name what demotes: … demote first with \`self state place <id> --exposure search --why "<reason>"\``, and the advertised line frees the room — **amended in implementation**, **amended in review round: #446** |
 | E19 | one full instruction demoted to `index` | `self undo <the entity.placed>` | the demotion is taken back: `<id> is placed where it was — the placement was taken back`, `state show` reads `placement: project · full`, the record renders again and leaves `## Index` — **added in review round 1** |
 | E20 | one instruction at `index`, the full tier at `fullTokens` **and** the instruction cap at `instructionTokens` | `state place <id> --exposure full` | it lands: the full tier does not hold it, and the instruction cap counts it at any exposure, so the promotion moves nothing either cap can see — **added in review round: #446 (D-16)** |
-| E21 | one full instruction, both retention tiers at their caps | `state place <id> --exposure index --why "…"`, `--priority 1`, `--scope workspace`, and `--demote <id>` | the first three land and no answer names `--demote`, a goal, an objective or a convention; the fourth is refused `--demote frees room in the capped tier a record enters — this command enters none, so nothing needs to demote` — **added in review round: #446 (D-16)** |
+| E21 | one full instruction, both retention tiers at their caps | `state place <id> --exposure index --why "…"`, `--priority 1`, `--scope workspace`, and `--demote <id>` | the first three land and no answer names `--demote`, a goal, an objective or a convention; the fourth is refused `--demote frees room in the capped tier a record enters — this command enters none, so nothing needs to demote`, `events().length` unchanged across it — **added in review round: #446 (D-16)**, outcome reworded **in round 2 of it** |
 
 ## 4.6 Group F — lifecycle
 
@@ -878,6 +929,7 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
 | G15 | one `renderedIn` in `model.ts` | `structure.test.mjs` | `skill.ts` and `instructions.ts` declare no local `renderedIn` and `instructions.ts` no `instructionsRenderedIn`; `skill.ts`, `instruction.ts` and `views.ts` import the shared one from `./model.js` — asserted on the source text, the way that file asserts every other module fact — **added in review round 1** |
 | G16 | ARCHITECTURE.md's layer table | `docs.test.mjs` test `G16: the layer table names #440's, #391's and #379's six modules` | the table names a layer for `instruction.ts`, `instructions.ts`, `skill.ts`, `skills.ts`, `runbook.ts` and `runbooks.ts` — scoped to those six; the four other unnamed modules predate this change — **added in review round 1** |
 | G17 | `renderMachineBlock` (`connect.ts`) gains the render bullet after the `self context` bullet | `docs.test.mjs` test `G17: the machine-level block points every session at \`self instruction render\`, in all three agent files` | `self connect --global` into a scratch machine holding `.claude`, `.codex` and `.gemini` writes the whole bullet into `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` alike — **added for #445** |
+| G18 | `docs/reference/cli.md`'s `instructionTokens` bullet | `docs.test.mjs` test `G18: the cli.md instructionTokens bullet names the cap, the default, per render target, and both --demote paths` | the bullet names `instructionTokens`, the default `2,000`, "per render target", and the remedy sentence matching `INSTRUCTION_REMEDY` (`state.ts`) — retiring one or superseding one with a shorter text, or raising `instructionTokens` in `config.json`; reworded to say `instruction add` refuses `--demote` by the parser (the flag is not declared) where a raw `state add --label instruction --demote <id>` refuses it by name — **added in review round: #446, round 2 (D-16)** |
 
 ## What this table does not cover
 
@@ -962,3 +1014,8 @@ verb; the structure gate's thresholds as `test/structure.mjs` declares them.
   That is a proxy for "the only change is the root usage listing": the fixture
   is regenerated and committed, so a byte that moved somewhere the word does not
   appear is caught by the golden comparison beside it, not by G3.
+- **An orphaned artifact past the instruction cap.** `entityAdd` (`state.ts`)
+  resolves `--artifact` before the cap gate that can still refuse the add, so
+  `state add --label instruction --artifact <path>` past `instructionTokens`
+  registers the artifact and then refuses the record it was for — pre-existing
+  (#238), not introduced by #446, and no cell drives it.

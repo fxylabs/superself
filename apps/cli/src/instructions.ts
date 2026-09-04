@@ -108,7 +108,11 @@ export function instructionCharacters(entities: EntityState[], home: string, tar
 
 // What the instructions inside one retention tier cost it — the number the CLI
 // subtracts from `tierCharacters`, which keeps counting them because the fold
-// does not change and `FOLD_VERSION` stays at 1.
+// does not change and `FOLD_VERSION` stays at 1. The fold's own count and
+// `holdsSeat`'s (`state.ts`) are the same rule stated twice, for the two
+// places that need it: this one corrects `tierCharacters`' sum after the
+// fact, `holdsSeat` excludes an instruction from a demotion's credit before
+// one is ever summed.
 export function instructionTierCharacters(entities: EntityState[], home: string,
     target: string, exposure: Exposure): number
 {
