@@ -40,6 +40,7 @@ import { EntityState, entityCharacters } from "@superself/fold";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import {
+    chargesInstructionCap,
     INSTRUCTION_KINDS,
     INSTRUCTION_LABEL,
     instructionLines,
@@ -48,7 +49,7 @@ import {
     instructionSections,
     isInstruction
 } from "./instructions.js";
-import { buildModel, renderedIn, workspaceModels } from "./model.js";
+import { buildModel, ProjectModel, renderedIn, workspaceModels } from "./model.js";
 import {
     ProjectContext,
     readScopes,
@@ -317,11 +318,17 @@ function requireInstructionTargets(ctx: ProjectContext, wanted: string[]): void
 function instructionList(): CommandOutput
 {
     const ctx = requireProject(process.cwd());
-    const sections = instructionSections(renderedIn(workspaceModels(ctx.storeDir, ctx.project), ctx.project));
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const sections = instructionSections(renderedIn(models, ctx.project));
     const entries = sections.flatMap((section) => section.entries);
+    // The share is what the cap holds, so the empty wording answers to the cap
+    // and not to the render: a store whose instructions are all demoted has a
+    // manual and is told its size, and only a store holding none at all is
+    // told to record one (§D-6).
+    const shares = shareLines(ctx, models);
     return [{
         kind: "listing",
-        rows: entries.length === 0 ? [EMPTY_LISTING] : [...listRows(sections), ...shareLines(ctx, entries)],
+        rows: shares.length === 0 ? [EMPTY_LISTING] : [...listRows(sections), ...shares],
         total: entries.length,
         noun: "instruction"
     }];
@@ -349,24 +356,27 @@ function scopeWord(entity: EntityState): string
 // The estimate note closes the last line and no other: it is one statement
 // about where every number on the page came from, and saying it once per tier
 // would print the same sentence twice for a store holding both.
-function shareLines(ctx: ProjectContext, entries: EntityState[]): string[]
+function shareLines(ctx: ProjectContext, models: ProjectModel[]): string[]
 {
     const config = readStoreConfig(ctx.storeDir);
     const scale = tokenScale(config);
     const cap = retentionCaps(config).instruction;
     const shares = [ctx.project, "workspace"]
-        .map((target) => ({ target, held: entries.filter((entry) => tierTarget(entry, ctx.project) === target) }))
+        .map((target) => ({ target, held: chargedAt(models, target) }))
         .filter((group) => group.held.length > 0)
         .map((group) => shareLine(scopeLabel(group.target, ctx.project), group.held, cap, scale));
     return shares.map((share, at) => at === shares.length - 1 ? share + estimateNote(scale) : share);
 }
 
-// Which instruction cap an instruction that renders here charges: the
-// workspace one, or the one of the project this listing is about. `rendersIn`
-// already settled that no third answer reaches this list.
-function tierTarget(entity: EntityState, here: string): string
+// What one instruction cap holds, through `chargesInstructionCap` — the same
+// predicate `state.ts` sums the cap itself with, so the share and the number a
+// cap refusal states can never be two answers about one store. Counted off the
+// records rather than off the rows above it: a demoted instruction prints no
+// row and is still in the manual the cap bounds (§D-6).
+function chargedAt(models: ProjectModel[], target: string): EntityState[]
 {
-    return entity.scope === "workspace" ? "workspace" : here;
+    return models.flatMap((model) => model.entities
+        .filter((item) => chargesInstructionCap(item, model.slug, target)));
 }
 
 // What the line counts is the instructions and nothing else (§D-6) — which is
@@ -375,8 +385,10 @@ function tierTarget(entity: EntityState, here: string): string
 // leaving a reader to read it in: what the full tier beside it holds is a
 // different figure, and its own cap refusal is where that one is stated.
 //
-// Only what renders here is listed, so the share is of the instructions this
-// project is handed, not of every instruction the store holds.
+// The line prints wherever the cap holds anything, at whatever exposure, so a
+// store whose instructions are all demoted still reads its manual's size; only
+// the instructions charging a cap this project stands in are counted — its own
+// and the workspace's — never every instruction the store holds.
 function shareLine(scope: string, held: EntityState[], cap: number, scale: TokenScale): string
 {
     const tokens = tokensOf(held.reduce((sum, entry) => sum + entityCharacters(entry), 0), scale.perCharacter);

@@ -75,9 +75,14 @@ const SOURCE_LABELS: Record<EntitySource, true> = {
 // The same rule as `isInstruction`, read off the labels a payload is about to
 // be written with. One rule, two readings — the label is the mechanism, so
 // `instruction add` and a raw `state add --label instruction` are judged alike.
+//
+// `Object.hasOwn` rather than `in`: a label is caller-supplied text, and `in`
+// walks `Object.prototype`, so `--label constructor` — or `toString`, or
+// `__proto__` — would read as a preset source and take the record out of the
+// instruction cap into a retention tier no `sourceOf` ever puts it in.
 export function labelsAreInstruction(labels: string[]): boolean
 {
-    return labels.includes(INSTRUCTION_LABEL) && !labels.some((label) => label in SOURCE_LABELS);
+    return labels.includes(INSTRUCTION_LABEL) && !labels.some((label) => Object.hasOwn(SOURCE_LABELS, label));
 }
 
 /* ── what the instruction cap holds (#446) ─────────────────────────── */

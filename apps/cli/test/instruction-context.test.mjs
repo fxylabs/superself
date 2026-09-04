@@ -66,6 +66,14 @@ async function unit(ground)
     return workIdIn((await must(ground.box, ground.demo, ["work", "add", "compile a packet"])).out);
 }
 
+// A project that has recorded nothing has no log file yet, and the cells that
+// count "nothing was recorded" start there.
+function events(ws, slug = "demo")
+{
+    const file = join(ws, ".superself", "projects", slug, "log.jsonl");
+    return !existsSync(file) ? [] : readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+}
+
 function setCaps(ws, caps)
 {
     const file = join(ws, ".superself", "config.json");
@@ -455,8 +463,10 @@ test("F16: a confirm past the instruction cap is refused against that cap, and n
     const proposed = await add(ground, "tests run on the dev VM", "rule", ["--proposed"]);
     await add(ground, "a PR gets a cross-model review", "rule");
     setCaps(ground.ws, { instructionTokens: 40 });
+    const before = events(ground.ws).length;
     const refused = await ground.self(["state", "confirm", proposed]);
     assert.notEqual(refused.code, 0);
+    assert.equal(events(ground.ws).length, before);
     assert.ok(refused.out.includes("confirming this would put the project instructions over their cap"
         + " (30 of 40 tokens held) — retire or supersede one with a shorter text,"
         + " or raise instructionTokens in config.json"), refused.out);

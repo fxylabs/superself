@@ -379,7 +379,9 @@ test("E21: every placement of an instruction lands, naming no demotion; --demote
             assert.equal(landed.out.includes(word), false, `${move.join(" ")} named ${word}:\n${landed.out}`);
         }
     }
+    const before = events(ground.ws, "demo").length;
     const refused = await ground.self(["state", "place", id, "--exposure", "full", "--demote", seated]);
     assert.notEqual(refused.code, 0);
     assert.match(refused.out, /--demote frees room in the capped tier a record enters — this command enters none/);
+    assert.equal(events(ground.ws, "demo").length, before);
 });

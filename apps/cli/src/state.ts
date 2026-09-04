@@ -753,12 +753,17 @@ function capOf(caps: RetentionCaps, tier: CapKind): number
 }
 
 // Whether a record holds a seat in one cap — the fold's own answer for a
-// retention tier, and the exposure-blind one for the instruction cap.
+// retention tier, and the exposure-blind one for the instruction cap. The
+// tier branch subtracts the instructions for the same reason `heldCharacters`
+// does (#446 §D-14): the fold still counts a full-exposure instruction into
+// the full tier, and a record the tier's own usage never charges cannot be
+// credited to it either — a `--supersedes` or `--demote` target that freed
+// room nothing was paying for would admit a write the cap should refuse.
 function holdsSeat(entity: EntityState, owner: string, at: CappedTier): boolean
 {
     return at.tier === "instruction"
         ? chargesInstructionCap(entity, owner, at.target)
-        : occupiesTier(entity, owner, at.target, at.tier);
+        : occupiesTier(entity, owner, at.target, at.tier) && !isInstruction(entity);
 }
 
 // How a tier reads to the caller: the project it ran in is "project", exactly
@@ -810,8 +815,19 @@ type UsageReader = (target: string, tier: CapKind) => number;
 function usageReader(models: ProjectModel[], scale: TokenScale): UsageReader
 {
     const cache = new Map<string, number>();
-    return (target, tier) => remembered(cache, `${target} ${tier}`, () => tokensOf(
-        models.reduce((sum, model) => sum + heldCharacters(model, target, tier), 0), scale.perCharacter));
+    return (target, tier) =>
+    {
+        const key = `${target} ${tier}`;
+        const found = cache.get(key);
+        if (found !== undefined)
+        {
+            return found;
+        }
+        const total = tokensOf(models.reduce((sum, model) => sum + heldCharacters(model, target, tier), 0),
+            scale.perCharacter);
+        cache.set(key, total);
+        return total;
+    };
 }
 
 // The fold counts every full-exposure record into a retention tier, including
@@ -827,18 +843,6 @@ function heldCharacters(model: ProjectModel, target: string, tier: CapKind): num
     }
     return tierCharacters(model.entities, model.slug, target, tier)
         - instructionTierCharacters(model.entities, model.slug, target, tier);
-}
-
-function remembered(cache: Map<string, number>, key: string, compute: () => number): number
-{
-    const found = cache.get(key);
-    if (found !== undefined)
-    {
-        return found;
-    }
-    const total = compute();
-    cache.set(key, total);
-    return total;
 }
 
 // Every cap is measured the same way now (#213, #446), so one check answers
@@ -888,16 +892,21 @@ function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
             + `\`--demote <id>\` (that ${tier} entity moves to ${DEMOTION_TARGET[tier]}), or demote `
             + `first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
     }
-    requireDemotionsEnough(demotions, tier, cap, held + adding, scale);
+    requireDemotionsEnough(demotions, entered, cap, held + adding, scale);
 }
 
 // The named demotions were the caller's answer to the refusal above, so what
 // they still owe is stated as one number rather than as the whole contract a
 // second time. `wanted` is what the tier would hold with this text in it.
-function requireDemotionsEnough(demotions: Placed[], tier: CapKind, cap: number,
+function requireDemotionsEnough(demotions: Placed[], entered: CappedTier, cap: number,
     wanted: number, scale: TokenScale): void
 {
-    const freed = tokensOf(demotions.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
+    // Through `holdsSeat`, never the raw characters: what a demotion frees is
+    // what the tier was charging for it, and the tier charges nothing for an
+    // instruction (#446 §D-14).
+    const leaving = demotions.filter((item) => holdsSeat(item.entity, item.owner, entered));
+    const freed = tokensOf(leaving.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
+    const tier = entered.tier;
     if (wanted - freed > cap)
     {
         throw new CliError(`still ${wanted - freed - cap} tokens over the ${cap}-token ${tier} cap `
@@ -1119,6 +1128,16 @@ function requireDemotable(records: Placed[], value: string, entered: CappedTier,
 
 function requireDemotableSeat(found: Placed, entered: CappedTier, here: string): void
 {
+    // Named before the scope and exposure clauses because it is the reason
+    // neither of them can answer: an instruction charges no retention tier, so
+    // where it sits and at what exposure say nothing about the room demoting it
+    // would free (#446 §D-14). A project-scoped full one passes both clauses
+    // and frees zero, which is the credit this refusal exists to refuse.
+    if (isInstruction(found.entity))
+    {
+        throw new CliError(`--demote ${found.entity.id} is an instruction — it charges no retention tier, so `
+            + "demoting it frees no room; name a goal, decision, convention or index record with --demote");
+    }
     const at = scopeLabel(scopeTarget(found.entity, found.owner), here);
     const into = scopeLabel(entered.target, here);
     if (at !== into)
