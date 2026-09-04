@@ -620,6 +620,12 @@ export interface StoreConfig
     // refuses, however far over a legacy store stands.
     fullTokens?: number;
     indexTokens?: number;
+    // The instruction cap (#446), in the same tokens and per the same render
+    // target, and deliberately not a retention tier: `instruction render`
+    // prints every instruction whole however far the store stands over the
+    // caps above, so an instruction charges none of them and is bounded here
+    // instead. Sized for a manual rather than for a context window.
+    instructionTokens?: number;
     // What one character costs in tokens, and whether that number came from a
     // real measurement or is still the shipped estimate. `self tokens` records
     // an observation; nothing else writes these.
@@ -654,17 +660,28 @@ export interface RetentionCaps
 {
     full: number;
     index: number;
+    // Beside the tiers rather than one of them: what an instruction charges,
+    // at any exposure, per render target (#446 §D-14).
+    instruction: number;
 }
 
 // The defaults are user-ruled (2026-08-05): the full tier ≤ 1,000 tokens, the
 // index tier ≤ 12,000. The index cap is deliberately the larger — a cap
 // measures what a store may hold, the render budget measures what one render
 // may spend, and the budget already cuts rows and leaves a pointer to the rest.
+// The instruction cap is larger again, at 2,000: it bounds a manual read whole
+// rather than a projection read under a budget, so the number that governs it
+// is how much standing direction a session can be handed, not how much of one
+// render a section may spend (#446 §D-14).
 // A malformed configured value reads as the default rather than as no cap.
 export function retentionCaps(config: StoreConfig): RetentionCaps
 {
     requireTokenCaps(config);
-    return { full: capValue(config.fullTokens, 1_000), index: capValue(config.indexTokens, 12_000) };
+    return {
+        full: capValue(config.fullTokens, 1_000),
+        index: capValue(config.indexTokens, 12_000),
+        instruction: capValue(config.instructionTokens, 2_000)
+    };
 }
 
 function capValue(value: number | undefined, fallback: number): number

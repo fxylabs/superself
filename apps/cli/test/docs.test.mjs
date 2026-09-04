@@ -548,3 +548,26 @@ test("G17: the machine-level block points every session at `self instruction ren
             `${dir}/${name} does not carry the instruction-render bullet:\n${content}`);
     }
 });
+
+/* ── #446 round 2: the instructionTokens bullet, pinned ────────────── */
+
+// Cell G18 of docs/maintainers/case-tables/440-instructions.md.
+
+test("G18: the cli.md instructionTokens bullet names the cap, the default, per render target, and both --demote paths", () =>
+{
+    const page = tier1("docs/reference/cli.md");
+    const bullet = page.match(/- `instructionTokens`[\s\S]*?(?=\n- `)/);
+    assert.ok(bullet !== null, "cli.md lost its instructionTokens bullet");
+    const text = bullet[0];
+    assert.ok(text.includes("`instructionTokens`"), text);
+    assert.ok(text.includes("default 2,000"), text);
+    assert.ok(text.includes("per render target"), text);
+    // The two refusal paths #446 round 2 told apart: `instruction add` never
+    // declares the flag, so the parser refuses it; a raw `state add` reaches
+    // it and is refused by name instead.
+    assert.ok(text.includes("`instruction add` declares no such flag"), text);
+    assert.ok(text.includes("unknown option '--demote'"), text);
+    assert.ok(text.includes("state add\n  --label instruction --demote <id>` is refused by name"), text);
+    assert.ok(text.includes("retiring one or superseding one with a shorter"), text);
+    assert.ok(text.includes("raising `instructionTokens` in `config.json`"), text);
+});

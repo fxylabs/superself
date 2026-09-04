@@ -40,6 +40,13 @@ import { validDate } from "./dates.js";
 import { bareRevisionRefusal, requireRevision } from "./gitutil.js";
 import { writtenBy } from "./human.js";
 import { entityId, wrongKindHint } from "./ids.js";
+import {
+    chargesInstructionCap,
+    instructionCharacters,
+    instructionTierCharacters,
+    isInstruction,
+    labelsAreInstruction
+} from "./instructions.js";
 import { claimMoves, claimNote, noteSessionSeen } from "./ledger.js";
 import { sessionToken } from "./machine.js";
 import { buildModel, ProjectModel, projectsHolding, workspaceModels } from "./model.js";
@@ -375,13 +382,18 @@ function entityAdd(values: CommandInput<typeof ADD_OPTIONS>["values"], positiona
     const exposure = values.exposure !== undefined ? validExposure(values.exposure) : row?.exposure ?? "index";
     const target = values.scope === undefined ? ctx.project : validScope(ctx, values.scope);
     const id = entityId();
-    // Resolved before the record's own event and after every other check: a
-    // path registers here, and an artifact nothing points at is the only
-    // wreckage a failure between the two can leave (#238).
+    // Resolved before the record's own event, but before the cap gate below
+    // it too: a path registers here whichever way that gate answers, so a
+    // refusal past the instruction cap can still leave an artifact nothing
+    // points at (#238) — the "does not cover" list says why nothing closes it.
     const artifact = resolveArtifactRef(ctx, values.artifact);
     const payload = { ...addPayload(models[0], id, text, exposure, writtenScope(target, ctx.project), values, row),
         ...(artifact === undefined ? {} : { artifact }), ...reserved };
-    const demotions = admittingDemotions(ctx, models, values, tierOf(target, exposure),
+    // Read back off the composed payload, where `reserved` has already spread
+    // last, so the cap judged is the one the record the log will hold charges
+    // (#446 §D-14): the label is the mechanism, so the raw verb follows it.
+    const entered = chargedCap(labelsAreInstruction(payloadLabels(payload)), target, exposure);
+    const demotions = admittingDemotions(ctx, models, values, entered,
         usageText, entityCharacters({ text, artifact }), supersedeTargets(payload));
     recordAdd(ctx, models, { id, text, payload }, demotions, values.proposed === true);
     return [{ kind: "receipt", text: id }];
@@ -404,6 +416,14 @@ function recordAdd(ctx: ProjectContext, models: ProjectModel[],
             ...demotionEvents(demotions, record.id, proposed)
         ],
         `${record.id} ${record.text}`);
+}
+
+// The labels a composed payload will be written with, read back where the cap
+// has to be judged before the record exists — the same read-back
+// `payloadArtifact` (`entities.ts`) does for a reference.
+function payloadLabels(payload: Record<string, unknown>): string[]
+{
+    return Array.isArray(payload.labels) ? payload.labels.filter((label) => typeof label === "string") : [];
 }
 
 // What the cap gate reads off a verb's arguments: the demotions it names, and
@@ -445,7 +465,7 @@ function vacatedTokens(records: Placed[], displaced: string[], entered: CappedTi
         return 0;
     }
     const leaving = records.filter((item) => displaced.includes(item.entity.id)
-        && occupiesTier(item.entity, item.owner, entered.target, entered.tier));
+        && holdsSeat(item.entity, item.owner, entered));
     return tokensOf(leaving.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
 }
 
@@ -703,15 +723,48 @@ function requireDemotionWhy(entity: EntityState, exposure: Exposure | undefined,
 // renders nothing, so an add into it, and any move toward it, passes without
 // gating. That open floor is what keeps a store past its caps from ever
 // wedging: a chain of demotions always terminates at search.
+//
+// `instruction` is the third cap and not a tier at all (#446 §D-14): it is
+// charged by exposure-blind occupancy, so nothing demotes into or out of it,
+// and it stands here only because every cap is read, compared and refused
+// through one path.
+type CapKind = "full" | "index" | "instruction";
+
 interface CappedTier
 {
     target: string;
-    tier: "full" | "index";
+    tier: CapKind;
 }
 
 export function tierOf(target: string, exposure: Exposure): CappedTier | undefined
 {
     return exposure === "search" ? undefined : { target, tier: exposure };
+}
+
+// The cap a record charges at a target: its own if it is an instruction, at any
+// exposure, and the retention tier of its exposure otherwise.
+function chargedCap(instruction: boolean, target: string, exposure: Exposure): CappedTier | undefined
+{
+    return instruction ? { target, tier: "instruction" } : tierOf(target, exposure);
+}
+
+function capOf(caps: RetentionCaps, tier: CapKind): number
+{
+    return { full: caps.full, index: caps.index, instruction: caps.instruction }[tier];
+}
+
+// Whether a record holds a seat in one cap — the fold's own answer for a
+// retention tier, and the exposure-blind one for the instruction cap. The
+// tier branch subtracts the instructions for the same reason `heldCharacters`
+// does (#446 §D-14): the fold still counts a full-exposure instruction into
+// the full tier, and a record the tier's own usage never charges cannot be
+// credited to it either — a `--supersedes` or `--demote` target that freed
+// room nothing was paying for would admit a write the cap should refuse.
+function holdsSeat(entity: EntityState, owner: string, at: CappedTier): boolean
+{
+    return at.tier === "instruction"
+        ? chargesInstructionCap(entity, owner, at.target)
+        : occupiesTier(entity, owner, at.target, at.tier) && !isInstruction(entity);
 }
 
 // How a tier reads to the caller: the project it ran in is "project", exactly
@@ -733,6 +786,15 @@ export function scopeLabel(target: string, here: string): string
 // nothing.
 function enteredTier(found: Placed, exposure: Exposure | undefined, target: string | undefined): CappedTier | undefined
 {
+    // A placement of an instruction enters nothing (#446 §D-16): no retention
+    // tier holds it at any exposure, and the instruction cap counts it whatever
+    // its exposure, so no move `state place` can spell changes what a cap sees.
+    // A `--scope` move does change which target's manual holds it, and is
+    // admitted anyway — the table's "does not cover" list says why.
+    if (isInstruction(found.entity))
+    {
+        return undefined;
+    }
     const from = scopeTarget(found.entity, found.owner);
     const to = target ?? from;
     const toExposure = exposure ?? found.entity.exposure;
@@ -743,13 +805,13 @@ function enteredTier(found: Placed, exposure: Exposure | undefined, target: stri
     return { target: to, tier: toExposure };
 }
 
-// What a capped tier currently holds, in tokens. A tier belongs to the project
-// a record renders in rather than to the store that holds it (#181 D1), so
-// every tier — a project's and the workspace's alike — is counted across every
-// registered store, and only the count travels. Characters are summed across
-// stores and converted once, so the answer never drifts by a rounding per
-// store. Memoized per invocation: the folds behind it are not free.
-type UsageReader = (target: string, tier: "full" | "index") => number;
+// What a cap currently holds, in tokens. A cap belongs to the project a record
+// renders in rather than to the store that holds it (#181 D1), so every one —
+// a project's and the workspace's alike — is counted across every registered
+// store, and only the count travels. Characters are summed across stores and
+// converted once, so the answer never drifts by a rounding per store. Memoized
+// per invocation: the folds behind it are not free.
+type UsageReader = (target: string, tier: CapKind) => number;
 
 function usageReader(models: ProjectModel[], scale: TokenScale): UsageReader
 {
@@ -757,22 +819,36 @@ function usageReader(models: ProjectModel[], scale: TokenScale): UsageReader
     return (target, tier) =>
     {
         const key = `${target} ${tier}`;
-        const cached = cache.get(key);
-        if (cached !== undefined)
+        const found = cache.get(key);
+        if (found !== undefined)
         {
-            return cached;
+            return found;
         }
-        const characters = models.reduce((sum, model) =>
-            sum + tierCharacters(model.entities, model.slug, target, tier), 0);
-        const total = tokensOf(characters, scale.perCharacter);
+        const total = tokensOf(models.reduce((sum, model) => sum + heldCharacters(model, target, tier), 0),
+            scale.perCharacter);
         cache.set(key, total);
         return total;
     };
 }
 
-// Both capped tiers are measured the same way now (#213), so one check answers
-// for both: what the tier holds in tokens, what this text adds, and what the
-// named demotions free. `vacates` is what the write itself frees there, and
+// The fold counts every full-exposure record into a retention tier, including
+// the instructions, and #446 changes no fold — so the subtraction is here,
+// where the cap is read. What a tier holds is what it holds minus the
+// instructions sitting in it; what the instruction cap holds is those records
+// at every exposure, at the target they render in.
+function heldCharacters(model: ProjectModel, target: string, tier: CapKind): number
+{
+    if (tier === "instruction")
+    {
+        return instructionCharacters(model.entities, model.slug, target);
+    }
+    return tierCharacters(model.entities, model.slug, target, tier)
+        - instructionTierCharacters(model.entities, model.slug, target, tier);
+}
+
+// Every cap is measured the same way now (#213, #446), so one check answers
+// for all three: what the cap holds in tokens, what this text adds, and what
+// the named demotions free. `vacates` is what the write itself frees there, and
 // `proposed` marks a record that holds no seat until a person confirms it.
 function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTier | undefined,
     adding: number, demotions: Placed[], scale: TokenScale, here: string, vacates: number, proposed: boolean): void
@@ -781,8 +857,8 @@ function requireRoom(usage: UsageReader, caps: RetentionCaps, entered: CappedTie
     {
         return;
     }
-    const cap = entered.tier === "full" ? caps.full : caps.index;
-    requireTokenRoom(usage, entered, cap, tokensOf(adding, scale.perCharacter), demotions, scale, here, vacates, proposed);
+    requireTokenRoom(usage, entered, capOf(caps, entered.tier), tokensOf(adding, scale.perCharacter),
+        demotions, scale, here, vacates, proposed);
 }
 
 // One refusal hands the whole contract: the cap, what the tier holds, what
@@ -805,19 +881,53 @@ function requireTokenRoom(usage: UsageReader, entered: CappedTier, cap: number,
     {
         return;
     }
+    const tier = entered.tier;
+    if (tier === "instruction")
+    {
+        throw new CliError(instructionCapRefusal(entered.target, held, cap, adding, scale, here));
+    }
     if (demotions.length === 0)
     {
-        throw new CliError(`the ${scopeLabel(entered.target, here)} ${entered.tier} tier holds ${held} of ${cap} tokens `
+        throw new CliError(`the ${scopeLabel(entered.target, here)} ${tier} tier holds ${held} of ${cap} tokens `
             + `and this text adds ${adding} more${estimateNote(scale)} — name what demotes: pass `
-            + `\`--demote <id>\` (that ${entered.tier} entity moves to ${DEMOTION_TARGET[entered.tier]}), or demote `
-            + `first with \`self state place <id> --exposure ${DEMOTION_TARGET[entered.tier]} --why "<reason>"\``);
+            + `\`--demote <id>\` (that ${tier} entity moves to ${DEMOTION_TARGET[tier]}), or demote `
+            + `first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
     }
-    const freed = tokensOf(demotions.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
-    if (held - freed + adding > cap)
+    requireDemotionsEnough(demotions, entered, cap, held + adding, scale);
+}
+
+// The named demotions were the caller's answer to the refusal above, so what
+// they still owe is stated as one number rather than as the whole contract a
+// second time. `wanted` is what the tier would hold with this text in it.
+function requireDemotionsEnough(demotions: Placed[], entered: CappedTier, cap: number,
+    wanted: number, scale: TokenScale): void
+{
+    // Through `holdsSeat`, never the raw characters: what a demotion frees is
+    // what the tier was charging for it, and the tier charges nothing for an
+    // instruction (#446 §D-14).
+    const leaving = demotions.filter((item) => holdsSeat(item.entity, item.owner, entered));
+    const freed = tokensOf(leaving.reduce((sum, item) => sum + entityCharacters(item.entity), 0), scale.perCharacter);
+    const tier = entered.tier;
+    if (wanted - freed > cap)
     {
-        throw new CliError(`still ${held - freed + adding - cap} tokens over the ${cap}-token ${entered.tier} cap `
+        throw new CliError(`still ${wanted - freed - cap} tokens over the ${cap}-token ${tier} cap `
             + `after the named demotion${demotions.length === 1 ? "" : "s"}, which free ${freed} — name more with --demote`);
     }
+}
+
+// The room is made among the rules (#446 §D-15). Nothing here names
+// `--demote`, a goal, an objective or a convention: an instruction charges no
+// retention tier, so demoting a strategic record frees nothing it can use, and
+// advertising that was the defect #446 reported. The two remedies that do work
+// are a shorter successor and a larger cap, and the refusal states both.
+const INSTRUCTION_REMEDY = "retire or supersede one with a shorter text,"
+    + " or raise instructionTokens in config.json";
+
+function instructionCapRefusal(target: string, held: number, cap: number,
+    adding: number, scale: TokenScale, here: string): string
+{
+    return `instructions hold ${held} of the ${cap}-token ${scopeLabel(target, here)} instruction cap `
+        + `and this text adds ${adding} more — ${INSTRUCTION_REMEDY}${estimateNote(scale)}`;
 }
 
 // Said once wherever a token number is printed, so a reader always knows
@@ -851,13 +961,14 @@ function requireDemotionRoom(usage: UsageReader, caps: RetentionCaps, target: st
     }
 }
 
-// One seat movement a confirm would apply: where the record stands now (a
-// proposed record stands nowhere), and where it would sit — scope and
-// exposure both, because a pending placement can move either.
+// One seat movement a confirm would apply: the cap the record sits in now (a
+// proposed record sits in none), and the cap it would sit in — scope and
+// exposure both, because a pending placement can move either. A move into
+// nothing is a move toward `search`, which no cap bounds.
 interface SeatMove
 {
-    from?: { target: string; exposure: Exposure };
-    to: { target: string; exposure: Exposure };
+    from?: CappedTier;
+    to?: CappedTier;
     characters: number;
 }
 
@@ -865,21 +976,22 @@ function unitMoves(unit: ConfirmMember[], home: string): SeatMove[]
 {
     return unit.flatMap((member): SeatMove[] =>
     {
-        const characters = entityCharacters(member.entity);
         const entity = member.entity;
+        const characters = entityCharacters(entity);
         const at = scopeTarget(entity, home);
+        const instruction = isInstruction(entity);
         if (member.kind === "record")
         {
-            return [{ to: { target: at, exposure: entity.exposure }, characters }];
+            return [{ to: chargedCap(instruction, at, entity.exposure), characters }];
         }
-        const pending = entity.pending;
-        const to = {
-            target: pending?.scope === undefined ? at : scopeTarget({ scope: pending.scope }, home),
-            exposure: pending?.exposure ?? entity.exposure
-        };
-        return to.target === at && to.exposure === entity.exposure
+        // A placement moves an instruction's seat nowhere a cap can see it, the
+        // same way `state place` on one is ungated (#446 §D-16).
+        const pending = instruction ? undefined : entity.pending;
+        const target = pending?.scope === undefined ? at : scopeTarget({ scope: pending.scope }, home);
+        const exposure = pending?.exposure ?? entity.exposure;
+        return target === at && exposure === entity.exposure
             ? []
-            : [{ from: { target: at, exposure: entity.exposure }, to, characters }];
+            : [{ from: tierOf(at, entity.exposure), to: tierOf(target, exposure), characters }];
     });
 }
 
@@ -892,45 +1004,72 @@ function unitMoves(unit: ConfirmMember[], home: string): SeatMove[]
 function requireUnitRoom(usage: UsageReader, caps: RetentionCaps, unit: ConfirmMember[], scale: TokenScale, home: string): void
 {
     const moves = unitMoves(unit, home);
-    for (const target of new Set(moves.map((move) => move.to.target)))
+    for (const at of enteredCaps(moves))
     {
-        for (const tier of ["full", "index"] as const)
+        requireTierRoom(usage, caps, at, moves, scale, home);
+    }
+}
+
+// Every cap the unit enters, once each: one check per (target, cap) pair the
+// moves land in, and none at all for a unit that only drains.
+function enteredCaps(moves: SeatMove[]): CappedTier[]
+{
+    const entered = new Map<string, CappedTier>();
+    for (const move of moves)
+    {
+        if (move.to !== undefined)
         {
-            requireTierRoom(usage, caps, { target, tier }, moves, scale, home);
+            entered.set(`${move.to.target} ${move.to.tier}`, move.to);
         }
     }
+    return [...entered.values()];
 }
 
 function requireTierRoom(usage: UsageReader, caps: RetentionCaps, at: CappedTier, moves: SeatMove[], scale: TokenScale, here: string): void
 {
     const weigh = (move: SeatMove): number => tokensOf(move.characters, scale.perCharacter);
-    const inTier = (seat: { target: string; exposure: Exposure } | undefined): boolean =>
-        seat !== undefined && seat.target === at.target && seat.exposure === at.tier;
+    const inTier = (seat: CappedTier | undefined): boolean =>
+        seat !== undefined && seat.target === at.target && seat.tier === at.tier;
     const entering = moves.filter((move) => inTier(move.to)).reduce((sum, move) => sum + weigh(move), 0);
-    if (entering === 0)
-    {
-        return;
-    }
     const held = usage(at.target, at.tier);
-    const cap = at.tier === "full" ? caps.full : caps.index;
+    const cap = capOf(caps, at.tier);
     const leaving = moves.filter((move) => inTier(move.from)).reduce((sum, move) => sum + weigh(move), 0);
-    if (held + entering - leaving > cap)
+    if (entering > 0 && held + entering - leaving > cap)
     {
-        throw new CliError(`confirming this would put the ${scopeLabel(at.target, here)} ${at.tier} tier over its cap `
-            + `(${held} of ${cap} tokens held)${estimateNote(scale)} — `
-            + `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[at.tier]} --why "<reason>"\``);
+        throw new CliError(confirmRefusal(at, held, cap, scale, here));
     }
+}
+
+// The confirm's half of §D-15, in `requireTierRoom`'s own family: the same
+// clause opens it and the same numbers close it, and only the remedy differs —
+// an instruction's room is made among the instructions.
+function confirmRefusal(at: CappedTier, held: number, cap: number, scale: TokenScale, here: string): string
+{
+    const scope = scopeLabel(at.target, here);
+    const tier = at.tier;
+    if (tier === "instruction")
+    {
+        return `confirming this would put the ${scope} instructions over their cap `
+            + `(${held} of ${cap} tokens held)${estimateNote(scale)} — ${INSTRUCTION_REMEDY}`;
+    }
+    return `confirming this would put the ${scope} ${tier} tier over its cap `
+        + `(${held} of ${cap} tokens held)${estimateNote(scale)} — `
+        + `free room first with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``;
 }
 
 // A demotion named where no cap demands one would demote a record as a side
 // effect of an unrelated command — refused toward the direct verb instead.
 function requireDemotionsNeeded(demotions: Placed[], entered: CappedTier, here: string): void
 {
-    if (demotions.length > 0)
+    const tier = entered.tier;
+    // The instruction cap names no demotion at all, so `demotionsFor` has
+    // already refused one; this gate answers for the tiers alone.
+    if (demotions.length === 0 || tier === "instruction")
     {
-        throw new CliError(`the ${scopeLabel(entered.target, here)} ${entered.tier} tier is not over its cap — nothing needs to demote; `
-            + `demote directly with \`self state place <id> --exposure ${DEMOTION_TARGET[entered.tier]} --why "<reason>"\``);
+        return;
     }
+    throw new CliError(`the ${scopeLabel(entered.target, here)} ${tier} tier is not over its cap — nothing needs to demote; `
+        + `demote directly with \`self state place <id> --exposure ${DEMOTION_TARGET[tier]} --why "<reason>"\``);
 }
 
 function demotionsFor(records: Placed[], raw: string[], entered: CappedTier | undefined,
@@ -943,6 +1082,14 @@ function demotionsFor(records: Placed[], raw: string[], entered: CappedTier | un
     if (entered === undefined)
     {
         throw new CliError("--demote frees room in the capped tier a record enters — this command enters none, so nothing needs to demote");
+    }
+    // Reachable only from a raw `state add --label instruction --demote <id>`:
+    // `instruction add` declares no such flag (#446 §D-16), and a placement of
+    // an instruction enters no cap, so it takes the refusal above instead.
+    if (entered.tier === "instruction")
+    {
+        throw new CliError("--demote frees room in a retention tier and an instruction charges none — retire or"
+            + " supersede an instruction with a shorter text, or raise instructionTokens in config.json");
     }
     const demotions = raw.map((value) => requireDemotable(records, value, entered, exclude, usage, here));
     for (const [index, item] of demotions.entries())
@@ -967,6 +1114,15 @@ function requireDemotable(records: Placed[], value: string, entered: CappedTier,
     if (entity.id === exclude)
     {
         throw new CliError(`--demote ${entity.id} names the record being placed — another entity has to free the room`);
+    }
+    // Named before the proposed and lifecycle clauses below, and every clause
+    // in requireDemotableSeat: what kind of record this is settles the answer
+    // regardless of what its lifecycle says, and a proposed or withdrawn
+    // instruction is still an instruction (#446 §D-16, round 2).
+    if (isInstruction(entity))
+    {
+        throw new CliError(`--demote ${entity.id} is an instruction — it charges no retention tier, so `
+            + "demoting it frees no room; name a goal, decision, convention or index record with --demote");
     }
     if (entity.status === "proposed")
     {

@@ -364,18 +364,20 @@ test("C22: the payload's entry ids and their order equal the rendered lines, sec
     assert.deepEqual(payload.sections.flatMap((section) => section.entries.map((entry) => `- ${entry.text}`)), lines);
 });
 
-test("C23: a store far over its full cap renders whole while the add stays gated", async () =>
+test("C23: a store far over its instruction cap renders whole while the add stays gated", async () =>
 {
     const ground = await floor();
     await add(ground, "tests run on the dev VM", "rule");
     await add(ground, "a PR gets a cross-model review before merge", "rule");
-    setCaps(ground.ws, { fullTokens: 20 });
+    setCaps(ground.ws, { instructionTokens: 20 });
     const out = await render(ground);
     assert.match(out, /- tests run on the dev VM/);
     assert.match(out, /- a PR gets a cross-model review before merge/);
     const refused = await ground.self(["instruction", "add", "one more standing rule", "--kind", "rule"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project full tier holds \d+ of 20 tokens and this text adds \d+ more/);
+    assert.ok(refused.out.includes("instructions hold 66 of the 20-token project instruction cap"
+        + " and this text adds 22 more — retire or supersede one with a shorter text,"
+        + " or raise instructionTokens in config.json"), refused.out);
 });
 
 test("C24: the render is never spliced into `self context` — its head appears nowhere there", async () =>

@@ -176,17 +176,25 @@ test("E8: promotion back to full needs no --why, and returns the record to the r
     assert.equal((await context(ground)).includes("tests run on the dev VM"), false);
 });
 
-test("E9: a promotion into a full tier at its cap is refused with the numbers", async () =>
+test("E9: a full tier at its cap refuses no instruction's promotion, and still refuses a record's", async () =>
 {
     const ground = await floor();
     const id = await add(ground, "tests run on the dev VM", "rule");
     await must(ground.box, ground.demo, ["state", "place", id, "--exposure", "index", "--why", "narrower"]);
+    // A 32-token full tier holding one 30-token ordinary record, and a full
+    // instruction beside it the tier does not hold.
     await add(ground, "a PR gets a cross-model review", "rule");
+    await must(ground.box, ground.demo, ["state", "add", "a PR gets a cross-model review", "--exposure", "full"]);
+    const waiting = entityIn(receiptIn((await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary index note here"])).out));
     setCaps(ground.ws, { fullTokens: 32 });
-    const refused = await ground.self(["state", "place", id, "--exposure", "full"]);
+    await must(ground.box, ground.demo, ["state", "place", id, "--exposure", "full"]);
+    assert.match(await render(ground), /- tests run on the dev VM/);
+    const refused = await ground.self(["state", "place", waiting, "--exposure", "full"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project full tier holds 30 of 32 tokens and this text adds 23 more/);
-    assert.match(refused.out, /name what demotes/);
+    assert.ok(refused.out.includes("the project full tier holds 30 of 32 tokens and this text adds 27 more"),
+        refused.out);
+    assert.equal(refused.out.includes("holds 53"), false, refused.out);
 });
 
 test("E10: a scope move is not a demotion — no --why, and it then renders everywhere", async () =>
@@ -292,23 +300,34 @@ test("E17: a foreign workspace record resolves here and its event lands in its o
 // refusal a demotion into a crowded index tier actually raises is
 // `requireTokenRoom`'s, and its advertised line is the one asserted below;
 // see the amendment note under group E's table.
-test("E18: a demotion into a crowded index tier is refused, and the advertised line frees the room", async () =>
+test("E18: an instruction demotes into a crowded index tier; an ordinary record's is still refused", async () =>
 {
     const ground = await floor();
     const moving = await add(ground, "tests run on the dev VM", "rule");
     const seated = entityIn(receiptIn((await must(ground.box, ground.demo,
         ["state", "add", "an index note"])).out));
+    const ordinary = entityIn(receiptIn((await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record", "--exposure", "full"])).out));
     setCaps(ground.ws, { indexTokens: 30 });
-    const refused = await ground.self(["state", "place", moving, "--exposure", "index",
-        "--why", "narrower than it looked"]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project index tier holds 13 of 30 tokens and this text adds 23 more/);
-    assert.match(refused.out, /demote first with `self state place <id> --exposure search --why "<reason>"`/);
-    await must(ground.box, ground.demo, ["state", "place", seated, "--exposure", "search", "--why", "quieter"]);
+    // The instruction charges no index tier either, so the crowded tier does
+    // not see it arrive.
     await must(ground.box, ground.demo, ["state", "place", moving, "--exposure", "index",
         "--why", "narrower than it looked"]);
     assert.match((await must(ground.box, ground.demo, ["state", "show", moving])).out, /placement: project · index/);
     assert.equal((await render(ground)).includes("tests run on the dev VM"), false);
+    // `requireTokenRoom` still answers for a record the tier does hold, and its
+    // advertised line still frees the room.
+    const refused = await ground.self(["state", "place", ordinary, "--exposure", "index",
+        "--why", "narrower than it looked"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes("the project index tier holds 13 of 30 tokens and this text adds 23 more"),
+        refused.out);
+    assert.match(refused.out, /demote first with `self state place <id> --exposure search --why "<reason>"`/);
+    await must(ground.box, ground.demo, ["state", "place", seated, "--exposure", "search", "--why", "quieter"]);
+    await must(ground.box, ground.demo, ["state", "place", ordinary, "--exposure", "index",
+        "--why", "narrower than it looked"]);
+    assert.match((await must(ground.box, ground.demo, ["state", "show", ordinary])).out,
+        /placement: project · index/);
 });
 
 test("E19: undoing the demotion's `entity.placed` puts the instruction back in the render", async () =>
@@ -323,4 +342,46 @@ test("E19: undoing the demotion's `entity.placed` puts the instruction back in t
     assert.match(await render(ground), /- tests run on the dev VM/);
     assert.match((await must(ground.box, ground.demo, ["state", "show", id])).out, /placement: project · full/);
     assert.equal((await context(ground)).includes("tests run on the dev VM"), false);
+});
+
+/* ── group E: no cap sees a placement of an instruction (#446) ─────── */
+
+test("E20: a promotion lands with the full tier and the instruction cap both at their limits", async () =>
+{
+    const ground = await floor();
+    const id = await add(ground, "tests run on the dev VM", "rule");
+    await must(ground.box, ground.demo, ["state", "place", id, "--exposure", "index", "--why", "narrower"]);
+    await must(ground.box, ground.demo, ["state", "add", "an ordinary full record here", "--exposure", "full"]);
+    // 28 tokens of full tier at a cap of 28, and 23 of instruction cap at 23:
+    // the promotion moves neither, because the full tier does not hold an
+    // instruction and the instruction cap counts one at any exposure.
+    setCaps(ground.ws, { fullTokens: 28, instructionTokens: 23 });
+    await must(ground.box, ground.demo, ["state", "place", id, "--exposure", "full"]);
+    assert.match(await render(ground), /- tests run on the dev VM/);
+    assert.match((await must(ground.box, ground.demo, ["state", "show", id])).out, /placement: project · full/);
+});
+
+test("E21: every placement of an instruction lands, naming no demotion; --demote has nothing to free", async () =>
+{
+    const ground = await floor();
+    await sibling(ground, "other");
+    const id = await add(ground, "tests run on the dev VM", "rule");
+    const seated = entityIn(receiptIn((await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record here", "--exposure", "full"])).out));
+    setCaps(ground.ws, { fullTokens: 1, indexTokens: 1, instructionTokens: 1 });
+    for (const move of [["--priority", "5"], ["--scope", "workspace"],
+        ["--exposure", "index", "--why", "narrower than it looked"]])
+    {
+        const landed = await must(ground.box, ground.demo, ["state", "place", id, ...move]);
+        assert.equal(landed.code, 0);
+        for (const word of ["--demote", "goal", "objective", "convention", "over its cap"])
+        {
+            assert.equal(landed.out.includes(word), false, `${move.join(" ")} named ${word}:\n${landed.out}`);
+        }
+    }
+    const before = events(ground.ws, "demo").length;
+    const refused = await ground.self(["state", "place", id, "--exposure", "full", "--demote", seated]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /--demote frees room in the capped tier a record enters — this command enters none/);
+    assert.equal(events(ground.ws, "demo").length, before);
 });

@@ -14,7 +14,16 @@
 // row in `BUILTIN_ROWS`, and no `@superself/fold` change: `FOLD_VERSION`
 // stays at 1.**
 
-import { EntityState, isCurrent, orderEntities } from "@superself/fold";
+import {
+    entityCharacters,
+    EntitySource,
+    EntityState,
+    Exposure,
+    EXPOSURES,
+    isCurrent,
+    occupiesTier,
+    orderEntities
+} from "@superself/fold";
 import { oneLine } from "./style.js";
 
 // The one label this surface records under. Never a row in `BUILTIN_ROWS` —
@@ -52,6 +61,68 @@ export const INSTRUCTION_HEAD = "# Instructions — follow; do not restate.";
 export function isInstruction(entity: EntityState): boolean
 {
     return entity.labels.includes(INSTRUCTION_LABEL) && entity.source === undefined;
+}
+
+// The labels the fold reads as an `EntitySource`, written as a total map over
+// that union rather than as a list: a kind added to `SOURCE_LABELS`
+// (`entities.ts`) fails this build instead of silently widening what counts as
+// an instruction. Needed because the cap gate judges a record before it exists,
+// where there is no folded `source` to read (#446 §D-14).
+const SOURCE_LABELS: Record<EntitySource, true> = {
+    goal: true, decision: true, convention: true, objective: true, milestone: true, work: true
+};
+
+// The same rule as `isInstruction`, read off the labels a payload is about to
+// be written with. One rule, two readings — the label is the mechanism, so
+// `instruction add` and a raw `state add --label instruction` are judged alike.
+//
+// `Object.hasOwn` rather than `in`: a label is caller-supplied text, and `in`
+// walks `Object.prototype`, so `--label constructor` — or `toString`, or
+// `__proto__` — would read as a preset source and take the record out of the
+// instruction cap into a retention tier no `sourceOf` ever puts it in.
+export function labelsAreInstruction(labels: string[]): boolean
+{
+    return labels.includes(INSTRUCTION_LABEL) && !labels.some((label) => Object.hasOwn(SOURCE_LABELS, label));
+}
+
+/* ── what the instruction cap holds (#446) ─────────────────────────── */
+
+// Whether a record charges the instruction cap at a render target: a live
+// instruction that renders there, at **any** exposure. The cap bounds the
+// store's manual, and a demoted instruction is still one of its records —
+// where a retention tier asks which projection a record is in, this asks
+// whether the manual holds it at all (§D-14).
+export function chargesInstructionCap(entity: EntityState, home: string, target: string): boolean
+{
+    return isInstruction(entity)
+        && EXPOSURES.some((exposure) => occupiesTier(entity, home, target, exposure));
+}
+
+// What the instruction cap holds at one target, in characters. Summed through
+// `occupiesTier` rather than beside it, so what this counts and what a tier
+// counts can never drift into two answers about one record.
+export function instructionCharacters(entities: EntityState[], home: string, target: string): number
+{
+    return sumCharacters(entities.filter((item) => chargesInstructionCap(item, home, target)));
+}
+
+// What the instructions inside one retention tier cost it — the number the CLI
+// subtracts from `tierCharacters`, which keeps counting them because the fold
+// does not change and `FOLD_VERSION` stays at 1. The fold's own count and
+// `holdsSeat`'s (`state.ts`) are the same rule stated twice, for the two
+// places that need it: this one corrects `tierCharacters`' sum after the
+// fact, `holdsSeat` excludes an instruction from a demotion's credit before
+// one is ever summed.
+export function instructionTierCharacters(entities: EntityState[], home: string,
+    target: string, exposure: Exposure): number
+{
+    return sumCharacters(entities.filter((item) => isInstruction(item)
+        && occupiesTier(item, home, target, exposure)));
+}
+
+function sumCharacters(entities: EntityState[]): number
+{
+    return entities.reduce((sum, item) => sum + entityCharacters(item), 0);
 }
 
 function instructionKind(entity: EntityState): InstructionKind | undefined

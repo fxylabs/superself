@@ -20,10 +20,12 @@
 //   R4  supersession is held to instructions by resolving the target through
 //       the instruction predicate before the add — the kinds the fold reads as
 //       `"entity"` only; a convention keeps the fold's own refusal
-//   R5  an instruction charges the retention caps like any record, and no cap
-//       gains an exemption for it
-//   R6  the listing closes with one cap-share line per occupied tier, so a
-//       workspace manual and a project set are never added together
+//   R5  an instruction charges no retention tier at any exposure and is
+//       bounded by `instructionTokens` instead — its own cap, per render
+//       target, 2,000 tokens by default (#446 §D-14); `--demote` leaves the
+//       verb with the tier it freed room in (§D-16)
+//   R6  the listing closes with one cap-share line per occupied render target,
+//       so a workspace manual and a project set are never added together
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -331,38 +333,58 @@ test("A22: --proposed records a proposal that renders nowhere until a person con
         + ` (confirm with \`self state confirm ${id}\`)`), context);
 });
 
-test("A23: an add past the full cap is refused with the numbers and the demote shape", async () =>
+// The cell #446 turns over: this state used to refuse the add, and the tier it
+// seeds is one the record never enters.
+test("A23: a full tier at its cap does not see the add at all, and is unmoved by it", async () =>
 {
     const ground = await floor();
+    // A 30-token full tier, 28 of it already spent by an ordinary record.
+    await must(ground.box, ground.demo, ["state", "add", "an ordinary full record here", "--exposure", "full"]);
     setCaps(ground.ws, { fullTokens: 30 });
-    await add(ground, "tests run on the dev VM", "rule");
-    const refused = await ground.self(["instruction", "add", "a second standing rule here", "--kind", "rule"]);
+    const id = await add(ground, "a second standing rule here", "rule");
+    assert.equal(recordOf(ground.ws, id).type, "entity.confirmed");
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out,
+        /- a second standing rule here/);
+    // The tier's held count is the ordinary record's alone, before and after.
+    const refused = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project full tier holds 23 of 30 tokens and this text adds 27 more/);
-    assert.match(refused.out, /name what demotes: pass `--demote <id>` \(that full entity moves to index\)/);
-    assert.match(refused.out, /self state place <id> --exposure index --why "<reason>"/);
+    assert.match(refused.out, /the project full tier holds 28 of 30 tokens/);
 });
 
-test("A24: past the cap, --proposed --demote lands the pair and moves nothing yet", async () =>
+test("A24: past the instruction cap --proposed records the proposal, and the confirm is what gates", async () =>
 {
     const ground = await floor();
-    setCaps(ground.ws, { fullTokens: 30 });
-    const seated = await add(ground, "tests run on the dev VM", "rule");
-    const added = await add(ground, "a second standing rule here", "rule", ["--proposed", "--demote", seated]);
-    assert.match((await must(ground.box, ground.demo, ["state", "show", seated])).out, /placement: project · full/);
+    setCaps(ground.ws, { instructionTokens: 30 });
+    await add(ground, "tests run on the dev VM", "rule");
+    const added = await add(ground, "a second standing rule here", "rule", ["--proposed"]);
+    assert.equal(recordOf(ground.ws, added).type, "entity.proposed");
     const context = (await must(ground.box, ground.demo, ["context"])).out;
     assert.ok(context.includes(`proposed entity ${added}`), context);
-    assert.ok(context.includes(`proposed placement of ${seated}`), context);
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["state", "confirm", added]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /confirming this would put the project instructions over their cap/);
+    assert.equal(events(ground.ws).length, before);
 });
 
-test("A25: --demote under the cap is refused — nothing needs to move", async () =>
+test("A25: under the instruction cap the add lands, naming no demotion and no other record kind", async () =>
 {
     const ground = await floor();
-    const seated = await add(ground, "tests run on the dev VM", "rule");
-    const refused = await ground.self(["instruction", "add", "x", "--kind", "rule", "--demote", seated]);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project full tier is not over its cap — nothing needs to demote/);
-    assert.match(refused.out, /demote directly with `self state place <id> --exposure index --why "<reason>"`/);
+    // The two records the old refusal advertised demoting, filling the full
+    // tier to its cap: this is the state #446 reported, and the add lands.
+    await must(ground.box, ground.demo, ["state", "add", "ship the thing", "--label", "goal", "--exposure", "full"]);
+    await must(ground.box, ground.demo,
+        ["state", "add", "review before merge", "--label", "convention", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 33 });
+    const landed = await must(ground.box, ground.demo,
+        ["instruction", "add", "tests run on the dev VM", "--kind", "rule"]);
+    assert.equal(landed.code, 0);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out,
+        /- tests run on the dev VM/);
+    for (const word of ["--demote", "goal", "objective", "convention", "full tier"])
+    {
+        assert.equal(landed.out.includes(word), false, `the receipt named ${word}:\n${landed.out}`);
+    }
 });
 
 test("A26: an add outside every registered project is refused, and records nothing", async () =>
@@ -387,16 +409,21 @@ test("A27: an add inside an archived project's checkout is refused by the append
     assert.equal(events(ground.ws, "other").length, before);
 });
 
-test("A28: a --workspace add charges the workspace tier, leaving the project tier where it was", async () =>
+test("A28: a --workspace add lands, and the project tier's refusal counts neither instruction", async () =>
 {
     const ground = await floor();
     await sibling(ground, "other");
+    // 24 tokens of ordinary full record, and two instructions the tier does not
+    // hold: the project-scoped 23 and the workspace-scoped 14.
+    await must(ground.box, ground.demo, ["state", "add", "one ordinary record here", "--exposure", "full"]);
     setCaps(ground.ws, { fullTokens: 25 });
     await add(ground, "tests run on the dev VM", "rule");
     await add(ground, "reviewed first", "rule", ["--workspace"]);
     const refused = await ground.self(["state", "add", "another project-scoped full rule", "--exposure", "full"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project full tier holds 23 of 25 tokens/);
+    assert.match(refused.out, /the project full tier holds 24 of 25 tokens/);
+    assert.equal(refused.out.includes("holds 47"), false, refused.out);
+    assert.equal(refused.out.includes("holds 61"), false, refused.out);
 });
 
 test("A29: the append mints one ordinary entity event and no storage of its own", async () =>
@@ -505,7 +532,233 @@ test("A35: padding and a trailing newline record trimmed; a mid-text tab is refu
     assert.equal(events(ground.ws).length, before + 2);
 });
 
+/* ── group A: the instruction cap (#446) ───────────────────────────── */
+
+// The wording §D-15 decides, asserted whole rather than by a word a wrong
+// refusal would also carry: the tier refusal it replaces holds "holds", "of",
+// "tokens" and "this text adds <m> more" too, and differs only in which cap it
+// names and which remedy it offers.
+const CAP_REFUSAL = (held, cap, adding, scope = "project") =>
+    `instructions hold ${held} of the ${cap}-token ${scope} instruction cap and this text adds ${adding}`
+    + " more — retire or supersede one with a shorter text, or raise instructionTokens in config.json";
+
+test("A36: an add past the instruction cap is refused against that cap, and records nothing", async () =>
+{
+    const ground = await floor();
+    setCaps(ground.ws, { instructionTokens: 30 });
+    await add(ground, "tests run on the dev VM", "rule");
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["instruction", "add", "a second standing rule here", "--kind", "rule"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(CAP_REFUSAL(23, 30, 27)), refused.out);
+    assert.equal(events(ground.ws).length, before);
+    for (const word of ["--demote", "goal", "objective", "convention", "full tier", "index tier"])
+    {
+        assert.equal(refused.out.includes(word), false, `the refusal named ${word}:\n${refused.out}`);
+    }
+});
+
+test("A37: --demote is not an option this verb has, and the help page names it nowhere", async () =>
+{
+    const ground = await floor();
+    const seated = await add(ground, "tests run on the dev VM", "rule");
+    const refused = await ground.self(["instruction", "add", "x", "--kind", "rule", "--demote", seated]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.out, /unknown option '--demote' — run `self instruction --help`/);
+    const page = (await must(ground.box, ground.demo, ["help", "instruction"])).out;
+    assert.equal(page.includes("--demote"), false, page);
+});
+
+test("A38: the instruction add lands at a full cap, and the tier's own refusal counts neither", async () =>
+{
+    const ground = await floor();
+    // A 60-token full tier holding one 50-token ordinary record, and one
+    // instruction the tier does not hold.
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 60 });
+    await add(ground, "tests run on the dev VM", "rule");
+    const refused = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes("the project full tier holds 50 of 60 tokens and this text adds 20 more"),
+        refused.out);
+});
+
+test("A39: raising instructionTokens in config.json admits the add the cap refused", async () =>
+{
+    const ground = await floor();
+    setCaps(ground.ws, { instructionTokens: 30 });
+    await add(ground, "tests run on the dev VM", "rule");
+    assert.notEqual((await ground.self(
+        ["instruction", "add", "a second standing rule here", "--kind", "rule"])).code, 0);
+    setCaps(ground.ws, { instructionTokens: 200 });
+    const id = await add(ground, "a second standing rule here", "rule");
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out,
+        /- a second standing rule here/);
+    assert.equal(recordOf(ground.ws, id).type, "entity.confirmed");
+});
+
+test("A40: the raw verb follows the label — a labelled add lands at a full tier's cap", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 60 });
+    const landed = await must(ground.box, ground.demo,
+        ["state", "add", "a raw note the label makes an instruction", "--label", "instruction", "--exposure", "full"]);
+    assert.equal(landed.code, 0);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out,
+        /- a raw note the label makes an instruction/);
+});
+
+test("A41: the raw verb is judged by the instruction cap, and a preset label beside it is not", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    setCaps(ground.ws, { instructionTokens: 30, fullTokens: 60 });
+    await add(ground, "tests run on the dev VM", "rule");
+    const refused = await ground.self(
+        ["state", "add", "a raw note the label makes one", "--label", "instruction", "--exposure", "full"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(CAP_REFUSAL(23, 30, 30)), refused.out);
+    // `sourceOf` reads the convention label, so `source !== undefined` and the
+    // predicate rejects it: the same text is a convention, and it is refused by
+    // the full tier instead — the two caps, told apart by one label.
+    const convention = await ground.self(["state", "add", "a raw note the label makes one",
+        "--label", "instruction", "--label", "convention", "--exposure", "full"]);
+    assert.notEqual(convention.code, 0);
+    assert.ok(convention.out.includes("the project full tier holds 50 of 60 tokens and this text adds 30 more"),
+        convention.out);
+});
+
+test("A42: --demote on a raw instruction add is refused toward the room that does exist", async () =>
+{
+    const ground = await floor();
+    setCaps(ground.ws, { instructionTokens: 30, fullTokens: 1000 });
+    const seated = await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record here", "--exposure", "full"]);
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["state", "add", "a raw note the label makes one", "--label", "instruction",
+        "--exposure", "full", "--demote", entityIn(receiptIn(seated.out))]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes("--demote frees room in a retention tier and an instruction charges none"
+        + " — retire or supersede an instruction with a shorter text, or raise instructionTokens in config.json"),
+        refused.out);
+    assert.equal(events(ground.ws).length, before);
+});
+
+// The credit side of the same ruling. A43 names `--demote`, A44 `--supersedes`;
+// both once handed a tier the characters of a record that tier does not hold,
+// which admitted a write the cap had already refused and left the tier reading
+// over its own cap afterwards.
+test("A43: --demote naming an instruction is refused — it charges no tier, so it frees nothing", async () =>
+{
+    const ground = await floor();
+    // The state #446 reported, plus the instruction the old credit paid with:
+    // a 60-token full tier holding one 50-token ordinary record, and a 23-token
+    // instruction the tier does not hold.
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    const rule = await add(ground, "tests run on the dev VM", "rule");
+    setCaps(ground.ws, { fullTokens: 60 });
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["state", "add", "a raw note the label makes one",
+        "--exposure", "full", "--demote", rule]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(`--demote ${rule} is an instruction — it charges no retention tier, so demoting`
+        + " it frees no room; name a goal, decision, convention or index record with --demote"), refused.out);
+    assert.equal(events(ground.ws).length, before);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out, /- tests run on the dev VM/);
+});
+
+test("A44: a --supersedes instruction credits the tier nothing, so the cap still refuses", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    const rule = await add(ground, "tests run on the dev VM", "rule");
+    setCaps(ground.ws, { fullTokens: 60 });
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["state", "add", "a raw note the label makes one",
+        "--exposure", "full", "--supersedes", rule]);
+    assert.notEqual(refused.code, 0);
+    // 50 of 60, not 27: the number is the tier's own, and the instruction the
+    // successor would displace was never in it to be credited back.
+    assert.ok(refused.out.includes("the project full tier holds 50 of 60 tokens and this text adds 30 more"),
+        refused.out);
+    assert.equal(events(ground.ws).length, before);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out, /- tests run on the dev VM/);
+});
+
+test("A45: a label named after an Object.prototype key is no preset source", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 60, instructionTokens: 30 });
+    await add(ground, "tests run on the dev VM", "rule");
+    // `constructor` reads as a source only to a membership test that walks the
+    // prototype chain; `sourceOf` folds the record with `source === undefined`,
+    // so the gate that judged it before it existed has to agree.
+    const refused = await ground.self(["state", "add", "a raw note the label makes one",
+        "--label", "instruction", "--label", "constructor", "--exposure", "full"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(CAP_REFUSAL(23, 30, 30)), refused.out);
+    setCaps(ground.ws, { fullTokens: 60, instructionTokens: 200 });
+    await must(ground.box, ground.demo, ["state", "add", "a raw note the label makes one",
+        "--label", "instruction", "--label", "constructor", "--exposure", "full"]);
+    const render = (await must(ground.box, ground.demo, ["instruction", "render"])).out;
+    assert.match(render, /## Unclassified\n- a raw note the label makes one/);
+});
+
+// #446 round 2's should: kind before lifecycle. A proposed instruction is
+// still an instruction, so naming one with `--demote` took the "still
+// proposed" wording before the hoist — a remedy that led nowhere, since
+// confirming it would only reach A43's refusal next.
+test("A46: --demote naming a proposed instruction is refused as an instruction, not as still proposed", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    const proposed = await add(ground, "tests run on the dev VM", "rule", ["--proposed"]);
+    setCaps(ground.ws, { fullTokens: 60 });
+    const before = events(ground.ws).length;
+    const refused = await ground.self(["state", "add", "a raw note the label makes one",
+        "--exposure", "full", "--demote", proposed]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(`--demote ${proposed} is an instruction — it charges no retention tier, so demoting`
+        + " it frees no room; name a goal, decision, convention or index record with --demote"), refused.out);
+    assert.equal(refused.out.includes("is still proposed"), false, refused.out);
+    assert.equal(events(ground.ws).length, before);
+});
+
+// #446 round 2's optional: `holdsSeat`'s tier branch and `heldCharacters`'s
+// subtraction are one rule stated twice, and this pins them equal with two of
+// each kind seeded, so the equality is not a coincidence of one instruction
+// and one ordinary record — driven through a tier refusal's numbers, as A28
+// and A38 are.
+test("A47: heldCharacters and holdsSeat agree on what a tier holds, with two instructions and two ordinary records", async () =>
+{
+    const ground = await floor();
+    await must(ground.box, ground.demo,
+        ["state", "add", "the first ordinary full record here", "--exposure", "full"]);
+    await must(ground.box, ground.demo,
+        ["state", "add", "a second ordinary full record here too", "--exposure", "full"]);
+    setCaps(ground.ws, { fullTokens: 80 });
+    await add(ground, "tests run on the dev VM", "rule");
+    await add(ground, "reviewed before merge always", "rule");
+    // 35 + 38 = 73: the sum of entityCharacters over exactly the records
+    // holdsSeat reads as holding a seat — the two ordinary ones, neither
+    // instruction — and the number heldCharacters reports for the tier.
+    const refused = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes("the project full tier holds 73 of 80 tokens and this text adds 20 more"),
+        refused.out);
+});
+
 /* ── group B: reading the list ─────────────────────────────────────── */
+
 
 test("B1: a project with no instructions says so and names the verb that records one", async () =>
 {
@@ -566,7 +819,7 @@ test("B5: an unmeasured store says its token total is an estimate, and how to me
     const ground = await floor();
     await add(ground, "tests run on the dev VM", "rule");
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^instructions hold \d+ tokens — \d+ of the \d+-token project full cap \(\d+%\)/m);
+    assert.match(out, /^instructions hold \d+ tokens — \d+ of the \d+-token project instruction cap \(\d+%\)/m);
     assert.match(out, / \(estimated at [0-9.]+ tokens per character; `self tokens` records a measurement\)$/m);
 });
 
@@ -576,11 +829,11 @@ test("B6: once `self tokens` records a measurement the estimate note is gone", a
     await add(ground, "tests run on the dev VM", "rule");
     await must(ground.box, ground.demo, ["tokens", "10", "40"]);
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^instructions hold \d+ tokens — \d+ of the \d+-token project full cap \(\d+%\)$/m);
+    assert.match(out, /^instructions hold \d+ tokens — \d+ of the \d+-token project instruction cap \(\d+%\)$/m);
     assert.equal(out.includes("estimated at"), false, out);
 });
 
-test("B7: the closing line states the share of the full cap the instructions occupy", async () =>
+test("B7: the closing line states the share of the instruction cap the instructions occupy", async () =>
 {
     const ground = await floor();
     const other = await sibling(ground, "other");
@@ -591,18 +844,20 @@ test("B7: the closing line states the share of the full cap the instructions occ
     // the record's log sits.
     await add(ground, "tests run on the dev VM", "rule", ["--scope", "other"]);
     const out = (await must(ground.box, other, ["instruction"])).out;
-    assert.match(out, /^instructions hold 23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
-    assert.equal(out.includes("other full cap"), false, out);
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 2000-token project instruction cap \(1%\)$/m);
+    assert.equal(out.includes("other instruction cap"), false, out);
+    assert.equal(out.includes("full cap"), false, out);
 });
 
-test("B8: a raised fullTokens is the cap the share is against", async () =>
+test("B8: a raised instructionTokens is the cap the share is against", async () =>
 {
     const ground = await floor();
-    setCaps(ground.ws, { fullTokens: 4000 });
+    setCaps(ground.ws, { instructionTokens: 4000, fullTokens: 1000 });
     await add(ground, "tests run on the dev VM", "rule");
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^instructions hold 23 tokens — 23 of the 4000-token project full cap \(1%\)$/m);
-    assert.equal(out.includes("1000-token"), false);
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 4000-token project instruction cap \(1%\)$/m);
+    assert.equal(out.includes("2000-token"), false, out);
+    assert.equal(out.includes("1000-token"), false, out);
 });
 
 test("B9: a project set and a workspace manual get one share line each, neither counting the other", async () =>
@@ -613,9 +868,9 @@ test("B9: a project set and a workspace manual get one share line each, neither 
     await add(ground, "tests run on the dev VM", "rule");
     await add(ground, "reviewed before merge", "rule", ["--workspace"]);
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^instructions hold 23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
-    assert.match(out, /^instructions hold 21 tokens — 21 of the 1000-token workspace full cap \(2%\)$/m);
-    assert.equal(out.includes("44 tokens"), false, "the two tiers were added together");
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 2000-token project instruction cap \(1%\)$/m);
+    assert.match(out, /^instructions hold 21 tokens — 21 of the 2000-token workspace instruction cap \(1%\)$/m);
+    assert.equal(out.includes("44 tokens"), false, "the two caps were added together");
 });
 
 test("B10: --json on the listing is refused by name, as a JSON envelope on stdout", async () =>
@@ -726,14 +981,15 @@ test("B18: the share line counts the instructions alone, not what the tier holds
     await must(ground.box, ground.demo,
         ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
     const out = (await must(ground.box, ground.demo, ["instruction"])).out;
-    assert.match(out, /^instructions hold 23 tokens — 23 of the 1000-token project full cap \(2%\)$/m);
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 2000-token project instruction cap \(1%\)$/m);
     assert.equal(out.includes("an ordinary full record"), false, out);
-    // What the tier itself holds is the larger number, and the line above is
-    // not it: the cap refusal is where tier occupancy is stated.
-    setCaps(ground.ws, { fullTokens: 80 });
+    // What the full tier holds is the ordinary record's 50 — not the 73 the two
+    // of them made when an instruction charged the tier, and not the 23 above.
+    setCaps(ground.ws, { fullTokens: 60 });
     const refused = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project full tier holds 73 of 80 tokens/);
+    assert.match(refused.out, /the project full tier holds 50 of 60 tokens/);
+    assert.equal(refused.out.includes("holds 73"), false, refused.out);
 });
 
 test("B19: the estimate note closes the last share line and is said once", async () =>
@@ -749,6 +1005,11 @@ test("B19: the estimate note closes the last share line and is said once", async
     assert.match(shares.at(-1),
         / \(estimated at [0-9.]+ tokens per character; `self tokens` records a measurement\)$/);
     assert.match(shares[0], /\(\d+%\)$/);
+    // The cap each line is a share of, as B5–B9 and B21 assert it: without
+    // this the cell passes against the pre-#446 build, which printed the same
+    // two lines against the full tier.
+    assert.match(shares[0], /of the \d+-token project instruction cap/);
+    assert.match(shares.at(-1), /of the \d+-token workspace instruction cap/);
 });
 
 test("B20: an unknown leaf under `instruction` is refused with the branch usage", async () =>
@@ -758,6 +1019,77 @@ test("B20: an unknown leaf under `instruction` is refused with the branch usage"
     assert.notEqual(refused.code, 0);
     assert.match(refused.out,
         /usage: self instruction \| add "<text>" --kind rule\|tool\|procedure \| render \[--project <slug>\]/);
+});
+
+test("B21: each occupied target gets its own instruction-cap share, counting nothing else", async () =>
+{
+    const ground = await floor();
+    await sibling(ground, "other");
+    setCaps(ground.ws, {});
+    await add(ground, "tests run on the dev VM", "rule");
+    await add(ground, "reviewed first", "rule", ["--workspace"]);
+    // One ordinary full record in each of the two tiers the instructions do
+    // not charge, so a share that read tier occupancy would print a larger one.
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    await must(ground.box, ground.demo, ["state", "add", "a workspace-scoped ordinary record",
+        "--exposure", "full", "--scope", "workspace"]);
+    const out = (await must(ground.box, ground.demo, ["instruction"])).out;
+    assert.match(out, /^instructions hold 23 tokens — 23 of the 2000-token project instruction cap \(1%\)$/m);
+    assert.match(out, /^instructions hold 14 tokens — 14 of the 2000-token workspace instruction cap \(1%\)$/m);
+    assert.equal(out.split("instructions hold ").length - 1, 2, out);
+});
+
+test("B22: neither tier's refusal counts an instruction, at full or at index", async () =>
+{
+    const ground = await floor();
+    setCaps(ground.ws, {});
+    const demoted = await add(ground, "tests run on the dev VM", "rule");
+    await add(ground, "reviewed first", "rule");
+    await must(ground.box, ground.demo, ["state", "place", demoted, "--exposure", "index", "--why", "narrower"]);
+    await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary full record that is not an instruction", "--exposure", "full"]);
+    await must(ground.box, ground.demo, ["state", "add", "an index note"]);
+    setCaps(ground.ws, { fullTokens: 60, indexTokens: 20 });
+    const atFull = await ground.self(["state", "add", "one more full record", "--exposure", "full"]);
+    assert.notEqual(atFull.code, 0);
+    assert.ok(atFull.out.includes("the project full tier holds 50 of 60 tokens"), atFull.out);
+    const atIndex = await ground.self(["state", "add", "one more index note"]);
+    assert.notEqual(atIndex.code, 0);
+    assert.ok(atIndex.out.includes("the project index tier holds 13 of 20 tokens"), atIndex.out);
+});
+
+test("B23: the share is what the cap holds, at every exposure, and prints where nothing renders", async () =>
+{
+    const ground = await floor();
+    setCaps(ground.ws, {});
+    const quiet = await add(ground, "a demoted standing rule here", "rule");
+    const replaced = await add(ground, "the wording tests run on the dev VM replaces", "rule");
+    const loud = await add(ground, "tests run on the dev VM", "rule", ["--supersedes", replaced]);
+    await add(ground, "a proposal that never confirms", "rule", ["--proposed"]);
+    const withdrawn = await add(ground, "withdrawn before it ever counted", "rule");
+    await must(ground.box, ground.demo, ["state", "retract", withdrawn, "--why", "no longer holds"]);
+    await must(ground.box, ground.demo, ["state", "place", quiet, "--exposure", "index", "--why", "narrower"]);
+    // 28 + 23: the demoted one prints no row and is still in the manual. The
+    // proposal, the superseded predecessor and the retracted one left the
+    // store's manual the moment they did, exactly as B12 states — this is
+    // where that number is proved, and B12's row now points here truthfully.
+    const listed = (await must(ground.box, ground.demo, ["instruction"])).out;
+    assert.match(listed, /^instructions hold 51 tokens — 51 of the 2000-token project instruction cap \(3%\)$/m);
+    assert.equal(listed.includes("a demoted standing rule here"), false, listed);
+    // The same 51 the cap's own refusal states — one number, two surfaces.
+    setCaps(ground.ws, { instructionTokens: 60 });
+    const refused = await ground.self(["instruction", "add", "a second standing rule here", "--kind", "rule"]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes(CAP_REFUSAL(51, 60, 27)), refused.out);
+    // Every instruction demoted: the manual still costs 51, so the line that
+    // states its size prints and the one that says none is recorded does not.
+    await must(ground.box, ground.demo, ["state", "place", loud, "--exposure", "index", "--why", "narrower"]);
+    const empty = (await must(ground.box, ground.demo, ["instruction"])).out;
+    assert.match(empty, /^instructions hold 51 tokens — 51 of the 60-token project instruction cap \(85%\)$/m);
+    assert.equal(empty.includes("no instructions recorded"), false, empty);
+    assert.match(empty, /every instruction is demoted — self context carries them as index lines;/);
+    assert.match(empty, /instruction render prints none/);
 });
 
 /* ── group G: the one surface cell that needs a store ──────────────── */

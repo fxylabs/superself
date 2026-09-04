@@ -149,6 +149,10 @@ test("G4: the placement topic states that a full-exposure instruction is outside
     const page = self(["help", "placement"]);
     assert.ok(page.includes("A full-exposure instruction is the one record placement keeps out of"), page);
     assert.ok(page.includes("budget and renders whole through `self instruction render`."), page);
+    // #446: the topic states which cap does bound an instruction, since the
+    // paragraph below it is about the retention caps that no longer do.
+    assert.ok(page.includes("Instructions charge no retention tier at any exposure"), page);
+    assert.ok(page.includes("`instruction add` is bounded by `instructionTokens` (default 2,000)"), page);
 });
 
 test("G10: `self help instruction` resolves through commandUsage — syntax, detail and the requirement", () =>

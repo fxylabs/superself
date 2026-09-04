@@ -66,6 +66,14 @@ async function unit(ground)
     return workIdIn((await must(ground.box, ground.demo, ["work", "add", "compile a packet"])).out);
 }
 
+// A project that has recorded nothing has no log file yet, and the cells that
+// count "nothing was recorded" start there.
+function events(ws, slug = "demo")
+{
+    const file = join(ws, ".superself", "projects", slug, "log.jsonl");
+    return !existsSync(file) ? [] : readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+}
+
 function setCaps(ws, caps)
 {
     const file = join(ws, ".superself", "config.json");
@@ -208,18 +216,24 @@ test("D12: over both caps, the index rows and the render both print whole and th
     const ground = await floor();
     await add(ground, "tests run on the dev VM", "rule");
     await add(ground, "a PR gets a cross-model review", "rule");
+    const demoted = await add(ground, "one demoted instruction", "rule");
+    await must(ground.box, ground.demo, ["state", "place", demoted, "--exposure", "index", "--why", "narrower"]);
     await must(ground.box, ground.demo, ["state", "add", "the first index note"]);
     await must(ground.box, ground.demo, ["state", "add", "the second index note"]);
-    setCaps(ground.ws, { fullTokens: 20, indexTokens: 20 });
+    setCaps(ground.ws, { fullTokens: 20, indexTokens: 45 });
     const context = (await must(ground.box, ground.demo, ["context"])).out;
     assert.match(context, /- the first index note/);
     assert.match(context, /- the second index note/);
     const rendered = (await must(ground.box, ground.demo, ["instruction", "render"])).out;
     assert.match(rendered, /- tests run on the dev VM/);
     assert.match(rendered, /- a PR gets a cross-model review/);
+    // The index cap still gates, and the two index notes are its whole
+    // occupancy: the demoted instruction charges it nothing, as the two full
+    // instructions charge the full tier nothing.
     const refused = await ground.self(["state", "add", "a third index note"]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /the project index tier holds \d+ of 20 tokens/);
+    assert.ok(refused.out.includes("the project index tier holds 41 of 45 tokens and this text adds 18 more"),
+        refused.out);
 });
 
 test("D13: a --workspace instruction is out of every context and in every render", async () =>
@@ -421,17 +435,57 @@ test("F13: a confirm lands a proposed instruction, and a second confirm is refus
     assert.match(again.out, /already confirmed/);
 });
 
-test("F14: a confirm past the cap is refused, and the line it advertises lets it land", async () =>
+test("F14: a full tier at its cap refuses no instruction's confirm, and still refuses a record's", async () =>
 {
     const ground = await floor();
     const proposed = await add(ground, "tests run on the dev VM", "rule", ["--proposed"]);
-    const seated = await add(ground, "a PR gets a cross-model review", "rule");
+    // A 33-token full tier holding one 30-token ordinary record, and a full
+    // instruction beside it that the tier does not hold.
+    await add(ground, "a PR gets a cross-model review", "rule");
+    await must(ground.box, ground.demo, ["state", "add", "a PR gets a cross-model review", "--exposure", "full"]);
+    const waiting = entityIn(receiptIn((await must(ground.box, ground.demo,
+        ["state", "add", "an ordinary proposed record", "--exposure", "full", "--proposed"])).out));
     setCaps(ground.ws, { fullTokens: 33 });
+    await must(ground.box, ground.demo, ["state", "confirm", proposed]);
+    assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out, /- tests run on the dev VM/);
+    const refused = await ground.self(["state", "confirm", waiting]);
+    assert.notEqual(refused.code, 0);
+    assert.ok(refused.out.includes("confirming this would put the project full tier over its cap"
+        + " (30 of 33 tokens held)"), refused.out);
+    assert.equal(refused.out.includes("53 of 33"), false, refused.out);
+});
+
+/* ── group F: the instruction cap at confirm time (#446) ───────────── */
+
+test("F16: a confirm past the instruction cap is refused against that cap, and nothing is confirmed", async () =>
+{
+    const ground = await floor();
+    const proposed = await add(ground, "tests run on the dev VM", "rule", ["--proposed"]);
+    await add(ground, "a PR gets a cross-model review", "rule");
+    setCaps(ground.ws, { instructionTokens: 40 });
+    const before = events(ground.ws).length;
     const refused = await ground.self(["state", "confirm", proposed]);
     assert.notEqual(refused.code, 0);
-    assert.match(refused.out, /confirming this would put the project full tier over its cap \(\d+ of 33 tokens held\)/);
-    assert.match(refused.out, /free room first with `self state place <id> --exposure index --why "<reason>"`/);
-    await must(ground.box, ground.demo, ["state", "place", seated, "--exposure", "index", "--why", "make room"]);
+    assert.equal(events(ground.ws).length, before);
+    assert.ok(refused.out.includes("confirming this would put the project instructions over their cap"
+        + " (30 of 40 tokens held) — retire or supersede one with a shorter text,"
+        + " or raise instructionTokens in config.json"), refused.out);
+    assert.equal((await must(ground.box, ground.demo, ["instruction", "render"]))
+        .out.includes("tests run on the dev VM"), false);
+    for (const word of ["--demote", "full tier", "index tier"])
+    {
+        assert.equal(refused.out.includes(word), false, `the refusal named ${word}:\n${refused.out}`);
+    }
+});
+
+test("F17: raising the cap the refusal names is what lands the confirm", async () =>
+{
+    const ground = await floor();
+    const proposed = await add(ground, "tests run on the dev VM", "rule", ["--proposed"]);
+    await add(ground, "a PR gets a cross-model review", "rule");
+    setCaps(ground.ws, { instructionTokens: 40 });
+    assert.notEqual((await ground.self(["state", "confirm", proposed])).code, 0);
+    setCaps(ground.ws, { instructionTokens: 200 });
     await must(ground.box, ground.demo, ["state", "confirm", proposed]);
     assert.match((await must(ground.box, ground.demo, ["instruction", "render"])).out, /- tests run on the dev VM/);
 });

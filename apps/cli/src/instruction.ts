@@ -28,11 +28,19 @@
 // is a separate command a caller concatenates. Splicing it into `context`
 // would zero every other section — `fitKeeps` never cuts `head` and measures
 // the whole string.
+//
+// Being outside that projection, it charges neither retention tier at any
+// exposure (#446): the tier caps exist so `context` fits its budget, and a
+// record nothing ever elides has no business competing for room with the
+// records that are elided. `instructionTokens` is the cap it does charge —
+// its own, per render target, 2,000 tokens by default — and this module's
+// listing closes with the share of it this project holds.
 
 import { EntityState, entityCharacters } from "@superself/fold";
 import { Requirement, required, requireText } from "./args.js";
 import { branch, Command, CommandInput, leaf } from "./contract.js";
 import {
+    chargesInstructionCap,
     INSTRUCTION_KINDS,
     INSTRUCTION_LABEL,
     instructionLines,
@@ -41,7 +49,7 @@ import {
     instructionSections,
     isInstruction
 } from "./instructions.js";
-import { buildModel, renderedIn, workspaceModels } from "./model.js";
+import { buildModel, ProjectModel, renderedIn, workspaceModels } from "./model.js";
 import {
     ProjectContext,
     readScopes,
@@ -74,7 +82,6 @@ const ADD_OPTIONS = {
     workspace: { type: "boolean" },
     scope: { type: "string" },
     supersedes: { type: "string", multiple: true },
-    demote: { type: "string", multiple: true },
     proposed: { type: "boolean" },
     why: { type: "string" }
 } as const;
@@ -110,7 +117,7 @@ export const INSTRUCTION_COMMAND: Command = {
         },
         {
             syntax: 'instruction add "<text>" --kind rule|tool|procedure [--priority n]'
-                + " [--workspace|--scope <slug>] [--supersedes <id>] [--demote <id>] [--proposed] [--why w]",
+                + " [--workspace|--scope <slug>] [--supersedes <id>] [--proposed] [--why w]",
             description: ["record a rule, a tool note or a procedure every session here is handed whole"],
             verbs: ["add"]
         },
@@ -129,16 +136,18 @@ export const INSTRUCTION_COMMAND: Command = {
         "that projection at all, so `instruction render` prints every one of them",
         "whole, in a fixed section order, however far the store stands over its caps.",
         "",
-        "it is still an ordinary record. It charges the retention caps like any other,",
-        "and no cap has an exemption for it — raising `fullTokens` in the store's",
-        "config.json is the remedy, as it is for every kind. A correction is",
-        "--supersedes, a withdrawal is `self state retract`, and `self undo` takes an",
-        "add back.",
+        "it is still an ordinary record: a correction is --supersedes, a withdrawal is",
+        "`self state retract`, and `self undo` takes an add back. What it does not do is",
+        "charge a retention tier. `fullTokens` and `indexTokens` bound what `self",
+        "context` renders, and an instruction is in no part of that projection, so it",
+        "charges neither of them at any exposure and demoting a goal, an objective or a",
+        "convention frees it nothing.",
         "",
-        "an instruction is recorded at full exposure, which is where the render reads",
-        "from. When the full tier is at its cap the add is refused rather than quietly",
-        "trimmed: pass `--demote <id>` to name the confirmed entity that moves one tier",
-        "down and makes room, or free the room first and record it after.",
+        "it is bounded by `instructionTokens` instead — its own cap in the store's",
+        "config.json, 2,000 tokens by default, counted per render target. Past it the",
+        "add is refused rather than quietly trimmed, and the room is made among the",
+        "instructions: retire one, supersede one with a shorter text, or raise the cap.",
+        "`self instruction` closes with the share of it this project holds.",
         "",
         "  --kind <rule|tool|procedure>  which section it renders under: a rule is a",
         "                        judgement or execution rule, a tool is a note about a",
@@ -148,8 +157,6 @@ export const INSTRUCTION_COMMAND: Command = {
         "                        every project; its record stays in this project's store",
         "  --scope <slug>        render it in another registered project instead",
         "  --supersedes <id>     the instruction this one replaces; the predecessor retires",
-        "  --demote <id>         past a retention cap: the confirmed entity that frees its",
-        "                        place by moving one tier down; repeatable",
         "  --proposed            record it as a proposal `self state confirm` lands",
         "  --why <text>          why the instruction holds",
         "  --project <slug>      render this registered project's set instead of this",
@@ -280,7 +287,6 @@ function instructionAdd({ values, positionals }: CommandInput<typeof ADD_OPTIONS
     return composedEntityAdd(INSTRUCTION_ROW, { labels: [INSTRUCTION_LABEL, asked.kind] }, {
         why: values.why,
         supersedes: values.supersedes,
-        demote: values.demote,
         scope: asked.scope,
         priority: values.priority,
         proposed: values.proposed === true
@@ -312,18 +318,35 @@ function requireInstructionTargets(ctx: ProjectContext, wanted: string[]): void
 function instructionList(): CommandOutput
 {
     const ctx = requireProject(process.cwd());
-    const sections = instructionSections(renderedIn(workspaceModels(ctx.storeDir, ctx.project), ctx.project));
+    const models = workspaceModels(ctx.storeDir, ctx.project);
+    const sections = instructionSections(renderedIn(models, ctx.project));
     const entries = sections.flatMap((section) => section.entries);
-    return [{
-        kind: "listing",
-        rows: entries.length === 0 ? [EMPTY_LISTING] : [...listRows(sections), ...shareLines(ctx, entries)],
-        total: entries.length,
-        noun: "instruction"
-    }];
+    // The share is what the cap holds, so the empty wording answers to the cap
+    // and not to the render: a store whose instructions are all demoted has a
+    // manual and is told its size, and only a store holding none at all is
+    // told to record one (§D-6). A store the cap holds something for but whose
+    // sections are all empty is every charged instruction demoted out of the
+    // render, and gets a line of its own beside the share so a reader does not
+    // read the bare number as "nothing is recorded".
+    const shares = shareLines(ctx, models);
+    const rows = shares.length === 0
+        ? [EMPTY_LISTING]
+        : sections.length === 0 ? [...shares, ALL_DEMOTED_NOTE] : [...listRows(sections), ...shares];
+    return [{ kind: "listing", rows, total: entries.length, noun: "instruction" }];
 }
+
+const ALL_DEMOTED_NOTE = "every instruction is demoted — self context carries them as index lines;"
+    + " instruction render prints none";
 
 function listRows(sections: InstructionSection[]): string[]
 {
+    // Guarded rather than left to `instructionList`'s branch alone: an empty
+    // `sections` here means every entry list is empty too, and `Math.max` of
+    // no widths is `-Infinity`, not a usable one.
+    if (sections.length === 0)
+    {
+        return [];
+    }
     const width = Math.max(...sections.flatMap((section) =>
         section.entries.map((entry) => String(entry.priority ?? "").length)));
     return sections.flatMap((section) => [section.heading,
@@ -336,41 +359,51 @@ function scopeWord(entity: EntityState): string
     return entity.scope === "workspace" ? "workspace" : "project  ";
 }
 
-// One line per occupied tier (§D-6). A `--workspace` instruction charges the
-// workspace full tier and a project-scoped one charges this project's, so
-// adding them together would produce a number neither cap governs.
+// One line per occupied render target (§D-6). A `--workspace` instruction
+// charges the workspace instruction cap and a project-scoped one charges this
+// project's, so adding them together would produce a number neither cap
+// governs.
 //
 // The estimate note closes the last line and no other: it is one statement
 // about where every number on the page came from, and saying it once per tier
 // would print the same sentence twice for a store holding both.
-function shareLines(ctx: ProjectContext, entries: EntityState[]): string[]
+function shareLines(ctx: ProjectContext, models: ProjectModel[]): string[]
 {
     const config = readStoreConfig(ctx.storeDir);
     const scale = tokenScale(config);
-    const cap = retentionCaps(config).full;
+    const cap = retentionCaps(config).instruction;
     const shares = [ctx.project, "workspace"]
-        .map((target) => ({ target, held: entries.filter((entry) => tierTarget(entry, ctx.project) === target) }))
+        .map((target) => ({ target, held: chargedAt(models, target) }))
         .filter((group) => group.held.length > 0)
         .map((group) => shareLine(scopeLabel(group.target, ctx.project), group.held, cap, scale));
     return shares.map((share, at) => at === shares.length - 1 ? share + estimateNote(scale) : share);
 }
 
-// Which capped tier an instruction that renders here occupies: the workspace
-// full tier, or the tier of the project this listing is about. `rendersIn`
-// already settled that no third answer reaches this list.
-function tierTarget(entity: EntityState, here: string): string
+// What one instruction cap holds, through `chargesInstructionCap` — the same
+// predicate `state.ts` sums the cap itself with, so the share and the number a
+// cap refusal states can never be two answers about one store. Counted off the
+// records rather than off the rows above it: a demoted instruction prints no
+// row and is still in the manual the cap bounds (§D-6).
+function chargedAt(models: ProjectModel[], target: string): EntityState[]
 {
-    return entity.scope === "workspace" ? "workspace" : here;
+    return models.flatMap((model) => model.entities
+        .filter((item) => chargesInstructionCap(item, model.slug, target)));
 }
 
-// What the line counts is the instructions and nothing else (§D-6): the tier
-// itself holds every full-exposure record, and the number below would be a
-// different, larger one. So the line says whose tokens they are rather than
-// leaving a reader to read tier occupancy into a figure that is not it.
+// What the line counts is the instructions and nothing else (§D-6) — which is
+// also, since #446, exactly what the cap it is a share of counts, so the two
+// numbers answer one question. The line still names its subject rather than
+// leaving a reader to read it in: what the full tier beside it holds is a
+// different figure, and its own cap refusal is where that one is stated.
+//
+// The line prints wherever the cap holds anything, at whatever exposure, so a
+// store whose instructions are all demoted still reads its manual's size; only
+// the instructions charging a cap this project stands in are counted — its own
+// and the workspace's — never every instruction the store holds.
 function shareLine(scope: string, held: EntityState[], cap: number, scale: TokenScale): string
 {
     const tokens = tokensOf(held.reduce((sum, entry) => sum + entityCharacters(entry), 0), scale.perCharacter);
-    return `instructions hold ${tokens} tokens — ${tokens} of the ${cap}-token ${scope} full cap`
+    return `instructions hold ${tokens} tokens — ${tokens} of the ${cap}-token ${scope} instruction cap`
         + ` (${Math.round((tokens / cap) * 100)}%)`;
 }
 
