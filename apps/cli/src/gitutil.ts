@@ -2,6 +2,7 @@ import { spawnSync, SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns, StdioO
 import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { serverBacked } from "./mode.js";
+import { jsonMode, notice } from "./output.js";
 import { CliError, fail } from "./types.js";
 
 // ── the one place git is spawned ─────────────────────────────────────────
@@ -188,9 +189,81 @@ function mustGit(cwd: string, doing: string, ...args: string[]): string
     const result = git(cwd, ...args);
     if (!result.ok)
     {
-        throw new CliError(`${doing} in ${cwd} failed: ${result.err === "" ? "git could not be run" : result.err}`);
+        throw gitFailed(cwd, doing, result);
     }
     return result.out;
+}
+
+// The refusal a failed step raises, in one place because the lock-losing path
+// below raises the very same one for every failure that is not the lock: two
+// spellings of "committing the workspace store failed" would be two contracts.
+function gitFailed(cwd: string, doing: string, result: GitResult): CliError
+{
+    return new CliError(`${doing} in ${cwd} failed: ${result.err === "" ? "git could not be run" : result.err}`);
+}
+
+// A second session writing into the same store is the one failure of `add` or
+// `commit` that is nobody's mistake, and git's own advice for it — remove the
+// file manually — would destroy that session's write (#444). It is recognised
+// by the lock's path, not by the exit status, which git shares with every
+// other fatal, and not by the sentence around it, which git translates.
+function lockedOut(result: GitResult): boolean
+{
+    return result.err.includes("index.lock");
+}
+
+// Long enough that the neighbour's commit — which holds the index for the
+// length of one `git commit` — is usually done, short enough that a person
+// waits out no perceptible pause when it is not. One retry and no more: a loop
+// would be the write coordination decision 01kz57aqsxym2g2g8wasp6vv7j ruled
+// out, arrived at from underneath.
+const LOCK_RETRY_MS = 300;
+
+// The synchronous sleep, as in `human.ts`: nothing can wake this array, so the
+// timeout is the whole story. `spawnSync` runs git, so there is no loop turn to
+// await on and nothing else in this process to yield to.
+const LOCK_PAUSE = new Int32Array(new SharedArrayBuffer(4));
+
+// One step of the store commit that needs git's index, tried twice. False means
+// the lock was held both times and this commit is not happening; every other
+// failure is raised exactly as it always was.
+function tookTheIndex(storeDir: string, doing: string, args: string[]): boolean
+{
+    for (const attempt of [0, 1])
+    {
+        const result = git(storeDir, ...args);
+        if (result.ok)
+        {
+            return true;
+        }
+        if (!lockedOut(result))
+        {
+            throw gitFailed(storeDir, doing, result);
+        }
+        if (attempt === 0)
+        {
+            Atomics.wait(LOCK_PAUSE, 0, 0, LOCK_RETRY_MS);
+        }
+    }
+    return false;
+}
+
+// What the reader is told instead of git's advice. The events are already in
+// `log.jsonl` and the next session to commit sweeps them in — several events
+// per commit is what decision 01kz57aqsxym2g2g8wasp6vv7j accepts — so this is
+// a statement about when the record is committed, not a failure.
+//
+// Silent on a machine surface, for the reason `pipeline.ts` is: a line of
+// prose on stdout ahead of the envelope is an agent's parse error rather than
+// a notice, and the agent already has its receipt.
+function lockHeldElsewhere(): void
+{
+    if (jsonMode())
+    {
+        return;
+    }
+    notice("the store is being written by another session; this event is recorded "
+        + "and will be committed with the next write");
 }
 
 // Nothing to do where the store keeps no git history. The nine callers are
@@ -198,19 +271,28 @@ function mustGit(cwd: string, doing: string, ...args: string[]): string
 // that" — and a server-backed store records it by queueing the append rather
 // than by committing, which has already happened by the time this is reached.
 // Deciding here rather than at each call is what stops a caller added later
-// from being the one that forgot.
+// from being the one that forgot — and the same is true of the lock: the
+// notice is said here, so no caller can be the one that lets git's advice
+// through.
 export function commitAll(storeDir: string, message: string): void
 {
     if (serverBacked(storeDir))
     {
         return;
     }
-    mustGit(storeDir, "staging the workspace store", "add", "-A");
+    if (!tookTheIndex(storeDir, "staging the workspace store", ["add", "-A"]))
+    {
+        lockHeldElsewhere();
+        return;
+    }
     if (mustGit(storeDir, "reading the workspace store status", "status", "--porcelain") === "")
     {
         return;
     }
-    mustGit(storeDir, "committing the workspace store", "commit", "-qm", message);
+    if (!tookTheIndex(storeDir, "committing the workspace store", ["commit", "-qm", message]))
+    {
+        lockHeldElsewhere();
+    }
 }
 
 interface ClassifiedEvidence
