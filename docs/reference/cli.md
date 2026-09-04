@@ -235,8 +235,17 @@ work, or a free-labeled entity — folds into one record kind with placement:
 - Retention caps (`fullTokens` and `indexTokens` in the store's `config.json`;
   defaults 1,000 and 12,000 context tokens, per scope) gate `state add`,
   `state place`, and the alias verbs into a tier: past a cap the verb refuses
-  until `--demote <id>` names what frees the room, and every number in that
-  refusal is a token count.
+  until `--demote <id>` names what frees the room in that tier, and every number
+  in that refusal is a token count.
+- `instructionTokens` (default 2,000 context tokens, per render target — this
+  project or the workspace) is the third cap, and the only one an instruction
+  charges: an instruction is outside the context projection the two retention
+  tiers exist to bound, so it charges neither of them at any exposure. Past it
+  `instruction add` — and a raw `state add --label instruction` — refuses.
+  `--demote` frees nothing here and is refused by name: the room is made among
+  the instructions, by retiring one or superseding one with a shorter text, or
+  by raising `instructionTokens` in `config.json`. `self instruction` closes
+  with the share of it this project's manual holds.
 - `state add --artifact <id|path>` and `convention add --artifact <id|path>`
   point a record at a registered artifact — the guide a rule is too short to
   state. One per record; a second `--artifact` is refused by name. Pass an
