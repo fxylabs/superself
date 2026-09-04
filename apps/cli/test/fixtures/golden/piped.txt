@@ -645,6 +645,10 @@ units, reports — outside the code repository.
 - A registered project carries its own superself block in AGENTS.md or
   CLAUDE.md: run `self context` at session start and follow that block.
   `self setup` tells you which project, if any, a directory resolves to.
+- Also run `self instruction render` and follow it: the workspace's execution
+  rules, tool notes and procedures, rendered whole outside the context budget.
+  Outside a registered project, `self instruction render --project <slug>`. If
+  it prints only its head line, none are recorded yet.
 - In an unregistered project, ask the user once whether to register it with
   `self project init`. Never register a project on your own.
 - Every checkout of a registered git repository — worktrees included —

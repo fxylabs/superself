@@ -523,3 +523,28 @@ test("G16: the layer table names #440's, #391's and #379's six modules", () =>
         assert.ok(named.has(module), `ARCHITECTURE.md's layer table names no layer for ${module}`);
     }
 });
+
+/* ── #445: the machine-level block points a session at instruction render ── */
+
+// Cell G17 of docs/maintainers/case-tables/440-instructions.md.
+
+const MACHINE_RENDER_BULLET = "- Also run `self instruction render` and follow it: the workspace's execution\n"
+    + "  rules, tool notes and procedures, rendered whole outside the context budget.\n"
+    + "  Outside a registered project, `self instruction render --project <slug>`. If\n"
+    + "  it prints only its head line, none are recorded yet.";
+
+test("G17: the machine-level block points every session at `self instruction render`, in all three agent files", async () =>
+{
+    const box = machine();
+    for (const dir of [".claude", ".codex", ".gemini"])
+    {
+        mkdirSync(join(box.env.HOME, dir), { recursive: true });
+    }
+    await must(box, box.env.HOME, ["connect", "--global"]);
+    for (const [dir, name] of [[".claude", "CLAUDE.md"], [".codex", "AGENTS.md"], [".gemini", "GEMINI.md"]])
+    {
+        const content = readFileSync(join(box.env.HOME, dir, name), "utf8");
+        assert.ok(content.includes(MACHINE_RENDER_BULLET),
+            `${dir}/${name} does not carry the instruction-render bullet:\n${content}`);
+    }
+});
