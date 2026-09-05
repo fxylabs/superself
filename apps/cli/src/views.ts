@@ -12,6 +12,7 @@ import {
     pendingSummary,
     rendersIn
 } from "@superself/fold";
+import { checkDirection, summaryLine } from "./check.js";
 import { commonProtocolLines } from "./connect.js";
 import { instructionLines, isInstruction } from "./instructions.js";
 import { claimNote, judgeProcess } from "./ledger.js";
@@ -79,13 +80,31 @@ function contextBodyLimit(scale: TokenScale): number
 }
 const REPORT_EXCERPT_LIMIT = 500;
 
-// Console surfaces reuse the verdicts persisted by the last fold, so they
-// agree with canonical state without re-running git. Artifacts are re-checked
-// here instead: the store holds the bytes, so the answer never depends on
-// which project checkout this command ran from.
-function modelWithVerdicts(storeDir: string, slug: string): ProjectModel
+// A project's page: the fold it renders from, and the one direction line it
+// states (#417 §7).
+//
+// Console surfaces reuse the verdicts persisted by the last fold, so they agree
+// with canonical state without re-running git. Artifacts are re-checked in
+// `withVerdicts` instead: the store holds the bytes, so the answer never
+// depends on which project checkout this command ran from.
+//
+// The two halves come out of one read on purpose. The check answers about the
+// graph this project's own log owns, which is exactly what the re-scope below
+// replaces with the units that render here whoever owns them — so asking for it
+// afterwards would mean folding the whole workspace a second time for one line.
+interface ProjectPage
 {
-    return withVerdicts(storeDir, renderedModel(storeDir, slug));
+    model: ProjectModel;
+    direction: string;
+}
+
+function projectPage(storeDir: string, slug: string): ProjectPage
+{
+    const own = buildModel(storeDir, slug, new Date());
+    const others = foreignModels(storeDir, slug);
+    const direction = summaryLine(checkDirection(own, others).summary);
+    own.works = [...scopedWorks(own, slug), ...others.flatMap((other) => scopedWorks(other, slug))];
+    return { model: withVerdicts(storeDir, own), direction };
 }
 
 // A record scoped into an archived project is rechecked here for the same
@@ -160,7 +179,7 @@ export function contextOutput(ctx: CliContext): CommandOutput
     {
         return workspaceContextOutput(ctx);
     }
-    const model = modelWithVerdicts(ctx.storeDir, ctx.project);
+    const { model, direction } = projectPage(ctx.storeDir, ctx.project);
     // An archived project still renders its context — a session standing in its
     // checkout has to be able to read the state it left (#283). What it owes
     // that session is one line saying the project is set aside and how it comes
@@ -175,8 +194,8 @@ export function contextOutput(ctx: CliContext): CommandOutput
     }
     return [{
         kind: "document",
-        plain: () => lines(projectContextText(ctx, model)),
-        pretty: () => renderContext({ model, waiting: unrankedWaitingRows(model) })
+        plain: () => lines(projectContextText(ctx, model, direction)),
+        pretty: () => renderContext({ model, direction, waiting: unrankedWaitingRows(model) })
     }];
 }
 
@@ -184,11 +203,11 @@ export function contextOutput(ctx: CliContext): CommandOutput
 // (#181 D2), and for what the linked foreign objectives can be said to hold —
 // status and target — at read time (#244). Inside the plain thunk, because
 // that is the render that spends them.
-function projectContextText(ctx: CliContext, model: ProjectModel): string
+function projectContextText(ctx: CliContext, model: ProjectModel, direction: string): string
 {
     const all = [model, ...foreignModels(ctx.storeDir, ctx.project)];
     return renderProjectContext(model, contextBodyLimit(tokenScale(readStoreConfig(ctx.storeDir))),
-        scopedIn(all, model.slug), all);
+        scopedIn(all, model.slug), all, new Set(), direction);
 }
 
 // Handoff supplies the one model graph captured by its command. This helper
@@ -473,10 +492,17 @@ interface ContextSection
     omission: (count: number) => string;
 }
 
-function renderProjectContext(model: ProjectModel, limit: number, foreign: EntityState[] = [], all: ProjectModel[] = [], excluded = new Set<string>()): string
+// `direction` is the one line #417 §7 owes a session reading this page, and it
+// goes in the head rather than into a section: the budget cuts sections, and a
+// count of unresolved structural drift that the budget could drop is a count
+// nobody can rely on. The handoff packet passes none — it is a snapshot of one
+// unit, and a direction summary read at packet time would go stale in it.
+function renderProjectContext(model: ProjectModel, limit: number, foreign: EntityState[] = [], all: ProjectModel[] = [], excluded = new Set<string>(), direction?: string): string
 {
     const { head, sections } = projectContextSections(model, foreign, all, excluded);
-    return assembleContext(head, sections, fitKeeps(head, sections, limit));
+    const headed = direction === undefined ? head
+        : [head[0], "", `Direction: ${direction} — ${scoped("self objective check", shellArgument(model.slug))}`, ...head.slice(1)];
+    return assembleContext(headed, sections, fitKeeps(headed, sections, limit));
 }
 
 // A full-exposure instruction is absent from every section below because it is
@@ -1299,13 +1325,14 @@ export function statusOutput(ctx: CliContext): CommandOutput
     {
         return workspaceOverviewOutput(ctx);
     }
-    const model = modelWithVerdicts(ctx.storeDir, ctx.project);
+    const { model, direction } = projectPage(ctx.storeDir, ctx.project);
     const project = ctx.project;
     return [{
         kind: "document",
-        plain: () => statusLines(project, model),
+        plain: () => statusLines(project, model, direction),
         pretty: () => renderStatus({
             model,
+            direction,
             waiting: unrankedWaitingRows(model),
             objectives: objectiveCountLine(model),
             attempts: openProcesses(project, model)
@@ -1317,12 +1344,13 @@ export function statusOutput(ctx: CliContext): CommandOutput
 // is running under it. The attention line is there only when there is a band
 // to describe, which is what keeps a project with no proposals from carrying
 // three zeroes.
-function statusLines(project: string, model: ProjectModel): string[]
+function statusLines(project: string, model: ProjectModel, direction: string): string[]
 {
     return [
         `${model.slug} — goal: ${(model.goal ?? "(not set)") + otherGoals(model)}`,
         `work: ${countLine(model.works)}`,
         `objectives: ${objectiveCountLine(model)}`,
+        `direction: ${direction} — ${scoped("self objective check", shellArgument(model.slug))}`,
         `waiting on you: ${waitingCount(model)}`,
         `unshipped: ${unshippedLine(model)}`,
         ...(attentionRows(model).length > 0 ? [attentionLine(model)] : []),

@@ -24,6 +24,7 @@ import {
 import { presetRow } from "./aliases.js";
 import { required, Requirement, requireOptions } from "./args.js";
 import { attachedArtifactLines } from "./artifact.js";
+import { checkDirection, checkLines } from "./check.js";
 import { branch, Command, CommandInput, CommandLeaf, leaf } from "./contract.js";
 import { validDate } from "./dates.js";
 import { renderMilestoneBody, renderObjectiveBody } from "./fold.js";
@@ -47,7 +48,7 @@ import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
 import { admittingDemotions, confirmEntityUnit, Declaration, declarationOf, DECLARE_OPTIONS, demotionEvents, Placed, recordCoverage, recordOwner, requireDecision, tierOf } from "./state.js";
 import { dim, errYellow, firstLine, markdownHeadings, plural, styled } from "./style.js";
-import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
+import { CliError, CommandOutput, JsonValue, ListingBlock, SelfEvent } from "./types.js";
 
 const CONFIDENCE = ["low", "medium", "high"];
 
@@ -148,6 +149,10 @@ const ASSUMED_DECISION: Requirement = { flags: ["decision"], value: "<id>", hint
 
 /* ── objectives ────────────────────────────────────────────────────── */
 
+// A read verb with a machine shape (#417 §6): `--json` hands an agent the
+// findings whole, and the human render is the same answer in lines.
+const CHECK_OPTIONS = { project: { type: "string" }, json: { type: "boolean" } } as const;
+
 // Listing and showing are reads, so they answer for any project the workspace
 // knows; every verb that writes still records into the project this directory
 // belongs to, and resolves it only once the arguments are known to be good. A
@@ -190,7 +195,15 @@ export const OBJECTIVE_COMMAND: Command = {
             ],
             verbs: ["revise"]
         },
-        { syntax: "objective close <id> --as reached|dropped [--why w]", description: ["--why is required when it is dropped"], verbs: ["close"] }
+        { syntax: "objective close <id> --as reached|dropped [--why w]", description: ["--why is required when it is dropped"], verbs: ["close"] },
+        {
+            syntax: "objective check [--project <slug>] [--json]",
+            description: [
+                "read the direction graph and state what is inconsistent, what needs re-judging,",
+                "and which done work could be cited as evidence — it changes nothing"
+            ],
+            verbs: ["check"]
+        }
     ],
     detail: [
         "keep the time-boxed objectives that break the goal down, each with the",
@@ -235,7 +248,29 @@ export const OBJECTIVE_COMMAND: Command = {
         "  --as <state>          how `close` ends it: reached or dropped",
         "  --why <text>          the reason for a revision or a decline, and for a close that drops",
         "  --demote <id>         past a retention cap: the confirmed entity that frees its place by",
-        "                        moving one tier down (full → index, index → search); repeatable"
+        "                        moving one tier down (full → index, index → search); repeatable",
+        "  --json                on check, the findings as one machine-readable object",
+        "",
+        "check reads and never repairs. It states seven kinds of finding and no more:",
+        "work whose every current contribution is to an outcome that is over; a successor",
+        "checkpoint with no live work beside a predecessor that still has some; a",
+        "checkpoint dated past its objective; a coverage judgment made under a former",
+        "parent or an assumption on a decision that was replaced; done work that could be",
+        "cited as evidence for an uncovered criterion; work that states no disposition at",
+        "all; and an objective whose whole live checkpoint workload is runbook",
+        "occurrences. It never relinks, covers, revises or reclassifies anything: every",
+        "line it prints is a command you run yourself.",
+        "",
+        "a candidate is information. Nothing is paired to a criterion by its wording, and",
+        "no unit's evidence is applied on your behalf. Maintenance is read off the",
+        "`self runbook link` edge and never out of a record's text or its dates.",
+        "",
+        "check answers for one project — this directory's, or the one --project names —",
+        "and has no --workspace form: a report over every registered project would bury",
+        "the one you are standing in, and `self status` already carries each project's",
+        "count. A contribution to another project's objective is judged from that",
+        "project's own log where this machine holds it; where it does not, the line says",
+        "the target state was not checked rather than reporting all clear."
     ],
     guard: rejectManualProgress,
     // An unknown verb is answered before the id is resolved: telling someone
@@ -253,12 +288,29 @@ export const OBJECTIVE_COMMAND: Command = {
             leaf("confirm", {}, 1, confirmObjective),
             leaf("decline", WHY_OPTION, 1, declineObjective, { requires: [WHY_TURNED_DOWN] }),
             retiring(leaf("revise", OBJECTIVE_REVISE_OPTIONS, 1, objectiveRevise, { requires: [WHY_CHANGED] })),
+            leaf("check", CHECK_OPTIONS, 0, objectiveCheck),
             retiring(leaf("close", OBJECTIVE_CLOSE_OPTIONS, 1, objectiveClose, {
                 requires: [{ flags: ["as"], value: "reached|dropped", hint: "whether the outcome was reached or given up" }]
             }))
         ]
     })
 };
+
+// The check answers about the graph this project's log owns, against the
+// target projects this machine can read. One fold per registered project, the
+// same walk `objective list` makes, and no other input: no clock, no network,
+// and nothing written.
+function objectiveCheck({ values }: CommandInput<typeof CHECK_OPTIONS>): CommandOutput
+{
+    const scope = readScopes(process.cwd(), values)[0];
+    const models = workspaceModels(scope.storeDir, scope.project);
+    const report = checkDirection(models[0], models.slice(1));
+    return [{
+        kind: "payload",
+        data: report as unknown as JsonValue,
+        plain: () => checkLines(report)
+    }];
+}
 
 function objectiveList({ values }: CommandInput<typeof WORKSPACE_SCOPE_OPTIONS>): CommandOutput
 {

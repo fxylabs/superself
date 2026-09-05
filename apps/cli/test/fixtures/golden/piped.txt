@@ -56,6 +56,8 @@ en
 $ self context   (in project, exit 0)
 # demo
 
+Direction: 1 finding (1 structural, 0 to review, 0 candidates) — self objective check --project 'demo'
+
 the render gate scenario
 
 ## Work in progress
@@ -79,6 +81,7 @@ $ self status   (in project, exit 0)
 demo — goal: (not set)
 work: 1 active, 0 blocked, 0 next, 0 done
 objectives: 0 open, 0 of 0 milestones reached, 0 of 0 exit criteria covered
+direction: 1 finding (1 structural, 0 to review, 0 candidates) — self objective check --project 'demo'
 waiting on you: 1
 unshipped: nothing waiting to ship
 health: no friction on 1 of this project's 1 report in the last 30 days — self report … --friction "<what differed>"
@@ -207,6 +210,9 @@ usage: self <command>
                                              --target moves freely; a date that leaves a live checkpoint beyond it warns
   objective close <id> --as reached|dropped [--why w]
                                              --why is required when it is dropped
+  objective check [--project <slug>] [--json]
+                                             read the direction graph and state what is inconsistent, what needs re-judging,
+                                             and which done work could be cited as evidence — it changes nothing
   milestone [--project <slug>]               list milestones with state, reason, and linked work
   milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m] [--decision d]
   milestone show <id> [--project <slug>]     print a milestone, its exit criteria, and its coverage
@@ -696,6 +702,16 @@ one, with its full brief — value, success, stop, risk, capacity, evidence
 plan, confidence, expiry, and the objective or milestone it closes.
 `self work --help` lists the flags, and the refusal names every one you
 left out at once.
+
+Whether a unit's contributions still point anywhere is a read, never a
+guess: `self objective check` names the units whose every current
+contribution is to an outcome that is over, and the units that state no
+disposition at all — and it names them beside the commands that answer
+each one. It changes nothing; a candidate it lists is information, and
+maintenance is read off the `self runbook link` edge rather than out of a
+unit's wording. Where the project a unit contributes to is not readable
+here, the line says the target state was not checked rather than reporting
+all clear.
 
 Related: `self help goals`.
 

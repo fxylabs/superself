@@ -95,6 +95,15 @@ const mixedLog = join(mixedBox.root, "ws", ".superself", "projects", "demo", "lo
 // `state show` pages, and `self log` — which still hold the pre-cutover
 // binary's own bytes. The other seven captures were rebaselined for #305, and
 // the diff that rebaselined them is on the pull request.
+//
+// `context` and `status` moved once more with #417 part (c), which gave both
+// surfaces one direction line. That is a deliberate product change and reaches
+// every store, so a pre-cutover one is not exempt from it — what E1 claims is
+// that a log an old binary wrote still *folds* the same, and G5 below is where
+// that claim is asserted about records rather than about a page's furniture.
+// Both rebaselined captures read `ok`, which is the substantive evidence in
+// the diff: the check states no finding at all against a legacy log, so it
+// invents no drift out of history it cannot have caused.
 test("E1 / #305 G3: every captured read surface answers exactly as its capture states", async () =>
 {
     const manifest = JSON.parse(readFileSync(join(fixtures, "pre-cutover-reads", "manifest.json"), "utf8"));
