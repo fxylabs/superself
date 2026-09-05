@@ -9,6 +9,7 @@ import {
     CriterionState,
     EntityState,
     isCurrent,
+    JudgmentContext,
     MilestoneState,
     ObjectiveState,
     openObjectives,
@@ -539,7 +540,22 @@ export function renderMilestoneBody(milestone: MilestoneState, objective: Object
     // report hangs under its entry — `section` rather than `bullets`.
     section(lines, "Linked work", progress);
     bullets(lines, "Coverage", milestone.coverage.map(coverageLine));
+    bullets(lines, "Judgment to review", milestone.judgmentContext.map((item) => judgmentLine(milestone, objective, item)));
     return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+// A criterion whose standing judgment was reached somewhere else (#417 §5).
+// It says what moved and offers the one command that settles it; it never
+// says the coverage was wrong, and it never clears itself — a person re-judges
+// the criterion, and the claim they record is what takes this line away.
+function judgmentLine(milestone: MilestoneState, objective: ObjectiveState, item: JudgmentContext): string
+{
+    const under = item.condition === "moved"
+        ? `judged under ${item.judgedUnder}`
+        : "judged under a parent this record does not establish";
+    return `${item.criterion} — ${under}, and ${milestone.id} now hangs under ${objective.id}; `
+        + `recheck it with \`self milestone recheck ${milestone.id} --criterion ${item.criterion} `
+        + `--why "<what you re-judged>"\``;
 }
 
 function exitLines(milestone: MilestoneState): string[]

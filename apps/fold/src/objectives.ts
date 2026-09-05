@@ -35,6 +35,24 @@ export interface Coverage
     objectiveRevision: number;
     milestoneRevision: number;
     recheck?: boolean;
+    // The objective this judgment was made under (#417 §5). Carried from the
+    // claim, never re-derived: a revision that moves a checkpoint to a new
+    // parent leaves every earlier verdict saying what it was reached under,
+    // which is the whole point of recording it. Absent on a claim written
+    // before this issue.
+    judgedUnder?: string;
+}
+
+// A criterion whose coverage was judged somewhere other than where the
+// checkpoint hangs now (#417 §5). `moved` — the claim names a former parent;
+// `unknown` — the claim names none and the checkpoint has been carried at
+// least once, so nothing establishes which parent it was judged under. A
+// checkpoint that was never carried has one parent and states neither.
+export interface JudgmentContext
+{
+    criterion: string;
+    condition: "moved" | "unknown";
+    judgedUnder?: string;
 }
 
 export interface Reached
@@ -83,6 +101,11 @@ export interface MilestoneState
     met: string[];
     open: string[];
     stale: Coverage[];
+    // The criteria whose standing judgment was reached under another parent,
+    // or under one the record cannot establish (#417 §5). Review-needed, never
+    // "wrong": a person re-judges it with `milestone recheck`, one criterion
+    // at a time, and this is what part (c)'s check reads.
+    judgmentContext: JudgmentContext[];
     works: string[];
     blockedWorks: string[];
     evidence: string[];
@@ -445,6 +468,7 @@ function newMilestone(event: SelfEvent): MilestoneState
         met: [],
         open: [],
         stale: [],
+        judgmentContext: [],
         works: [],
         blockedWorks: [],
         evidence: [],
@@ -478,7 +502,8 @@ function newCoverage(event: SelfEvent): Coverage
         commits: event.refs?.commits ?? [],
         objectiveRevision: Number(event.payload.objectiveRevision),
         milestoneRevision: Number(event.payload.milestoneRevision),
-        recheck: event.type === "milestone.rechecked" ? true : undefined
+        recheck: event.type === "milestone.rechecked" ? true : undefined,
+        judgedUnder: str(event.payload.objective)
     };
 }
 
@@ -513,6 +538,7 @@ function deriveMilestone(milestone: MilestoneState, objective: ObjectiveState, w
     milestone.met = live.filter((criterion) => covered.has(criterion.id)).map((criterion) => criterion.id);
     milestone.open = live.filter((criterion) => !covered.has(criterion.id)).map((criterion) => criterion.id);
     milestone.stale = staleCoverage(milestone, objective, new Set(live.map((criterion) => criterion.id)));
+    milestone.judgmentContext = carriedJudgments(milestone, objective, live.map((criterion) => criterion.id));
     const linked = works.filter((work) => work.milestones.includes(milestone.id));
     milestone.works = linked.map((work) => work.id);
     milestone.blockedWorks = linked.filter((work) => work.status === "blocked").map((work) => work.id);
@@ -534,6 +560,39 @@ function staleCoverage(milestone: MilestoneState, objective: ObjectiveState, liv
     }
     return [...latest.values()].filter((item) => live.has(item.criterion)
         && (item.objectiveRevision !== objective.revision || item.milestoneRevision !== milestone.revision));
+}
+
+// The standing judgment on each live criterion, read against where the
+// checkpoint hangs now (#417 §5). Only the newest claim answers: an earlier
+// verdict is lineage, and a criterion rejudged under the current parent is
+// settled whatever it was judged under before. A claim that recorded no
+// parent is read as unknown only where a carry actually happened — a
+// checkpoint that has always had one objective establishes its own context,
+// and reclassifying its history would say the tool knows something it does
+// not.
+function carriedJudgments(milestone: MilestoneState, objective: ObjectiveState, live: string[]): JudgmentContext[]
+{
+    const latest = new Map<string, Coverage>();
+    for (const item of milestone.coverage)
+    {
+        latest.set(item.criterion, item);
+    }
+    const carried = milestone.carriedFrom.length > 0;
+    return live.flatMap<JudgmentContext>((criterion) =>
+    {
+        const claim = latest.get(criterion);
+        if (claim === undefined)
+        {
+            return [];
+        }
+        if (claim.judgedUnder === undefined)
+        {
+            return carried ? [{ criterion, condition: "unknown" }] : [];
+        }
+        return claim.judgedUnder === objective.id
+            ? []
+            : [{ criterion, condition: "moved", judgedUnder: claim.judgedUnder }];
+    });
 }
 
 // Evidence rolls up by reference: two milestones covered by the same report
@@ -730,6 +789,21 @@ function staleJudgmentSignals(objective: ObjectiveState, milestone: MilestoneSta
     return signals;
 }
 
+// A judgment reached under a former parent is not a wrong judgment and not a
+// stale one: nobody revised the checkpoint, and the criterion still reads
+// covered. What moved is the objective the verdict was weighed against, so the
+// signal asks for a re-judgment and says which parent the old one named (#417
+// §5). A carried checkpoint whose claim recorded no parent gets the bounded
+// unknown form instead, which claims nothing about what the judgment saw.
+function carriedJudgmentSignals(objective: ObjectiveState, milestone: MilestoneState): string[]
+{
+    return milestone.judgmentContext.map((item) =>
+        `${milestone.id} coverage of ${item.criterion} was judged under ` +
+        `${item.condition === "moved" ? item.judgedUnder : "a judgment context this record does not establish"}` +
+        `, and ${milestone.id} now hangs under ${objective.id} — ` +
+        `recheck it with \`self milestone recheck ${milestone.id} --criterion ${item.criterion} --why "<what you re-judged>"\``);
+}
+
 function milestoneStateSignals(milestone: MilestoneState): string[]
 {
     if (milestone.state === "missed")
@@ -758,6 +832,7 @@ function objectiveSignals(objective: ObjectiveState): string[]
         .filter((milestone) => milestone.supersededBy === undefined)
         .flatMap((milestone) => [
             ...staleJudgmentSignals(objective, milestone),
+            ...carriedJudgmentSignals(objective, milestone),
             ...milestoneStateSignals(milestone)
         ]);
 }

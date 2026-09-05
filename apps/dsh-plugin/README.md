@@ -84,6 +84,45 @@ self milestone link <milestone-id> --decision <decision-id>
 self milestone unlink <milestone-id> --decision <old-decision-id>
 ```
 
+A contribution names an outcome that is still open. `self work link`,
+`self work propose` and `self work confirm` refuse a target that was reached,
+dropped or superseded — a checkpoint under a closed objective included — and
+the refusal names the open successor of that lineage, or the standalone
+declaration where the lineage ends closed. `self work unlink` is never refused
+for it: taking an edge off an outcome that is over is the repair.
+
+A plan whose gap closed before anyone answered it is moved rather than
+abandoned, and only until it is first started:
+
+```bash
+self work revise <id> "<plan>" --why "<what changed>" --milestone <open-id>
+self work confirm <id>
+```
+
+The gap is part of the plan, so the same plan text toward a new outcome is
+still a revision: the acceptance is invalidated, and a contribution an earlier
+acceptance had written toward the old gap is withdrawn in the same append.
+
+A revision carries the work. `self objective revise` carries every live
+checkpoint and every unit linked directly to the objective;
+`self milestone revise` carries the checkpoint's work and the decisions it
+assumed. Nothing is unlinked — a carried unit reads current under the successor
+and unchanged toward every other outcome it serves — and done work carries as a
+membership, never as coverage.
+
+A checkpoint may be judged on its objective's own date but never after it:
+`self milestone add` and `self milestone revise` refuse a later one, while the
+objective's own date moves either way and warns when a live checkpoint falls
+beyond it. Neither date stated means the ordering is not checked.
+
+Coverage records the objective it was judged under, so a checkpoint a revision
+carried names the criteria that were judged under a former parent. That is a
+judgment to review, not a wrong one, and a person settles each one at a time:
+
+```bash
+self milestone recheck <milestone-id> --criterion cN --why "<what you re-judged>"
+```
+
 ## What you get
 
 `/self` prints `self context` in the chat, without a model turn.
