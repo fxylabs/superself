@@ -818,6 +818,9 @@ interface SurfaceInput
 {
     model: ProjectModel;
     waiting: WaitingRow[];
+    // The direction summary #417 §7 states, already composed by the render
+    // layer: this module prints one line and decides nothing about it.
+    direction: string;
 }
 
 interface StatusInput extends SurfaceInput
@@ -837,6 +840,7 @@ export function renderStatus(input: StatusInput): string[]
         lines.push(heading("OBJECTIVES", input.objectives));
     }
     lines.push(heading("DECISIONS WAITING", attentionCounts(model)));
+    lines.push(heading("DIRECTION", `${input.direction} — ${scoped("self objective check", project)}`));
     // Ahead of the roll-ups: what waits on the reader is the only part of this
     // page they can act on without running another command (#264).
     lines.push("", ...waitingSection(input.waiting, scoped("self context", project)));
@@ -865,7 +869,8 @@ export function renderContext(input: SurfaceInput): string[]
     {
         lines.push(dim(fitDisplay(oneLine(model.description), columns())));
     }
-    lines.push(`Goal: ${fitDisplay(oneLine(model.goal ?? "(not set)") + otherGoals(model), columns() - 6)}`, "");
+    lines.push(`Goal: ${fitDisplay(oneLine(model.goal ?? "(not set)") + otherGoals(model), columns() - 6)}`);
+    lines.push(`Direction: ${input.direction} — ${scoped("self objective check", project)}`, "");
     // The two approval bands lead the page and stand next to each other: a
     // reader asking what is on them should not have to scroll past the work
     // roll-up to find out, or read half the answer here and half further down

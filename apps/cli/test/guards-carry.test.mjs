@@ -823,13 +823,12 @@ test("53: every command the three routes name is one this branch dispatches", ()
     }
 });
 
-test("54: no entry route advertises the check part (c) has not shipped", () =>
-{
-    for (const [route, text] of Object.entries(entryRoutes()))
-    {
-        assert.ok(!/objective check/.test(text), `the ${route} guidance advertises \`self objective check\``);
-    }
-});
+// Cell 54 — "no entry route advertises the check part (c) has not shipped" —
+// is retired: part (c) shipped `self objective check`, and cell 52 of
+// docs/maintainers/case-tables/417-check.md is what replaces it. Cell 53 above
+// still resolves every command every route names against the typed contract,
+// so the rule the retired cell enforced — no route offers a command that does
+// not dispatch — is unchanged and still proved here.
 
 /* ── 8: provenance stays off the generic history reader (#455) ─────── */
 

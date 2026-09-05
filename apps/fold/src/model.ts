@@ -286,6 +286,11 @@ export interface WorkState
 export type ScopableVerb =
     | "self work"
     | "self objective"
+    // The read-only direction check (#417 §6). A verb of its own in this union
+    // rather than a suffix a caller appends, for the reason the union exists:
+    // a scoped pointer has to stay a command the parser resolves, and
+    // `self objective --project <slug> check` is not that command.
+    | "self objective check"
     | "self milestone"
     | "self status"
     | "self context"

@@ -531,14 +531,29 @@ export function deriveGoals(goals: GoalState, works: LinkedWork[], now: Date, zo
     return signals;
 }
 
+// Which exit criteria still stand, and which of them a claim covers — read
+// from the log alone, so the derivation below and the direction check (#417 §6)
+// answer the same question once. A dropped criterion is neither met nor open:
+// there is nothing left to judge.
+export function exitStanding(milestone: MilestoneState): { live: string[]; met: string[]; open: string[] }
+{
+    const live = milestone.exit.filter((criterion) => criterion.dropped !== true).map((criterion) => criterion.id);
+    const covered = new Set(milestone.coverage.map((item) => item.criterion));
+    return {
+        live,
+        met: live.filter((id) => covered.has(id)),
+        open: live.filter((id) => !covered.has(id))
+    };
+}
+
 function deriveMilestone(milestone: MilestoneState, objective: ObjectiveState, works: LinkedWork[], today: string): void
 {
-    const live = milestone.exit.filter((criterion) => criterion.dropped !== true);
-    const covered = new Set(milestone.coverage.map((item) => item.criterion));
-    milestone.met = live.filter((criterion) => covered.has(criterion.id)).map((criterion) => criterion.id);
-    milestone.open = live.filter((criterion) => !covered.has(criterion.id)).map((criterion) => criterion.id);
-    milestone.stale = staleCoverage(milestone, objective, new Set(live.map((criterion) => criterion.id)));
-    milestone.judgmentContext = carriedJudgments(milestone, objective, live.map((criterion) => criterion.id));
+    const standing = exitStanding(milestone);
+    const live = standing.live;
+    milestone.met = standing.met;
+    milestone.open = standing.open;
+    milestone.stale = staleCoverage(milestone, objective, new Set(live));
+    milestone.judgmentContext = carriedJudgments(milestone, objective, live);
     const linked = works.filter((work) => work.milestones.includes(milestone.id));
     milestone.works = linked.map((work) => work.id);
     milestone.blockedWorks = linked.filter((work) => work.status === "blocked").map((work) => work.id);
@@ -570,7 +585,7 @@ function staleCoverage(milestone: MilestoneState, objective: ObjectiveState, liv
 // checkpoint that has always had one objective establishes its own context,
 // and reclassifying its history would say the tool knows something it does
 // not.
-function carriedJudgments(milestone: MilestoneState, objective: ObjectiveState, live: string[]): JudgmentContext[]
+export function carriedJudgments(milestone: MilestoneState, objective: ObjectiveState, live: string[]): JudgmentContext[]
 {
     const latest = new Map<string, Coverage>();
     for (const item of milestone.coverage)
@@ -603,19 +618,33 @@ function evidenceOf(milestone: MilestoneState, linked: LinkedWork[]): string[]
     return [...new Set(hashes)];
 }
 
-function milestoneState(milestone: MilestoneState, objective: ObjectiveState, today: string): TargetState
+// Whether a checkpoint is over, decided by the log alone (#417 §6): reached,
+// superseded, dropped, or hanging under an objective that closed. The state
+// below layers what the clock decides — missed, at-risk — on top of this, and
+// the direction check reads this and nothing else, because a finding that
+// changed with the hour would not be the same finding on two machines.
+//
+// Reached is answered first: a checkpoint whose evidence landed before anyone
+// dropped it keeps that verdict, and the drop verb refuses it anyway.
+export function milestoneClosure(milestone: MilestoneState, objective: ObjectiveState): "reached" | "closed" | undefined
 {
     if (milestone.reached !== undefined)
     {
         return "reached";
     }
-    if (objective.status === "dropped" || objective.status === "superseded"
-        || milestone.supersededBy !== undefined || milestone.droppedWhy !== undefined)
+    return objective.status === "dropped" || objective.status === "superseded"
+        || milestone.supersededBy !== undefined || milestone.droppedWhy !== undefined
+        ? "closed"
+        : undefined;
+}
+
+function milestoneState(milestone: MilestoneState, objective: ObjectiveState, today: string): TargetState
+{
+    const closure = milestoneClosure(milestone, objective);
+    if (closure !== undefined)
     {
-        return "closed";
+        return closure;
     }
-    // Reached is checked above: a milestone whose evidence landed before anyone
-    // dropped it keeps that verdict, and the drop verb refuses it anyway.
     if (milestone.target !== undefined && daysBetween(today, milestone.target) < 0)
     {
         return "missed";

@@ -459,6 +459,21 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   former parent. `milestone recheck <id> --criterion cN --why w` settles one,
   recording the parent the checkpoint hangs under now; criteria nobody
   rechecks stay listed, and no unit's evidence is applied on anyone's behalf.
+- `objective check [--project <slug>] [--json]` reads the direction graph and
+  changes nothing. It states seven kinds of finding and no more: work whose
+  every current contribution is to an outcome that is over; a successor
+  checkpoint with no live work beside a predecessor that still has some; a
+  checkpoint dated past its objective; a coverage judgment made under a former
+  parent, or an assumption on a decision that was replaced; done work that is a
+  candidate for an uncovered criterion; work that states no disposition at all;
+  and an objective whose whole live checkpoint workload is runbook occurrences.
+  Every line it prints is a command you run yourself: it never relinks, covers,
+  revises or reclassifies, a candidate is information rather than coverage, and
+  maintenance is read off the `runbook link` edge rather than out of a record's
+  wording. It answers for one project and has no `--workspace` form; a
+  contribution to another project's objective is judged from that project's own
+  log where this machine holds it, and reported as not checked where it does
+  not. `status` and `context` carry the count.
 - `work` creates and moves outcomes, links them to objectives or milestones,
   records the process running a unit, and shows its evidence and recovery
   path. `work done` is the judgment that the outcome was reached, and the

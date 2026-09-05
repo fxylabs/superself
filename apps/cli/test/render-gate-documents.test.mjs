@@ -244,10 +244,13 @@ test("stage 4 cell 6: a piped `self status` keeps its roll-up lines and the proc
     assert.equal(printed[0], "demo — goal: every page answers through the gate");
     assert.match(printed[1], /^work: \d+ active, /);
     assert.match(printed[2], /^objectives: /);
-    assert.match(printed[3], /^waiting on you: [1-9]/);
-    assert.match(printed[4], /^unshipped: /);
-    assert.match(printed[5], /^decisions waiting: /);
-    assert.match(printed[6], /^health: /);
+    // The direction summary sits beside the objective roll-up, because it is a
+    // reading of the same graph (#417 §7).
+    assert.match(printed[3], /^direction: .* — self objective check --project /);
+    assert.match(printed[4], /^waiting on you: [1-9]/);
+    assert.match(printed[5], /^unshipped: /);
+    assert.match(printed[6], /^decisions waiting: /);
+    assert.match(printed[7], /^health: /);
     assert.equal(printed.at(-1), `process ${running}: running (pid ${process.pid})`);
 });
 

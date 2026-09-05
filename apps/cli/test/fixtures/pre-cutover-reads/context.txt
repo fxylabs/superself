@@ -1,5 +1,7 @@
 # demo
 
+Direction: ok — self objective check --project 'demo'
+
 fixture project
 
 - [goal] steady direction

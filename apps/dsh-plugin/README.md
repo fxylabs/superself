@@ -123,6 +123,30 @@ judgment to review, not a wrong one, and a person settles each one at a time:
 self milestone recheck <milestone-id> --criterion cN --why "<what you re-judged>"
 ```
 
+Reading the direction graph back is a command of its own, and it changes
+nothing:
+
+```bash
+self objective check [--project <slug>] [--json]
+```
+
+It names seven things and no more: work whose every current contribution is to
+an outcome that is over; a successor checkpoint with no live work beside a
+predecessor that still has some; a checkpoint dated past its objective; a
+coverage judgment made under a former parent, or an assumption on a decision
+that was replaced; done work that is a candidate for an uncovered criterion;
+work that states no disposition at all; and an objective whose whole live
+checkpoint workload is runbook occurrences.
+
+It never relinks, covers, revises or reclassifies. Every line it prints is a
+command the model or the user runs themselves, and the printed steps for the
+route chosen clear the finding they were printed under. A candidate is
+information: nothing is paired to a criterion by its wording, and maintenance
+is read off the run link rather than out of a record's text. Where a unit
+contributes to another project's objective and this machine cannot read that
+project, the answer says the target state was not checked rather than
+reporting all clear. `self status` and `self context` carry the count.
+
 ## What you get
 
 `/self` prints `self context` in the chat, without a model turn.
