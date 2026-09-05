@@ -46,6 +46,17 @@ function offer(printed)
     return lines.slice(3);
 }
 
+// The third disposition, offered under the outcomes since #417: a unit that
+// contributes to nothing on purpose says so with a reason, and an offer a
+// reader never sees is one nobody reaches for.
+function standaloneRows(work)
+{
+    return [
+        "contributes to nothing on purpose? say so, with the reason:",
+        `    self work link ${work} --standalone --why "<why it contributes to no outcome>"`
+    ];
+}
+
 /* ── cell 1: one open objective ───────────────────────────────────── */
 
 test("with one open objective, work add names it, its id and the exact link command", async () =>
@@ -57,6 +68,7 @@ test("with one open objective, work add names it, its id and the exact link comm
     assert.deepEqual(offer(added.out), [
         `${objective}  unstarted  reach preview`,
         `    self work link ${work} --objective ${objective}`,
+        ...standaloneRows(work),
         "1 open objective"
     ]);
 });
@@ -88,7 +100,7 @@ test("with no objective, work add prints the line work propose prints, and no si
 {
     const { box, demo } = await project();
     const added = await mustPerson(box, demo, ["work", "add", "the flow works"]);
-    assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT]);
+    assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT, ...standaloneRows(workIdIn(added.out))]);
     // `printSize` says nothing at zero: the empty wording is the size statement.
     assert.ok(!/\d+ open objective/.test(added.out), `a size line was printed at zero:\n${added.out}`);
 });
@@ -105,7 +117,7 @@ test("a closed objective is never offered as a link target", async () =>
         ["objective", "close", dropped, "--as", "dropped", "--why", "descoped"], dropped);
     assert.equal(closed.code, 0, `the drop was refused:\n${closed.out}`);
     const added = await mustPerson(box, demo, ["work", "add", "the flow works"]);
-    assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT]);
+    assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT, ...standaloneRows(workIdIn(added.out))]);
     assert.ok(!added.out.includes(reached), "a reached objective was offered as a link target");
     assert.ok(!added.out.includes(dropped), "a dropped objective was offered as a link target");
 });
@@ -240,7 +252,7 @@ test("an objective that only another project has is not offered here", async () 
     await must(box, other, ["project", "init", "--name", "other", "--no-connect"]);
     const foreign = await objectiveIn(box, other, "the other project's outcome");
     const added = await mustPerson(box, demo, ["work", "add", "the flow works"]);
-    assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT]);
+    assert.deepEqual(offer(added.out), [NO_OBJECTIVE_HINT, ...standaloneRows(workIdIn(added.out))]);
     assert.ok(!added.out.includes(foreign), "another project's objective was offered");
     assert.ok(!added.out.includes("the other project's outcome"), "another project's outcome text leaked");
 });

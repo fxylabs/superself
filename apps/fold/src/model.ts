@@ -8,7 +8,7 @@
 // terminal, and nothing runs at module load.
 
 import { DEFAULT_ZONE } from "./dates.js";
-import { applyEntity, awaitsReview, collectAnnulled, CriterionState, deriveEntities, emptyEntityFold, EntityFold, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn } from "./entities.js";
+import { applyEntity, assumedDecisions, awaitsReview, collectAnnulled, CriterionState, deriveEntities, emptyEntityFold, EntityFold, EntityScope, EntityState, HOME_SCOPE, isCurrent, isLive, PlanState, reconcileEntity, rendersIn, standaloneOf } from "./entities.js";
 import {
     applyMilestone,
     applyObjective,
@@ -185,6 +185,14 @@ export interface ForeignObjectiveLink
     project: string;
 }
 
+// A unit's stated standalone disposition, read off its own `standalone` edge.
+export interface StandaloneDisposition
+{
+    why: string;
+    // Absent only for an edge a hand-appended line left without a timestamp.
+    declared?: string;
+}
+
 export interface WorkState
 {
     id: string;
@@ -252,6 +260,11 @@ export interface WorkState
     // satisfied by evidence, not by a unit reaching done.
     objectives: string[];
     milestones: string[];
+    // What this unit says about contributing to nothing (#417 §1): the reason
+    // it stands alone and when that was declared. Absent means nobody has
+    // stated a disposition — which is not the same fact, and is why the
+    // declaration is an edge rather than the absence of one.
+    standalone?: StandaloneDisposition;
     // The objectives other registered projects own that this unit contributes
     // to (#244), each qualified by the owning slug the link event carried.
     // Kept apart from `objectives` on purpose: those ids resolve in this
@@ -1268,6 +1281,7 @@ function newMilestone(entity: EntityState, objective: ObjectiveState, creation: 
         revision: 1,
         target: entity.target,
         exit: entity.criteria.map((text, index) => ({ id: `c${index + 1}`, text })),
+        assumes: assumedDecisions(entity),
         after: stringList(creation?.payload.after),
         coverage: [],
         supersededBy: entity.supersededBy,
@@ -1334,7 +1348,16 @@ function carryLegacyMilestones(model: ProjectModel): void
         const found = findMilestone(model.goals, entity.id);
         const parents = memberObjectives(model, entity);
         const target = parents[parents.length - 1];
-        if (found === null || target === undefined || target === found.objective)
+        if (found === null)
+        {
+            continue;
+        }
+        // Before the carry guard, not after it: an assumption is stated on the
+        // derived entity whether or not a revision ever moved the record, and
+        // a legacy checkpoint that stayed where it was would otherwise be the
+        // one kind that cannot say what it assumes (#417 §2).
+        found.milestone.assumes = assumedDecisions(entity);
+        if (target === undefined || target === found.objective)
         {
             continue;
         }
@@ -1390,6 +1413,16 @@ function projectWork(model: ProjectModel, entity: EntityState, creation: SelfEve
     model.works.push(workFromEntity(model, entity, creation));
 }
 
+// The disposition an explicit standalone edge states. A declaration with no
+// reason cannot be written by the verb — it demands `--why` — so one that
+// reaches here came from a hand-appended line, and the empty string is what a
+// render says nothing about rather than what it treats as a stated reason.
+function standaloneDisposition(entity: EntityState): StandaloneDisposition | undefined
+{
+    const edge = standaloneOf(entity);
+    return edge === undefined ? undefined : { why: edge.why ?? "", declared: edge.declared };
+}
+
 // The member-of edges, split by where they resolve (#244): an unqualified id
 // resolves against this fold's own goal tree, as it always did; a qualified
 // one names another project's objective and is carried as stated, because
@@ -1430,6 +1463,7 @@ function workFromEntity(model: ProjectModel, entity: EntityState, creation: Self
         artifacts: [],
         branches: creation?.refs?.branch === undefined ? [] : [String(creation.refs.branch)],
         ...memberLinks(model, entity),
+        standalone: standaloneDisposition(entity),
         gatedBy: [],
         attempts: []
     };

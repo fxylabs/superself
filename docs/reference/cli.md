@@ -418,6 +418,23 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   judgment about this machine's sessions.
 - `decide` records a confirmed decision by default. `--proposed` records one
   awaiting confirmation; `decide confirm <event-id>` confirms it.
+- `work link <id>` states what a unit contributes to, and there are three
+  answers: `--objective <id>` or `--milestone <id>` for work that moves a
+  stated outcome, `--standalone --why "<reason>"` for work that moves none on
+  purpose, and `self runbook link <run-id> --work <id>` for one occurrence of a
+  procedure this project repeats. Nothing is inferred from a unit's wording or
+  its dates, and nothing forces a disposition: a unit that states none is not
+  standing alone, it is one nobody has said anything about yet. `work add` and
+  `work propose` take `--standalone --why` too, so a unit can be born with the
+  disposition. Declaring standalone conceals no existing edge — `work unlink
+  <id> --objective <id>` withdraws a contribution, and `work unlink <id>
+  --standalone` takes the declaration back — so moving a unit off an outcome
+  that is over is two statements, both on the record.
+- `milestone link <id> --decision <decision-id>` states a decision a checkpoint
+  rests on, and the flag is repeatable on `milestone add` and `milestone
+  revise` as well. Assumptions are additive: replacing one is linking the
+  successor decision and then `milestone unlink <id> --decision <old-id>`,
+  never a rewrite that could take an unrelated assumption with it.
 - `work` creates and moves outcomes, links them to objectives or milestones,
   records the process running a unit, and shows its evidence and recovery
   path. `work done` is the judgment that the outcome was reached, and the

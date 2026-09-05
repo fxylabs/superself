@@ -17,6 +17,7 @@ import {
     rendersIn,
     requireSupersedeKind,
     scopeTarget,
+    standaloneEdge,
     supersedeSpelling,
     WorkProposal
 } from "@superself/fold";
@@ -44,7 +45,7 @@ import {
 } from "./paths.js";
 import { makeEvent, recordEvent, recordEvents } from "./pipeline.js";
 import { recordRetirement, retiring, retirementIntent, supersedeTargets, supersedingRecord } from "./retirement.js";
-import { admittingDemotions, confirmEntityUnit, Declaration, declarationOf, DECLARE_OPTIONS, demotionEvents, Placed, recordCoverage, recordOwner, tierOf } from "./state.js";
+import { admittingDemotions, confirmEntityUnit, Declaration, declarationOf, DECLARE_OPTIONS, demotionEvents, Placed, recordCoverage, recordOwner, requireDecision, tierOf } from "./state.js";
 import { dim, errYellow, firstLine, markdownHeadings, plural, styled } from "./style.js";
 import { CliError, CommandOutput, ListingBlock, SelfEvent } from "./types.js";
 
@@ -79,7 +80,7 @@ const RECHECK_REQUIRED: Requirement[] = [
 ];
 
 const OBJECTIVE_USAGE = 'usage: self objective [list] | add "<outcome>" | show <id> | confirm <id> | decline <id> --why w | revise <id> --why w | close <id> --as reached|dropped [--why w]';
-const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | met <id> --criterion c1 --why w | reach <id> | recheck <id> --criterion c1 --why w';
+const MILESTONE_USAGE = 'usage: self milestone [list] | add "<outcome>" --objective <id> --exit "<criterion>" | show <id> | revise <id> --why w | drop <id> --why w | link|unlink <id> --decision <id> | met <id> --criterion c1 --why w | reach <id> | recheck <id> --criterion c1 --why w';
 
 // `met` and `recheck` are one intake read twice, so they declare one option set
 // rather than two that can drift apart.
@@ -125,6 +126,7 @@ const MILESTONE_ADD_OPTIONS = {
     exit: { type: "string", multiple: true },
     after: { type: "string", multiple: true },
     supersedes: { type: "string" },
+    decision: { type: "string", multiple: true },
     demote: { type: "string", multiple: true }
 } as const;
 
@@ -133,8 +135,16 @@ const MILESTONE_REVISE_OPTIONS = {
     target: { type: "string" },
     exit: { type: "string", multiple: true },
     "drop-exit": { type: "string", multiple: true },
+    decision: { type: "string", multiple: true },
     why: { type: "string" }
 } as const;
+
+// One checkpoint, one decision, one edge. Repeatable because a checkpoint
+// rests on as many decisions as it names (#417 §2), and stated rather than
+// inferred: an assumption nobody wrote down is not one anybody can withdraw.
+const MILESTONE_LINK_OPTIONS = { decision: { type: "string", multiple: true } } as const;
+
+const ASSUMED_DECISION: Requirement = { flags: ["decision"], value: "<id>", hint: "the decision this checkpoint assumes" };
 
 /* ── objectives ────────────────────────────────────────────────────── */
 
@@ -627,7 +637,10 @@ export const MILESTONE_COMMAND: Command = {
             description: ["list milestones with state, reason, and linked work"],
             verbs: ["", "list"]
         },
-        { syntax: 'milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]', verbs: ["add"] },
+        {
+            syntax: 'milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m] [--decision d]',
+            verbs: ["add"]
+        },
         {
             syntax: "milestone show <id> [--project <slug>]",
             description: [
@@ -637,7 +650,7 @@ export const MILESTONE_COMMAND: Command = {
             verbs: ["show"]
         },
         {
-            syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]",
+            syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1] [--decision d]",
             description: ["a revision supersedes: a new milestone id carries the revised criteria"],
             verbs: ["revise"]
         },
@@ -645,6 +658,14 @@ export const MILESTONE_COMMAND: Command = {
             syntax: 'milestone drop <id> --why "<reason>"',
             description: ["give up on a checkpoint with nothing replacing it"],
             verbs: ["drop"]
+        },
+        {
+            syntax: "milestone link|unlink <id> --decision <id>",
+            description: [
+                "state, or withdraw, a decision this checkpoint assumes",
+                "(replacing one is linking the successor and then unlinking the old decision)"
+            ],
+            verbs: ["link", "unlink"]
         },
         { syntax: "milestone met <id> --criterion c1 --why w [--work id] [--evidence c]", verbs: ["met"] },
         { syntax: "milestone reach <id>", description: ["record a milestone as reached once every criterion is covered"], verbs: ["reach"] },
@@ -659,6 +680,17 @@ export const MILESTONE_COMMAND: Command = {
         "every exit criterion is covered by evidence — finishing work never",
         "reaches one on its own.",
         "",
+        "a checkpoint may rest on decisions this project settled. State each one,",
+        "and a checkpoint whose ground moved is corrected by naming the successor",
+        "and then withdrawing the old one — never by rewriting the set:",
+        "",
+        "  self milestone link <id> --decision <decision-id>",
+        "  self milestone unlink <id> --decision <old-decision-id>",
+        "",
+        "Nothing reads an assumption out of the wording of a checkpoint. An edge is",
+        "what there is to withdraw, so an assumption nobody stated is one nobody can",
+        "take back.",
+        "",
         "list and show read and take --project; every other verb writes into the",
         "project it runs in. There is no --workspace form: a milestone hangs under",
         "an objective, so `self objective --workspace` is the workspace-wide roll-up.",
@@ -668,6 +700,8 @@ export const MILESTONE_COMMAND: Command = {
         "  --exit <criterion>    an exit criterion, repeatable",
         "  --target <date>       the date the checkpoint is judged on",
         "  --after <id>          order it after another milestone",
+        "  --decision <id>       a decision this checkpoint assumes, repeatable — stated on the",
+        "                        add or the revision, and linked or withdrawn on its own after",
         "  --criterion <c>       the criterion `met` or `recheck` speaks about",
         "  --work <id>           the work unit whose evidence covers it",
         "  --evidence <hash>     a commit recorded with the coverage",
@@ -694,6 +728,8 @@ export const MILESTONE_COMMAND: Command = {
             retiring(leaf("drop", WHY_OPTION, 1, milestoneDrop, {
                 requires: [{ flags: ["why"], hint: "why it is not being reached" }]
             })),
+            leaf("link", MILESTONE_LINK_OPTIONS, 1, (input) => milestoneLink(input, true), { requires: [ASSUMED_DECISION] }),
+            leaf("unlink", MILESTONE_LINK_OPTIONS, 1, (input) => milestoneLink(input, false), { requires: [ASSUMED_DECISION] }),
             leaf("met", COVERAGE_OPTIONS, 1, milestoneMet, { requires: COVERAGE_REQUIRED }),
             leaf("reach", {}, 1, milestoneReach),
             leaf("recheck", COVERAGE_OPTIONS, 1, milestoneRecheck, { requires: RECHECK_REQUIRED })
@@ -840,6 +876,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         requireSupersedeKind(model.entities, values.supersedes, "milestone");
         links.push({ type: "supersedes", target: requireSibling(objective, values.supersedes) });
     }
+    links.push(...statedAssumptions(model, values.decision));
     const payload = milestoneAddPayload(id, outcome, row, links, objective, values);
     const demotions = presetGate(ctx, models, 'milestone add "<outcome>"', row.exposure, values, outcome, payload);
     recordRetirement(ctx, retirementIntent(model, "supersede", supersedeTargets(payload),
@@ -875,9 +912,10 @@ function refuseMilestoneRevise(milestone: MilestoneState, values: CommandInput<t
     }
     if (values.outcome === undefined && values.target === undefined
         && (values.exit === undefined || values.exit.length === 0)
-        && (values["drop-exit"] === undefined || values["drop-exit"].length === 0))
+        && (values["drop-exit"] === undefined || values["drop-exit"].length === 0)
+        && (values.decision === undefined || values.decision.length === 0))
     {
-        throw new CliError("milestone revise needs at least one of --outcome, --target, --exit, --drop-exit");
+        throw new CliError("milestone revise needs at least one of --outcome, --target, --exit, --drop-exit, --decision");
     }
 }
 
@@ -889,29 +927,45 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
     const { ctx, model, milestone, objective } = milestoneTarget(positionals[0]);
     const why = required(values.why);
     refuseMilestoneRevise(milestone, values);
-    const dropped = new Set((values["drop-exit"] ?? []).map((id) => requireCriterion(milestone, id).id));
-    const criteria = [
-        ...milestone.exit.filter((item) => item.dropped !== true && !dropped.has(item.id)).map((item) => item.text),
-        ...values.exit ?? []
-    ];
     const id = milestoneId();
-    const payload: Record<string, unknown> = {
-        entity: id,
-        text: restated(values.outcome, "milestone") ?? milestone.outcome,
-        labels: [presetRow(ctx.storeDir, "milestone").label],
-        links: [{ type: "member-of", target: objective.id }, { type: "supersedes", target: milestone.id }],
-        criteria,
-        ...carriedPlacement(model, milestone.id),
-        after: milestone.after,
-        target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, milestone.target),
-        why
-    };
+    const payload = milestoneRevisePayload(ctx, model, { milestone, objective }, id, values);
     recordRetirement(ctx, retirementIntent(model, "supersede", [milestone.id],
         { successor: supersedingRecord(payload) }), model,
         (by) => [makeEvent(ctx.project, "entity.confirmed",
             strip({ ...payload, by }), undefined, true)],
         `${id} ${why}`);
     return [{ kind: "receipt", text: id }];
+}
+
+// What the successor record carries: the criteria the revision leaves standing
+// plus the ones it adds, the grouping and supersession edges, and the
+// assumptions this call states. The predecessor's own assumptions are not
+// carried here — that is #417's part (b) — so a revision names the decisions
+// it rests on or names none.
+function milestoneRevisePayload(ctx: ProjectContext, model: ProjectModel,
+    revised: { milestone: MilestoneState; objective: ObjectiveState }, id: string,
+    values: CommandInput<typeof MILESTONE_REVISE_OPTIONS>["values"]): Record<string, unknown>
+{
+    const { milestone, objective } = revised;
+    const dropped = new Set((values["drop-exit"] ?? []).map((item) => requireCriterion(milestone, item).id));
+    return {
+        entity: id,
+        text: restated(values.outcome, "milestone") ?? milestone.outcome,
+        labels: [presetRow(ctx.storeDir, "milestone").label],
+        links: [
+            { type: "member-of", target: objective.id },
+            { type: "supersedes", target: milestone.id },
+            ...statedAssumptions(model, values.decision)
+        ],
+        criteria: [
+            ...milestone.exit.filter((item) => item.dropped !== true && !dropped.has(item.id)).map((item) => item.text),
+            ...values.exit ?? []
+        ],
+        ...carriedPlacement(model, milestone.id),
+        after: milestone.after,
+        target: revisedField(withdrawable(values.target, validDate) as string | null | undefined, milestone.target),
+        why: required(values.why)
+    };
 }
 
 // A checkpoint given up on, with nothing taking its place. Revising it would
@@ -933,6 +987,60 @@ function milestoneDrop({ values, positionals }: CommandInput<typeof WHY_OPTION>)
         (by) => [makeEvent(ctx.project, "entity.retired",
             { entity: milestone.id, why, by }, undefined, true)],
         `${milestone.id} ${why}`);
+}
+
+/* ── the decisions a checkpoint assumes (#417 §2) ──────────────────── */
+
+// One edge per named decision, `assumes` rather than `member-of`: a checkpoint
+// is not part of a decision and a decision is not part of a checkpoint — the
+// checkpoint rests on what the decision settled, and it may rest on several.
+//
+// Additive by design. Replacing a superseded assumption is linking the
+// successor and then unlinking the old decision, two statements a person can
+// see and undo, never a silent rewrite that takes an unrelated assumption with
+// it.
+function milestoneLink({ values, positionals }: CommandInput<typeof MILESTONE_LINK_OPTIONS>, link: boolean): CommandOutput
+{
+    const { ctx, model, milestone } = milestoneTarget(positionals[0]);
+    const decisions = (values.decision ?? []).map((prefix) => requireDecision(model, prefix).id);
+    const edges = decisions.map((id) => assumedEdge(milestone, id, link));
+    recordEvents(ctx, edges.map((edge) =>
+        makeEvent(ctx.project, link ? "entity.linked" : "entity.unlinked",
+            { entity: milestone.id, link: edge }, undefined, true)),
+        `${milestone.id} ${milestone.outcome}`);
+    return [{
+        kind: "receipt",
+        text: `${milestone.id} ${link ? "assumes" : "no longer assumes"} ${decisions.join(", ")}`
+    }];
+}
+
+// Refused before anything is written, and by name: restating an edge the
+// record already carries would append an event no reader can tell from the
+// first, and withdrawing one it never carried would record a correction of
+// nothing.
+function assumedEdge(milestone: MilestoneState, decision: string, link: boolean): Record<string, unknown>
+{
+    const assumed = milestone.assumes.includes(decision);
+    if (link && assumed)
+    {
+        throw new CliError(`${milestone.id} already assumes ${decision} — one edge is one link`);
+    }
+    if (!link && !assumed)
+    {
+        throw new CliError(`${milestone.id} does not assume ${decision} — `
+            + `state one with \`self milestone link ${milestone.id} --decision <id>\``);
+    }
+    return { type: "assumes", target: decision };
+}
+
+// The assumption edges a creation or a revision states. A revision states its
+// own: this part of #417 ships the edges and the verbs, and carrying a
+// predecessor's assumptions across a revision is PR(b)'s scope, so a revision
+// that names none is a checkpoint that assumes none until somebody says
+// otherwise.
+function statedAssumptions(model: ProjectModel, decisions: string[] | undefined): Record<string, unknown>[]
+{
+    return (decisions ?? []).map((prefix) => ({ type: "assumes", target: requireDecision(model, prefix).id }));
 }
 
 // Sugar over the coverage grammar (#207 C5): `met` records the same
@@ -1036,16 +1144,32 @@ function requireCovered(milestone: MilestoneState): void
 const LINK_OPTIONS = {
     objective: { type: "string" },
     "objective-project": { type: "string" },
-    milestone: { type: "string" }
+    milestone: { type: "string" },
+    standalone: { type: "boolean" },
+    why: { type: "string" }
 } as const;
 
-const LINK_TARGET: Requirement = { flags: ["objective", "milestone"], value: "<id>", hint: "what the unit contributes to" };
+// Three answers, not two (#417 §1). A unit contributes to an objective, to a
+// milestone, or to nothing on purpose — and the third is a statement with a
+// reason, which is what tells it apart from a unit nobody has said anything
+// about yet.
+const LINK_TARGET: Requirement = {
+    flags: ["objective", "milestone", "standalone"],
+    value: "<id>",
+    hint: "what the unit contributes to, or --standalone when it contributes to nothing on purpose"
+};
+
+// Demanded only once `--standalone` is given, so it cannot be declared on the
+// leaf: a requirement that depends on another flag's value is judged in the
+// handler and still refused by the one gate (#106).
+const STANDALONE_WHY: Requirement = { flags: ["why"], hint: "why this unit contributes to no outcome" };
 
 const PROPOSAL_OPTIONS = {
     objective: { type: "string" },
     milestone: { type: "string" },
     supersedes: { type: "string" },
     why: { type: "string" },
+    standalone: { type: "boolean" },
     value: { type: "string" },
     success: { type: "string", multiple: true },
     stop: { type: "string", multiple: true },
@@ -1118,17 +1242,65 @@ export const WORK_GOAL_LEAVES: CommandLeaf[] = [
 
 // Stating what a unit contributes to is a grouping edge in the shared
 // grammar (#207 B13): one `entity.linked` per named outcome, `member-of`
-// pointing at the objective or the milestone.
+// pointing at the objective or the milestone. A standalone declaration rides
+// the same two events (#417 §2) — it is a statement about the same axis, and
+// a second verb for it would be a second gate that has to agree with this one.
 function cmdWorkLink({ values, positionals }: CommandInput<typeof LINK_OPTIONS>, link: boolean): void
 {
+    const verb = link ? "work link" : "work unlink";
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireWork(model, positionals[0]);
-    const links = linkEdges(ctx, model, values, link ? "work link" : "work unlink");
+    const links = [...linkEdges(ctx, model, values, verb), ...standaloneEdges(work, values, link)];
     const type = link ? "entity.linked" : "entity.unlinked";
     recordEvents(ctx, links.map((edge) =>
         makeEvent(ctx.project, type, { entity: work.id, link: edge }, undefined, true)),
         `${work.id} ${work.outcome}`);
+}
+
+// The standalone half of one link call, refused before anything is written.
+// Declaring it beside an outcome is the one combination that cannot be true:
+// a unit that stands alone contributes to nothing, so the two statements are
+// made one at a time and the second one is the correction of the first.
+function standaloneEdges(work: WorkState, values: CommandInput<typeof LINK_OPTIONS>["values"],
+    link: boolean): Record<string, unknown>[]
+{
+    if (values.standalone !== true)
+    {
+        return [];
+    }
+    if (values.objective !== undefined || values.milestone !== undefined)
+    {
+        throw new CliError("a unit that stands alone contributes to no outcome — state one or the other, "
+            + `and withdraw the edge it no longer needs with \`self work unlink ${work.id} --objective|--milestone <id>\``);
+    }
+    return link ? [declaredStandalone(work, values)] : [withdrawnStandalone(work, values)];
+}
+
+function declaredStandalone(work: WorkState, values: CommandInput<typeof LINK_OPTIONS>["values"]): Record<string, unknown>
+{
+    requireOptions("work link", values, [STANDALONE_WHY]);
+    if (work.standalone !== undefined)
+    {
+        throw new CliError(`${work.id} already stands alone — ${work.standalone.why}; one edge is one link, so restate it `
+            + `with \`self work unlink ${work.id} --standalone\` and declare it again`);
+    }
+    return { ...standaloneEdge(work.id, required(values.why)) };
+}
+
+function withdrawnStandalone(work: WorkState, values: CommandInput<typeof LINK_OPTIONS>["values"]): Record<string, unknown>
+{
+    if (values.why !== undefined)
+    {
+        throw new CliError("work unlink --standalone withdraws the declaration and states nothing of its own — "
+            + "what the unit contributes to now is the link that replaces it");
+    }
+    if (work.standalone === undefined)
+    {
+        throw new CliError(`${work.id} does not stand alone — a unit declares it with `
+            + `\`self work link ${work.id} --standalone --why "<why it contributes to no outcome>"\``);
+    }
+    return { ...standaloneEdge(work.id) };
 }
 
 // The edges one call states, resolved before anything is written. An objective
@@ -1240,15 +1412,43 @@ function cmdPropose({ values, positionals }: CommandInput<typeof PROPOSAL_OPTION
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const brief = briefFor(model, outcome, values as Record<string, string | string[] | undefined>);
     requireNovel(model, outcome, brief);
-    const supersedes = proposedSupersession(ctx, model, values);
     const id = workId();
-    const payload = proposedPayload(ctx, id, outcome, brief, supersedes, declarationOf(values, "work propose"));
+    const born = proposedStandalone(id, values);
+    const supersedes = proposedSupersession(ctx, model, values);
+    const payload = proposedPayload(ctx, id, outcome, brief, supersedes, declarationOf(values, "work propose"), born);
     recordEvent(ctx, makeEvent(ctx.project, "entity.proposed", strip({ ...payload, by: writtenBy() })), `${outcome}`);
     return [{ kind: "receipt", text: proposalReceipt(id, supersedes) }];
 }
 
+// The disposition a plan states about the unit it will become (#417 §1). It
+// rides the proposal's own creation links, so the acceptance carries it
+// without a second statement — confirming a plan is confirming what it said.
+//
+// A plan that names a gap contributes to that gap by construction, and `--why`
+// on this verb already states why a superseded unit gave up its outcome, so
+// both pairings are refused rather than half-recorded.
+function proposedStandalone(id: string, values: CommandInput<typeof PROPOSAL_OPTIONS>["values"]): Record<string, unknown>[]
+{
+    if (values.standalone !== true)
+    {
+        return [];
+    }
+    if (values.objective !== undefined || values.milestone !== undefined)
+    {
+        throw new CliError("work propose --standalone plans a unit that closes no stated gap — drop --objective and --milestone, "
+            + "or drop --standalone and give the gap proposal its brief");
+    }
+    if (values.supersedes !== undefined)
+    {
+        throw new CliError("work propose --why states why the replaced unit gave up its outcome, and --standalone needs a "
+            + "reason of its own — propose the correction first, then `self work link <new-id> --standalone --why \"…\"`");
+    }
+    requireOptions("work propose", values, [STANDALONE_WHY]);
+    return [{ ...standaloneEdge(id, required(values.why)) }];
+}
+
 function proposedPayload(ctx: ProjectContext, id: string, outcome: string, brief: Record<string, unknown>,
-    supersedes: SupersedePlan | undefined, declared: Declaration): Record<string, unknown>
+    supersedes: SupersedePlan | undefined, declared: Declaration, links: Record<string, unknown>[]): Record<string, unknown>
 {
     const row = presetRow(ctx.storeDir, "work");
     const { outcome: text, ...rest } = brief;
@@ -1257,7 +1457,7 @@ function proposedPayload(ctx: ProjectContext, id: string, outcome: string, brief
         entity: id,
         text: outcome,
         labels: [row.label],
-        links: [],
+        links,
         // What the plan declares, in the order it was declared. The hard-coded
         // empty list this carried until #408 is what a call declaring nothing
         // still writes, so a proposal from before this issue is unchanged.
@@ -1287,7 +1487,10 @@ function proposedSupersession(ctx: ProjectContext, model: ProjectModel,
 {
     if (values.supersedes === undefined)
     {
-        if (values.why !== undefined)
+        // A standalone declaration owns the `--why` on such a call, and
+        // `proposedStandalone` has already refused the pair that would make
+        // one reason answer for two statements.
+        if (values.why !== undefined && values.standalone !== true)
         {
             throw new CliError("work propose --why states why a replaced unit gave up its outcome — "
                 + "pass --supersedes <work-id> too, or record the reason with `self report`");
@@ -1680,14 +1883,19 @@ function refuseClosedPlan(entity: EntityState): void
 // It names targets and spells out the command; it refuses nothing. The unit is
 // already recorded by the time this renders, and superself forces no
 // methodology.
-export function attachmentListing(model: ProjectModel, work: string, superseded?: WorkState): ListingBlock
+export function attachmentListing(model: ProjectModel, work: string, superseded?: WorkState,
+    standalone = false): ListingBlock
 {
     const objectives = openObjectives(model.goals);
     const rows = [
         ...carriedLinks(model, work, superseded),
         ...(objectives.length === 0
             ? [NO_OBJECTIVE_HINT]
-            : objectives.flatMap((objective) => attachmentRows(objective, work)))
+            : objectives.flatMap((objective) => attachmentRows(objective, work))),
+        // Not offered to a unit that was born with the declaration: the caller
+        // has already answered, and an offer repeated back at them reads as a
+        // command that did not take.
+        ...(standalone ? [] : standaloneOffer(work))
     ];
     return {
         kind: "listing",
@@ -1701,6 +1909,18 @@ export function attachmentListing(model: ProjectModel, work: string, superseded?
         total: objectives.length,
         noun: "open objective"
     };
+}
+
+// The third answer, offered where the other two are (#417 §1). A unit that
+// contributes to nothing on purpose says so with a reason, and an offer it
+// never sees is one no agent reaches for — which is how work with no stated
+// disposition became indistinguishable from work nobody had got to yet.
+function standaloneOffer(work: string): string[]
+{
+    return [
+        "contributes to nothing on purpose? say so, with the reason:",
+        `    self work link ${work} --standalone --why "<why it contributes to no outcome>"`
+    ];
 }
 
 // One objective and its checkpoints, each under the command that attaches this

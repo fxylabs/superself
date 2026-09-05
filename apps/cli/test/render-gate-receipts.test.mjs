@@ -27,10 +27,10 @@ git(box, demo, ["init", "-q", "-b", "main"]);
 await must(box, demo, ["project", "init", "--name", "demo", "--desc", "the receipt migration", "--no-connect"]);
 
 // Since #286 the id is followed by what the unit could attach to. This project
-// has no objective, so that is the one line `work propose` prints in the same
-// situation — and the receipt itself is still the bare id on its own line,
-// directly under the announce line, which is what this cell has always been
-// about.
+// has no objective, so that half is the one line `work propose` prints in the
+// same situation, and since #417 the standalone declaration is offered under
+// it. The receipt itself is still the bare id on its own line, directly under
+// the announce line, which is what this cell has always been about.
 test("stage 2 cell 1: a piped `self work add` answers with the bare id, under the announce line", async () =>
 {
     const answer = await personIn(box, demo, ["work", "add", "the receipts answer through the gate"]);
@@ -41,7 +41,10 @@ test("stage 2 cell 1: a piped `self work add` answers with the bare id, under th
         new RegExp(`^entity\\.confirmed recorded \\[[0-9abcdefghjkmnpqrstvwxyz]{26}\\]`
             + `\\n {2}w-[0-9abcdefghjkmnpqrstvwxyz]{5} the receipts answer through the gate`
             + ` — verify; wrong\\? self undo [0-9abcdefghjkmnpqrstvwxyz]{26}`
-            + `\\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\\n${escaped(NO_OBJECTIVE_HINT)}\\n$`));
+            + `\\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\\n${escaped(NO_OBJECTIVE_HINT)}`
+            + `\\ncontributes to nothing on purpose\\? say so, with the reason:`
+            + `\\n {4}self work link w-[0-9abcdefghjkmnpqrstvwxyz]{5} --standalone`
+            + ` --why "<why it contributes to no outcome>"\\n$`));
 });
 
 function escaped(text)

@@ -206,12 +206,15 @@ usage: self <command>
   objective close <id> --as reached|dropped [--why w]
                                              --why is required when it is dropped
   milestone [--project <slug>]               list milestones with state, reason, and linked work
-  milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m]
+  milestone add "<outcome>" --objective <id> --exit "<criterion>" [--target d] [--after m] [--supersedes m] [--decision d]
   milestone show <id> [--project <slug>]     print a milestone, its exit criteria, and its coverage
                                              (with every linked work unit: its state, its criteria, its holder, its latest report)
-  milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1]
+  milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1] [--decision d]
                                              a revision supersedes: a new milestone id carries the revised criteria
   milestone drop <id> --why "<reason>"       give up on a checkpoint with nothing replacing it
+  milestone link|unlink <id> --decision <id>
+                                             state, or withdraw, a decision this checkpoint assumes
+                                             (replacing one is linking the successor and then unlinking the old decision)
   milestone met <id> --criterion c1 --why w [--work id] [--evidence c]
   milestone reach <id>                       record a milestone as reached once every criterion is covered
   milestone recheck <id> --criterion c1 --why w
@@ -226,10 +229,11 @@ usage: self <command>
   work [--project <slug>] [--pretty|--plain]
                                              list open work, from any directory with --project
                                              (a terminal gets the ruled table; a pipe gets one line per unit)
-  work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
+  work add "<required outcome>" [--supersedes <work-id> --why w] [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
                                              create a work unit; --supersedes retires the unit it replaces, naming this one its successor
                                              (the confirmed-at-once form; `work propose` is the one that asks for review first)
                                              --criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task
+                                             --standalone records at birth that the unit contributes to nothing on purpose, with the reason
   work show <id> [--history [--page n]] [--project <slug>]
                                              print full work detail: brief, reports, evidence
                                              (resolves the owning project from any directory)
@@ -249,14 +253,17 @@ usage: self <command>
                                              close a unit whose outcome was reached; the claim must carry evidence
                                              (a report with a commit or artifact, or the done-time --report text)
                                              a unit that declares criteria is refused until every one of them is covered
-  work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
+  work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m | --standalone --why w
                                              state, or withdraw, what a work unit contributes to
                                              (an objective resolves here first, then across every registered project)
-  work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
+                                             --standalone states that it contributes to nothing on purpose, and owes the reason
+                                             (`work unlink <id> --standalone` takes that declaration back)
+  work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
                                              propose work for a person to review; the plan text alone is enough
                                              (--objective or --milestone makes it a gap proposal, which owes the full brief)
                                              --supersedes proposes a correction: the unit it names is retired when the plan is confirmed
                                              --criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task
+                                             --standalone plans a unit that closes no stated gap, and says why it contributes to nothing
   work revise <id> "<revised plan>" --why w  restate an unstarted plan under the same work id; acceptance is invalidated
                                              (a plan that has started is corrected by a successor, the way `work add` records one)
   work confirm|decline <proposal-id> [--why w]
@@ -381,15 +388,15 @@ concepts: self help <topic>
 
 $ self work --help   (in project, exit 0)
 usage: self work [--project <slug>] [--pretty|--plain]
-       self work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
+       self work add "<required outcome>" [--supersedes <work-id> --why w] [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
        self work show <id> [--history [--page n]] [--project <slug>]
        self work start <id>
        self work block|unblock <id> [--criterion cN]
        self work criteria add <id> "<text>" [--verify "<how it is checked>"] [--owner person]
        self work cover <id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]
        self work done <id> [--report "<what verifiably happened>"] [--why w]
-       self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m
-       self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
+       self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m | --standalone --why w
+       self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
        self work revise <id> "<revised plan>" --why w
        self work confirm|decline <proposal-id> [--why w]
        self work started <id> --pid N | exited <id> [--code N]
@@ -397,6 +404,22 @@ usage: self work [--project <slug>] [--pretty|--plain]
 
 create and move units of work, and state what each contributes to.
 `work add` prints the new id.
+
+a unit says one of three things about its outcomes, and nothing infers
+them from its wording or its dates:
+
+  self work link <id> --objective <id>|--milestone <id>   it contributes to that
+  self work link <id> --standalone --why "<reason>"       it contributes to nothing,
+                                                         and here is why
+  self runbook link <run> --work <id>                     it is one occurrence of a
+                                                         procedure this project repeats
+
+a unit that states none of the three is not refused — nothing here forces a
+methodology — it is a unit nobody has said anything about yet, which is a
+different fact from one that stands alone on purpose. --standalone conceals
+nothing: a contribution edge stays until `work unlink` withdraws it, so
+moving a unit off an outcome that is over is two statements, the withdrawal
+and the declaration.
 
 `work start` is how a session picks a unit up: it prints the brief and the
 report history, and records that this session took it. `work show` is the
@@ -470,6 +493,8 @@ superseded unit names its successor rather than folding it in.
   --on <reason>         what a blocked unit waits on: decision, dependency, or external
   --why <text>          detail recorded with the block, a revision, or the done,
                         and why a superseded or retired unit gave up its outcome
+  --standalone          this unit contributes to no outcome on purpose; --why states
+                        why, and `work unlink <id> --standalone` takes it back
   --supersedes <id>     the unit this one replaces: it retires with this unit as
                         its successor, and --why states why the outcome moved
                         on `work propose`, the retirement waits for the acceptance
@@ -506,8 +531,8 @@ required, and refused in one pass when missing:
   work block      --on
   work cover      --criterion --why
   work retire     --why
-  work link       --objective|--milestone
-  work unlink     --objective|--milestone
+  work link       --objective|--milestone|--standalone
+  work unlink     --objective|--milestone|--standalone
   work decline    --why
   work revise     --why
 
@@ -544,6 +569,29 @@ record; `--owner` is whose task the criterion is — a session records a
 criterion a person will do, and neither implies the other. Ownership is
 stated when the criterion is declared and nothing re-states it: a wrong
 one is undone and declared again.
+
+Every unit says one of three things about the outcomes it serves, and
+nothing is read out of its wording or its dates:
+
+  self work link <id> --objective <id>            it moves that outcome
+  self work link <id> --milestone <id>            it moves that checkpoint
+  self work link <id> --standalone --why "<r>"    it moves none, on purpose
+  self runbook link <run> --work <id>             it is one occurrence of a
+                                                 procedure this project repeats
+
+A unit may serve several outcomes at once, and none of this is forced. A
+unit that states nothing is not standing alone — it is a unit nobody has
+said anything about yet, which is what makes the two worth telling apart.
+
+Standalone conceals nothing. The contribution edges stay until they are
+withdrawn, so a unit that was aimed at an outcome nobody is pursuing any
+more is corrected in two statements:
+
+  self work unlink <id> --objective <id>
+  self work link <id> --standalone --why "<why nothing current needs it>"
+
+The declaration is taken back the same way it was made — `self work unlink
+<id> --standalone` — and both statements stay in the unit's own history.
 
 When work stops for a reason that is not completion:
 

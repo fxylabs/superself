@@ -327,22 +327,27 @@ function checkRequirements(commands: Command[], command: Command): string[]
             return [`${at} declares a requirement naming no flag`];
         }
         return [
-            ...requirement.flags.flatMap((flag) => checkRequiredFlag(at, flag, optionsOf(command, verb)[flag])),
+            ...requirement.flags.flatMap((flag) => checkRequiredFlag(at, requirement, flag, optionsOf(command, verb)[flag])),
             ...unblockPaths(requirement.unblock).filter((path) => !dispatchable(commands, path))
                 .map((path) => `${at} points at \`self ${path}\`, which no command dispatches`)
         ];
     });
 }
 
-function checkRequiredFlag(at: string, flag: string, spec: OptionSpec | undefined): string[]
+function checkRequiredFlag(at: string, requirement: Requirement, flag: string, spec: OptionSpec | undefined): string[]
 {
     if (spec === undefined)
     {
         return [`${at} requires --${flag}, which it does not declare as an option`];
     }
     // A boolean is absent or true, and a caller cannot state the true one is
-    // meant: demanding it would refuse every call that left it off by choice.
-    return spec.type === "boolean" ? [`${at} requires --${flag}, a boolean — a flag with no value states nothing`] : [];
+    // meant: demanding it alone would refuse every call that left it off by
+    // choice. One alternative among several is a different statement — the
+    // caller has other ways to satisfy the requirement, and `--standalone` is
+    // exactly the third answer `--objective|--milestone` was missing (#417) —
+    // so the rule holds where it was aimed and stops short of that.
+    return spec.type === "boolean" && requirement.flags.length === 1
+        ? [`${at} requires --${flag}, a boolean — a flag with no value states nothing`] : [];
 }
 
 interface DeclaredRequirement
