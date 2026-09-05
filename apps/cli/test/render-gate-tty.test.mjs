@@ -92,7 +92,9 @@ test("cell 8: at a styled terminal, an event verb prints today's ✓ line", asyn
 // announce line above it, which `pipeline.ts` still composes — so this cell is
 // the two of them together, in the order they have always been printed in.
 // Since #286 the attachment offer follows the id, dim, and this project has no
-// objective, so the offer is the one line that says how to record one.
+// objective, so the offer opens with the line that says how to record one and
+// closes with the standalone declaration #417 added under it. Every row of it
+// is dim: the whole block reads as an offer under the answer.
 test("stage 2 cell 2: at a terminal, `self work add` styles the announce line and leaves the id alone", async () =>
 {
     const outcome = "the receipts answer through the gate";
@@ -103,8 +105,12 @@ test("stage 2 cell 2: at a terminal, `self work add` styles the announce line an
     const event = announced.match(/\[([0-9abcdefghjkmnpqrstvwxyz]{26})\]/)[1];
     assert.equal(announced, `${green("✓")} ${bold("entity.confirmed")}  ${dim(`${id} ${outcome}`)}  ${dim(`[${event}]`)}`);
     assert.match(answer.printed, /\nw-[0-9abcdefghjkmnpqrstvwxyz]{5}\n/);
-    assert.equal(answer.printed.endsWith(`\n${dim(NO_OBJECTIVE_HINT)}\n`), true,
-        `the attachment offer is not the dim last line:\n${JSON.stringify(answer.printed)}`);
+    const offered = answer.printed.replace(/\n$/, "").split("\n").slice(3);
+    assert.equal(offered[0], dim(NO_OBJECTIVE_HINT),
+        `the attachment offer does not open with the dim no-objective line:\n${JSON.stringify(answer.printed)}`);
+    assert.equal(offered.every((line) => line === dim(line.replace(/\u001b\[\d+m/g, ""))), true,
+        `a row of the attachment offer is not dim:\n${JSON.stringify(answer.printed)}`);
+    assert.match(offered.at(-1), /self work link w-[0-9abcdefghjkmnpqrstvwxyz]{5} --standalone --why/);
 });
 
 /* ── stage 3 cell 13: the size line is a plain-render line ─────────── */

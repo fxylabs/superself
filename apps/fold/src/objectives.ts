@@ -61,6 +61,11 @@ export interface MilestoneState
     revision: number;
     target?: string;
     exit: Criterion[];
+    // The decisions this checkpoint says it rests on (#417 §2), in the order
+    // the edges were stated. A checkpoint whose assumption a later decision
+    // replaced keeps naming the old one until somebody unlinks it — which is
+    // the point: an edge is what there is to withdraw.
+    assumes: string[];
     after: string[];
     coverage: Coverage[];
     reached?: Reached;
@@ -428,6 +433,10 @@ function newMilestone(event: SelfEvent): MilestoneState
         revision: 1,
         target: str(event.payload.target),
         exit: criteria(event.payload.exit),
+        // Empty here and filled by the model's legacy pass: a legacy record
+        // states an assumption on its derived entity, which this fold does not
+        // see (#417 §2).
+        assumes: [],
         after: list(event.payload.after),
         coverage: [],
         carriedFrom: [],

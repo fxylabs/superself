@@ -70,7 +70,7 @@ function workTool(run: Runner): ToolDefinition
 {
     return defineTool({
         name: "superself_work",
-        description: "Superself work units. `list` prints the open work (`self work`); `show <id>` prints a unit's brief, reports and evidence; `start <id>` claims a unit for this session and prints its brief. Ids look like `w-abc12`.",
+        description: "Superself work units. `list` prints the open work (`self work`); `show <id>` prints a unit's brief, reports and evidence; `start <id>` claims a unit for this session and prints its brief. Ids look like `w-abc12`. This tool reads; stating what a unit contributes to is a `self` command in the terminal — `self work link <id> --objective <id>` or `--milestone <id>`, `self work link <id> --standalone --why \"<reason>\"` when it contributes to nothing on purpose, or `self runbook link <run> --work <id>` for one occurrence of a repeated procedure.",
         parameters: {
             action: { type: "string", enum: ["list", "show", "start"], required: true, description: "list | show | start" },
             id: { type: "string", description: "The work id (required for show and start)." },

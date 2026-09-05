@@ -15,7 +15,8 @@ import {
     payloadArtifact,
     rendersIn,
     requireSupersedeKind,
-    scopeTarget
+    scopeTarget,
+    standaloneEdge
 } from "@superself/fold";
 import { ALIAS_COMMAND, presetRow, registerPluginClaims, registerReservedVerbs, resolveAliasCommand } from "./aliases.js";
 import { applyCommand } from "./apply.js";
@@ -103,11 +104,13 @@ import {
     declarationOf,
     DECLARE_OPTIONS,
     demotionEvents,
+    holdsDecision,
     Placed,
     recordCriterionBlock,
     recordCriterionUnblock,
     recordDeclaration,
     recordOwner,
+    requireDecision,
     requirePersonOwner,
     resolveCriterion,
     STATE_COMMAND,
@@ -632,9 +635,14 @@ const RETIRE_OPTIONS = {
 
 // `--supersedes` is the correction path every add verb takes; on a work unit it
 // retires the unit it replaces, which is why the reason comes with it.
-const WORK_ADD_OPTIONS = { supersedes: { type: "string" }, why: { type: "string" }, ...DECLARE_OPTIONS } as const;
+const WORK_ADD_OPTIONS = {
+    supersedes: { type: "string" },
+    why: { type: "string" },
+    standalone: { type: "boolean" },
+    ...DECLARE_OPTIONS
+} as const;
 
-const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …]';
+const WORK_ADD_USAGE = 'work add "<required outcome>" [--supersedes <work-id> --why w] [--standalone --why w] [--criteria "<text>" …]';
 
 const WORK_COVER_USAGE = 'work cover <work-id> --criterion cN --why "<how it is covered>" [--evidence <commit>] [--work <id>]';
 
@@ -1103,12 +1111,13 @@ export const COMMANDS: Command[] = [
                 verbs: [""]
             },
             {
-                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w] [--criteria "<text>" …]'
-                    + ' [--verify "cN <how>"] [--owner "cN person"]',
+                syntax: 'work add "<required outcome>" [--supersedes <work-id> --why w] [--standalone --why w]'
+                    + ' [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]',
                 description: [
                     "create a work unit; --supersedes retires the unit it replaces, naming this one its successor",
                     "(the confirmed-at-once form; `work propose` is the one that asks for review first)",
-                    "--criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task"
+                    "--criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task",
+                    "--standalone records at birth that the unit contributes to nothing on purpose, with the reason"
                 ],
                 verbs: ["add"]
             },
@@ -1161,21 +1170,24 @@ export const COMMANDS: Command[] = [
                 verbs: ["done"]
             },
             {
-                syntax: "work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m",
+                syntax: "work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m | --standalone --why w",
                 description: [
                     "state, or withdraw, what a work unit contributes to",
-                    "(an objective resolves here first, then across every registered project)"
+                    "(an objective resolves here first, then across every registered project)",
+                    "--standalone states that it contributes to nothing on purpose, and owes the reason",
+                    "(`work unlink <id> --standalone` takes that declaration back)"
                 ],
                 verbs: ["link", "unlink"]
             },
             {
                 syntax: 'work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v]'
-                    + ' [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]',
+                    + ' [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]',
                 description: [
                     "propose work for a person to review; the plan text alone is enough",
                     "(--objective or --milestone makes it a gap proposal, which owes the full brief)",
                     "--supersedes proposes a correction: the unit it names is retired when the plan is confirmed",
-                    "--criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task"
+                    "--criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task",
+                    "--standalone plans a unit that closes no stated gap, and says why it contributes to nothing"
                 ],
                 verbs: ["propose"]
             },
@@ -1212,6 +1224,22 @@ export const COMMANDS: Command[] = [
         detail: [
             "create and move units of work, and state what each contributes to.",
             "`work add` prints the new id.",
+            "",
+            "a unit says one of three things about its outcomes, and nothing infers",
+            "them from its wording or its dates:",
+            "",
+            "  self work link <id> --objective <id>|--milestone <id>   it contributes to that",
+            '  self work link <id> --standalone --why "<reason>"       it contributes to nothing,',
+            "                                                         and here is why",
+            "  self runbook link <run> --work <id>                     it is one occurrence of a",
+            "                                                         procedure this project repeats",
+            "",
+            "a unit that states none of the three is not refused — nothing here forces a",
+            "methodology — it is a unit nobody has said anything about yet, which is a",
+            "different fact from one that stands alone on purpose. --standalone conceals",
+            "nothing: a contribution edge stays until `work unlink` withdraws it, so",
+            "moving a unit off an outcome that is over is two statements, the withdrawal",
+            "and the declaration.",
             "",
             "`work start` is how a session picks a unit up: it prints the brief and the",
             "report history, and records that this session took it. `work show` is the",
@@ -1285,6 +1313,8 @@ export const COMMANDS: Command[] = [
             "  --on <reason>         what a blocked unit waits on: decision, dependency, or external",
             "  --why <text>          detail recorded with the block, a revision, or the done,",
             "                        and why a superseded or retired unit gave up its outcome",
+            "  --standalone          this unit contributes to no outcome on purpose; --why states",
+            "                        why, and `work unlink <id> --standalone` takes it back",
             "  --supersedes <id>     the unit this one replaces: it retires with this unit as",
             "                        its successor, and --why states why the outcome moved",
             "                        on `work propose`, the retirement waits for the acceptance",
@@ -2764,37 +2794,6 @@ function cmdDecide({ values, positionals }: CommandInput<typeof DECIDE_OPTIONS>)
         { proposed: values.proposed, demote: values.demote });
 }
 
-// Exact id first, then a unique prefix, over the folded records — legacy
-// decisions and native decision entities answer through one lookup.
-function requireDecision(model: ProjectModel, prefix: string | undefined): DecisionState
-{
-    const wanted = requireText(prefix, "decide … <decision-id>");
-    const exact = model.decisions.find((item) => item.id === wanted);
-    if (exact !== undefined)
-    {
-        return exact;
-    }
-    const matches = model.decisions.filter((item) => item.id.startsWith(wanted));
-    if (matches.length > 1)
-    {
-        throw new CliError(`decision id "${wanted}" is ambiguous (${matches.length} matches) — spell more of it`);
-    }
-    if (matches.length === 0)
-    {
-        throw new CliError(`${wanted} is not a decision`);
-    }
-    return matches[0];
-}
-
-// Whether `requireDecision` would find anything here, asked of a whole project
-// so `recordOwner` can pick the one whose lookup is about to succeed. A prefix
-// is what makes this worth stating: two projects can both answer to one, which
-// is the ambiguity `recordOwner` refuses by naming them.
-function holdsDecision(model: ProjectModel, wanted: string): boolean
-{
-    return model.decisions.some((item) => item.id === wanted || item.id.startsWith(wanted));
-}
-
 // The project comes from the decision rather than from the directory (#302):
 // this is the line a `--project` context prints beside a proposed decision, and
 // it now resolves where that context was read.
@@ -2897,6 +2896,10 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const id = workId();
+    // Before the retirement is resolved: a call that spells both corrections
+    // is refused for the collision rather than for whichever of the two the
+    // reading order happened to reach first.
+    const born = bornStandalone(id, values);
     const retirement = supersededRetirement(ctx, id, values);
     // The unit is recorded and what it contributes to is still nobody's
     // statement (#286). The model is the one read before the append, which is
@@ -2904,13 +2907,13 @@ function cmdWorkAdd({ values, positionals }: CommandInput<typeof WORK_ADD_OPTION
     const superseded = retirement === undefined
         ? undefined
         : model.works.find((work) => work.id === retirement.payload.entity);
-    const payload = workPayload(ctx, id, outcome, declarationOf(values, "work add"));
+    const payload = workPayload(ctx, id, outcome, declarationOf(values, "work add"), born);
     recordRetirement(ctx, retirementIntent(model, "supersede",
         retirement === undefined ? [] : [String(retirement.payload.entity)],
         { successor: supersedingRecord(payload) }), model,
         (by) => addedEvents(ctx, payload, retirement, by),
         `${id} ${outcome}`);
-    return [{ kind: "receipt", text: id }, attachmentListing(model, id, superseded)];
+    return [{ kind: "receipt", text: id }, attachmentListing(model, id, superseded, born.length > 0)];
 }
 
 // The unit, and the retirement it displaces where there is one — composed
@@ -2927,14 +2930,38 @@ function addedEvents(ctx: ProjectContext, payload: Record<string, unknown>,
     return events;
 }
 
-function workPayload(ctx: ProjectContext, id: string, outcome: string, declared: Declaration): Record<string, unknown>
+// The disposition a unit is born with, where the call states one (#417 §1).
+// It rides the creation event's own link list rather than a second append: a
+// unit and what it says about its outcomes are one statement, and `self undo`
+// on the creation takes both back together.
+//
+// `--why` is already spoken for on this verb — it states why a superseded unit
+// gave up its outcome — so the two cannot be spelled in one call. Refusing
+// says which two reasons collided and how to state both.
+function bornStandalone(id: string, values: CommandInput<typeof WORK_ADD_OPTIONS>["values"]): Record<string, unknown>[]
+{
+    if (values.standalone !== true)
+    {
+        return [];
+    }
+    if (values.supersedes !== undefined)
+    {
+        throw new CliError("work add --why states why the replaced unit gave up its outcome, and --standalone needs a "
+            + "reason of its own — record the correction first, then `self work link <new-id> --standalone --why \"…\"`");
+    }
+    const why = requireText(values.why, 'work add "<outcome>" --standalone --why "<why it contributes to no outcome>"');
+    return [{ ...standaloneEdge(id, why) }];
+}
+
+function workPayload(ctx: ProjectContext, id: string, outcome: string, declared: Declaration,
+    links: Record<string, unknown>[]): Record<string, unknown>
 {
     const row = presetRow(ctx.storeDir, "work");
     const payload: Record<string, unknown> = {
         entity: id,
         text: outcome,
         labels: [row.label],
-        links: [],
+        links,
         // Byte-identical to what this wrote before #408 for a unit that
         // declares nothing, which is every unit in every store written before
         // it: an empty list and no `verify` key at all.
@@ -2958,7 +2985,10 @@ function supersededRetirement(ctx: ProjectContext, successor: string, values: Co
 {
     if (values.supersedes === undefined)
     {
-        if (values.why !== undefined)
+        // A standalone declaration owns the `--why` on such a call, and
+        // `bornStandalone` has already refused the pair that would make one
+        // reason answer for two statements.
+        if (values.why !== undefined && values.standalone !== true)
         {
             throw new CliError("work add --why states why a replaced unit gave up its outcome — pass --supersedes <work-id> too, or record the reason with `self report`");
         }

@@ -10,6 +10,7 @@ import {
     CRITERION_DECLARED,
     CRITERION_UNBLOCKED,
     CriterionState,
+    DecisionState,
     DEMOTION_TARGET,
     entityCharacters,
     EntityLink,
@@ -1252,6 +1253,37 @@ function pairedUnit(model: ProjectModel, entity: EntityState, own: ConfirmMember
     }
     members.set(entity.id, own);
     return [...members.values()];
+}
+
+// Exact id first, then a unique prefix, over the folded records — legacy
+// decisions and native decision entities answer through one lookup.
+export function requireDecision(model: ProjectModel, prefix: string | undefined): DecisionState
+{
+    const wanted = requireText(prefix, "decide … <decision-id>");
+    const exact = model.decisions.find((item) => item.id === wanted);
+    if (exact !== undefined)
+    {
+        return exact;
+    }
+    const matches = model.decisions.filter((item) => item.id.startsWith(wanted));
+    if (matches.length > 1)
+    {
+        throw new CliError(`decision id "${wanted}" is ambiguous (${matches.length} matches) — spell more of it`);
+    }
+    if (matches.length === 0)
+    {
+        throw new CliError(`${wanted} is not a decision`);
+    }
+    return matches[0];
+}
+
+// Whether `requireDecision` would find anything here, asked of a whole project
+// so `recordOwner` can pick the one whose lookup is about to succeed. A prefix
+// is what makes this worth stating: two projects can both answer to one, which
+// is the ambiguity `recordOwner` refuses by naming them.
+export function holdsDecision(model: ProjectModel, wanted: string): boolean
+{
+    return model.decisions.some((item) => item.id === wanted || item.id.startsWith(wanted));
 }
 
 // The project a confirm records into, found from the record it names (#302).

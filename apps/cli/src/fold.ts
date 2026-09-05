@@ -494,6 +494,10 @@ function milestoneHeadLines(milestone: MilestoneState): string[]
     {
         lines.push(`- Carried from: ${milestone.carriedFrom.join(", ")}`);
     }
+    if (milestone.assumes.length > 0)
+    {
+        lines.push(`- Assumes: ${milestone.assumes.join(", ")}`);
+    }
     lines.push(`- Critical path: ${milestone.criticalPath ? "yes" : "no"}`);
     lines.push(`- Work: ${milestone.works.length === 0 ? "none linked" : milestone.works.join(", ")}`);
     if (milestone.evidence.length > 0)
@@ -703,6 +707,7 @@ function workStandingLines(work: WorkState, model: ProjectModel, supersedes: str
     {
         lines.push(`- Contributes to: ${contributes.join("; ")}`);
     }
+    lines.push(...standaloneLines(work));
     if (work.status === "blocked")
     {
         lines.push(`- Blocked on: ${work.blockedOn}${work.blockedWhy === undefined ? "" : ` — ${work.blockedWhy}`}`);
@@ -719,6 +724,21 @@ function workStandingLines(work: WorkState, model: ProjectModel, supersedes: str
         lines.push(`- Process: ${work.process.state}${work.process.code === undefined ? "" : ` (code ${work.process.code})`} at ${work.process.at}`);
     }
     return lines;
+}
+
+// The disposition a unit declared about contributing to nothing (#417 §1),
+// with the reason and the day it was stated. Printed beside a contribution
+// rather than instead of one: a unit that declared standalone and later linked
+// an outcome still says both, because the declaration is a statement somebody
+// made and the render is not the place it is quietly dropped.
+function standaloneLines(work: WorkState): string[]
+{
+    if (work.standalone === undefined)
+    {
+        return [];
+    }
+    const declared = work.standalone.declared === undefined ? "" : ` (declared ${work.standalone.declared.slice(0, 10)})`;
+    return [`- Standalone: ${work.standalone.why}${declared}`];
 }
 
 // When a unit's own creation was taken back (#390). A record that never held

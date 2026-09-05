@@ -47,6 +47,43 @@ no reimplementation of self's logic. A refusal (self not installed, no project
 here, a non-zero exit) comes back as a message the model can act on, not as a
 thrown error.
 
+## Commands the plugin points at rather than exposes
+
+These five tools are the whole tool surface. The rest of the work graph is run
+through the installed CLI in a terminal, and the model is expected to reach for
+it there — there is no tool for any of the commands below.
+
+Pick the record kind by what it asserts, never by how its text reads or what
+date it carries: a goal is lasting direction; an objective is a desired state
+with a time boundary; a milestone is a checkpoint reached once, through its exit
+criteria; a work unit is one bounded effort and its outcome; a decision states a
+policy or assumption; a runbook states a procedure this project repeats, and
+each occurrence of it is a work unit linked to a run.
+
+A unit says one of three things about the outcomes it serves, and none of them
+is read out of its wording or its dates:
+
+```bash
+self work link <id> --objective <objective-id>          # it moves that outcome
+self work link <id> --milestone <milestone-id>          # it moves that checkpoint
+self work link <id> --standalone --why "<reason>"       # it moves none, on purpose
+self runbook link <run-id> --work <id>                  # one occurrence of a repeated procedure
+```
+
+A unit that states none of the three is not standing alone; it is one nobody
+has said anything about yet. Declaring standalone hides no existing link —
+`self work unlink <id> --objective <objective-id>` withdraws the edge, and the
+declaration is taken back the same way it was made, with `self work unlink <id>
+--standalone`.
+
+A checkpoint can name the decisions it rests on, and replacing one is two
+statements rather than a rewrite:
+
+```bash
+self milestone link <milestone-id> --decision <decision-id>
+self milestone unlink <milestone-id> --decision <old-decision-id>
+```
+
 ## What you get
 
 `/self` prints `self context` in the chat, without a model turn.

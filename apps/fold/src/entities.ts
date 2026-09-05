@@ -16,7 +16,11 @@ import { SelfEvent } from "./types.js";
 
 // Spelled once, for the verbs' refusals and the fold's own reading guards.
 export const EXPOSURES = ["full", "index", "search"] as const;
-export const LINK_TYPES = ["member-of", "supersedes", "relates"] as const;
+// `standalone` and `assumes` join the three grouping types (#417 §2). Neither
+// is a new event: both ride `entity.linked`/`entity.unlinked` like the rest,
+// so a store written before this reads unchanged and a store written after it
+// stays readable by the same two verbs.
+export const LINK_TYPES = ["member-of", "supersedes", "relates", "standalone", "assumes"] as const;
 
 export type Exposure = (typeof EXPOSURES)[number];
 export type LinkType = (typeof LINK_TYPES)[number];
@@ -66,6 +70,47 @@ export interface EntityLink
     // read to know where the edge points. The edge's identity stays
     // (type, target) — the project is provenance, not a second key.
     project?: string;
+    // Why the edge was stated, where the edge is a statement rather than a
+    // grouping (#417 §2). A standalone declaration owes one: it says a unit
+    // contributes to nothing on purpose, and a disposition with no reason is
+    // indistinguishable from one nobody got round to recording. Provenance in
+    // the same sense `project` is — the identity is still (type, target), so
+    // restating an edge under a different reason is refused by the verb rather
+    // than silently kept twice.
+    why?: string;
+    // When the edge was declared, stamped from the event that declared it. The
+    // log already says who wrote it; this is what lets a render say since when
+    // without reading the record's history back.
+    declared?: string;
+}
+
+// The disposition a unit states when it contributes to nothing on purpose
+// (#417 §1). The edge points at the record itself: an edge's identity in this
+// fold is (type, target), and the record's own id is the one target that makes
+// the edge a singleton by construction — there is no second one it could name,
+// so a declaration and its withdrawal are the same edge and no reader has to
+// key it. Minted here rather than spelled at each call site, because the verb
+// that writes it and the projections that read it must agree exactly.
+export function standaloneEdge(id: string, why?: string): EntityLink
+{
+    return why === undefined ? { type: "standalone", target: id } : { type: "standalone", target: id, why };
+}
+
+// The standalone edge a record carries, or nothing. Read by identity rather
+// than by type alone, so an `assumes` edge and a hand-appended standalone edge
+// naming some other record are both left where they are.
+export function standaloneOf(record: { id: string; links: EntityLink[] }): EntityLink | undefined
+{
+    return record.links.find((link) => link.type === "standalone" && link.target === record.id);
+}
+
+// The decisions a record says it assumes, in the order the edges were stated
+// (#417 §2). Additive: a checkpoint names as many as it depends on, and
+// replacing one is linking the successor and unlinking the old one, never a
+// silent rewrite of the set.
+export function assumedDecisions(record: { links: EntityLink[] }): string[]
+{
+    return record.links.filter((link) => link.type === "assumes").map((link) => link.target);
 }
 
 // A placement proposal waiting on a person (#197 §5, ruling 4): recorded by
@@ -697,7 +742,7 @@ function createEntity(fold: EntityFold, event: SelfEvent): void
 // displaced nothing.
 function createdLinks(fold: EntityFold, event: SelfEvent): EntityLink[]
 {
-    const links = readLinks(event.payload.links);
+    const links = readLinks(event.payload.links).map((link) => ({ ...link, declared: event.ts }));
     return fold.annulled.has(event.id) ? links.filter((link) => link.type !== "supersedes") : links;
 }
 
@@ -1157,7 +1202,7 @@ function applyLinks(entities: EntityState[], fold: EntityFold): void
         }
         else if (!target.links.some((link) => link.type === item.link.type && link.target === item.link.target))
         {
-            target.links.push(item.link);
+            target.links.push({ ...item.link, declared: item.ts });
         }
     }
 }
@@ -1964,8 +2009,14 @@ function readLinks(value: unknown): EntityLink[]
         const type = (item as { type?: unknown })?.type;
         const target = (item as { target?: unknown })?.target;
         const project = (item as { project?: unknown })?.project;
+        const why = (item as { why?: unknown })?.why;
         return (LINK_TYPES as readonly string[]).includes(String(type)) && typeof target === "string" && target !== ""
-            ? [{ type: type as LinkType, target, ...(typeof project === "string" && project !== "" ? { project } : {}) }]
+            ? [{
+                type: type as LinkType,
+                target,
+                ...(typeof project === "string" && project !== "" ? { project } : {}),
+                ...(typeof why === "string" && why !== "" ? { why } : {})
+            }]
             : [];
     });
 }
