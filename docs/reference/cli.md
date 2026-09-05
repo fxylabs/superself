@@ -434,7 +434,31 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   rests on, and the flag is repeatable on `milestone add` and `milestone
   revise` as well. Assumptions are additive: replacing one is linking the
   successor decision and then `milestone unlink <id> --decision <old-id>`,
-  never a rewrite that could take an unrelated assumption with it.
+  never a rewrite that could take an unrelated assumption with it. A revision
+  carries the predecessor's set, and `--decision` on it adds one more.
+- A contribution names an outcome that is still open. `work link`,
+  `work propose` and `work confirm` refuse a target that was reached, dropped
+  or superseded — a checkpoint under a closed objective included — and the
+  refusal names the open successor of that record's own lineage, or the
+  standalone declaration where the lineage ends closed. `work unlink` is never
+  refused for it.
+- `objective revise` carries every live checkpoint and every work unit linked
+  directly to the objective; `milestone revise` carries the checkpoint's work
+  and its assumptions. The carry is stated — one `entity.linked` per carried
+  record — and nothing is unlinked, so a carried unit reads current under the
+  successor, historical under the predecessor, and unchanged toward every
+  other outcome it serves. `self undo` of one carried link moves one record
+  back. Done work carries as a membership and covers nothing.
+- A checkpoint may be judged on its objective's own date and never after it:
+  `milestone add` and `milestone revise` refuse a later one, judging the
+  revision on the date its successor will carry. The objective's own date
+  moves either way, and one that leaves a live checkpoint beyond it warns on
+  stderr. Either date absent means the ordering cannot be checked.
+- `entity.covered` records the objective the judgment was made under, so a
+  checkpoint an `objective revise` carried names the criteria judged under a
+  former parent. `milestone recheck <id> --criterion cN --why w` settles one,
+  recording the parent the checkpoint hangs under now; criteria nobody
+  rechecks stay listed, and no unit's evidence is applied on anyone's behalf.
 - `work` creates and moves outcomes, links them to objectives or milestones,
   records the process running a unit, and shows its evidence and recovery
   path. `work done` is the judgment that the outcome was reached, and the
@@ -504,6 +528,13 @@ self skill drop "deploy staging" --why "the deploy moved to the pipeline"
   until a person accepts again. Unlike `objective revise` and `milestone
   revise`, it mints no new id and supersedes nothing. The first `work start`
   freezes the plan; after it, a correction is a successor like any other.
+- `work revise <id> "<plan>" --why w --objective <id>|--milestone <id>` moves
+  that plan to another gap — the supported repair when the gap it named closed
+  before anybody answered it. The gap is part of the plan, so the same plan
+  text still counts as a revision: the version advances, the acceptance is
+  invalidated, and a contribution an earlier acceptance had written toward the
+  old gap is withdrawn in the same append. Every other contribution the unit
+  holds is untouched, and the new gap has to be open.
 - `report` attaches a progress report, optional commit evidence, and optional
   artifacts to a work unit. A report records the current project HEAD as
   evidence unless another value is supplied.
