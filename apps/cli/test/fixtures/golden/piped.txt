@@ -201,8 +201,10 @@ usage: self <command>
   objective decline <id> --why w             turn down a proposed objective; it leaves waiting at once
   objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]
                                              a revision supersedes: a new objective id carries the revised fields
-                                             and every live milestone, with its coverage and work, moves under it
+                                             and every live milestone, with its coverage, moves under it, together with
+                                             every work unit linked directly to the objective
                                              (an empty --target/--horizon/--priority withdraws that field)
+                                             --target moves freely; a date that leaves a live checkpoint beyond it warns
   objective close <id> --as reached|dropped [--why w]
                                              --why is required when it is dropped
   milestone [--project <slug>]               list milestones with state, reason, and linked work
@@ -210,7 +212,10 @@ usage: self <command>
   milestone show <id> [--project <slug>]     print a milestone, its exit criteria, and its coverage
                                              (with every linked work unit: its state, its criteria, its holder, its latest report)
   milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1] [--decision d]
-                                             a revision supersedes: a new milestone id carries the revised criteria
+                                             a revision supersedes: a new milestone id carries the revised criteria,
+                                             the decisions the predecessor assumed, and the work linked to it
+                                             (--decision adds one more assumption; it never replaces the set)
+                                             the successor's date, stated or inherited, may not follow its objective's
   milestone drop <id> --why "<reason>"       give up on a checkpoint with nothing replacing it
   milestone link|unlink <id> --decision <id>
                                              state, or withdraw, a decision this checkpoint assumes
@@ -219,6 +224,9 @@ usage: self <command>
   milestone reach <id>                       record a milestone as reached once every criterion is covered
   milestone recheck <id> --criterion c1 --why w
                                              re-cover a criterion on the current record — a revision's successor starts uncovered
+                                             also the answer to a judgment made under a former parent objective, which a
+                                             carry leaves standing: the recheck records the parent this checkpoint hangs
+                                             under now, and clears that one criterion's review line
   decide "<text>" [--why w] [--proposed] [--supersedes id] [--work id] [--blocks id] [--after id]
   decide confirm <event-id>                  confirm a proposed decision
   decide decline <event-id> --why "<reason>"
@@ -258,14 +266,19 @@ usage: self <command>
                                              (an objective resolves here first, then across every registered project)
                                              --standalone states that it contributes to nothing on purpose, and owes the reason
                                              (`work unlink <id> --standalone` takes that declaration back)
+                                             link names an outcome that is still open; unlink is never refused for a closed one
   work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
                                              propose work for a person to review; the plan text alone is enough
                                              (--objective or --milestone makes it a gap proposal, which owes the full brief)
                                              --supersedes proposes a correction: the unit it names is retired when the plan is confirmed
                                              --criteria declares what the unit is judged on, ordered c1..cN; --owner makes one of them a person's own task
                                              --standalone plans a unit that closes no stated gap, and says why it contributes to nothing
-  work revise <id> "<revised plan>" --why w  restate an unstarted plan under the same work id; acceptance is invalidated
+  work revise <id> "<revised plan>" --why w [--objective <id>|--milestone <id>]
+                                             restate an unstarted plan under the same work id; acceptance is invalidated
                                              (a plan that has started is corrected by a successor, the way `work add` records one)
+                                             --objective/--milestone move the plan to another gap, which is what a gap that
+                                             closed before anyone answered the plan is repaired by; the same plan text still
+                                             counts as a revision, so the plan is confirmed again before it can be started
   work confirm|decline <proposal-id> [--why w]
                                              answer a proposed plan; decline states why
                                              (the record says who confirmed it, and `self undo` takes it back)
@@ -397,7 +410,7 @@ usage: self work [--project <slug>] [--pretty|--plain]
        self work done <id> [--report "<what verifiably happened>"] [--why w]
        self work link|unlink <id> --objective o [--objective-project <slug>] | --milestone m | --standalone --why w
        self work propose "<plan>" [--supersedes <work-id> --why w] [--milestone m --value v] [--standalone --why w] [--criteria "<text>" …] [--verify "cN <how>"] [--owner "cN person"]
-       self work revise <id> "<revised plan>" --why w
+       self work revise <id> "<revised plan>" --why w [--objective <id>|--milestone <id>]
        self work confirm|decline <proposal-id> [--why w]
        self work started <id> --pid N | exited <id> [--code N]
        self work retire <id> --why w [--successor <work-id>] [--successor-project <slug>]
@@ -435,6 +448,33 @@ spells a correction. A session spells the same correction as a plan:
 `work propose "<corrected outcome>" --supersedes <id> --why w` leaves the unit
 it names untouched until the plan is confirmed, and the retirement lands with
 the confirm.
+
+a contribution names an outcome that is still open. `work link`, `work propose`
+and `work confirm` refuse a target that was reached, dropped or superseded — a
+checkpoint under a closed objective included — and the refusal names the open
+successor of that record's own lineage, or, where the lineage ends closed, the
+standalone declaration. `work unlink` is never refused for it: withdrawing an
+edge from an outcome that is over is the repair.
+
+a plan whose gap closed before anybody answered it is moved rather than
+abandoned, and only until it is first started:
+
+  self work revise <id> "<plan>" --why "<what changed>" --milestone <open-id>
+  self work confirm <id>
+
+the same plan text still counts as a revision when the gap moves — the outcome
+it closes is part of the plan — so the version advances, the acceptance is
+invalidated, and any contribution an earlier acceptance had written toward the
+old gap is withdrawn in the same append. Every other contribution the unit
+holds is untouched.
+
+a revision of an objective or a milestone carries its work: `objective revise`
+carries every live checkpoint and every unit linked directly to it, and
+`milestone revise` carries the units linked to the checkpoint. Nothing is
+unlinked — the unit reads current under the successor and historical under the
+predecessor, one `self undo` puts one unit back, and a contribution to any
+other outcome stays exactly as it was. A done unit carries as a membership and
+covers nothing: the successor's exit criteria start uncovered.
 
 done is the judgment that the outcome was reached, and the claim must
 carry evidence: a report with a commit or an artifact, or a done-time
@@ -502,11 +542,14 @@ superseded unit names its successor rather than folding it in.
   --successor <id>      the unit that carries a retired outcome now, resolved workspace-wide
   --successor-project <slug>  the successor's project when its id is ambiguous
   --objective <id>      the objective a linked unit contributes to, resolved in
-                        this project first and then across every registered one
+                        this project first and then across every registered one;
+                        on `work revise` it moves an unstarted plan to that gap
   --objective-project <slug>  the objective's project when its id is ambiguous,
                         or to name where it resolves outright
   --milestone <id>      the milestone a linked or proposed unit contributes to,
-                        resolved in the current project only
+                        resolved in the current project only; on `work revise` it
+                        moves an unstarted plan to that gap and asks for the
+                        acceptance again
   --value <text>        why the proposed work matters
   --success <text>      what done looks like for the proposal
   --stop <text>         the condition that ends the proposal early
@@ -592,6 +635,32 @@ more is corrected in two statements:
 
 The declaration is taken back the same way it was made — `self work unlink
 <id> --standalone` — and both statements stay in the unit's own history.
+
+A contribution names an outcome that is still open. Linking, proposing and
+confirming are all refused against a target that was reached, dropped or
+superseded — a checkpoint under a closed objective included — and the refusal
+names the open successor of that lineage, or the standalone declaration when
+the lineage ends closed. Unlinking is never refused for it: taking an edge off
+an outcome that is over is the repair.
+
+A plan whose gap closed before anyone answered it is moved, not abandoned,
+and only until it is first started:
+
+  self work revise <id> "<plan>" --why "<what changed>" --milestone <open-id>
+  self work confirm <id>
+
+The gap a plan closes is part of the plan, so the same words toward a new
+outcome are still a revision: the version advances, the acceptance stops
+authorizing a start, and a contribution an earlier acceptance had written
+toward the old gap is withdrawn in the same append. Everything else the unit
+contributes to is untouched.
+
+When an objective or a milestone is revised, the work carries with it. The
+successor gains a stated link per carried unit and nothing is unlinked, so a
+unit reads current under the successor, historical under the predecessor, and
+unchanged toward every other outcome it serves. A done unit carries as a
+membership and covers nothing — the successor's exit criteria start
+uncovered, and somebody judges them.
 
 When work stops for a reason that is not completion:
 

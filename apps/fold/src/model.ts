@@ -1052,7 +1052,8 @@ function syncCoverage(milestone: MilestoneState, objectiveRevision: number, enti
                 work: claim.work,
                 commits: claim.commits,
                 objectiveRevision,
-                milestoneRevision: milestone.revision
+                milestoneRevision: milestone.revision,
+                judgedUnder: claim.objective
             });
         }
     }
@@ -1292,6 +1293,7 @@ function newMilestone(entity: EntityState, objective: ObjectiveState, creation: 
         met: [],
         open: [],
         stale: [],
+        judgmentContext: [],
         works: [],
         blockedWorks: [],
         evidence: [],
@@ -1432,11 +1434,45 @@ function memberLinks(model: ProjectModel, entity: EntityState): Pick<WorkState, 
     const members = entity.links.filter((link) => link.type === "member-of");
     const local = members.filter((link) => link.project === undefined).map((link) => link.target);
     return {
-        objectives: local.filter((id) => model.goals.objectives.some((item) => item.id === id)),
-        milestones: local.filter((id) => findMilestone(model.goals, id) !== null),
+        objectives: lineageCurrent(local.filter((id) => model.goals.objectives.some((item) => item.id === id)),
+            (id) => model.goals.objectives.find((item) => item.id === id)?.supersededBy),
+        milestones: lineageCurrent(local.filter((id) => findMilestone(model.goals, id) !== null),
+            (id) => findMilestone(model.goals, id)?.milestone.supersededBy),
+        // A foreign contribution is never lineage-resolved here: this fold
+        // does not hold the other project's supersession chain, and reading
+        // an edge as historical on a guess is worse than listing both.
         foreignObjectives: members.filter((link) => link.project !== undefined)
             .map((link) => ({ id: link.target, project: link.project as string }))
     };
+}
+
+// Membership is lineage-local (#417 §3). An edge to a record that was replaced
+// stops being current only when the same unit also names something further
+// down that record's own supersession chain — which is exactly what an
+// explicit revision's carry writes. Every other membership the unit holds is
+// untouched: a unit contributing to two objectives, one of them revised,
+// still contributes to the other. Nothing is removed from the log; this reads
+// which of the stated edges is the current one.
+function lineageCurrent(ids: string[], successorOf: (id: string) => string | undefined): string[]
+{
+    const held = new Set(ids);
+    return ids.filter((id) => !succeededWithin(id, held, successorOf));
+}
+
+// Single steps down the chain, bounded, so a cycle a foreign writer appended
+// cannot loop the walk.
+function succeededWithin(id: string, held: Set<string>, successorOf: (id: string) => string | undefined): boolean
+{
+    let next = successorOf(id);
+    for (let hops = 0; next !== undefined && hops < 1000; hops += 1)
+    {
+        if (held.has(next))
+        {
+            return true;
+        }
+        next = successorOf(next);
+    }
+    return false;
 }
 
 function workFromEntity(model: ProjectModel, entity: EntityState, creation: SelfEvent | undefined): WorkState
@@ -1529,12 +1565,20 @@ export function planNote(work: WorkState): string
 function projectProposal(entity: EntityState, creation: SelfEvent)
 {
     const payload = creation.payload;
+    // The gap the plan closes *now* (#417 §4): the creation payload's, until a
+    // revision moved the plan to another one. Read as a pair, so a retarget
+    // onto a checkpoint leaves no objective the plan no longer names standing
+    // beside it.
+    const gap = entity.planTarget ?? {
+        objective: payload.objective === undefined ? undefined : String(payload.objective),
+        milestone: payload.milestone === undefined ? undefined : String(payload.milestone)
+    };
     return {
         id: entity.id,
         ts: entity.ts,
         outcome: entity.text,
-        objective: payload.objective === undefined ? undefined : String(payload.objective),
-        milestone: payload.milestone === undefined ? undefined : String(payload.milestone),
+        objective: gap.objective,
+        milestone: gap.milestone,
         value: String(payload.value ?? ""),
         success: stringList(payload.success),
         stop: stringList(payload.stop),

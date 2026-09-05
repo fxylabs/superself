@@ -19,6 +19,7 @@ import {
     executionSummary,
     Exposure,
     EXPOSURES,
+    findMilestone,
     HOME_SCOPE,
     isCurrent,
     isDemotion,
@@ -1413,8 +1414,23 @@ export function recordCoverage(
     {
         refs.commits = commits;
     }
-    recordEvent(ctx, makeEvent(ctx.project, "entity.covered", { entity, criterion, why, by: writtenBy() }, refs, true),
+    recordEvent(ctx, makeEvent(ctx.project, "entity.covered",
+        coveragePayload(model, entity, criterion, why), refs, true),
         `${entity} ${criterion} ${why}`);
+}
+
+// The claim itself, with the objective the judgment is made under (#417 §5).
+// Stamped here — the one coverage writer — so `milestone met`,
+// `milestone recheck` and `state cover` record it identically and no surface
+// can judge a checkpoint without saying where it hung at the time. A record
+// that hangs under no objective states none, which is what absence means.
+function coveragePayload(model: ProjectModel, entity: string, criterion: string,
+    why: string): Record<string, unknown>
+{
+    const parent = findMilestone(model.goals, entity)?.objective.id;
+    return parent === undefined
+        ? { entity, criterion, why, by: writtenBy() }
+        : { entity, criterion, why, objective: parent, by: writtenBy() };
 }
 
 function requireCoverable(model: ProjectModel, value: string | undefined, usage: string): EntityState

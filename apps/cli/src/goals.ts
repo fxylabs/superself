@@ -183,8 +183,10 @@ export const OBJECTIVE_COMMAND: Command = {
             syntax: "objective revise <id> --why w [--outcome t] [--target d] [--success s] [--stop s]",
             description: [
                 "a revision supersedes: a new objective id carries the revised fields",
-                "and every live milestone, with its coverage and work, moves under it",
-                "(an empty --target/--horizon/--priority withdraws that field)"
+                "and every live milestone, with its coverage, moves under it, together with",
+                "every work unit linked directly to the objective",
+                "(an empty --target/--horizon/--priority withdraws that field)",
+                "--target moves freely; a date that leaves a live checkpoint beyond it warns"
             ],
             verbs: ["revise"]
         },
@@ -193,6 +195,21 @@ export const OBJECTIVE_COMMAND: Command = {
     detail: [
         "keep the time-boxed objectives that break the goal down, each with the",
         "reason for its state. Progress is never a percentage.",
+        "",
+        "a revision carries the plan, and carries it by stating it: the successor gains",
+        "one `entity.linked` per live checkpoint and per directly linked work unit, and",
+        "nothing is unlinked. Membership is lineage-local — a unit that names both the",
+        "predecessor and the successor reads current under the successor alone, while",
+        "every other outcome it contributes to stays current — so `self undo` of one",
+        "carried link returns exactly one record to where it was. Done work carries as a",
+        "membership and covers nothing; the successor's exit criteria start uncovered.",
+        "",
+        "a checkpoint is judged inside its objective, so a milestone's date may equal",
+        "its objective's but never follow it. The objective's own date is the one that",
+        "moves: `objective revise --target` is allowed either way, and a date that",
+        "leaves a live checkpoint after it warns and names the checkpoints to settle.",
+        "Neither date being stated means the ordering cannot be checked, which is not a",
+        "failure — nothing here reads today or turns a horizon into a date.",
         "",
         "list and show read: without a scope flag they answer for the project this",
         "directory belongs to. add, confirm, revise and close write, so they take no",
@@ -496,14 +513,14 @@ function refuseObjectiveRevise(objective: ObjectiveState, values: CommandInput<t
     }
 }
 
-function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): CommandOutput
+// What the successor record carries: the revised fields, the predecessor's
+// placement, and the supersession edge. The membership carry rides beside it
+// as its own link events, because a carried record's edge belongs to that
+// record and not to the successor's creation.
+function objectiveRevisePayload(ctx: ProjectContext, model: ProjectModel, objective: ObjectiveState,
+    id: string, values: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>["values"]): Record<string, unknown>
 {
-    const { ctx, model } = writeTarget();
-    const objective = requireObjective(model, positionals[0]);
-    const why = required(values.why);
-    refuseObjectiveRevise(objective, values);
-    const id = objectiveId();
-    const payload: Record<string, unknown> = {
+    return {
         entity: id,
         text: restated(values.outcome, "objective") ?? objective.outcome,
         labels: [presetRow(ctx.storeDir, "objective").label],
@@ -515,16 +532,62 @@ function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_
         rank: revisedField(withdrawable(values.priority, validPriority) as number | null | undefined, objective.priority),
         success: values.success ?? objective.success,
         stop: values.stop ?? objective.stop,
-        why
+        why: required(values.why)
     };
+}
+
+function objectiveRevise({ values, positionals }: CommandInput<typeof OBJECTIVE_REVISE_OPTIONS>): CommandOutput
+{
+    const { ctx, model } = writeTarget();
+    const objective = requireObjective(model, positionals[0]);
+    const why = required(values.why);
+    refuseObjectiveRevise(objective, values);
+    const id = objectiveId();
+    const payload = objectiveRevisePayload(ctx, model, objective, id, values);
     const carried = liveMilestones(objective);
+    const units = carriedWork(model, objective);
+    warnBeyondTarget(objective, payload.target as string | undefined);
     recordRetirement(ctx, retirementIntent(model, "supersede", [objective.id],
         { successor: supersedingRecord(payload) }), model,
         (by) => [makeEvent(ctx.project, "entity.confirmed",
             strip({ ...payload, by }), undefined, true),
-        ...carryEvents(ctx, carried, id)],
+        ...carryEvents(ctx, [...carried, ...units], id)],
         `${id} ${why}`);
-    return [{ kind: "receipt", text: `${id} — carried ${plural(carried.length, "milestone")} from ${objective.id}` }];
+    const moved = [plural(carried.length, "milestone"),
+        ...units.length === 0 ? [] : [plural(units.length, "work unit")]];
+    return [{ kind: "receipt", text: `${id} — carried ${moved.join(" and ")} from ${objective.id}` }];
+}
+
+// The units a revision carries to the successor (#417 §3): every one directly
+// linked to this objective whose history has not ended. A done unit carries —
+// its evidence belongs to the plan, and carrying it states a membership, never
+// coverage of the successor's criteria, which stay uncovered until somebody
+// judges them. A retired or undone one does not: its outcome was given up
+// under the record that is being replaced, and the successor owes nothing on
+// it. A unit that contributes only through a milestone gets no edge of its
+// own — it carries with that checkpoint, and an edge here would state a
+// membership nobody ever declared.
+function carriedWork(model: ProjectModel, objective: ObjectiveState): WorkState[]
+{
+    return model.works.filter((work) => work.objectives.includes(objective.id)
+        && work.status !== "retired" && work.status !== "undone");
+}
+
+// An objective's own date moves freely — an objective is the thing being
+// re-planned — so this warns and never refuses (#417 §4). It names the live
+// checkpoints that now fall after their objective, because that is the pair a
+// person has to settle and the tool must not settle for them.
+function warnBeyondTarget(objective: ObjectiveState, target: string | undefined): void
+{
+    const beyond = target === undefined ? [] : liveMilestones(objective)
+        .filter((milestone) => milestone.state !== "reached" && milestone.state !== "closed")
+        .filter((milestone) => milestone.target !== undefined && milestone.target > target);
+    if (beyond.length > 0)
+    {
+        console.error(`${errYellow("warning:")} ${objective.id} is now judged on ${target}, and `
+            + `${beyond.map((milestone) => `${milestone.id} (${milestone.target})`).join(", ")} `
+            + `${beyond.length === 1 ? "falls" : "fall"} after it — revise the checkpoint's date or the objective's`);
+    }
 }
 
 // The checkpoints a revision carries to the successor (#333): every one not
@@ -537,15 +600,17 @@ function liveMilestones(objective: ObjectiveState): MilestoneState[]
     return objective.milestones.filter((milestone) => milestone.droppedWhy === undefined && milestone.supersededBy === undefined);
 }
 
-// The carry is one grouping edge per milestone in the shared grammar, the
+// The carry is one grouping edge per carried record in the shared grammar, the
 // same `entity.linked` a `work link` records, written in the successor's own
-// append so no reader finds the objective without its checkpoints. The edge to
-// the predecessor is left standing: the fold reads the newest edge as the
-// current objective and every older one as where the milestone came from.
-function carryEvents(ctx: ProjectContext, milestones: MilestoneState[], successor: string): SelfEvent[]
+// append so no reader finds the objective without its checkpoints or the work
+// that moves them. The edge to the predecessor is left standing: membership is
+// lineage-local (#417 §3), so the fold reads the edge to the successor as the
+// current one and the older edge as where the record came from — and one
+// `self undo` of one link returns exactly one record to where it was.
+function carryEvents(ctx: ProjectContext, records: { id: string }[], successor: string): SelfEvent[]
 {
-    return milestones.map((milestone) => makeEvent(ctx.project, "entity.linked",
-        { entity: milestone.id, link: { type: "member-of", target: successor } }, undefined, true));
+    return records.map((record) => makeEvent(ctx.project, "entity.linked",
+        { entity: record.id, link: { type: "member-of", target: successor } }, undefined, true));
 }
 
 // What a revision does to one field: absent keeps the predecessor's value, a
@@ -651,7 +716,12 @@ export const MILESTONE_COMMAND: Command = {
         },
         {
             syntax: "milestone revise <id> --why w [--outcome t] [--target d] [--exit e] [--drop-exit c1] [--decision d]",
-            description: ["a revision supersedes: a new milestone id carries the revised criteria"],
+            description: [
+                "a revision supersedes: a new milestone id carries the revised criteria,",
+                "the decisions the predecessor assumed, and the work linked to it",
+                "(--decision adds one more assumption; it never replaces the set)",
+                "the successor's date, stated or inherited, may not follow its objective's"
+            ],
             verbs: ["revise"]
         },
         {
@@ -671,7 +741,12 @@ export const MILESTONE_COMMAND: Command = {
         { syntax: "milestone reach <id>", description: ["record a milestone as reached once every criterion is covered"], verbs: ["reach"] },
         {
             syntax: "milestone recheck <id> --criterion c1 --why w",
-            description: ["re-cover a criterion on the current record — a revision's successor starts uncovered"],
+            description: [
+                "re-cover a criterion on the current record — a revision's successor starts uncovered",
+                "also the answer to a judgment made under a former parent objective, which a",
+                "carry leaves standing: the recheck records the parent this checkpoint hangs",
+                "under now, and clears that one criterion's review line"
+            ],
             verbs: ["recheck"]
         }
     ],
@@ -679,6 +754,28 @@ export const MILESTONE_COMMAND: Command = {
         "keep the checkpoints under an objective. A milestone is reached only when",
         "every exit criterion is covered by evidence — finishing work never",
         "reaches one on its own.",
+        "",
+        "a checkpoint is judged inside its objective, so its date may equal the",
+        "objective's and never follow it. `milestone add` and `milestone revise` refuse",
+        "a later one, and the revision is judged on the date the successor will carry —",
+        "the one it inherits when the call states none. Either date absent means the",
+        "ordering cannot be checked, which is not a failure.",
+        "",
+        "a revision carries: the criteria it leaves standing, the decisions the",
+        "predecessor assumed, and the work linked to the checkpoint. --decision adds one",
+        "more assumption rather than replacing the set, and withdrawing one is still",
+        "`milestone unlink <id> --decision <id>`, so nothing erases an assumption",
+        "nobody spoke about.",
+        "",
+        "coverage records which objective it was judged under. A checkpoint an",
+        "`objective revise` carried keeps that judgment and says so, criterion by",
+        "criterion — it is a judgment to review, not a wrong one and not a stale one —",
+        "and a person settles each with:",
+        "",
+        '  self milestone recheck <id> --criterion cN --why "<what you re-judged>"',
+        "",
+        "criteria nobody rechecks stay listed, and no work unit's evidence is applied",
+        "to a criterion on anyone's behalf.",
         "",
         "a checkpoint may rest on decisions this project settled. State each one,",
         "and a checkpoint whose ground moved is corrected by naming the successor",
@@ -868,6 +965,7 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
     const model = models[0];
     const outcome = requireText(positionals[0], 'milestone add "<outcome>" --objective <id> --exit "<criterion>"');
     const objective = requireOwnObjective(models, ctx.project, required(values.objective));
+    refuseLateTarget(values.target === undefined ? undefined : validDate(values.target), objective);
     const id = milestoneId();
     const row = presetRow(ctx.storeDir, "milestone");
     const links: Record<string, unknown>[] = [{ type: "member-of", target: objective.id }];
@@ -886,6 +984,25 @@ function milestoneAdd({ values, positionals }: CommandInput<typeof MILESTONE_ADD
         ...demotionEvents(demotions, id, false)],
         `${id} ${outcome}`);
     return [{ kind: "receipt", text: id }];
+}
+
+// The two dates are compared asymmetrically (#417 §4). A checkpoint sits
+// inside its objective, so it may be judged on the objective's own date but
+// never after it; the objective's date is the one that moves, and moving it
+// only warns. Equal passes — a checkpoint that lands on the last day of the
+// objective is inside it. Either date absent means the ordering cannot be
+// checked, which is not a failure: no horizon is turned into a date and today
+// is never read, so this answer is the same on every machine.
+function refuseLateTarget(target: string | undefined, objective: ObjectiveState): void
+{
+    if (target === undefined || objective.target === undefined || target <= objective.target)
+    {
+        return;
+    }
+    throw new CliError(`${target} falls after ${objective.id}, which is judged on ${objective.target} — `
+        + "a checkpoint inside an objective cannot be judged after it\n"
+        + "  give the checkpoint an earlier date, or move the objective's first:\n"
+        + `    self objective revise ${objective.id} --why "<what changed>" --target <date>`);
 }
 
 // A checkpoint is the objective owner's own plan, and it renders in that
@@ -929,19 +1046,40 @@ function milestoneRevise({ values, positionals }: CommandInput<typeof MILESTONE_
     refuseMilestoneRevise(milestone, values);
     const id = milestoneId();
     const payload = milestoneRevisePayload(ctx, model, { milestone, objective }, id, values);
+    // The effective date, not the stated one: a revision that says nothing
+    // about the date inherits the predecessor's, and an inherited date that
+    // now falls after an objective whose own date moved is the case #417
+    // observed. So the check reads what the successor will carry.
+    refuseLateTarget(payload.target as string | undefined, objective);
+    const units = carriedUnits(model, milestone);
     recordRetirement(ctx, retirementIntent(model, "supersede", [milestone.id],
         { successor: supersedingRecord(payload) }), model,
         (by) => [makeEvent(ctx.project, "entity.confirmed",
-            strip({ ...payload, by }), undefined, true)],
+            strip({ ...payload, by }), undefined, true),
+        ...carryEvents(ctx, units, id)],
         `${id} ${why}`);
-    return [{ kind: "receipt", text: id }];
+    return [{
+        kind: "receipt",
+        text: units.length === 0 ? id : `${id} — carried ${plural(units.length, "work unit")} from ${milestone.id}`
+    }];
+}
+
+// The units a checkpoint's revision carries (#417 §3), by the same rule an
+// objective's revision carries its own: every linked unit whose history has
+// not ended. Membership is lineage-local, so the edge to the predecessor
+// stays and the unit reads current under the successor alone.
+function carriedUnits(model: ProjectModel, milestone: MilestoneState): WorkState[]
+{
+    return model.works.filter((work) => work.milestones.includes(milestone.id)
+        && work.status !== "retired" && work.status !== "undone");
 }
 
 // What the successor record carries: the criteria the revision leaves standing
 // plus the ones it adds, the grouping and supersession edges, and the
-// assumptions this call states. The predecessor's own assumptions are not
-// carried here — that is #417's part (b) — so a revision names the decisions
-// it rests on or names none.
+// assumptions — the predecessor's, plus whatever this call adds (#417 §3). A
+// revision restates the plan; it does not withdraw what the checkpoint rests
+// on, and an assumption that no longer holds leaves through the verb that
+// exists for it, `milestone unlink --decision`.
 function milestoneRevisePayload(ctx: ProjectContext, model: ProjectModel,
     revised: { milestone: MilestoneState; objective: ObjectiveState }, id: string,
     values: CommandInput<typeof MILESTONE_REVISE_OPTIONS>["values"]): Record<string, unknown>
@@ -955,7 +1093,7 @@ function milestoneRevisePayload(ctx: ProjectContext, model: ProjectModel,
         links: [
             { type: "member-of", target: objective.id },
             { type: "supersedes", target: milestone.id },
-            ...statedAssumptions(model, values.decision)
+            ...carriedAssumptions(model, milestone, values.decision)
         ],
         criteria: [
             ...milestone.exit.filter((item) => item.dropped !== true && !dropped.has(item.id)).map((item) => item.text),
@@ -1033,14 +1171,27 @@ function assumedEdge(milestone: MilestoneState, decision: string, link: boolean)
     return { type: "assumes", target: decision };
 }
 
-// The assumption edges a creation or a revision states. A revision states its
-// own: this part of #417 ships the edges and the verbs, and carrying a
-// predecessor's assumptions across a revision is PR(b)'s scope, so a revision
-// that names none is a checkpoint that assumes none until somebody says
-// otherwise.
+// The assumption edges a creation states.
 function statedAssumptions(model: ProjectModel, decisions: string[] | undefined): Record<string, unknown>[]
 {
     return (decisions ?? []).map((prefix) => ({ type: "assumes", target: requireDecision(model, prefix).id }));
+}
+
+// What a revision's successor assumes (#417 §3): the predecessor's set, in the
+// order it stated it, plus whatever this call names. `--decision` adds; it
+// never replaces, because replacing one silently is exactly what leaves an
+// unrelated assumption erased with no statement to undo. A decision the
+// checkpoint already assumes is carried once — the successor rests on a set,
+// not on a list that counts how often somebody named it.
+function carriedAssumptions(model: ProjectModel, milestone: MilestoneState,
+    decisions: string[] | undefined): Record<string, unknown>[]
+{
+    const stated = statedAssumptions(model, decisions);
+    const named = new Set(stated.map((edge) => edge.target as string));
+    return [
+        ...milestone.assumes.filter((id) => !named.has(id)).map((id) => ({ type: "assumes", target: id })),
+        ...stated
+    ];
 }
 
 // Sugar over the coverage grammar (#207 C5): `met` records the same
@@ -1074,7 +1225,14 @@ function milestoneRecheck({ values, positionals }: CommandInput<typeof COVERAGE_
     const why = required(values.why);
     const { milestone } = currentMilestone(model, named.milestone);
     const criterion = requireCriterion(milestone, required(values.criterion));
-    if (milestone.met.includes(criterion.id) && !milestone.stale.some((item) => item.criterion === criterion.id))
+    // Two conditions admit a recheck now (#417 §5): coverage judged against a
+    // revision that has since moved — the legacy one — and coverage judged
+    // under a parent objective this checkpoint no longer hangs under, which no
+    // revision number records. Neither says the criterion is uncovered; both
+    // say somebody has to look again.
+    if (milestone.met.includes(criterion.id)
+        && !milestone.stale.some((item) => item.criterion === criterion.id)
+        && !milestone.judgmentContext.some((item) => item.criterion === criterion.id))
     {
         throw new CliError(`${milestone.id} ${criterion.id} is already covered at the current record — nothing to recheck`);
     }
@@ -1208,11 +1366,20 @@ const GAP_PROPOSAL_REQUIRED: Requirement[] = [
 // revision restates the plan text and says nothing about the list, so a caller
 // who reached for it here is sent to the verb that appends one rather than
 // having the flag dropped without a word.
-const REVISE_OPTIONS = { why: { type: "string" }, criteria: { type: "string", multiple: true } } as const;
+// `--objective`/`--milestone` retarget a pre-start plan (#417 §4): the one
+// supported answer to a gap that closed before anybody answered the plan.
+// They are declared on the leaf, so the help page glosses them and the parser
+// names a stray one — the flag a refusal prints has to be a flag that runs.
+const REVISE_OPTIONS = {
+    why: { type: "string" },
+    criteria: { type: "string", multiple: true },
+    objective: { type: "string" },
+    milestone: { type: "string" }
+} as const;
 
 const WHY_PLAN_CHANGED: Requirement = { flags: ["why"], hint: "why the plan changed" };
 
-const REVISE_USAGE = 'work revise <work-id> "<revised plan>" --why "<why the plan changed>"';
+const REVISE_USAGE = 'work revise <work-id> "<revised plan>" --why "<why the plan changed>" [--objective <id>|--milestone <id>]';
 
 const PROPOSE_USAGE = 'work propose "<plan>" [--supersedes <id> --why w] [--objective <id>|--milestone <id> …]';
 
@@ -1251,7 +1418,7 @@ function cmdWorkLink({ values, positionals }: CommandInput<typeof LINK_OPTIONS>,
     const ctx = requireProject(process.cwd());
     const model = buildModel(ctx.storeDir, ctx.project, new Date());
     const work = requireWork(model, positionals[0]);
-    const links = [...linkEdges(ctx, model, values, verb), ...standaloneEdges(work, values, link)];
+    const links = [...linkEdges(ctx, model, work, values, verb, link), ...standaloneEdges(work, values, link)];
     const type = link ? "entity.linked" : "entity.unlinked";
     recordEvents(ctx, links.map((edge) =>
         makeEvent(ctx.project, type, { entity: work.id, link: edge }, undefined, true)),
@@ -1308,8 +1475,8 @@ function withdrawnStandalone(work: WorkState, values: CommandInput<typeof LINK_O
 // project only, so a foreign milestone id is refused as unknown here. Only a
 // foreign objective's edge carries the owning slug — a local link stays
 // byte-identical to what it always was.
-function linkEdges(ctx: ProjectContext, model: ProjectModel,
-    values: CommandInput<typeof LINK_OPTIONS>["values"], verb: string): Record<string, unknown>[]
+function linkEdges(ctx: ProjectContext, model: ProjectModel, work: WorkState,
+    values: CommandInput<typeof LINK_OPTIONS>["values"], verb: string, link: boolean): Record<string, unknown>[]
 {
     if (values.objective === undefined && values["objective-project"] !== undefined)
     {
@@ -1319,15 +1486,154 @@ function linkEdges(ctx: ProjectContext, model: ProjectModel,
     if (values.objective !== undefined)
     {
         const found = findObjectiveAcross(ctx, model, values.objective, values["objective-project"]);
+        // The lineage is read in the log that owns the objective (#417 §4), so
+        // a foreign target is judged by its own project's fold rather than by
+        // an id this one cannot resolve.
+        refuseClosedLink(link, closedObjective(found.model, found.objective), work,
+            "--objective", found.slug === ctx.project ? undefined : found.slug);
         edges.push(found.slug === ctx.project
             ? { type: "member-of", target: found.objective.id }
             : { type: "member-of", target: found.objective.id, project: found.slug });
     }
     if (values.milestone !== undefined)
     {
-        edges.push({ type: "member-of", target: requireMilestone(model, values.milestone).milestone.id });
+        const milestone = requireMilestone(model, values.milestone).milestone;
+        refuseClosedLink(link, closedMilestone(model, milestone), work, "--milestone", undefined);
+        edges.push({ type: "member-of", target: milestone.id });
     }
     return edges;
+}
+
+// The guard on `work link` alone: `work unlink` passes through, because taking
+// an edge off a closed outcome is what a reader is being sent here to do.
+function refuseClosedLink(link: boolean, closed: ClosedTarget | undefined, work: WorkState,
+    flag: string, project: string | undefined): void
+{
+    if (!link || closed === undefined)
+    {
+        return;
+    }
+    const qualifier = project === undefined ? "" : ` --objective-project ${project}`;
+    throw closedTargetRefusal(closed,
+        (successor) => [
+            "  its successor is open — state the contribution there:",
+            `    self work link ${work.id} ${flag} ${successor}${qualifier}`
+        ],
+        standaloneRepair(work.id));
+}
+
+/* ── the target-open guard (#417 §4) ───────────────────────────────── */
+
+// A target nothing can be added to, and the live end of its own lineage.
+interface ClosedTarget
+{
+    id: string;
+    // What closed it, in the record's own words.
+    reason: string;
+    // The terminal record of the supersession chain, and only where that
+    // record is itself open. A chain that ends closed offers nothing: naming
+    // a closed parent as the repair sends a reader into a second refusal.
+    successor?: string;
+}
+
+// The one answer to "may a contribution name this record". Read by
+// `work link`, `work propose`, `work confirm` and the retarget on
+// `work revise`; `work unlink` never asks, because withdrawing an edge from an
+// outcome that is over is the repair rather than the mistake.
+//
+// A live checkpoint under a closed objective needs no rule of its own: that is
+// already what makes its derived state `closed`.
+function targetClosure(model: ProjectModel, id: string): ClosedTarget | undefined
+{
+    const objective = model.goals.objectives.find((item) => item.id === id);
+    if (objective !== undefined)
+    {
+        return closedObjective(model, objective);
+    }
+    const found = findMilestone(model.goals, id);
+    return found === null ? undefined : closedMilestone(model, found.milestone);
+}
+
+function isOpenObjective(objective: ObjectiveState): boolean
+{
+    return objective.status === "proposed" || objective.status === "active";
+}
+
+function closedObjective(model: ProjectModel, objective: ObjectiveState): ClosedTarget | undefined
+{
+    if (isOpenObjective(objective))
+    {
+        return undefined;
+    }
+    const terminal = terminalObjective(model, objective);
+    return {
+        id: objective.id,
+        reason: `${objective.status}${objective.closedWhy === undefined ? "" : ` — ${objective.closedWhy}`}`,
+        successor: isOpenObjective(terminal) ? terminal.id : undefined
+    };
+}
+
+// Single steps over folded state, bounded by the same guard `currentMilestone`
+// uses, so a cycle a foreign writer appended cannot loop the walk.
+function terminalObjective(model: ProjectModel, objective: ObjectiveState): ObjectiveState
+{
+    let current = objective;
+    for (let hops = 0; current.supersededBy !== undefined && hops < 1000; hops += 1)
+    {
+        const next = model.goals.objectives.find((item) => item.id === current.supersededBy);
+        if (next === undefined)
+        {
+            break;
+        }
+        current = next;
+    }
+    return current;
+}
+
+function isOpenMilestone(milestone: MilestoneState): boolean
+{
+    return milestone.state !== "reached" && milestone.state !== "closed";
+}
+
+function closedMilestone(model: ProjectModel, milestone: MilestoneState): ClosedTarget | undefined
+{
+    if (isOpenMilestone(milestone))
+    {
+        return undefined;
+    }
+    const terminal = currentMilestone(model, milestone).milestone;
+    return {
+        id: milestone.id,
+        reason: `${milestone.state} — ${milestone.reason}`,
+        successor: isOpenMilestone(terminal) ? terminal.id : undefined
+    };
+}
+
+// Every refusal here reads the same way: what closed, then one command that
+// reaches a state the caller wanted. The two halves are the caller's, because
+// what to do next depends on which verb was refused — and each of them is a
+// command a cell runs from this refusal's own reading context.
+function closedTargetRefusal(closed: ClosedTarget, relink: (successor: string) => string[],
+    otherwise: string[]): CliError
+{
+    return new CliError([
+        `${closed.id} is ${closed.reason} — a contribution names an outcome that is still open`,
+        "",
+        ...closed.successor === undefined ? otherwise : relink(closed.successor)
+    ].join("\n"));
+}
+
+// The standalone route, offered wherever a lineage ends closed: a unit whose
+// outcome is over moves no stated outcome, and saying so is a statement the
+// store already has a verb for.
+function standaloneRepair(work: string): string[]
+{
+    return [
+        "  nothing open succeeds it — a unit that moves no stated outcome says so instead:",
+        `    self work link ${work} --standalone --why "<why it contributes to no outcome>"`,
+        "",
+        "  `self objective` lists the outcomes that are still open."
+    ];
 }
 
 /* ── what a work correction may replace ────────────────────────────── */
@@ -1554,10 +1860,13 @@ function proposalPayload(model: ProjectModel, outcome: string, values: Record<st
     }
     const success = (values.success ?? []) as string[];
     const stop = (values.stop ?? []) as string[];
+    const objective = values.objective === undefined ? undefined : requireObjective(model, values.objective as string).id;
+    const milestone = values.milestone === undefined ? undefined : requireMilestone(model, values.milestone as string).milestone.id;
+    refuseClosedGap(model, milestone ?? objective);
     return strip({
         outcome,
-        objective: values.objective === undefined ? undefined : requireObjective(model, values.objective as string).id,
-        milestone: values.milestone === undefined ? undefined : requireMilestone(model, values.milestone as string).milestone.id,
+        objective,
+        milestone,
         value: values.value,
         success,
         stop,
@@ -1568,6 +1877,29 @@ function proposalPayload(model: ProjectModel, outcome: string, values: Record<st
         confidence: values.confidence,
         expires: validDate(values.expires as string)
     });
+}
+
+// A gap proposal names the gap it closes, so a gap that is already over is
+// refused before the proposal is minted (#417 §4) — a plan recorded toward an
+// outcome nobody is pursuing is the state this issue observed, and it is
+// cheaper to refuse than to reconcile later.
+function refuseClosedGap(model: ProjectModel, gap: string | undefined): void
+{
+    const closed = gap === undefined ? undefined : targetClosure(model, gap);
+    if (closed === undefined)
+    {
+        return;
+    }
+    throw closedTargetRefusal(closed,
+        (successor) => [
+            "  its successor is open — close that gap instead:",
+            `    self work propose "<plan>" --objective ${successor} …`
+        ],
+        [
+            "  nothing open succeeds it — `self objective` lists the outcomes still open, or",
+            "  plan a unit that closes no stated gap:",
+            '    self work propose "<plan>" --standalone --why "<why it contributes to no outcome>"'
+        ]);
 }
 
 // Deduplicated against both open proposals and open work already aimed at the
@@ -1668,8 +2000,43 @@ function cmdProposalDecision({ values, positionals }: CommandInput<typeof WHY_OP
         recordEvent(ctx, makeEvent(ctx.project, "entity.retracted", { entity: proposal.id, why, by: writtenBy() }, { declines: proposal.id }, true), `${proposal.text}`);
         return [];
     }
+    requireOpenGap(ctx, model, proposal);
     recordAcceptance(ctx, model, proposal);
     return [{ kind: "receipt", text: proposal.id }];
+}
+
+// A plan is accepted toward the gap it names *now* (#417 §4). The gap can
+// close between the proposal and the answer, and confirming into an outcome
+// that is over is what leaves work on superseded checkpoints — so the
+// acceptance rechecks the link against the current target and refuses whole,
+// leaving the plan open for a person to move or to end.
+//
+// Both routes it prints are supported commands: the retarget is the pre-start
+// revision this part makes explicit, and the decline is the verb that has
+// always been there. Neither is a flag advertised ahead of the code.
+function requireOpenGap(ctx: ProjectScope, model: ProjectModel, proposal: Answerable): void
+{
+    const closed = proposal.target === undefined ? undefined : targetClosure(model, proposal.target);
+    if (closed === undefined)
+    {
+        return;
+    }
+    const flag = model.goals.objectives.some((item) => item.id === closed.id) ? "--objective" : "--milestone";
+    const move = closed.successor === undefined
+        ? [`    self work revise ${proposal.id} "<plan>" --why "${closed.id} closed before this was accepted" --objective <open-objective-id>`]
+        : [`    self work revise ${proposal.id} "<plan>" --why "${closed.id} closed before this was accepted" ${flag} ${closed.successor}`];
+    throw new CliError([
+        `${proposal.id} contributes to ${closed.id}, and ${closed.id} is ${closed.reason} — nothing was recorded`,
+        "",
+        closed.successor === undefined
+            ? "  move the plan to an open outcome and confirm it again — `self objective` lists them:"
+            : "  move the plan to the open successor and confirm it again:",
+        ...move,
+        `    self work confirm ${proposal.id}`,
+        "",
+        "  or decline it:",
+        `    self work decline ${proposal.id} --why "<why it is not being done>"`
+    ].join("\n"));
 }
 
 // The acceptance itself. A plan that carries no supersession is the append it
@@ -1779,36 +2146,137 @@ function alreadyToward(model: ProjectModel, proposal: Answerable): boolean
 // previous version stays in the record's own history, the acceptance that
 // approved it stops authorizing a start, and nothing is superseded — which is
 // why a started plan cannot come here at all.
-function cmdWorkRevise({ values, positionals }: CommandInput<typeof REVISE_OPTIONS>): CommandOutput
+// Everything a revision is refused for beyond what `requireRevisable` already
+// answered: the flag that belongs to another verb, and the call that states
+// nothing new. `--criteria` is judged before the no-op check, because a
+// revision restates the plan and says nothing about the list whatever the
+// text says.
+function refuseIdleRevision(entity: EntityState, text: string, moved: Retarget | undefined,
+    values: CommandInput<typeof REVISE_OPTIONS>["values"]): void
 {
-    const ctx = requireProject(process.cwd());
-    const wanted = requireText(positionals[0], REVISE_USAGE);
-    const text = requireText(positionals[1], REVISE_USAGE);
-    const { entity, owner } = requireRevisable(ctx, wanted);
-    // Before the no-op check: the flag is refused whatever the text says,
-    // because a revision restates the plan and says nothing about the list.
     if (values.criteria !== undefined)
     {
         throw new CliError("work revise restates the plan text — declare a criterion with "
             + `\`self work criteria add ${entity.id} "<text>"\`, which appends it to the ones already declared`);
     }
-    if (entity.text === text)
+    // A changed gap is a changed plan (#417 §4), so the no-op refusal is
+    // lifted exactly when the target moves: same words, different outcome, is
+    // a version somebody has to accept again rather than a display change.
+    if (entity.text === text && moved === undefined)
     {
         throw new CliError(`${entity.id} already states this plan — a revision restates it, and this changes nothing`);
     }
+}
+
+function cmdWorkRevise({ values, positionals }: CommandInput<typeof REVISE_OPTIONS>): CommandOutput
+{
+    const ctx = requireProject(process.cwd());
+    const wanted = requireText(positionals[0], REVISE_USAGE);
+    const text = requireText(positionals[1], REVISE_USAGE);
+    const { entity, owner, model } = requireRevisable(ctx, wanted);
+    const moved = retargetOf(model, entity, values);
+    refuseIdleRevision(entity, text, moved, values);
     const why = required(values.why);
-    recordEvent(ctx, makeEvent(owner, "entity.revised", { entity: entity.id, text, why }), `${entity.id} ${text}`);
+    recordEvents(ctx, [
+        makeEvent(owner, "entity.revised", strip({ entity: entity.id, text, why, ...moved?.gap })),
+        ...withdrawnGapEdges(owner, entity, moved)
+    ], `${entity.id} ${text}`);
     return [{
         kind: "receipt",
-        text: `${entity.id} — v${(entity.plan?.current ?? 1) + 1}; confirm it with \`self work confirm ${entity.id}\``
+        text: `${entity.id} — v${(entity.plan?.current ?? 1) + 1}${moved === undefined ? "" : `, now toward ${moved.id}`}`
+            + `; confirm it with \`self work confirm ${entity.id}\``
     }];
+}
+
+// What a retarget states, once it is resolved and allowed.
+interface Retarget
+{
+    // The gap the revision moves the plan to.
+    id: string;
+    // The payload fields the revision carries, as a pair — a plan closes one
+    // gap, so moving it onto a checkpoint states the checkpoint and no
+    // objective, and the fold reads the pair rather than merging it.
+    gap: { objective?: string; milestone?: string };
+    // The gap the plan named until now, where the record carries an edge to it
+    // that an earlier acceptance wrote.
+    withdrawn?: string;
+}
+
+// Moving a pre-start plan to another gap (#417 §4). Only a plan that already
+// names a gap can be moved: a standalone plan closes none, so there is nothing
+// to retarget, and it states a contribution after it is confirmed the way
+// every other unit does.
+function retargetOf(model: ProjectModel, entity: EntityState,
+    values: CommandInput<typeof REVISE_OPTIONS>["values"]): Retarget | undefined
+{
+    if (values.objective === undefined && values.milestone === undefined)
+    {
+        return undefined;
+    }
+    if (values.objective !== undefined && values.milestone !== undefined)
+    {
+        throw new CliError("work revise moves a plan to one gap — pass --objective or --milestone, not both");
+    }
+    const proposal = model.goals.proposals.find((item) => item.id === entity.id);
+    const current = proposal?.milestone ?? proposal?.objective;
+    if (current === undefined)
+    {
+        throw new CliError(`${entity.id} names no gap, so there is none to move — a plan that closes no stated gap `
+            + `states what it contributes to once it is confirmed:\n`
+            + `    self work confirm ${entity.id}\n`
+            + `    self work link ${entity.id} --objective <id>`);
+    }
+    const gap = values.objective === undefined
+        ? { milestone: requireMilestone(model, values.milestone).milestone.id }
+        : { objective: requireObjective(model, values.objective).id };
+    const id = gap.milestone ?? gap.objective as string;
+    refuseClosedRetarget(model, entity, id);
+    return { id, gap, withdrawn: acceptedGapEdge(entity, current) };
+}
+
+// A retarget names a target that is open, by the same rule every other
+// contribution does — the repair for a closed gap is never another closed one.
+function refuseClosedRetarget(model: ProjectModel, entity: EntityState, id: string): void
+{
+    const closed = targetClosure(model, id);
+    if (closed === undefined)
+    {
+        return;
+    }
+    throw closedTargetRefusal(closed,
+        (successor) => [
+            "  its successor is open — move the plan there instead:",
+            `    self work revise ${entity.id} "<plan>" --why "<what changed>" --objective ${successor}`
+        ],
+        [
+            "  nothing open succeeds it — `self objective` lists the outcomes still open, or end the plan:",
+            `    self work decline ${entity.id} --why "<why it is not being done>"`
+        ]);
+}
+
+// The contribution an earlier acceptance already wrote toward the gap the plan
+// is leaving. A plan confirmed once and revised before it started keeps that
+// edge, and a retarget that left it standing would say the unit contributes to
+// a gap it no longer names. Every other edge the record carries is untouched:
+// this withdraws exactly the one the acceptance wrote.
+function acceptedGapEdge(entity: EntityState, current: string): string | undefined
+{
+    return entity.links.some((link) => link.type === "member-of" && link.target === current && link.project === undefined)
+        ? current
+        : undefined;
+}
+
+function withdrawnGapEdges(owner: string, entity: EntityState, moved: Retarget | undefined): SelfEvent[]
+{
+    return moved?.withdrawn === undefined ? [] : [makeEvent(owner, "entity.unlinked",
+        { entity: entity.id, link: { type: "member-of", target: moved.withdrawn } })];
 }
 
 // The record a revision names, and the log that owns it — the same resolution
 // `work start` makes, so a unit scoped in from another project is revised
 // where its record lives (#181 D3). Since #305 every folded unit is a record
 // here, so a pre-cutover id reads as the unknown id it now is.
-function requireRevisable(ctx: ProjectContext, wanted: string): { entity: EntityState; owner: string }
+function requireRevisable(ctx: ProjectContext, wanted: string): { entity: EntityState; owner: string; model: ProjectModel }
 {
     for (const model of workspaceModels(ctx.storeDir, ctx.project))
     {
@@ -1816,7 +2284,7 @@ function requireRevisable(ctx: ProjectContext, wanted: string): { entity: Entity
         if (entity !== undefined && rendersHere(model, entity, ctx.project))
         {
             refuseUnrevisable(entity);
-            return { entity, owner: model.slug };
+            return { entity, owner: model.slug, model };
         }
     }
     throw new CliError(wrongKindHint(wanted, "work") ?? `unknown work id "${wanted}" — run \`self work\` to list ids`);
@@ -2037,11 +2505,14 @@ function requireObjective(model: ProjectModel, id: string | undefined): Objectiv
     return objective;
 }
 
-// An objective and the registered project whose log owns it.
+// An objective, the registered project whose log owns it, and the fold that
+// log produced — which is what lets a caller read the objective's own lineage
+// without resolving a foreign id in the wrong project (#417 §4).
 interface FoundObjective
 {
     slug: string;
     objective: ObjectiveState;
+    model: ProjectModel;
 }
 
 // The `findWorkAcross` precedent (#181, #244): a bare id resolves in the
@@ -2063,7 +2534,7 @@ function findObjectiveAcross(ctx: ProjectContext, model: ProjectModel, id: strin
         const objective = source.goals.objectives.find((item) => item.id === wanted);
         if (objective !== undefined)
         {
-            matches.push({ slug, objective });
+            matches.push({ slug, objective, model: source });
         }
     }
     return settleObjectiveMatches(ctx, wanted, matches);
@@ -2096,7 +2567,7 @@ function objectiveIn(ctx: ProjectContext, model: ProjectModel, wanted: string, s
     {
         throw new CliError(`no objective "${wanted}" in ${slug} — run \`self objective --project ${slug}\` to list ids`);
     }
-    return { slug, objective };
+    return { slug, objective, model: source };
 }
 
 function requireMilestone(model: ProjectModel, id: string | undefined): { objective: ObjectiveState; milestone: MilestoneState }

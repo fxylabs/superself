@@ -184,6 +184,12 @@ interface CoverageClaim
     actor: string;
     work?: string;
     commits: string[];
+    // The objective the judgment was made under (#417 §5), stamped by the one
+    // coverage writer whenever the covered record is a checkpoint. Absent on
+    // every claim written before this issue, and on a claim about a record
+    // that hangs under no objective — which is why a reader treats absence as
+    // "not recorded" rather than as "the current parent".
+    objective?: string;
 }
 
 // One declared criterion, folded from its own ordered event stream (#408).
@@ -273,6 +279,10 @@ export interface EntityState
     // acceptance bound (#356). Absent on every other record — nothing else
     // restates its text in place.
     plan?: PlanState;
+    // The gap the newest revision that states one moved the plan to (#417 §4).
+    // Absent while no revision has retargeted the plan, which is when the
+    // creation payload's own gap is still the effective one.
+    planTarget?: PlanTarget;
     // Set by the first `entity.started` and never cleared: a plan that has
     // been picked up is frozen, whatever the record's working state becomes
     // afterwards. `claim` answers who holds the unit, which is a different
@@ -312,6 +322,16 @@ export interface PlanState
     current: number;
     event: string;
     accepted?: number;
+}
+
+// The gap a plan closes, as a revision states it (#417 §4). The pair is read
+// and replaced whole: a revision that moves a plan onto a checkpoint states
+// the checkpoint and no objective, so carrying the two fields separately
+// would leave the objective the plan no longer names standing beside it.
+export interface PlanTarget
+{
+    objective?: string;
+    milestone?: string;
 }
 
 // The declared list in both shapes it is read in, minted together so no caller
@@ -536,9 +556,10 @@ interface CoverageEvent
     claim: CoverageClaim;
 }
 
-// One `entity.revised` line: a whole restated text, never a diff, and the
-// reason the plan changed. Collected like every other transition, because the
-// record it names can be created later in a union-merged log.
+// One `entity.revised` line: a whole restated text, never a diff, the reason
+// the plan changed, and — since #417 §4 — the gap the revision moves the plan
+// to. Collected like every other transition, because the record it names can
+// be created later in a union-merged log.
 interface RevisionEvent
 {
     event: string;
@@ -546,6 +567,7 @@ interface RevisionEvent
     entity: string;
     text: string;
     why?: string;
+    target?: PlanTarget;
 }
 
 const EXECUTION_EVENTS = ["entity.started", "entity.blocked", "entity.unblocked", "entity.done", "entity.retired"];
@@ -909,7 +931,8 @@ function collectCoverage(fold: EntityFold, event: SelfEvent): void
             why: String(event.payload.why ?? ""),
             actor: String(event.origin.actor ?? "agent"),
             work: str(event.refs?.work),
-            commits: stringList(event.refs?.commits)
+            commits: stringList(event.refs?.commits),
+            objective: str(event.payload.objective)
         }
     });
 }
@@ -954,7 +977,25 @@ function collectRevision(fold: EntityFold, event: SelfEvent): void
     {
         return;
     }
-    fold.revisions.push({ event: event.id, ts: event.ts, entity, text, why: str(event.payload.why) });
+    fold.revisions.push({
+        event: event.id, ts: event.ts, entity, text,
+        why: str(event.payload.why),
+        target: statedTarget(event.payload)
+    });
+}
+
+// The gap a revision states, or nothing. A line naming neither reads as a
+// plain restatement, and one whose id is not a string reads the same way: a
+// retarget nobody can resolve must not empty the gap the plan already names.
+function statedTarget(payload: Record<string, unknown>): PlanTarget | undefined
+{
+    const objective = str(payload.objective);
+    const milestone = str(payload.milestone);
+    if (objective === undefined && milestone === undefined)
+    {
+        return undefined;
+    }
+    return { objective, milestone };
 }
 
 // Placement moves by event (#197 §3), collected here and applied over the
@@ -1135,6 +1176,7 @@ function applyPlans(entities: EntityState[], fold: EntityFold, revisions: Map<st
             entity.text = stated[stated.length - 1].text;
         }
         entity.plan = planOf(entity.id, stated, accepted);
+        entity.planTarget = [...stated].reverse().find((item) => item.target !== undefined)?.target;
         if (entity.plan.accepted !== entity.plan.current && entity.status === "confirmed")
         {
             entity.status = "proposed";
