@@ -1,10 +1,9 @@
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { Client, OAuthError, ProtocolError, SdkHttpError, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
-import { readConfig, serverOf } from './auth/config';
-import type { ServerEntry } from './auth/config';
+import { notSignedIn } from './auth/config';
 import { authProviderFor } from './auth/session';
-import { readTokens } from './auth/secret';
-import { CliError, EXIT, notSignedIn } from './errors';
+import { readSignIn } from './auth/store';
+import { CliError, EXIT } from './errors';
 import { VERSION } from './version';
 
 /**
@@ -12,22 +11,13 @@ import { VERSION } from './version';
  * stored sign-in belongs to. The server is stateless, so each call is its own
  * connection: initialize, call, close.
  */
-
-/** The server a command talks to, and what this machine keeps for it — or the instruction to sign in. */
-export const signedInServer = (flag: string | undefined): { server: string; entry: ServerEntry } =>
+export const callTool = async (server: string, name: string, args: Record<string, unknown>): Promise<unknown> =>
 {
-    const config = readConfig();
-    const server = serverOf(flag, config);
-    const entry = config.servers[server];
+    const signIn = readSignIn(server);
 
-    if (entry === undefined || readTokens(server) === null) throw notSignedIn(server);
+    if (signIn === null) throw notSignedIn(server);
 
-    return { server, entry };
-};
-
-export const callTool = async (server: string, entry: ServerEntry, name: string, args: Record<string, unknown>): Promise<unknown> =>
-{
-    const transport = new StreamableHTTPClientTransport(new URL(entry.resource), { authProvider: authProviderFor(server, entry) });
+    const transport = new StreamableHTTPClientTransport(new URL(signIn.resource), { authProvider: authProviderFor(server) });
     const client = new Client({ name: 'superself-cli', version: VERSION });
 
     try
@@ -36,7 +26,8 @@ export const callTool = async (server: string, entry: ServerEntry, name: string,
 
         const result = await client.callTool({ name, arguments: args }) as CallToolResult;
 
-        if (result.isError === true) throw new CliError(EXIT.refused, textOf(result) || `${name} failed`);
+        // The server answered, and said no: a refusal it wrote for the caller.
+        if (result.isError === true) throw new CliError(EXIT.refused, textOf(result) || `${name} was refused`);
 
         return result.structuredContent ?? parsed(textOf(result));
     }
@@ -66,10 +57,15 @@ const parsed = (text: string): unknown =>
 };
 
 /**
- * What the person is told when a call fails. A refusal the server wrote for the
- * caller (a key no record has, a state that does not allow the command) is
- * shown in its own words with exit 3; a server that cannot be reached, or
- * answers 5xx, is exit 4.
+ * A failure by who produced it, not by what it happens to carry:
+ *
+ * - a `CliError` was thrown where its cause is known (the keychain, the lock, a
+ *   sign-in that ended) and keeps its code;
+ * - a JSON-RPC error (`ProtocolError`) and an OAuth error are the server's
+ *   answer: refused, exit 3, in its words;
+ * - an HTTP status: 401 is a sign-in the server will not take, another 4xx a
+ *   refusal, a 5xx a server that failed;
+ * - anything else — a connection refused, a timeout — is a server not reached.
  */
 const asCliError = (error: unknown, server: string): CliError =>
 {
@@ -79,41 +75,16 @@ const asCliError = (error: unknown, server: string): CliError =>
     }
 
     const message = error instanceof Error ? error.message : String(error);
-    const status = statusOf(error);
-    const words = serverWords(message);
 
-    if (status === 401) return notSignedIn(server, 'the sign-in was refused');
-    if (status !== undefined && status >= 400 && status < 500) return new CliError(EXIT.refused, words ?? message);
-    if (words !== undefined && status === undefined) return new CliError(EXIT.refused, words);
+    if (ProtocolError.isInstance(error) || OAuthError.isInstance(error)) return new CliError(EXIT.refused, message);
+
+    if (SdkHttpError.isInstance(error))
+    {
+        const status = error.data.status;
+
+        if (status === 401) return notSignedIn(server, 'the server did not accept the sign-in');
+        if (status >= 400 && status < 500) return new CliError(EXIT.refused, message);
+    }
 
     return new CliError(EXIT.server, `${server} did not answer: ${message}`);
-};
-
-const statusOf = (error: unknown): number | undefined =>
-{
-    const candidate = error as { status?: unknown; code?: unknown; data?: { status?: unknown } };
-
-    if (typeof candidate.status === 'number') return candidate.status;
-    if (typeof candidate.data?.status === 'number') return candidate.data.status;
-
-    return undefined;
-};
-
-/** The `message` of a JSON-RPC error the server sent, when the SDK's error carries its body. */
-const serverWords = (message: string): string | undefined =>
-{
-    const start = message.indexOf('{');
-
-    if (start === -1) return undefined;
-
-    try
-    {
-        const body = JSON.parse(message.slice(start)) as { error?: { message?: unknown } };
-
-        return typeof body.error?.message === 'string' ? body.error.message : undefined;
-    }
-    catch
-    {
-        return undefined;
-    }
 };

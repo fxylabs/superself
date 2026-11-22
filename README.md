@@ -24,10 +24,13 @@ self login
 ```
 
 The browser opens the Superself sign-in. Pick the workspace `self` should work on; the terminal says when you are
-signed in. On a machine without a browser, `self login --no-browser` prints the address to open instead.
+signed in. The browser has to run on the same machine: it hands the sign-in back to `self` on `127.0.0.1`.
+`self login --no-browser` prints the address instead of opening it (over SSH, forward the port it names with
+`ssh -L`).
 
-- The tokens are kept in the OS keychain (macOS Keychain, Windows Credential Manager, or the Secret Service on
-  Linux) under the service name `superself`, and nowhere else.
+- The sign-in — the tokens and the client they belong to — is kept in the OS keychain (macOS Keychain, Windows
+  Credential Manager, or the Secret Service on Linux, e.g. GNOME Keyring) under the service name `superself`, and
+  nowhere else.
 - The sign-in renews itself. After 180 days, or when you disconnect `self` in Superself's settings, run
   `self login` again.
 - `self logout` revokes the sign-in at the server and deletes it from the keychain.
@@ -72,15 +75,17 @@ self record undo <seq>|<issue>|<note>
 `self help` prints the same list with a line on each command. Every write prints the command that takes it back
 (`undo: self record undo <seq>`).
 
-Exit codes: `0` done, `2` the command line was wrong, `3` the server refused or you are not signed in, `4` the
-server could not be reached.
+Exit codes: `0` done, `1` this machine could not do it (the keychain refused, another `self` held the sign-in lock,
+the browser never came back), `2` the command line was wrong, `3` the server refused or you are not signed in, `4`
+the server could not be reached.
 
 ## Servers
 
 `self` talks to `https://app.superselfs.com` unless told otherwise. `--server <origin>` on any command, or the
 `SUPERSELF_SERVER` environment variable, names another; `self login --server <origin>` also makes it the default.
-Settings that are not secret (the server, its sign-in metadata, the client id) are in
-`~/.config/superself/config.json` (`%APPDATA%\superself` on Windows, `$XDG_CONFIG_HOME/superself` when set).
+A server is `https`, or `http` on localhost. The default server is the one setting outside the keychain:
+`~/.config/superself/config.json` (`%APPDATA%\superself` on Windows), beside the lock that keeps two `self`
+processes from renewing the sign-in at once.
 
 ## Development
 

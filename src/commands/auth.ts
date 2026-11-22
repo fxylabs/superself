@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { discoverOAuthServerInfo, exchangeAuthorization, registerClient, startAuthorization } from '@modelcontextprotocol/client';
-import { openInBrowser } from '../auth/browser';
-import { readConfig, serverOf, writeConfig } from '../auth/config';
-import type { ServerEntry } from '../auth/config';
+import { discoverOAuthServerInfo, exchangeAuthorization, OAuthError, registerClient, startAuthorization } from '@modelcontextprotocol/client';
+import { openableUrl, openInBrowser } from '../auth/browser';
+import { chooseServer, rememberServer } from '../auth/config';
+import { withRefreshLock } from '../auth/lock';
 import { openLoopback } from '../auth/loopback';
-import { deleteTokens, readTokens, writeTokens } from '../auth/secret';
-import { tokensFrom } from '../auth/session';
+import { authFetch, AUTH_REQUEST_MS, withTokens } from '../auth/session';
+import { deleteSignIn, keptMetadata, readSignIn, revocationEndpoint, writeSignIn } from '../auth/store';
+import type { SignIn } from '../auth/store';
 import { CliError, EXIT } from '../errors';
 import { callTool } from '../mcp';
 import { renderWorkspace } from '../render/workspace';
@@ -24,39 +25,48 @@ export interface Io
     err: (line: string) => void;
 }
 
+/** An OAuth refusal is the server's answer (exit 3); anything else on the way is a server not reached (exit 4). */
+const fromServer = (step: string, server: string) => (error: unknown): never =>
+{
+    if (error instanceof CliError) throw error;
+    if (OAuthError.isInstance(error)) throw new CliError(EXIT.refused, `${step} was refused: ${error.message}`);
+
+    throw new CliError(EXIT.server, `${server} did not answer the ${step}: ${error instanceof Error ? error.message : String(error)}`);
+};
+
 /**
  * `self login [--server <origin>] [--no-browser]`
  *
  * The OAuth 2.1 flow Claude Code uses for the same server: discover the
  * authorization server from the MCP resource, register this machine as a
- * public client (once; the registration is reused while a sign-in stands),
- * open the consent screen with PKCE, catch the answer on a loopback port and
- * exchange the code. The person picks the workspace on the consent screen.
- * The tokens go to the OS keychain and nowhere else.
+ * public client (once; reused while a sign-in is stored), open the consent
+ * screen with PKCE, catch the answer on a loopback port and exchange the code.
+ * The person picks the workspace on the consent screen.
+ *
+ * What cannot be undone comes last: the keychain is read before the browser
+ * opens, so a keychain that refuses refuses before a grant exists; and if the
+ * write still fails, the grant just issued is revoked.
  */
 export const login = async (flag: string | undefined, browser: boolean, io: Io): Promise<string> =>
 {
-    const config = readConfig();
-    const server = serverOf(flag, config);
-    const info = await discoverOAuthServerInfo(new URL('/mcp', server)).catch((error: unknown) =>
-    {
-        throw new CliError(EXIT.server, `${server} did not answer the sign-in discovery: ${error instanceof Error ? error.message : String(error)}`);
-    });
+    const { server } = chooseServer(flag);
+    const previous = readSignIn(server);
+    const expected = new URL('/mcp', server).href;
+    const info = await discoverOAuthServerInfo(expected, { fetchFn: authFetch }).catch(fromServer('sign-in discovery', server));
     const metadata = info.authorizationServerMetadata;
     const resource = info.resourceMetadata?.resource;
 
-    if (metadata === undefined || resource === undefined)
-    {
-        throw new CliError(EXIT.server, `${server} does not publish a sign-in for its MCP server`);
-    }
+    if (metadata === undefined || resource === undefined) throw new CliError(EXIT.server, `${server} does not publish a sign-in for its MCP server`);
+
+    // RFC 9728 §3.3: the tokens go to `resource`, so it must be the server the person named.
+    if (new URL(resource).href !== expected) throw new CliError(EXIT.server, `${server} names another server as its resource (${resource}); refusing to sign in`);
 
     const loopback = await openLoopback();
 
     try
     {
-        const known = config.servers[server];
-        const clientId = known !== undefined && known.issuer === metadata.issuer
-            ? known.clientId
+        const clientId = previous !== null && previous.metadata.issuer === metadata.issuer
+            ? previous.clientId
             : (await registerClient(info.authorizationServerUrl, {
                 metadata,
                 clientMetadata: {
@@ -69,7 +79,8 @@ export const login = async (flag: string | undefined, browser: boolean, io: Io):
                     software_version: VERSION,
                 },
                 scope: SCOPES,
-            })).client_id;
+                fetchFn: authFetch,
+            }).catch(fromServer('client registration', server))).client_id;
         const state = randomBytes(24).toString('base64url');
         const { authorizationUrl, codeVerifier } = await startAuthorization(info.authorizationServerUrl, {
             metadata,
@@ -79,10 +90,11 @@ export const login = async (flag: string | undefined, browser: boolean, io: Io):
             state,
             resource,
         });
+        const address = openableUrl(authorizationUrl.toString());
 
-        io.err(browser ? 'Opening the browser to sign in. If it does not open, open this address:' : 'Open this address in a browser to sign in:');
-        io.err(`  ${authorizationUrl.toString()}`);
-        if (browser) openInBrowser(authorizationUrl.toString());
+        io.err(browser ? 'Opening the browser to sign in. If it does not open, open this address:' : 'Open this address in a browser on this machine to sign in:');
+        io.err(`  ${address}`);
+        if (browser) openInBrowser(address);
 
         const { code, iss } = await loopback.wait(state, BROWSER_WAIT_MS);
         const answer = await exchangeAuthorization(info.authorizationServerUrl, {
@@ -93,68 +105,86 @@ export const login = async (flag: string | undefined, browser: boolean, io: Io):
             codeVerifier,
             redirectUri: loopback.redirectUri,
             resource,
+            fetchFn: authFetch,
+        }).catch(fromServer('sign-in', server));
+        const signIn = withTokens({ resource, clientId, metadata: keptMetadata(metadata) }, answer);
+
+        await withRefreshLock(server, async () =>
+        {
+            try
+            {
+                writeSignIn(server, signIn);
+            }
+            catch (error)
+            {
+                await revokeAll(signIn).catch(() => undefined);
+
+                throw error;
+            }
         });
-        const entry: ServerEntry = { resource, issuer: metadata.issuer, metadata, clientId };
-
-        writeTokens(server, tokensFrom(answer));
-        writeConfig({ server, servers: { ...config.servers, [server]: entry } });
-
-        const shown = await callTool(server, entry, 'workspace_show', {}) as WorkspaceShow;
-
-        return [`signed in to ${server}`, renderWorkspace(shown)].join('\n');
     }
     finally
     {
         loopback.close();
     }
+
+    rememberServer(server);
+
+    const workspace = await callTool(server, 'workspace_show', {}).then(
+        shown => renderWorkspace(shown as WorkspaceShow),
+        (error: unknown) => `workspace: not read (${error instanceof Error ? error.message : String(error)})`,
+    );
+
+    return [`signed in to ${server}`, workspace].join('\n');
 };
 
-/**
- * `self logout [--server <origin>]`
- *
- * Revoke both tokens at the authorization server (RFC 7009), then delete them
- * from the keychain and forget the client registration. A revocation that does
- * not reach the server is said, and the local sign-in is removed all the same.
- */
-export const logout = async (flag: string | undefined): Promise<string> =>
-{
-    const config = readConfig();
-    const server = serverOf(flag, config);
-    const entry = config.servers[server];
-    const tokens = readTokens(server);
-
-    if (entry === undefined && tokens === null) return `not signed in to ${server}`;
-
-    const lines: string[] = [];
-    // RFC 8414 names it; the SDK's type is the union with OpenID's metadata, which does not.
-    const endpoint = entry === undefined ? undefined : (entry.metadata as { revocation_endpoint?: string }).revocation_endpoint;
-
-    if (tokens !== null && entry !== undefined && endpoint !== undefined)
-    {
-        const failed = await revoke(endpoint, entry.clientId, tokens.refreshToken, 'refresh_token')
-            .then(() => revoke(endpoint, entry.clientId, tokens.accessToken, 'access_token'))
-            .then(() => null, (error: unknown) => (error instanceof Error ? error.message : String(error)));
-
-        if (failed !== null) lines.push(`the server was not told (${failed}); disconnect this CLI in Settings, Connected Agents`);
-    }
-
-    deleteTokens(server);
-
-    const { [server]: _forgotten, ...servers } = config.servers;
-
-    writeConfig({ server: config.server, servers });
-    lines.push(`signed out of ${server}`);
-
-    return lines.join('\n');
-};
-
+/** RFC 7009, to the endpoint the metadata named and nowhere else, within a time limit. */
 const revoke = async (endpoint: string, clientId: string, token: string, hint: string): Promise<void> =>
 {
     const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ token, token_type_hint: hint, client_id: clientId }),
+        redirect: 'error',
+        signal: AbortSignal.timeout(AUTH_REQUEST_MS),
     });
 
-    if (!response.ok) throw new Error(`revocation answered ${response.status}`);
+    if (!response.ok) throw new Error(`the revocation endpoint answered ${response.status}`);
+};
+
+const revokeAll = async (signIn: SignIn): Promise<void> =>
+{
+    const endpoint = revocationEndpoint(signIn.metadata);
+
+    if (endpoint === undefined) throw new Error('the server names no revocation endpoint');
+
+    await revoke(endpoint, signIn.clientId, signIn.refreshToken, 'refresh_token');
+    await revoke(endpoint, signIn.clientId, signIn.accessToken, 'access_token');
+};
+
+/**
+ * `self logout [--server <origin>]`
+ *
+ * Revoke both tokens at the authorization server, then delete the sign-in from
+ * the keychain. The local sign-in is removed either way; a revocation that did
+ * not happen is said, and exits 4, because the grant still stands on the server.
+ */
+export const logout = async (flag: string | undefined): Promise<string> =>
+{
+    const { server } = chooseServer(flag);
+    const signIn = readSignIn(server);
+
+    if (signIn === null) return `not signed in to ${server}`;
+
+    const failed = await revokeAll(signIn).then(() => null, (error: unknown) => (error instanceof Error ? error.message : String(error)));
+
+    deleteSignIn(server);
+
+    if (failed !== null)
+    {
+        throw new CliError(EXIT.server,
+            `signed out on this machine, but ${server} was not told (${failed}): disconnect the Superself CLI in Superself's settings`);
+    }
+
+    return `signed out of ${server}`;
 };

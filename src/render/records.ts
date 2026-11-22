@@ -7,23 +7,44 @@ import type {
  * Records as plain text for a person, in the same lines the `self` inside a
  * Superself runtime prints, so an issue reads the same wherever it is read.
  *
- * `query` in a list renderer is the flags the command was given, by name; it
- * makes the next-page line a command that can be run as it is.
+ * A list renderer gets the flags as they were typed, and every renderer that
+ * prints a command to run next gets `Again`: the printed line is a command that
+ * runs as it is, against the same server.
  */
 
 // ── shared ────────────────────────────────────────────────────────────────
 
-export const undoLine = (seq: number): string => `undo: self record undo ${seq}`;
+/**
+ * How a command this CLI prints for the person to run next is written: `self`,
+ * the command, its flags, and `--server <origin>` when the command that printed
+ * it was given one — so the line acts on the same server, never the default.
+ */
+export interface Again
+{
+    /** ` --server <origin>`, or nothing. */
+    server: string;
+}
+
+/** A flag as it was typed: a switch, or a value. */
+export type Typed = readonly [name: string, value: string | true];
+
+export const undoLine = (seq: number, again: Again): string => `undo: self record undo ${seq}${again.server}`;
 
 const countLine = (count: number): string => `count: ${count > COUNT_CAP ? '1,000+' : count}`;
 
-export const nextPageLine = (command: string, query: Record<string, string>, next: string): string =>
-    `next page: self ${[command, ...Object.entries(query).filter(([name]) => name !== 'after')
-        .map(([name, value]) => (value === 'true' ? `--${name}` : `--${name} ${shellWord(value)}`)), `--after ${next}`].join(' ')}`;
+/** The flags, then `--after`, then the server, then the words; `--` before the words when one starts with `-`. */
+export const nextPageLine = (command: string, flags: readonly Typed[], next: string, again: Again, words: readonly string[] = []): string =>
+    `next page: self ${[
+        command,
+        ...flags.filter(([name]) => name !== 'after').map(([name, value]) => (value === true ? `--${name}` : `--${name} ${shellWord(value)}`)),
+        `--after ${next}`,
+    ].join(' ')}${again.server}${words.length === 0 ? '' : ` ${words.some(word => word.startsWith('-')) ? '-- ' : ''}${words.map(shellWord).join(' ')}`}`;
 
 /** A word as a shell reads it back: bare when it is letters, digits and `-_.:/@`, else in single quotes. */
 const shellWord = (word: string): string =>
     /^[\p{L}\p{N}_.:/@-]+$/u.test(word) ? word : `'${word.replaceAll('\'', '\'\\\'\'')}'`;
+
+const given = (flags: readonly Typed[], name: string): boolean => flags.some(([flag]) => flag === name);
 
 const renderLinks = (links: WorkLink[]): string[] =>
     links.length === 0 ? [] : ['', 'links:', ...links.map(link => `  ${link.type} ${link.direction === 'from' ? '→' : '←'} ${link.key}`)];
@@ -51,13 +72,13 @@ export const renderIssueRow = (row: WorkRow): string =>
     ].join('\n');
 };
 
-export const renderIssueWritten = (row: WorkRow): string => [renderIssueRow(row), undoLine(row.lastEventSeq)].join('\n');
+export const renderIssueWritten = (row: WorkRow, again: Again): string => [renderIssueRow(row), undoLine(row.lastEventSeq, again)].join('\n');
 
 const heldByLine = (held: HeldBy): string[] =>
     held.heldBy !== null ? [`  held by session ${held.heldBy}`] : held.heldByMember !== null ? [`  held by ${held.heldByMember}`] : [];
 
-export const renderIssueStarted = (answer: WorkRow & HeldBy): string =>
-    [renderIssueRow(answer), ...heldByLine(answer), undoLine(answer.lastEventSeq)].join('\n');
+export const renderIssueStarted = (answer: WorkRow & HeldBy, again: Again): string =>
+    [renderIssueRow(answer), ...heldByLine(answer), undoLine(answer.lastEventSeq, again)].join('\n');
 
 export const renderIssueDetail = (detail: WorkDetail): string =>
     [
@@ -69,18 +90,18 @@ export const renderIssueDetail = (detail: WorkDetail): string =>
         ...renderEvents(detail.events),
     ].join('\n');
 
-export const renderIssueList = (page: Page<WorkRow>, query: Record<string, string>): string =>
+export const renderIssueList = (page: Page<WorkRow>, flags: readonly Typed[], again: Again): string =>
 {
     if (page.rows.length === 0)
     {
-        return query.state === undefined && query.all === undefined
+        return !given(flags, 'state') && !given(flags, 'all')
             ? 'no open issues (done and canceled are hidden: --state done|canceled shows them; --all adds deleted ones)'
             : 'no issues match these flags';
     }
 
     return [
         ...page.rows.map(row => `${row.key}  ${row.working}  ${firstLine(row.summary)}${row.project === null ? '' : `  (${row.project})`}`),
-        ...(page.next === null ? [] : [nextPageLine('issue list', query, page.next)]),
+        ...(page.next === null ? [] : [nextPageLine('issue list', flags, page.next, again)]),
         countLine(page.count),
     ].join('\n');
 };
@@ -97,7 +118,7 @@ export const renderNoteRow = (row: NoteRow): string =>
     return `${row.key}  ${row.status}  ${firstLine(row.summary)}${labels}${project}${visibility}`;
 };
 
-export const renderNoteWritten = (row: NoteRow): string => [renderNoteRow(row), undoLine(row.lastEventSeq)].join('\n');
+export const renderNoteWritten = (row: NoteRow, again: Again): string => [renderNoteRow(row), undoLine(row.lastEventSeq, again)].join('\n');
 
 export const renderNoteDetail = (detail: NoteDetail): string =>
     [
@@ -110,18 +131,18 @@ export const renderNoteDetail = (detail: NoteDetail): string =>
         ...renderEvents(detail.events),
     ].join('\n');
 
-export const renderNoteList = (page: Page<NoteRow>, query: Record<string, string>): string =>
+export const renderNoteList = (page: Page<NoteRow>, flags: readonly Typed[], again: Again): string =>
 {
     if (page.rows.length === 0)
     {
-        return query.status === undefined && query.all === undefined
+        return !given(flags, 'status') && !given(flags, 'all')
             ? 'no current notes (superseded, retracted and undone are hidden; --all shows them)'
             : 'no notes match these flags';
     }
 
     return [
         ...page.rows.map(renderNoteRow),
-        ...(page.next === null ? [] : [nextPageLine('note list', query, page.next)]),
+        ...(page.next === null ? [] : [nextPageLine('note list', flags, page.next, again)]),
         countLine(page.count),
     ].join('\n');
 };
@@ -139,23 +160,20 @@ const searchRowLines = (row: RecordListRow): string[] =>
     return row.fragment === null ? [line] : [line, `    ${row.fragment}`];
 };
 
-/** The words go right after the noun in the next-page command, so `q` is not repeated among its flags. */
-export const renderSearch = (answer: RecordList, query: Record<string, string>): string =>
+/** The next page repeats the words as they were given, one argument each, after the flags. */
+export const renderSearch = (answer: RecordList, words: readonly string[], flags: readonly Typed[], again: Again): string =>
 {
     if (answer.rows.length === 0)
     {
-        return query.all === undefined
+        return !given(flags, 'all')
             ? 'no records match (deleted and superseded, retracted, undone notes are hidden: --all shows them)'
             : 'no records match';
     }
 
-    const { q = '', ...flags } = query;
-    const command = ['record search', ...(q === '' ? [] : q.split(' ').map(shellWord))].join(' ');
-
     return [
         ...(answer.mode === 'substring' ? ['no prefix match; showing substring matches'] : []),
         ...answer.rows.flatMap(searchRowLines),
-        ...(answer.next === null ? [] : [nextPageLine(command, flags, answer.next)]),
+        ...(answer.next === null ? [] : [nextPageLine('record search', flags, answer.next, again, words)]),
         countLine(answer.count),
     ].join('\n');
 };

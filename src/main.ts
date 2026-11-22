@@ -1,13 +1,15 @@
 import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
-import { openInBrowser } from './auth/browser';
+import { openableUrl, openInBrowser } from './auth/browser';
+import { chooseServer } from './auth/config';
 import { login, logout } from './commands/auth';
 import type { Io } from './commands/auth';
 import { RECORD_COMMANDS } from './commands/records';
 import type { Flag, Parsed, RecordCommand } from './commands/records';
 import { CliError, EXIT, usage } from './errors';
 import type { ExitCode } from './errors';
-import { callTool, signedInServer } from './mcp';
+import { callTool } from './mcp';
+import type { Again } from './render/records';
 import { renderWorkspace } from './render/workspace';
 import type { SwitchLink, WorkspaceShow } from './render/workspace';
 import { VERSION } from './version';
@@ -20,8 +22,8 @@ import { VERSION } from './version';
 const SERVER_FLAG: Flag = { name: 'server', type: 'string', value: '<origin>' };
 
 const ACCOUNT_LINES: readonly [string, string][] = [
-    ['self login [--server <origin>] [--no-browser]', 'sign in in the browser and pick the workspace; the tokens go to the OS keychain;'
-        + ' --no-browser only prints the address to open'],
+    ['self login [--server <origin>] [--no-browser]', 'sign in in the browser on this machine and pick the workspace; the sign-in goes to'
+        + ' the OS keychain; --no-browser prints the address instead of opening it'],
     ['self logout [--server <origin>]', 'revoke the sign-in at the server and delete it from the keychain'],
     ['self workspace show', 'the workspace the record commands work on'],
     ['self workspace switch', 'pick another workspace in the browser'],
@@ -50,7 +52,8 @@ const help = (noun?: string): string =>
         ...records.flatMap(command => [formOf(command), `    ${command.about}`]),
         ...(noun === undefined
             ? ['', 'Every command takes --server <origin>; without it, the server `self login` last signed in to.',
-                'Exit codes: 0 done, 2 wrong command line, 3 refused or not signed in, 4 server not reached.']
+                'Exit codes: 0 done, 1 this machine could not (keychain, lock, no browser answer), 2 wrong command line,'
+                + ' 3 refused or not signed in, 4 server not reached.']
             : []),
     ].join('\n');
 };
@@ -87,9 +90,10 @@ const runRecord = async (command: RecordCommand, argv: readonly string[]): Promi
     if (!fits || missing.length > 0 || parsed.positionals.includes('')) throw usage(`usage: ${form}`);
 
     const input = command.input(parsed);
-    const { server, entry } = signedInServer(serverFlag(parsed));
+    const { server, byFlag } = chooseServer(serverFlag(parsed));
+    const again: Again = { server: byFlag ? ` --server ${server}` : '' };
 
-    return command.render(await callTool(server, entry, command.tool, input), parsed);
+    return command.render(await callTool(server, command.tool, input), parsed, again);
 };
 
 const runWorkspace = async (verb: string | undefined, argv: readonly string[], io: Io): Promise<string> =>
@@ -100,15 +104,16 @@ const runWorkspace = async (verb: string | undefined, argv: readonly string[], i
 
     if (parsed.positionals.length > 0) throw usage(`usage: self workspace ${verb} [--server <origin>]`);
 
-    const { server, entry } = signedInServer(serverFlag(parsed));
+    const { server } = chooseServer(serverFlag(parsed));
 
-    if (verb === 'show') return renderWorkspace(await callTool(server, entry, 'workspace_show', {}) as WorkspaceShow);
+    if (verb === 'show') return renderWorkspace(await callTool(server, 'workspace_show', {}) as WorkspaceShow);
 
-    const { link, expiresAt } = await callTool(server, entry, 'workspace_switch', {}) as SwitchLink;
+    const { link, expiresAt } = await callTool(server, 'workspace_switch', {}) as SwitchLink;
+    const address = openableUrl(link, server);
 
     io.err('Opening the browser to pick the workspace. If it does not open, open this address:');
-    io.err(`  ${link}`);
-    openInBrowser(link);
+    io.err(`  ${address}`);
+    openInBrowser(address);
 
     return `the link works once, until ${expiresAt}; the next command works on the workspace you pick (self workspace show)`;
 };

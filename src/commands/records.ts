@@ -2,6 +2,7 @@ import {
     renderIssueDetail, renderIssueList, renderIssueStarted, renderIssueWritten, renderNoteDetail, renderNoteList, renderNoteWritten,
     renderRecord, renderSearch, renderUndone,
 } from '../render/records';
+import type { Again, Typed } from '../render/records';
 import type { HeldBy, NoteDetail, NoteRow, Page, RecordDetail, RecordList, UndoAnswer, WorkDetail, WorkRow } from '../render/types';
 import { usage } from '../errors';
 
@@ -46,7 +47,7 @@ export interface RecordCommand
     positionals: { count: number } | { min: number };
     tool: string;
     input: (parsed: Parsed) => Record<string, unknown>;
-    render: (answer: unknown, parsed: Parsed) => string;
+    render: (answer: unknown, parsed: Parsed, again: Again) => string;
 }
 
 // ── reading flags ─────────────────────────────────────────────────────────
@@ -82,14 +83,14 @@ const noneAsNull = (value: string): string | null => (value === 'none' ? null : 
 const given = (input: Record<string, unknown>): Record<string, unknown> =>
     Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 
-/** A list's flags as they were typed, for the next-page line: switches as `true`, values as given. */
-const typed = (parsed: Parsed, names: readonly string[]): Record<string, string> =>
-    Object.fromEntries(names.flatMap((name) =>
+/** A list's flags as they were typed, for the next-page line: a switch stays a switch, a value stays a value. */
+const typed = (parsed: Parsed, names: readonly string[]): Typed[] =>
+    names.flatMap((name): Typed[] =>
     {
         const value = parsed.values[name];
 
-        return value === true ? [[name, 'true']] : typeof value === 'string' ? [[name, value]] : [];
-    }));
+        return value === true ? [[name, true]] : typeof value === 'string' ? [[name, value]] : [];
+    });
 
 const at = (parsed: Parsed, index: number): string => parsed.positionals[index] ?? '';
 
@@ -110,14 +111,14 @@ const onIssue = (verb: string, args: string, about: string, flags: Flag[], count
     input: (parsed: Parsed) => Record<string, unknown>): RecordCommand => ({
     noun: 'issue', verb, args, about, flags, positionals: { count }, tool: `issue_${verb}`,
     input: parsed => ({ key: at(parsed, 0), ...input(parsed) }),
-    render: answer => renderIssueWritten(answer as WorkRow),
+    render: (answer, _parsed, again) => renderIssueWritten(answer as WorkRow, again),
 });
 
 const onNote = (verb: string, args: string, about: string, flags: Flag[], count: number,
     input: (parsed: Parsed) => Record<string, unknown>): RecordCommand => ({
     noun: 'note', verb, args, about, flags, positionals: { count }, tool: `note_${verb}`,
     input: parsed => ({ key: at(parsed, 0), ...input(parsed) }),
-    render: answer => renderNoteWritten(answer as NoteRow),
+    render: (answer, _parsed, again) => renderNoteWritten(answer as NoteRow, again),
 });
 
 const ISSUE_LIST_FLAGS = ['state', 'project', 'all', 'after', 'limit'] as const;
@@ -131,7 +132,7 @@ export const RECORD_COMMANDS: readonly RecordCommand[] = [
         flags: [{ name: 'body', type: 'string', value: '<text>' }, { name: 'criteria', type: 'string', multiple: true, value: '<text>' }, PROJECT],
         positionals: { count: 1 }, tool: 'issue_add',
         input: parsed => given({ summary: at(parsed, 0), body: text(parsed, 'body'), criteria: texts(parsed, 'criteria'), project: text(parsed, 'project') }),
-        render: answer => renderIssueWritten(answer as WorkRow),
+        render: (answer, _parsed, again) => renderIssueWritten(answer as WorkRow, again),
     },
     {
         noun: 'issue', verb: 'show', args: '<issue>', about: 'one issue, its criteria and its latest events',
@@ -147,14 +148,14 @@ export const RECORD_COMMANDS: readonly RecordCommand[] = [
             state: text(parsed, 'state'), project: text(parsed, 'project'), all: switched(parsed, 'all'),
             after: text(parsed, 'after'), limit: integer(text(parsed, 'limit'), 'limit'),
         }),
-        render: (answer, parsed) => renderIssueList(answer as Page<WorkRow>, typed(parsed, ISSUE_LIST_FLAGS)),
+        render: (answer, parsed, again) => renderIssueList(answer as Page<WorkRow>, typed(parsed, ISSUE_LIST_FLAGS), again),
     },
     onIssue('todo', '<issue>', 'put it in the todo column', [], 1, () => ({})),
     {
         noun: 'issue', verb: 'start', args: '<issue>', about: 'start working on it; says who else holds it',
         flags: [], positionals: { count: 1 }, tool: 'issue_start',
         input: parsed => ({ key: at(parsed, 0) }),
-        render: answer => renderIssueStarted(answer as WorkRow & HeldBy),
+        render: (answer, _parsed, again) => renderIssueStarted(answer as WorkRow & HeldBy, again),
     },
     onIssue('block', '<issue>', 'mark it blocked, on what and why',
         [{ name: 'on', type: 'string', required: true, value: 'decision|dependency|external' }, { name: 'why', type: 'string', required: true, value: '<text>' }], 1,
@@ -175,7 +176,7 @@ export const RECORD_COMMANDS: readonly RecordCommand[] = [
         noun: 'issue', verb: 'evidence', args: '<issue> <commit> [<commit>…]', about: 'add commits to its evidence',
         flags: [], positionals: { min: 2 }, tool: 'issue_evidence',
         input: parsed => ({ key: at(parsed, 0), evidence: parsed.positionals.slice(1) }),
-        render: answer => renderIssueWritten(answer as WorkRow),
+        render: (answer, _parsed, again) => renderIssueWritten(answer as WorkRow, again),
     },
     onIssue('link', '<issue> member-of|supersedes|relates|duplicate-of|blocks <issue>', 'link it to another issue', [], 3,
         parsed => ({ type: at(parsed, 1), to: at(parsed, 2) })),
@@ -188,7 +189,7 @@ export const RECORD_COMMANDS: readonly RecordCommand[] = [
         noun: 'note', verb: 'add', args: '"<summary>"', about: 'record a note; --label repeats; --private keeps it to you',
         flags: NOTE_WORDS, positionals: { count: 1 }, tool: 'note_add',
         input: parsed => noteWords(parsed, at(parsed, 0)),
-        render: answer => renderNoteWritten(answer as NoteRow),
+        render: (answer, _parsed, again) => renderNoteWritten(answer as NoteRow, again),
     },
     {
         noun: 'note', verb: 'show', args: '<note>', about: 'one note, its links and its latest events',
@@ -207,7 +208,7 @@ export const RECORD_COMMANDS: readonly RecordCommand[] = [
             label: text(parsed, 'label'), project: text(parsed, 'project'), status: text(parsed, 'status'), all: switched(parsed, 'all'),
             after: text(parsed, 'after'), limit: integer(text(parsed, 'limit'), 'limit'),
         }),
-        render: (answer, parsed) => renderNoteList(answer as Page<NoteRow>, typed(parsed, NOTE_LIST_FLAGS)),
+        render: (answer, parsed, again) => renderNoteList(answer as Page<NoteRow>, typed(parsed, NOTE_LIST_FLAGS), again),
     },
     onNote('supersede', '<note> "<summary>"', 'replace a note with a new one', NOTE_WORDS, 2, parsed => noteWords(parsed, at(parsed, 1))),
     onNote('retract', '<note>', 'withdraw a note', [], 1, () => ({})),
@@ -239,8 +240,7 @@ export const RECORD_COMMANDS: readonly RecordCommand[] = [
             kind: text(parsed, 'kind'), label: text(parsed, 'label'), project: text(parsed, 'project'), all: switched(parsed, 'all'),
             after: text(parsed, 'after'), limit: integer(text(parsed, 'limit'), 'limit'),
         }),
-        render: (answer, parsed) => renderSearch(answer as RecordList,
-            { ...(parsed.positionals.length === 0 ? {} : { q: parsed.positionals.join(' ') }), ...typed(parsed, SEARCH_FLAGS) }),
+        render: (answer, parsed, again) => renderSearch(answer as RecordList, parsed.positionals, typed(parsed, SEARCH_FLAGS), again),
     },
     {
         noun: 'record', verb: 'undo', args: '<seq>|<issue>|<note>', about: 'reverse one event you recorded',
