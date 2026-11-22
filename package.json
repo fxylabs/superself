@@ -2,6 +2,7 @@
     "name": "superself",
     "version": "1.0.0-dev.0",
     "description": "The self command: sign in to Superself and work on your workspace's records from your own machine.",
+    "license": "MIT",
     "type": "module",
     "bin": {
         "self": "dist/self.mjs"
