@@ -1,0 +1,34 @@
+{
+    "name": "superself",
+    "version": "1.0.0-dev.0",
+    "description": "The self command: sign in to Superself and work on your workspace's records from your own machine.",
+    "type": "module",
+    "bin": {
+        "self": "dist/self.mjs"
+    },
+    "files": [
+        "dist"
+    ],
+    "engines": {
+        "node": ">=20"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/fxylabs/superself.git"
+    },
+    "homepage": "https://github.com/fxylabs/superself",
+    "bugs": "https://github.com/fxylabs/superself/issues",
+    "scripts": {
+        "build": "tsup",
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/client": "2.4.0",
+        "@napi-rs/keyring": "2.1.2"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.5",
+        "tsup": "^8.5.1",
+        "typescript": "^5.9.3"
+    }
+}
